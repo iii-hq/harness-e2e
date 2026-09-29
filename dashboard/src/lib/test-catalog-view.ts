@@ -237,6 +237,7 @@ export type CatalogSuite = { id: string; label: string }
 /** One test as the list shows it: every cell already written. */
 export type CatalogRowView = {
   id: string
+  title: string
   kind: CatalogKind
   /** The summary, else `4 criteria · human 1–2 h`. */
   sub: string
@@ -287,6 +288,7 @@ export function catalogRowView(
   const scores = row.recent_scores
   return {
     id: row.test_id,
+    title: row.spec?.title?.trim() || row.test_id,
     kind,
     sub:
       summary ||
@@ -318,7 +320,12 @@ export function catalogRowView(
     runsTitle: `${row.runs_current} on the current definition · ${row.runs_total} retained in all`,
     lastAt: last?.at ?? null,
     suites,
-    search: [row.test_id, summary, ...suites.map((suite) => suite.label)]
+    search: [
+      row.spec?.title,
+      row.test_id,
+      summary,
+      ...suites.map((suite) => suite.label),
+    ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase(),

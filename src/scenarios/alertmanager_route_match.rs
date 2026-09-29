@@ -31,10 +31,7 @@ use super::{
 
 pub const ID: &str = "alertmanager_route_match";
 pub const CANONICAL_SEED: u64 = 0x616c_7274_0001;
-pub const SUMMARY: &str = "Clone the pinned prometheus/alertmanager revision and refactor \
-route matching so the iii function route::match decides receivers and group-by labels. \
-The runner calls that function on the iii stack and scores the receivers it returns \
-against a frozen oracle from TestRouteMatch and conf.good.yml.";
+pub const SUMMARY: &str = "Refactor Alertmanager route matching into an iii function and verify its receivers and group-by labels against a frozen upstream oracle.";
 
 const UPSTREAM_REPOSITORY: &str = "prometheus/alertmanager";
 const UPSTREAM_URL: &str = "https://github.com/prometheus/alertmanager";
@@ -61,23 +58,23 @@ const BUNDLE_BYTES: &[u8] =
 const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     "revision_pinned",
     10,
-    "The checkout is the pinned bundle revision or a descendant of it.",
+    "Is the checkout at the pinned bundle revision or one of its descendants?",
 );
 const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
     "match_equivalent",
     70,
-    "Each live call to route::match returns the frozen receivers and group-by labels.",
+    "Does every live route::match call return the receivers and group-by labels in the frozen oracle?",
     EvaluationDimension::Deliverable,
 );
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
     "delegation_wired",
     10,
-    "Upstream TestRouteMatch passes through route::match and fails without the engine.",
+    "Does upstream TestRouteMatch call route::match and fail when the engine is unavailable?",
 );
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
     10,
-    "notify/, api/, and config/testdata/ stay identical to the pinned tree.",
+    "Do notify/, api/, and config/testdata/ remain identical to the pinned tree?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REVISION_PINNED,
@@ -174,6 +171,10 @@ pub struct AlertmanagerRouteMatch;
 impl Scenario for AlertmanagerRouteMatch {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Refactor Alertmanager Route Matching")
     }
 
     fn summary(&self) -> Option<&'static str> {

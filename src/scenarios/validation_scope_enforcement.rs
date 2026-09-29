@@ -35,17 +35,17 @@ const HOOK_TYPE: &str = "harness::hook::post-turn";
 const FOREIGN_SCOPE_REFUSED: AssessmentSpec = AssessmentSpec::scored(
     "foreign_scope_refused",
     35,
-    "The forbidden registration failed with the out-of-scope error and the agent continued.",
+    "Did the forbidden registration fail with the out-of-scope error while the agent continued?",
 );
 const SELF_GATE_ENGAGED: AssessmentSpec = AssessmentSpec::scored(
     "self_gate_engaged",
     30,
-    "The self-registration gated the session: exactly one denial with the marker unset.",
+    "Did the self-registration gate the session with exactly one denial while the marker remained unset?",
 );
 const TEARDOWN_UNGATED: AssessmentSpec = AssessmentSpec::scored(
     "teardown_ungated",
     35,
-    "Owner unregistration removed the gate mid-loop: the turn completed with the marker still absent.",
+    "Did owner unregistration remove the gate mid-loop, allowing the turn to complete with the marker still absent?",
 );
 const ASSESSMENTS: &[AssessmentSpec] =
     &[FOREIGN_SCOPE_REFUSED, SELF_GATE_ENGAGED, TEARDOWN_UNGATED];
@@ -60,6 +60,14 @@ pub struct ValidationScopeEnforcement;
 impl Scenario for ValidationScopeEnforcement {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Validation Scope Enforcement")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Rejects a foreign validator, enforces a self-scoped gate, and removes that gate through owner teardown.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

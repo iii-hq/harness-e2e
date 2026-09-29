@@ -52,23 +52,23 @@ const MAX_SEGMENTS: u32 = 48;
 const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::scored_in(
     "charter_preserved",
     40,
-    "The final report reproduces every planted charter fact verbatim after the full distractor load.",
+    "Does the final report reproduce every planted charter fact verbatim after the full distractor load?",
     EvaluationDimension::Deliverable,
 );
 const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::scored(
     "needles_recovered",
     30,
-    "Every segment needle appears in the report exactly once each, in ascending segment order.",
+    "Does every segment needle appear in the report exactly once and in ascending segment order?",
 );
 const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "ingestion_discipline",
     20,
-    "The charter is read first and each segment exactly once in ascending order, with nothing beyond function discovery and no errors.",
+    "Was the charter read first and each segment exactly once in ascending order, with no calls beyond function discovery and no errors?",
 );
 const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
     10,
-    "The report carries the facts and needles without echoing document text.",
+    "Does the report include the required facts and needles without echoing document text?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CHARTER_PRESERVED,
@@ -168,6 +168,14 @@ pub struct ContextPressure;
 impl Scenario for ContextPressure {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Context Pressure Recall")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Recovers early charter facts and ordered markers after ingesting a large distractor corpus.")
     }
 
     fn canonical_seed(&self) -> u64 {

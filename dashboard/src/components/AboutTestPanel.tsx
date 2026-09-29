@@ -121,6 +121,11 @@ export function TestCriteriaList({
                 {outcome ? (
                   <StatusBadge label={outcome.label} status={outcome.status} />
                 ) : null}
+                {criterion.gate ? (
+                  <span className="font-mono text-label text-ink-muted">
+                    Blocks completion
+                  </span>
+                ) : null}
               </span>
             </li>
           )
@@ -254,9 +259,12 @@ export function AboutTestPanel({
       padding="compact"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 className="m-0 text-sm font-semibold text-ink" id={headingId}>
-          About this test
-        </h2>
+        <div>
+          <h2 className="m-0 text-sm font-semibold text-ink" id={headingId}>
+            {spec.title ?? 'About this test'}
+          </h2>
+          <span className="font-mono text-label text-ink-muted">{testId}</span>
+        </div>
         <button
           aria-expanded={open}
           className={buttonClassName({ variant: 'quiet', size: 'compact' })}

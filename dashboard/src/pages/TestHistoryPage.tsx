@@ -402,10 +402,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           label: 'Back to Tests',
           href: hashForTests(new URLSearchParams({ highlight: testId })),
         }}
-        title={testId}
+        title={spec?.title ?? testId}
         headingId="test-history-title"
         summary={
-          spec?.summary ??
+          [testId, spec?.summary].filter(Boolean).join(' · ') ||
           (loading && !history
             ? 'Loading the history…'
             : 'Every run of this test, newest first.')

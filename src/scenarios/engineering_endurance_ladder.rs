@@ -56,33 +56,33 @@ const GITIGNORE: &str =
 const CAPABILITY_DEPTH: AssessmentSpec = AssessmentSpec::scored_in(
     "capability_depth",
     65,
-    "Points scale with the longest cumulative prefix of independently accepted tickets.",
+    "How many consecutive tickets form the longest independently accepted cumulative prefix?",
     EvaluationDimension::Deliverable,
 );
 const TERMINAL_PROTOCOL: AssessmentSpec = AssessmentSpec::scored(
     "terminal_protocol",
     5,
-    "The session reaches either all-rungs-complete or an evidence-backed first capability failure.",
+    "Does the session end with all rungs complete or with evidence for the first capability failure?",
 );
 const GIT_INTEGRITY: AssessmentSpec = AssessmentSpec::scored(
     "git_checkpoint_integrity",
     10,
-    "Every accepted checkpoint is an immutable, clean, non-merge descendant touching production only.",
+    "Is every accepted checkpoint an immutable, clean, non-merge descendant that touches only production code?",
 );
 const REGRESSION_INTEGRITY: AssessmentSpec = AssessmentSpec::scored(
     "regression_integrity",
     10,
-    "Every accepted checkpoint passed the public suite and all hidden probes through its rung.",
+    "Did every accepted checkpoint pass the public suite and all hidden probes through its rung?",
 );
 const CONVERGENCE: AssessmentSpec = AssessmentSpec::scored(
     "repair_convergence",
     5,
-    "Accepted tickets converge with few rejected checkpoint rounds.",
+    "How few rejected checkpoint rounds were needed for the accepted tickets to converge?",
 );
 const EFFICIENCY: AssessmentSpec = AssessmentSpec::scored(
     "change_efficiency",
     5,
-    "The accepted implementation remains within a compact cumulative change budget.",
+    "Does the accepted implementation remain within the cumulative file and line change budget?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CAPABILITY_DEPTH,
@@ -907,6 +907,14 @@ pub struct EngineeringEnduranceLadder;
 impl Scenario for EngineeringEnduranceLadder {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Climb the Engineering Endurance Ladder")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Complete a cumulative sequence of durable-queue tickets until all rungs pass or the first evidence-backed capability boundary is reached.")
     }
 
     fn canonical_seed(&self) -> u64 {

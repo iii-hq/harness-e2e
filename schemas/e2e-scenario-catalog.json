@@ -328,6 +328,18 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

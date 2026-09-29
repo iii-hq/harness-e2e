@@ -126,6 +126,14 @@ impl Scenario for LinklyTutorial {
         ID
     }
 
+    fn title(&self) -> Option<&'static str> {
+        Some("Linkly Full-Stack Tutorial")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Builds and validates a production-style link service across API, persistence, observability, streaming, import, and access control chapters.")
+    }
+
     fn execution_kind(&self) -> ScenarioExecutionKind {
         ScenarioExecutionKind::ScriptedDialogue
     }

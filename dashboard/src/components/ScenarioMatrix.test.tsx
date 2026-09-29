@@ -425,8 +425,12 @@ describe('ScenarioMatrix', () => {
         new RegExp(`data-state="not_run"[^>]*>(?:(?!</td>).)*<span>${word}<`),
       )
     expect(html).toContain('security_review · definition a1a1a1a1')
-    expect(html).toContain('aria-label="Persistent State scenario result"')
-    expect(html).toContain('aria-label="Missing Report scenario result"')
+    expect(html).toContain(
+      'aria-label="Persistent State (persistent_state) scenario result"',
+    )
+    expect(html).toContain(
+      'aria-label="Missing Report (missing_report) scenario result"',
+    )
     expect(html).toContain(
       'The expected report for this scenario is unavailable',
     )

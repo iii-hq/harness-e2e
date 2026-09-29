@@ -40,22 +40,22 @@ const COURIER_FUNCTIONS: [&str; 6] = [
 const COURIER_WORKLOAD: AssessmentSpec = AssessmentSpec::scored(
     "courier_workload",
     30,
-    "Three least-privilege couriers produce the exact shipments, corrections, and completion rows.",
+    "Do three least-privilege couriers produce the exact shipments, corrections, and completion rows?",
 );
 const LIVE_LEDGER: AssessmentSpec = AssessmentSpec::scored(
     "live_ledger",
     25,
-    "A database-native or mechanical reaction keeps the ledger current without model turns.",
+    "Does a database-native or mechanical reaction keep the ledger current without model turns?",
 );
 const DATABASE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "database_fan_in",
     25,
-    "The root learns completion from one database wake without polling.",
+    "Does the root learn completion from one database wake without polling?",
 );
 const VERIFICATION_CLEANUP: AssessmentSpec = AssessmentSpec::scored(
     "verification_cleanup",
     20,
-    "The root reports verified evidence and removes all standing machinery.",
+    "Does the root report verified evidence and remove all standing machinery?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     COURIER_WORKLOAD,
@@ -70,6 +70,14 @@ pub struct ReceivingOperation;
 impl Scenario for ReceivingOperation {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Receiving Operation")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Coordinates supplier couriers, maintains a live receiving ledger, and reports completion from one database wake.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

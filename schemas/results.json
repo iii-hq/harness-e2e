@@ -1041,6 +1041,19 @@
         },
         "scenario_id": {
           "type": "string"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Presentation captured when this result was produced; absent in older results.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

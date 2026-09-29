@@ -38,23 +38,23 @@ const TARGET_TEAM: &str = "team-blue";
 const CONSISTENT_FINAL_STATE: AssessmentSpec = AssessmentSpec::scored_in(
     "consistent_final_state",
     35,
-    "CRM and billing converge on team-blue and the support ticket closes only afterward.",
+    "Do CRM and billing converge on team-blue before the support ticket closes?",
     EvaluationDimension::Deliverable,
 );
 const CONFLICT_RECOVERED: AssessmentSpec = AssessmentSpec::scored(
     "conflict_recovered",
     25,
-    "The injected billing CAS conflict is observed exactly once and recovered using the new revision.",
+    "Is the injected billing CAS conflict observed exactly once and recovered using the new revision?",
 );
 const NO_COLLATERAL_MUTATION: AssessmentSpec = AssessmentSpec::scored(
     "no_collateral_mutation",
     25,
-    "Only the three authorized mutations occur; sentinel account and ticket remain byte-for-byte unchanged.",
+    "Do only the three authorized mutations occur while the sentinel account and ticket remain byte-for-byte unchanged?",
 );
 const AUTHENTIC_RECEIPTS: AssessmentSpec = AssessmentSpec::scored_in(
     "authentic_receipts",
     15,
-    "The final response contains the three receipts issued by the services and no fabricated transaction receipt.",
+    "Does the final response contain all three service-issued receipts and no fabricated transaction receipt?",
     EvaluationDimension::Deliverable,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -575,6 +575,14 @@ pub struct CrossAppTransaction;
 impl Scenario for CrossAppTransaction {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Reconcile a Cross-App Transaction")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Move one account across CRM, billing, and support while recovering from a deterministic version conflict and preserving unrelated state.")
     }
 
     fn canonical_seed(&self) -> u64 {

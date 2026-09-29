@@ -376,6 +376,9 @@ fn run_facts(entry: &TestEntry) -> (Option<LastRun>, Vec<Option<f64>>, usize, us
 /// describes the contract the dashboard is showing.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TestSpecProjection {
+    /// Human-readable test name; absent on responses from older runners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Editorial description; absent until the scenario defines a `SUMMARY`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -392,6 +395,7 @@ pub(super) struct TestCriterionProjection {
     pub id: String,
     pub weight: u8,
     pub description: String,
+    pub gate: bool,
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: EvaluationDimension,
@@ -1281,6 +1285,7 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
 /// and cleanup hooks stay behind: they are runner wiring, not contract.
 fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
     TestSpecProjection {
+        title: id.title().map(str::to_string),
         summary: id.summary().map(str::to_string),
         prompt: spec.prompt.clone(),
         criteria: spec
@@ -1290,6 +1295,7 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
                 id: criterion.id.to_string(),
                 weight: criterion.weight,
                 description: criterion.description.to_string(),
+                gate: criterion.gate,
                 kind: criterion.kind,
                 policy: criterion.policy,
                 dimension: criterion.dimension,

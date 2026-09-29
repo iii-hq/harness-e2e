@@ -17,7 +17,7 @@ use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity}
 use crate::scenarios::DeliverableContract;
 use crate::scenarios::{
     CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant, ExecutionPolicy,
-    ProvenanceEvidence, ScenarioCase,
+    ProvenanceEvidence, ScenarioCase, ScenarioId,
 };
 use crate::schema;
 use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponse, StatusReport};
@@ -1268,6 +1268,11 @@ fn failed_attempt_tokens(run: &E2eRunReport) -> Option<u64> {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct E2eScenarioReport {
     pub scenario_id: String,
+    /// Presentation captured when this result was produced; absent in older results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     #[serde(default)]
     pub case_id: String,
     /// Digest of the definition the case was materialized from. Absent only
@@ -1420,9 +1425,12 @@ impl E2eScenarioReport {
             && technical_failures == 0
             && undetermined_runs == 0
             && passed_runs >= required_passes;
+        let metadata = scenario_id.parse::<ScenarioId>().ok();
         Self {
             case_id,
             scenario_id,
+            title: metadata.and_then(ScenarioId::title).map(str::to_owned),
+            summary: metadata.and_then(ScenarioId::summary).map(str::to_owned),
             behavior_sha256,
             case,
             deferral_reason: None,
@@ -1463,6 +1471,8 @@ impl E2eScenarioReport {
 
     pub fn refresh_aggregate(&mut self) -> Result<()> {
         let planned_runs = self.aggregate.planned_runs;
+        let title = self.title.clone();
+        let summary = self.summary.clone();
         self.validate_deferral()?;
         let case = self.case.take();
         let runs = std::mem::take(&mut self.runs);
@@ -1476,6 +1486,8 @@ impl E2eScenarioReport {
             planned_runs,
             runs,
         );
+        self.title = title;
+        self.summary = summary;
         self.deferral_reason = deferral_reason;
         Ok(())
     }

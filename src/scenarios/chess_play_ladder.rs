@@ -58,23 +58,23 @@ const RUNG: Rung = Rung { depth: 3 };
 const ZERO_ILLEGAL_MOVES: AssessmentSpec = AssessmentSpec::scored(
     "zero_illegal_moves",
     30,
-    "The subject attempted no illegal move and the move channel reported no function-call errors.",
+    "Did the subject avoid illegal moves and did the move channel report no function-call errors?",
 );
 const GAME_COMPLETED: AssessmentSpec = AssessmentSpec::scored_in(
     "game_completed",
     25,
-    "The game reached a terminal result within the move cap rather than running out of moves unfinished.",
+    "Did the game reach a terminal result within the move cap?",
     EvaluationDimension::Deliverable,
 );
 const RESULT_REPORTED: AssessmentSpec = AssessmentSpec::scored(
     "result_reported",
     20,
-    "The final response reports `CHESS-RESULT <r>` matching the game's recorded outcome.",
+    "Does the final response report `CHESS-RESULT <r>` matching the recorded game outcome?",
 );
 const STRENGTH_SCORE: AssessmentSpec = AssessmentSpec::scored(
     "strength_score",
     25,
-    "Competitive result against the negamax opponent, banded win/draw/loss (centipawn nuance deferred).",
+    "What win, draw, or loss result did the subject achieve against the deterministic negamax opponent?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     ZERO_ILLEGAL_MOVES,
@@ -310,6 +310,14 @@ pub struct ChessPlayLadder;
 impl Scenario for ChessPlayLadder {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Play the Chess Strength Ladder")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Play a complete chess game as White against the retained deterministic opponent and report the recorded result.")
     }
 
     fn canonical_seed(&self) -> u64 {

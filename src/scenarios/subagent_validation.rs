@@ -35,18 +35,18 @@ const EXPECTED_ROWS: u64 = 8;
 const CHILD_GOAL: AssessmentSpec = AssessmentSpec::scored_in(
     "child_goal",
     35,
-    "The child's table work reaches the exact expected count and the verdict key carries the accepted count.",
+    "Does the child's table reach the exact expected count with the accepted count stored in the verdict key?",
     EvaluationDimension::Deliverable,
 );
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     35,
-    "Validator scoped to the child, wake armed before the spawn, and the child spawned with the named session.",
+    "Is the validator scoped to the child, the wake armed before spawn, and the child spawned with the named session?",
 );
 const WAKE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "wake_report",
     30,
-    "The parent finishes from the verdict wake with a completion report.",
+    "Does the parent finish from the verdict wake with a completion report?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[CHILD_GOAL, ORCHESTRATION_DISCIPLINE, WAKE_REPORT];
 
@@ -56,6 +56,14 @@ pub struct SubagentValidation;
 impl Scenario for SubagentValidation {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Validated Subagent Completion")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Scopes a validator to a child session and wakes the parent when the child reaches an accepted result.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

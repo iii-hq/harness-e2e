@@ -115,6 +115,14 @@ impl Scenario for TrendingTopicsBuild {
         ID
     }
 
+    fn title(&self) -> Option<&'static str> {
+        Some("Build a Trending Topics App")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Build and push a responsive application that presents six ranked topics and complete article routes from frozen input data.")
+    }
+
     fn canonical_seed_only(&self) -> bool {
         true
     }

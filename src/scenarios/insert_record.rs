@@ -24,12 +24,12 @@ const DELIVERABLE_ID: &str = "inserted_rows";
 const RECORD_CREATED: AssessmentSpec = AssessmentSpec::scored(
     "record_created",
     80,
-    "The table contains exactly one row whose value field is the requested text.",
+    "Does the table contain exactly one row whose value field matches the requested text?",
 );
 const FEWER_THAN_TEN_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "fewer_than_ten_turns",
     20,
-    "The evaluated session used fewer than 10 turns.",
+    "Did the evaluated session use fewer than ten turns?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[RECORD_CREATED, FEWER_THAN_TEN_TURNS];
 
@@ -43,6 +43,14 @@ pub struct InsertRecord;
 impl Scenario for InsertRecord {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Insert Database Record")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Inserts one requested row into a prepared database table within a small turn budget.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

@@ -188,6 +188,7 @@ export type TestCriterion = {
   id: string
   weight: number
   description: string
+  gate?: boolean
   kind: AssessmentKind
   policy: AssessmentPolicy
   dimension: AssessmentResult['dimension']
@@ -196,6 +197,7 @@ export type TestCriterion = {
 /** The scenario definition a reader needs: the task, the scoring contract and
  *  the limits the run answers to. Absent on responses from older harnesses. */
 export type TestSpec = {
+  title?: string
   summary?: string
   prompt: string
   criteria: TestCriterion[]

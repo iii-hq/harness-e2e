@@ -95,7 +95,6 @@ function RunDetail({
 }) {
   const lost = run ? lostCriteria(run) : []
   const links = runLinks(observation, run)
-  const scored = typeof (run?.score ?? observation.mean_score) === 'number'
   const headingId = `th-subs-${runKey(observation)}-${run?.run_id ?? 'run'}`
   return (
     <div className="th-run-detail" data-run={run?.run_id}>
@@ -125,20 +124,40 @@ function RunDetail({
           </section>
         )}
         <section className="th-lost" data-criteria-lost={lost.length}>
-          <h3 className="th-h3">Criteria lost</h3>
-          {run?.details && lost.length === 0 && scored ? (
-            <p className="th-faint th-empty-line">Every criterion met.</p>
-          ) : null}
-          {lost.length > 0 ? (
-            <ul className="th-lost-list">
-              {lost.map((criterion) => (
-                <li key={criterion.id} title={criterion.reason}>
-                  <span className="th-mono th-ellipsis">{criterion.id}</span>
-                  <span className="th-points">−{criterion.points}</span>
+          <h3 className="th-h3">Criteria in this run</h3>
+          {run?.details?.criteria.length ? (
+            <ul className="th-criterion-history">
+              {run.details.criteria.map((criterion) => (
+                <li key={criterion.id}>
+                  <div className="th-criterion-history-head">
+                    <span className="th-mono">{criterion.id}</span>
+                    <span className="th-points">
+                      {criterion.awarded === null
+                        ? `—/${criterion.possible}`
+                        : `${criterion.awarded}/${criterion.possible}`}
+                    </span>
+                    {criterion.gate === true ? (
+                      <span className="th-gate">Blocks completion</span>
+                    ) : criterion.gate === null ||
+                      criterion.gate === undefined ? (
+                      <span className="th-faint">Gate status not recorded</span>
+                    ) : null}
+                  </div>
+                  <p className="th-criterion-history-description">
+                    {criterion.description ??
+                      'Description not recorded in this result.'}
+                  </p>
+                  <p className="th-criterion-history-reason">
+                    {criterion.reason}
+                  </p>
                 </li>
               ))}
             </ul>
-          ) : null}
+          ) : (
+            <p className="th-faint th-empty-line">
+              Criterion details were not recorded for this run.
+            </p>
+          )}
           <div className="th-links">
             <a className="th-act th-act-filled" href={links.execution}>
               Open execution

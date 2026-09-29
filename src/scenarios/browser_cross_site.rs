@@ -41,22 +41,22 @@ const REQUIRED_ACTION: &str = "hold_for_review";
 const CROSS_SITE_NAVIGATION: AssessmentSpec = AssessmentSpec::scored(
     "cross_site_navigation",
     25,
-    "The browser visits support, the current knowledge-base policy, and order admin through their distinct origins.",
+    "Does the browser visit the support, current knowledge-base policy, and order-admin pages through their distinct origins?",
 );
 const CURRENT_POLICY_APPLIED: AssessmentSpec = AssessmentSpec::scored(
     "current_policy_applied",
     25,
-    "The current policy, rather than the superseded policy linked by the ticket, determines the order action.",
+    "Does the order action follow the current policy instead of the superseded policy linked by the ticket?",
 );
 const EXACT_BACKEND_DELTA: AssessmentSpec = AssessmentSpec::scored(
     "exact_backend_delta",
     35,
-    "Exactly the target order and ticket change, with one UI submission per mutation and no collateral state changes.",
+    "Do only the target order and ticket change, with one UI submission per mutation and no collateral state changes?",
 );
 const BOUNDED_BROWSER_HANDOFF: AssessmentSpec = AssessmentSpec::scored_in(
     "bounded_browser_handoff",
     15,
-    "One browser session is explicitly stopped and the final report contains the genuine receipt.",
+    "Is exactly one browser session stopped and is its genuine receipt included in the final report?",
     EvaluationDimension::Deliverable,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -641,6 +641,14 @@ pub struct BrowserCrossSite;
 impl Scenario for BrowserCrossSite {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Complete a Cross-Site Browser Workflow")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Use a real browser across three isolated local origins to apply the current policy and verify the exact backend changes.")
     }
 
     fn canonical_seed(&self) -> u64 {

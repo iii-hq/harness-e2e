@@ -23,6 +23,8 @@ export type ScenarioMatrixItem = {
   scenarioIndex: number | null
   subjectId: string
   scenarioId: string
+  title?: string | null
+  summary?: string | null
   /** Digest of the definition that evaluated the scenario, when retained. */
   behaviorSha256: string | null
   available: boolean
@@ -243,6 +245,8 @@ function scenarioItem(
     scenarioIndex,
     subjectId,
     scenarioId: scenario.scenario_id,
+    title: scenario.title ?? null,
+    summary: scenario.summary ?? null,
     behaviorSha256: scenario.behavior_sha256 ?? null,
     available: true,
     objective,

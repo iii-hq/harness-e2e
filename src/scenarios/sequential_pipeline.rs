@@ -45,22 +45,22 @@ const ALL_KEYS: [&str; 6] = [
 const RECEIPT_DELIVERED: AssessmentSpec = AssessmentSpec::scored(
     "receipt_delivered",
     40,
-    "pipeline_receipt exactly copies the publish stage name, accepted token, and receipt, and the final response contains that receipt.",
+    "Does pipeline_receipt exactly copy the publish stage name, accepted token, and receipt, with that receipt present in the final response?",
 );
 const EXACT_CHAIN: AssessmentSpec = AssessmentSpec::scored(
     "exact_chain",
     35,
-    "All three results chain the authored tokens exactly and the calls occurred as get/set pairs per stage, in order, with exact values.",
+    "Do all three results chain the authored tokens exactly through ordered get/set pairs with exact values?",
 );
 const EXECUTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "execution_discipline",
     15,
-    "Exactly six non-discovery calls, all on the owned scope and known keys, with zero function-call errors.",
+    "Were exactly six non-discovery calls made on the owned scope and known keys with zero function-call errors?",
 );
 const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
     10,
-    "The final response is one short line containing the exact receipt and no invented token.",
+    "Is the final response one short line containing the exact receipt and no invented token?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     RECEIPT_DELIVERED,
@@ -113,6 +113,14 @@ pub struct SequentialPipeline;
 impl Scenario for SequentialPipeline {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Sequential State Pipeline")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Executes three hidden state contracts in order and carries each exact result into the next stage.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

@@ -124,31 +124,31 @@ pub const ASSETS: [IncidentAssetSpec; 11] = [
 const INCIDENT_REPRODUCTION: CriterionSpec = CriterionSpec::scored(
     "incident_reproduction",
     15,
-    "The seeded timeout and redelivery deterministically reproduce two settlements for one event before remediation.",
+    "Do the seeded timeout and redelivery reproduce two settlements for one event before remediation?",
     EvaluationDimension::Deliverable,
 );
 const EVIDENCE_GROUNDED_DIAGNOSIS: CriterionSpec = CriterionSpec::scored(
     "evidence_grounded_diagnosis",
     20,
-    "Independent read-only analyses fan in to a diagnosis grounded in valid evidence and an executed falsification probe.",
+    "Do independent read-only analyses produce a diagnosis supported by valid evidence and an executed falsification probe?",
     EvaluationDimension::StructuralIntegrity,
 );
 const REMEDIATION_INTEGRITY: CriterionSpec = CriterionSpec::scored(
     "remediation_integrity",
     25,
-    "Any candidate changes only allowed production paths, preserves protected inputs, and passes every deterministic safety probe.",
+    "Does the candidate change only allowed production paths, preserve protected inputs, and pass every deterministic safety probe?",
     EvaluationDimension::Deliverable,
 );
 const SAFE_TERMINAL_ACTION: CriterionSpec = CriterionSpec::scored(
     "safe_terminal_action",
     25,
-    "Exactly one terminal action occurs: promote the exact validated candidate or restore the exact known-good revision.",
+    "Does exactly one terminal action promote the validated candidate or restore the exact known-good revision?",
     EvaluationDimension::StructuralIntegrity,
 );
 const FINAL_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "final_reconciliation",
     15,
-    "Deploy, ledger, audit, incident, active-resource, evidence, and cleanup state reconcile to the selected terminal action.",
+    "Do deploy, ledger, audit, incident, active-resource, evidence, and cleanup state reconcile with the selected terminal action?",
     EvaluationDimension::StructuralIntegrity,
 );
 
@@ -166,6 +166,14 @@ pub struct IncidentResponse;
 impl Scenario for IncidentResponse {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Diagnose and Recover an Incident")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Reproduce, diagnose, and remediate a duplicate-settlement incident before choosing one safe terminal action and reconciling the system.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {

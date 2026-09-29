@@ -321,6 +321,10 @@ pub struct ScenariosListRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScenarioDescriptor {
     pub scenario_id: ScenarioId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
@@ -2188,6 +2192,8 @@ fn materialize_scenario_descriptor(
     };
     Ok(ScenarioDescriptor {
         scenario_id,
+        title: scenario_id.title().map(str::to_owned),
+        summary: scenario_id.summary().map(str::to_owned),
         behavior_sha256: materialized.case.behavior_sha256.clone(),
         case_id: materialized.case.case_id,
         seed: materialized.case.seed,

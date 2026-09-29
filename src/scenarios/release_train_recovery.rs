@@ -18,31 +18,31 @@ pub const CANONICAL_SEED: u64 = 0x7265_6c65_6173_0001;
 const IMMUTABLE_RECOVERY: CriterionSpec = CriterionSpec::scored(
     "immutable_release_recovery",
     25,
-    "The same immutable tag, version, and run id recover through a later run attempt without retagging or version drift.",
+    "Do the same immutable tag, version, and run ID recover through a later attempt without retagging or version drift?",
     EvaluationDimension::StructuralIntegrity,
 );
 const PUBLICATION_INTEGRITY: CriterionSpec = CriterionSpec::scored(
     "exact_publication_integrity",
     20,
-    "All expected assets exist and the exact Registry version resolves before promotion planning continues.",
+    "Do all expected assets exist and does the exact Registry version resolve before promotion planning continues?",
     EvaluationDimension::Deliverable,
 );
 const EVIDENCE_BOUND_REPLAN: CriterionSpec = CriterionSpec::scored(
     "evidence_bound_replan",
     20,
-    "The incompatible latest graph invalidates plan one and plan two cites the trusted preview evidence.",
+    "Does the incompatible latest graph invalidate the first plan and does the second plan cite the trusted preview evidence?",
     EvaluationDimension::StructuralIntegrity,
 );
 const SAFE_CAS_PROMOTION: CriterionSpec = CriterionSpec::scored(
     "safe_cas_promotion",
     25,
-    "A fresh gated operation preserves the real latest pointer and performs one authorized CAS without retrying the stale operation.",
+    "Does a fresh gated operation preserve the real latest pointer and perform one authorized CAS without retrying the stale operation?",
     EvaluationDimension::Deliverable,
 );
 const RELEASE_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "release_reconciliation",
     10,
-    "Canary convergence, locks, audit state, secret hygiene, and cleanup reconcile after the single terminal promotion.",
+    "Do canary convergence, locks, audit state, secret hygiene, and cleanup reconcile after the single terminal promotion?",
     EvaluationDimension::StructuralIntegrity,
 );
 
@@ -60,6 +60,14 @@ pub struct ReleaseTrainRecovery;
 impl Scenario for ReleaseTrainRecovery {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Recover a Release Train")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Recover an immutable partially published release and safely replan one compare-and-swap promotion when latest has changed.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {

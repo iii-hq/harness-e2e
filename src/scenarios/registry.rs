@@ -25,6 +25,18 @@ const IDS: [&str; 4] = [
     ENVIRONMENT_ID,
     VERIFICATION_ID,
 ];
+const TITLES: [&str; 4] = [
+    "Registry Change Planning",
+    "Registry Change Implementation",
+    "Registry Environment Reproduction",
+    "Registry Independent Verification",
+];
+const SUMMARIES: [&str; 4] = [
+    "Produces an implementation plan for a version comparison feature against a pinned Registry codebase.",
+    "Implements and demonstrates a version comparison feature against a pinned Registry codebase.",
+    "Builds, starts, isolates, restarts, and cleans up a reproducible Registry environment.",
+    "Independently verifies a Registry implementation and supports every reported result with execution evidence.",
+];
 const REQUIREMENTS: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/requirements.md");
 pub(super) const REFERENCE: &str =
@@ -166,6 +178,14 @@ impl Registry {
 impl Scenario for Registry {
     fn id(&self) -> &'static str {
         IDS[self.index()]
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some(TITLES[self.index()])
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some(SUMMARIES[self.index()])
     }
 
     fn canonical_seed_only(&self) -> bool {

@@ -877,6 +877,46 @@
   font-size: var(--text-xs);
 }
 
+.th-criterion-history {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.th-criterion-history > li {
+  min-width: 0;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.th-criterion-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.th-criterion-history-description,
+.th-criterion-history-reason {
+  margin: 0.35rem 0 0;
+  color: var(--color-ink-soft);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.th-criterion-history-reason {
+  color: var(--color-ink-faint);
+}
+
+.th-gate {
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
 .th-lost-list .th-mono {
   flex: 1 1 auto;
 }

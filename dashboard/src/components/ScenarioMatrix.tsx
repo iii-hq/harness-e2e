@@ -650,6 +650,7 @@ function ScenarioResult({
     .filter(Boolean)
     .join(' ')
   const screenshots = expanded ? screenshotsOf(detail, item.scenarioId) : []
+  const scenarioTitle = item.title ?? titleCase(item.scenarioId)
   const title = `${item.scenarioId}${definition ? ` · definition ${definition}` : ''}`
   return (
     <>
@@ -658,7 +659,7 @@ function ScenarioResult({
         data-scenario-row={item.key}
         className="ep-result-row"
         data-row-state={waiting ? item.objective.status : undefined}
-        aria-label={`${titleCase(item.scenarioId)} scenario result`}
+        aria-label={`${scenarioTitle} (${item.scenarioId}) scenario result`}
       >
         <th scope="row" className="ep-cell ep-cell-test">
           <button
@@ -675,9 +676,13 @@ function ScenarioResult({
               aria-hidden="true"
             />
             <span className="ep-row-id">
-              <span className="ep-mono ep-strong" title={title}>
-                {item.scenarioId}
+              <span className="ep-strong" title={title}>
+                {scenarioTitle}
               </span>
+              <span className="ep-mono">{item.scenarioId}</span>
+              {item.summary ? (
+                <span className="ep-row-note">{item.summary}</span>
+              ) : null}
               {note ? <span className="ep-row-note">{note}</span> : null}
               {previous.length > 0 ? (
                 <span

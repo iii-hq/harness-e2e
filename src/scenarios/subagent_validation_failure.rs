@@ -39,17 +39,17 @@ const EXPIRY_DELAY_MS: u64 = 150_000;
 const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::scored(
     "bounded_failure",
     40,
-    "The child fails after exactly the budgeted denials; the verdict key is never written.",
+    "Does the child fail after exactly the budgeted denials while the verdict key remains unwritten?",
 );
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     30,
-    "Validator scoped to the child and the deadline wake armed before the spawn.",
+    "Is the validator scoped to the child with the deadline wake armed before spawn?",
 );
 const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "expiry_report",
     30,
-    "The parent is woken by the expiry notice and reports the give-up with the exact line.",
+    "Is the parent woken by the expiry notice and does it report the give-up with the exact line?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[BOUNDED_FAILURE, ORCHESTRATION_DISCIPLINE, EXPIRY_REPORT];
 
@@ -59,6 +59,14 @@ pub struct SubagentValidationFailure;
 impl Scenario for SubagentValidationFailure {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Bounded Subagent Validation Failure")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Bounds an impossible child validation loop and wakes the parent through an expiry fallback.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

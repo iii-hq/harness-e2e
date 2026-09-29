@@ -38,17 +38,17 @@ const REQUIRED_NAMES: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
 const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::scored(
     "data_repaired",
     40,
-    "All invariants hold at the end and every required name survived the repair.",
+    "Do all invariants hold at the end with every required name preserved by the repair?",
 );
 const DIAGNOSIS_DRIVEN: AssessmentSpec = AssessmentSpec::scored(
     "diagnosis_driven",
     30,
-    "The auditor rejected the flawed seed with a factual defect list (no prescribed fix), via one envelope-mode registration.",
+    "Did one envelope-mode auditor registration reject the flawed seed with a factual defect list and no prescribed fix?",
 );
 const DECISIVE_REPAIR: AssessmentSpec = AssessmentSpec::scored(
     "decisive_repair",
     30,
-    "The model's own repair converged within two rounds (full credit for one, half for two).",
+    "Did the model's own repair converge within two rounds, with full credit for one and half credit for two?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[DATA_REPAIRED, DIAGNOSIS_DRIVEN, DECISIVE_REPAIR];
 
@@ -118,6 +118,14 @@ pub struct ValidationSelfRepair;
 impl Scenario for ValidationSelfRepair {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Validation-Guided Self-Repair")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Diagnoses factual data defects from validator feedback and chooses a bounded repair independently.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

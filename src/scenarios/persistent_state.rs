@@ -24,22 +24,22 @@ const DELIVERABLE_ID: &str = "migration_record";
 const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::scored(
     "exact_migrated_state",
     50,
-    "The stored value exactly equals the migrated record with no missing or additional fields.",
+    "Does the stored value exactly equal the migrated record with no missing or additional fields?",
 );
 const READ_THEN_WRITE_ONCE: AssessmentSpec = AssessmentSpec::scored(
     "read_then_write_once",
     25,
-    "The subject read the owned key before exactly one successful state::set to it, with no errors and no writes elsewhere.",
+    "Did the subject read the owned key before exactly one successful state::set, with no errors or writes elsewhere?",
 );
 const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
     "existing_data_preserved",
     15,
-    "The baseline owner, the alpha item, and the metadata survive unchanged while beta is completed and gamma appended once.",
+    "Do the baseline owner, alpha item, and metadata remain unchanged while beta is completed and gamma is appended once?",
 );
 const CONCISE_MIGRATION_CONFIRMATION: AssessmentSpec = AssessmentSpec::scored(
     "concise_migration_confirmation",
     10,
-    "The final response is concise and states that revision 2 now contains 3 items.",
+    "Is the final response concise and does it state that revision 2 contains three items?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     EXACT_MIGRATED_STATE,
@@ -89,6 +89,16 @@ pub struct PersistentState;
 impl Scenario for PersistentState {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Persistent State Migration")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some(
+            "Migrates an existing state record with one write while preserving all unrelated data.",
+        )
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

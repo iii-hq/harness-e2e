@@ -44,7 +44,7 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
-import { providerModel } from '@/lib/execution-view'
+import { providerModel, titleCase } from '@/lib/execution-view'
 import type { Investigation } from '@/lib/investigation'
 import { requestQuickExecution } from '@/lib/quick-execution'
 import type {
@@ -693,8 +693,11 @@ function CompareRow({
               className="font-mono text-xs font-medium text-ink no-underline hover:underline"
               href={hashForTestHistory(row.test_id)}
             >
-              {row.test_id}
+              {row.spec?.title ?? titleCase(row.test_id)}
             </a>
+            <span className="font-mono text-label text-ink-muted">
+              {row.test_id}
+            </span>
             <TestDefinitionSelect
               row={row}
               disabled={loading}
@@ -1260,7 +1263,13 @@ export function TestsPage({
         rows.filter(
           (row) =>
             (!normalizedQuery ||
-              row.test_id.toLowerCase().includes(normalizedQuery)) &&
+              [
+                row.test_id,
+                row.spec?.title ?? '',
+                row.spec?.summary ?? '',
+              ].some((value) =>
+                value.toLowerCase().includes(normalizedQuery),
+              )) &&
             matchesCompareFilter(states.get(row.test_id) ?? 'none', filter),
         ),
       ),
@@ -1269,7 +1278,10 @@ export function TestsPage({
   const hiddenRows = rows.filter(
     (row) =>
       (states.get(row.test_id) ?? 'none') === 'none' &&
-      (!normalizedQuery || row.test_id.toLowerCase().includes(normalizedQuery)),
+      (!normalizedQuery ||
+        [row.test_id, row.spec?.title ?? '', row.spec?.summary ?? ''].some(
+          (value) => value.toLowerCase().includes(normalizedQuery),
+        )),
   )
 
   const updateCohort = (nextCohort: string) => {

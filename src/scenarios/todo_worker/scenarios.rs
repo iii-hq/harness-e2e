@@ -15,6 +15,14 @@ impl Scenario for TodoWorkerSimple {
         SIMPLE_ID
     }
 
+    fn title(&self) -> Option<&'static str> {
+        Some("Build a Todo Worker")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Build and start a Todo Worker in one session, then validate its function contracts and CRUD behavior independently.")
+    }
+
     fn characterization(&self) -> Result<ScenarioCharacterization> {
         Ok(ScenarioCharacterization::realistic())
     }
@@ -89,6 +97,14 @@ pub struct TodoWorkerPlanned;
 impl Scenario for TodoWorkerPlanned {
     fn id(&self) -> &'static str {
         PLANNED_ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Plan and Build a Todo Worker")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Plan a Todo Worker, execute the compiled plan in a separate Harness session, and validate the result independently.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {

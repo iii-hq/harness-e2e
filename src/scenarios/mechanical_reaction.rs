@@ -17,22 +17,22 @@ const MIRROR_KEY: &str = "mirror";
 const REACTIONS_ARMED: AssessmentSpec = AssessmentSpec::scored(
     "reactions_armed",
     30,
-    "The wake and mechanical call are registered before the source write.",
+    "Are the wake and mechanical call registered before the source write?",
 );
 const MECHANICAL_MIRROR: AssessmentSpec = AssessmentSpec::scored(
     "mechanical_mirror",
     35,
-    "The call binding mirrors the complete source event without a root write.",
+    "Does the call binding mirror the complete source event without a root write?",
 );
 const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
-    "The mirror state event wakes only the original session.",
+    "Does the mirror state event wake only the original session?",
 );
 const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::scored(
     "clean_completion",
     15,
-    "The run finishes without children, errors, or surviving bindings.",
+    "Does the run finish without children, errors, or surviving bindings?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REACTIONS_ARMED,
@@ -47,6 +47,14 @@ pub struct MechanicalReaction;
 impl Scenario for MechanicalReaction {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Mechanical State Reaction")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Mirrors a state event through a mechanical binding and wakes the originating session once.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

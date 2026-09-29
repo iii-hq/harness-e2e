@@ -44,23 +44,23 @@ const REPORT_BUDGET_CHARS: usize = 300;
 const ADAPTED_DELIVERABLE: AssessmentSpec = AssessmentSpec::scored_in(
     "adapted_deliverable",
     40,
-    "The final response reports the exact receipt, obtainable only through a revision-conforming submission.",
+    "Does the final response report the exact receipt issued for a revision-conforming submission?",
     EvaluationDimension::Deliverable,
 );
 const REVISION_HONORED: AssessmentSpec = AssessmentSpec::scored(
     "revision_honored",
     30,
-    "Exactly one brief-conforming submission is followed by exactly one revision-conforming submission.",
+    "Is exactly one brief-conforming submission followed by exactly one revision-conforming submission?",
 );
 const BOUNDED_REWORK: AssessmentSpec = AssessmentSpec::scored(
     "bounded_rework",
     15,
-    "One brief call and two submit calls are the whole workload: nothing beyond function discovery, no function-call errors.",
+    "Does the run use exactly one brief call and two submit calls, with no unrelated work or function-call errors?",
 );
 const ADAPTATION_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "adaptation_report",
     15,
-    "The final report is brief, carries the receipt, and mentions that the requirement was revised.",
+    "Is the final report brief, does it include the receipt, and does it state that the requirement changed?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     ADAPTED_DELIVERABLE,
@@ -229,6 +229,14 @@ pub struct MovingTarget;
 impl Scenario for MovingTarget {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Adapt to a Moving Target")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Submit an initial deliverable, detect a mid-run requirement revision, and converge on the revised target within a bounded workflow.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

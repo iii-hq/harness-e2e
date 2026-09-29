@@ -47,17 +47,17 @@ const SIMPLE_ASSESSMENTS: &[AssessmentSpec] = &[
     AssessmentSpec::scored_in(
         "compose_valid",
         15,
-        "The generated worker-compose.yaml is valid, run-scoped, has an explicit runtime, and exposes a matching stack.",
+        "Is the generated worker-compose.yaml valid, scoped to this run, configured with an explicit runtime, and aligned with the stack it exposes?",
         EvaluationDimension::Deliverable,
     ),
-    AssessmentSpec::scored("worker_live", 15, "The expected local worker is installed and running."),
-    AssessmentSpec::scored("function_surface", 15, "All four Todo functions expose the exact descriptions and schemas."),
-    AssessmentSpec::scored("todo_crud_isolated", 30, "Create, list, update, and delete preserve identity and unrelated items."),
-    AssessmentSpec::scored("todo_invalid_contracts", 15, "Empty titles and unknown IDs are rejected."),
+    AssessmentSpec::scored("worker_live", 15, "Is the expected local worker installed and running?"),
+    AssessmentSpec::scored("function_surface", 15, "Do all four Todo functions expose the required descriptions and schemas?"),
+    AssessmentSpec::scored("todo_crud_isolated", 30, "Do create, list, update, and delete preserve item identity and leave unrelated items unchanged?"),
+    AssessmentSpec::scored("todo_invalid_contracts", 15, "Are empty titles and unknown IDs rejected?"),
     AssessmentSpec::scored_in(
         "evidence_complete",
         10,
-        "The validation bundle is complete, bounded, and bound to the observed candidate.",
+        "Is the validation bundle complete, bounded, and bound to the observed candidate?",
         EvaluationDimension::Deliverable,
     ),
 ];
@@ -66,25 +66,25 @@ pub const PLANNED_CRITERIA: [CriterionSpec; 4] = [
     CriterionSpec::scored(
         "planning_contract",
         25,
-        "The planner emits a bounded, compilable plan with complete mandatory validation coverage.",
+        "Does the planner emit a bounded, compilable plan that covers every mandatory validation?",
         EvaluationDimension::StructuralIntegrity,
     ),
     CriterionSpec::scored(
         "worker_construction",
         25,
-        "The separate builder materializes the exact run-scoped worker contract and brings it live.",
+        "Does the separate builder materialize the exact run-scoped worker contract and bring the worker live?",
         EvaluationDimension::Deliverable,
     ),
     CriterionSpec::scored(
         "validation_coverage",
         25,
-        "Every planned check is executed by the independent runner with immutable evidence.",
+        "Does the independent runner execute every planned check and retain immutable evidence?",
         EvaluationDimension::StructuralIntegrity,
     ),
     CriterionSpec::scored(
         "functional_correctness",
         25,
-        "The compiled hard gates prove lifecycle, function contracts, CRUD isolation, and invalid-input behavior.",
+        "Do the compiled hard gates prove the worker lifecycle, function contracts, CRUD isolation, and invalid-input behavior?",
         EvaluationDimension::Deliverable,
     ),
 ];

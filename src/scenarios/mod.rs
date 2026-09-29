@@ -84,6 +84,10 @@ pub use domain::{
 pub trait Scenario: Send + Sync {
     /// The registered id, equal to the `ScenarioId` string.
     fn id(&self) -> &'static str;
+    /// A human-readable name, separate from the stable registered id.
+    fn title(&self) -> Option<&'static str> {
+        None
+    }
     fn execution_kind(&self) -> ScenarioExecutionKind {
         ScenarioExecutionKind::HarnessTurn
     }
@@ -538,6 +542,10 @@ impl ScenarioId {
 
     pub fn summary(self) -> Option<&'static str> {
         self.module().summary()
+    }
+
+    pub fn title(self) -> Option<&'static str> {
+        self.module().title()
     }
 }
 

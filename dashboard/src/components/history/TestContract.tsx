@@ -77,6 +77,9 @@ export function TestContract({ spec }: { spec: TestSpec }) {
               <span className="th-criterion">
                 <span className="th-mono">{criterion.id}</span>
                 <span className="th-faint">{criterion.description}</span>
+                {criterion.gate ? (
+                  <span className="th-gate">Blocks completion</span>
+                ) : null}
               </span>
             </li>
           ))}
