@@ -452,6 +452,17 @@ try {
   assert.equal(await sep25.locator('li[data-change]').count(), 10)
   await sep25.getByRole('button', { name: 'Show fewer' }).click()
   assert.equal(await sep25.locator('li[data-change]').count(), 7)
+  // Clearing the baseline with the list unfolded leaves nothing to fold back.
+  await sep25.getByRole('button', { name: 'Show 3 more' }).click()
+  await chip.getByRole('button', { name: 'Clear baseline' }).click()
+  await sep25.getByRole('heading', { name: /^What changed since / }).waitFor()
+  assert.equal(await sep25.getByRole('button', { name: /^Show/ }).count(), 0)
+  await sep25.getByRole('button', { name: 'Set as baseline' }).waitFor()
+  await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
+  await sep23.getByRole('button', { name: 'Set as baseline' }).click()
+  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await scoreAt(/^Sep 25, 2:17 AM · Score 96\.9$/).click()
+  await sep25.getByRole('button', { name: 'Show 3 more' }).waitFor()
   await sep25.getByText('Against the baseline, Sep 23, 2:17 AM').waitFor()
   assert.equal(
     await scoreRef.innerText(),
@@ -500,6 +511,17 @@ try {
   await page.getByRole('menuitemradio', { name: 'All time' }).click()
   await chip.getByText('Sep 23, 2:17 AM').waitFor()
   assert.equal(await page.locator('.tr-baseline').count(), 7)
+
+  // Another stack keeps it while its execution is there.
+  await page.locator('[data-stack-picker]').click()
+  await page.getByRole('menuitemradio', { name: /^default/ }).click()
+  await summary.getByText('11 executions ', { exact: false }).waitFor()
+  await hashMatches(/stack=default&range=all&base=github-35821773226-2$/)
+  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await page.locator('[data-stack-picker]').click()
+  await page.getByRole('menuitemradio', { name: /^any/ }).click()
+  await summary.getByText('14 executions ', { exact: false }).waitFor()
+  await hashMatches(/stack=any&range=all&base=github-35821773226-2$/)
 
   // The chip's time shows the baseline; its cross clears it.
   await chip.getByRole('button', { name: /^Baseline/ }).click()

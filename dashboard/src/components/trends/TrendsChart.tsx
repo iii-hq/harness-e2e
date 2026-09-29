@@ -100,7 +100,13 @@ function Reference({
   selected: number
   baseline: number
 }) {
-  const text = referenceText(comparedPair(points, metric, selected, baseline))
+  const pair = comparedPair(points, metric, selected, baseline)
+  const picked = selected >= 0 ? points[selected] : undefined
+  const text =
+    referenceText(pair) ??
+    (picked
+      ? `${pointTime(picked)} · ${counted(picked) ? 'no value for this measure' : 'no counted run'}`
+      : null)
   return text ? <p className="tr-footnote tr-reference">{text}</p> : null
 }
 

@@ -337,6 +337,27 @@ describe('trends page parts', () => {
       expect(small).toContain('data-selected="true"')
     })
 
+    it('says why a card is blank when the picked execution has nothing to show', () => {
+      const failed = all.findIndex(
+        (point) => point.execution_id === 'github-36220337119-1',
+      )
+      const html = renderToStaticMarkup(
+        <SmallChart
+          metric={trendMetric('duration')}
+          points={all}
+          changes={allChanges}
+          selected={failed}
+          baseline={BASE}
+          narrow={false}
+          onFocus={() => undefined}
+        />,
+      )
+      expect(html).toContain(
+        `<p class="tr-footnote tr-reference">${pointTime(all[failed])} · no counted run</p>`,
+      )
+      expect(html).toContain('>—<')
+    })
+
     it('draws no rule without one', () => {
       const html = renderToStaticMarkup(
         <LargeChart

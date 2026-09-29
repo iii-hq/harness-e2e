@@ -827,18 +827,6 @@ export function previousCounted(points: TrendPoint[], index: number) {
   return lastBefore(points, index, counted)
 }
 
-/** What the panel of execution `index` reads against: the baseline when
- *  there is one and it is another execution, else the previous counted. */
-export function panelAgainst(
-  points: TrendPoint[],
-  index: number,
-  baseline: number,
-) {
-  if (baseline >= 0 && baseline !== index)
-    return { point: points[baseline], isBaseline: true }
-  return { point: previousCounted(points, index), isBaseline: false }
-}
-
 /* ------------------------------------------------------------- baseline */
 
 /** The baseline execution in the hash, if it names one. */

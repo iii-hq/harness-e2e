@@ -1,5 +1,5 @@
 import { ArrowUpRight, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { buttonClassName } from '@/design-system'
 import {
   hashForComparison,
@@ -39,28 +39,36 @@ function useCommitLookups(
   changes: TrendChange[],
 ) {
   const [found, setFound] = useState<Record<string, Lookup>>({})
+  // A range is asked once while the panel is open; one that failed is asked
+  // again the next time it is shown.
+  const asked = useRef(new Set<string>())
+  const open = useRef(true)
+  useEffect(() => {
+    open.current = true
+    return () => {
+      open.current = false
+    }
+  }, [])
   useEffect(() => {
     if (!bridge) return
-    let cancelled = false
     for (const change of changes) {
       const request = change.compare
       if (!request) continue
       const key = compareKey(request)
-      setFound((current) =>
-        key in current ? current : { ...current, [key]: 'pending' },
-      )
+      if (asked.current.has(key)) continue
+      asked.current.add(key)
+      setFound((current) => ({ ...current, [key]: 'pending' }))
       bridge
         .compareVersions(request)
         .then((answer) => {
-          if (!cancelled) setFound((current) => ({ ...current, [key]: answer }))
+          if (open.current)
+            setFound((current) => ({ ...current, [key]: answer }))
         })
         .catch(() => {
-          if (!cancelled)
+          asked.current.delete(key)
+          if (open.current)
             setFound((current) => ({ ...current, [key]: 'failed' }))
         })
-    }
-    return () => {
-      cancelled = true
     }
   }, [bridge, changes])
   return found
@@ -126,7 +134,10 @@ export function PointPanel({
     ? points.findIndex((item) => item.execution_id === against.execution_id)
     : -1
   const before = index > 0 ? points[index - 1] : null
-  const [showAll, setShowAll] = useState(false)
+  // Unfolded only for the reference it was unfolded against.
+  const referenceId = against?.execution_id ?? ''
+  const [unfolded, setUnfolded] = useState<string | null>(null)
+  const showAll = unfolded === referenceId
   const listed = useMemo(() => {
     const all = against ? changesBetween(points, againstIndex, index) : changes
     const ordered = majorsFirst(all)
@@ -243,7 +254,7 @@ export function PointPanel({
             type="button"
             className={buttonClassName({ variant: 'quiet', size: 'compact' })}
             aria-expanded={showAll}
-            onClick={() => setShowAll((current) => !current)}
+            onClick={() => setUnfolded(showAll ? null : referenceId)}
           >
             {showAll ? 'Show fewer' : `Show ${listed.hidden} more`}
           </button>

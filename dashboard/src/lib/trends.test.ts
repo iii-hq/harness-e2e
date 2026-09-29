@@ -17,7 +17,6 @@ import {
   majorsFirst,
   modelChoices,
   notRun,
-  panelAgainst,
   periodBounds,
   periodError,
   periodFromParams,
@@ -392,17 +391,6 @@ describe('a baseline', () => {
       why: 'no_counted_run',
     })
     expect(baselineOf(all, null)).toEqual({ index: -1, why: null })
-  })
-
-  it('reads the panel against the baseline, else the previous counted execution', () => {
-    expect(panelAgainst(all, SEP25, BASE)).toMatchObject({ isBaseline: true })
-    expect(panelAgainst(all, SEP25, BASE).point?.execution_id).toBe(
-      all[BASE].execution_id,
-    )
-    expect(panelAgainst(all, BASE, BASE).isBaseline).toBe(false)
-    expect(panelAgainst(all, SEP25, -1).point?.execution_id).toBe(
-      previousCounted(all, SEP25)?.execution_id,
-    )
   })
 
   it('keeps the baseline in the hash', () => {
