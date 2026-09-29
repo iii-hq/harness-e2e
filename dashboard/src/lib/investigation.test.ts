@@ -78,6 +78,24 @@ describe('investigation prompt', () => {
     expect(prompt).toContain('detail.reports is empty')
   })
 
+  it('focuses both runs when two runs of a test are compared', () => {
+    const prompt = investigationPrompt({
+      executionId: 'a',
+      comparisonExecutionId: 'b',
+      focus: {
+        scenarioId: 'form_flow_build',
+        runId: 'r1',
+        comparedRunId: 'r2',
+      },
+    })
+    expect(selectedContext(prompt).focus).toEqual({
+      scenario_id: 'form_flow_build',
+      run_id: 'r1',
+      compared_run_id: 'r2',
+    })
+    expect(prompt).toContain('Start from the focused test and runs')
+  })
+
   it('asks for no commit range when nothing changed', () => {
     const prompt = investigationPrompt({ executionId: 'execution-1' })
     expect(prompt).not.toContain('version-compare')

@@ -7,6 +7,7 @@ import {
   metricRows,
   pairFromHash,
   RunComparison,
+  runsInvestigation,
   side,
   sideScore,
   workerCalls,
@@ -31,6 +32,21 @@ describe('two runs of a test', () => {
     expect(routeFromHash('#/ext/harness-e2e/tests/form_flow_build')).toEqual({
       page: 'test-history',
       testId: 'form_flow_build',
+    })
+  })
+
+  it('investigates the two runs as a comparison of their executions, focused on them', () => {
+    expect(runsInvestigation('form_flow_build', a, b)).toEqual({
+      executionId: 'plan-f811eb1f31c9ab47bca5de86e3c895e5',
+      comparisonExecutionId: 'plan-cf6ab5f943136bb54a954bc763a26eff',
+      focus: {
+        scenarioId: 'form_flow_build',
+        runId: '32c6b9c4907846aaaea371cb86b00003',
+        comparedRunId: '32c6b9c4907846aaaea371cb86b00004',
+      },
+      changes: [
+        { what: 'profile', change: 'ade-worker-builder → ade-solo-builder' },
+      ],
     })
   })
 

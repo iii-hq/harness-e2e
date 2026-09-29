@@ -12,6 +12,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -44,6 +45,7 @@ import {
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import { providerModel } from '@/lib/execution-view'
+import type { Investigation } from '@/lib/investigation'
 import { requestQuickExecution } from '@/lib/quick-execution'
 import type {
   CohortDescriptor,
@@ -405,6 +407,37 @@ function summaryStatusFromObservation(status: string): {
   return { status: 'failed', label: status.replace(/[_-]+/g, ' ') }
 }
 
+/** The chat reads a test across the two versions as its latest execution
+ *  on each side, A before B; null until both sides have one. */
+export function versionInvestigation(
+  result: TestVersionResult,
+): Investigation | null {
+  const latest = (observations: TestObservation[]) =>
+    [...observations]
+      .sort((x, y) => x.completed_at.localeCompare(y.completed_at))
+      .at(-1)
+  const a = latest(result.from_observations)
+  const b = latest(result.to_observations)
+  if (!a || !b) return null
+  return {
+    executionId: a.execution_id,
+    comparisonExecutionId: b.execution_id,
+    focus: { scenarioId: result.test_id },
+    changes:
+      result.compatibility === 'compatible'
+        ? []
+        : [
+            {
+              what: 'test contract',
+              change: [
+                result.compatibility.replaceAll('_', ' '),
+                ...result.compatibility_reasons,
+              ].join('; '),
+            },
+          ],
+  }
+}
+
 /** Audit CP-19: tiles only with data on at least one side; evidence as a list. */
 export function RowDetails({
   result,
@@ -423,6 +456,7 @@ export function RowDetails({
     )
   }
   const warnings = comparisonWarnings(result)
+  const investigation = versionInvestigation(result)
   const pair = (
     label: string,
     from: string,
@@ -540,17 +574,26 @@ export function RowDetails({
           </ul>
         )}
       </div>
-      <a
-        className={buttonClassName({
-          variant: 'quiet',
-          size: 'compact',
-          className: 'justify-self-start no-underline',
-        })}
-        href={hashForTestHistory(result.test_id)}
-      >
-        open history
-        <ArrowRight size={13} aria-hidden="true" />
-      </a>
+      <span className="inline-flex flex-wrap items-center gap-1 justify-self-start">
+        <a
+          className={buttonClassName({
+            variant: 'quiet',
+            size: 'compact',
+            className: 'no-underline',
+          })}
+          href={hashForTestHistory(result.test_id)}
+        >
+          open history
+          <ArrowRight size={13} aria-hidden="true" />
+        </a>
+        {investigation ? (
+          <InvestigationAction
+            label="Investigate A and B"
+            buttonClass={buttonClassName({ variant: 'quiet', size: 'compact' })}
+            {...investigation}
+          />
+        ) : null}
+      </span>
     </div>
   )
 }

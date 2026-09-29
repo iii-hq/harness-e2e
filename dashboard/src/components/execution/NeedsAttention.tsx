@@ -7,6 +7,7 @@ import {
 } from '@iii-dev/console-ui'
 import { AlertCircle, CircleMinus, Ellipsis, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { itemScore, runCriteria } from '@/components/ScenarioMatrix'
 import { ownReason, type ScenarioMatrixItem } from '@/lib/scenario-matrix'
 import './execution-page.css'
@@ -20,6 +21,7 @@ export type AttentionItem =
       kind: 'test'
       key: string
       scenarioId: string
+      subjectId: string
       tone: AttentionTone
       /** What happened, after the test's id: one line. */
       summary: string
@@ -122,6 +124,7 @@ export function attentionItems(
               kind: 'test' as const,
               key: item.key,
               scenarioId: item.scenarioId,
+              subjectId: item.subjectId,
               ...attention,
             },
           ]
@@ -160,10 +163,12 @@ const ICONS: Record<AttentionTone, ReactNode> = {
  *  shows under the line once asked for. */
 function AttentionRow({
   item,
+  executionId,
   onShow,
   onRerun,
 }: {
   item: AttentionItem
+  executionId?: string
   onShow: (key: string) => void
   onRerun?: (scenarioId: string) => void
 }) {
@@ -219,6 +224,14 @@ function AttentionRow({
             Show test
           </button>
         ) : null}
+        {test && executionId ? (
+          <InvestigationAction
+            label="Investigate"
+            buttonClass="ds-button ds-button-quiet ds-button-compact"
+            executionId={executionId}
+            focus={{ scenarioId: test.scenarioId, subjectId: test.subjectId }}
+          />
+        ) : null}
         {test && onRerun ? (
           <button
             type="button"
@@ -237,10 +250,13 @@ function AttentionRow({
 
 export function NeedsAttention({
   items,
+  executionId,
   onShow,
   onRerun,
 }: {
   items: AttentionItem[]
+  /** Investigate each test in chat, when the host has one. */
+  executionId?: string
   onShow: (key: string) => void
   /** Run one test again, offered on each test item once finished. */
   onRerun?: (scenarioId: string) => void
@@ -261,6 +277,7 @@ export function NeedsAttention({
           <AttentionRow
             key={item.key}
             item={item}
+            executionId={executionId}
             onShow={onShow}
             onRerun={onRerun}
           />

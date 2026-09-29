@@ -53,6 +53,7 @@ import {
 } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
+import { useInvestigation } from '@/components/InvestigationAction'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
@@ -473,6 +474,8 @@ export type LedgerActions = {
   copyId: (row: LedgerRow) => void
   cancel: (row: LedgerRow) => void
   delete: (row: LedgerRow) => void
+  /** Only when the host has a chat. */
+  investigate?: (row: LedgerRow) => void
 }
 
 /** Only executions started or imported here have a name of their own. */
@@ -498,6 +501,14 @@ export function rowMenuItems(
       onSelect: () => actions.open(row),
     },
   ]
+  const { investigate } = actions
+  if (investigate)
+    items.push({
+      label: 'Investigate',
+      hint: 'In a new Harness chat',
+      icon: icon(Search),
+      onSelect: () => investigate(row),
+    })
   if (renamable(row))
     items.push({
       label: 'Rename…',
@@ -1225,6 +1236,7 @@ function menuButton(id: string) {
 }
 
 export function ExecutionsPage() {
+  const investigate = useInvestigation()
   const chrome = useDashboardChrome()
   const narrow = chrome?.narrow ?? false
   const phone = chrome?.phone ?? false
@@ -1398,6 +1410,9 @@ export function ExecutionsPage() {
     open: (row) => {
       window.location.hash = hashForExecution(row.id)
     },
+    investigate: investigate
+      ? (row) => investigate({ executionId: row.id })
+      : undefined,
     rename: (row) => {
       focusBack.current = aroundRow(row.id)
       setRenaming(row)
@@ -1664,6 +1679,23 @@ export function ExecutionsPage() {
             <GitCompare aria-hidden="true" />
             Compare A and B
           </Button>
+          {bar.compare && investigate ? (
+            <Button
+              type="button"
+              variant="pill"
+              size="sm"
+              onClick={() => {
+                if (bar.compare)
+                  investigate({
+                    executionId: bar.compare[0],
+                    comparisonExecutionId: bar.compare[1],
+                  })
+              }}
+            >
+              <Search aria-hidden="true" />
+              Investigate A and B
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="pill"

@@ -178,26 +178,34 @@ describe('execution totals (canvas)', () => {
 describe('needs attention (canvas)', () => {
   it('counts items and offers Run again and Show error', () => {
     const html = renderToStaticMarkup(
-      <NeedsAttention
-        items={[
-          {
-            kind: 'test',
-            key: 'k',
-            scenarioId: 'kanban_c4',
-            tone: 'neutral',
-            summary: 'didn’t complete the task (80/100): short',
-            detail: null,
-          },
-          {
-            kind: 'warning',
-            key: 'w',
-            text: `Execution error: ${'x'.repeat(300)}`,
-          },
-        ]}
-        onShow={() => {}}
-        onRerun={() => {}}
-      />,
+      <InvestigationContext value={() => {}}>
+        <NeedsAttention
+          executionId="plan-1"
+          items={[
+            {
+              kind: 'test',
+              key: 'k',
+              scenarioId: 'kanban_c4',
+              subjectId: 'deepseek-flash',
+              tone: 'neutral',
+              summary: 'didn’t complete the task (80/100): short',
+              detail: null,
+            },
+            {
+              kind: 'warning',
+              key: 'w',
+              text: `Execution error: ${'x'.repeat(300)}`,
+            },
+          ]}
+          onShow={() => {}}
+          onRerun={() => {}}
+        />
+      </InvestigationContext>,
     )
+    // Each test opens the chat on itself; a warning has no test to focus.
+    expect(html.match(/aria-label="Investigate [^"]*"/g)).toEqual([
+      'aria-label="Investigate kanban_c4"',
+    ])
     expect(html).toContain('data-attention-count="true">2<')
     expect(html).toContain('data-attention-rerun="kanban_c4"')
     expect(html).toContain('Show error')

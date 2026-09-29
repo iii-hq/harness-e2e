@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TestCatalogRow, TestSideSummary } from '@/lib/test-catalog'
+import type {
+  TestCatalogRow,
+  TestObservation,
+  TestSideSummary,
+} from '@/lib/test-catalog'
 import {
   comparisonHasNoOverlap,
   comparisonVerdict,
@@ -11,6 +15,7 @@ import {
   SideResult,
   sortCompareRows,
   summaryStatus,
+  versionInvestigation,
 } from '@/pages/TestsPage'
 
 function side(overrides: Partial<TestSideSummary> = {}): TestSideSummary {
@@ -170,6 +175,35 @@ describe('comparison row states', () => {
     expect(html).not.toContain('median tokens')
     expect(html).toContain('No retained observations.')
     expect(html).toContain('open history')
+  })
+
+  it('investigates a test across the versions from the latest execution on each side', () => {
+    const seen = (execution_id: string, completed_at: string) =>
+      ({ execution_id, completed_at }) as TestObservation
+    const result = row(side(), side(), {}, 'contract_changed').result
+    if (!result) throw new Error('missing result fixture')
+    expect(versionInvestigation(result)).toBeNull()
+    expect(
+      versionInvestigation({
+        ...result,
+        compatibility_reasons: ['criterion weights differ'],
+        from_observations: [
+          seen('a-late', '2026-09-03T00:00:00Z'),
+          seen('a-early', '2026-09-01T00:00:00Z'),
+        ],
+        to_observations: [seen('b', '2026-09-05T00:00:00Z')],
+      }),
+    ).toEqual({
+      executionId: 'a-late',
+      comparisonExecutionId: 'b',
+      focus: { scenarioId: 'direct_answer' },
+      changes: [
+        {
+          what: 'test contract',
+          change: 'contract changed; criterion weights differ',
+        },
+      ],
+    })
   })
 
   // Audit CP-20: two sides that share nothing produce a table of empty delta

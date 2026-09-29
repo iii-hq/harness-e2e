@@ -1096,6 +1096,7 @@ export function ExecutionPage({
         ) : null}
         {(!live || (detail.plan_execution && !githubLive)) && scenarioMatrix ? (
           <NeedsAttention
+            executionId={detail.id}
             items={attentionItems(scenarioMatrix.items, [
               ...(detail.plan_execution?.error
                 ? [`Execution error: ${detail.plan_execution.error}`]
