@@ -1,20 +1,24 @@
 // Deterministic browser coverage for Stacks as the redesign canvas draws it:
-// the repository's stacks apart from this Console's (empty, then a copy), a
-// repository stack viewed read-only with its YAML as written, Copy to edit,
-// an edit whose warnings show beside the editor, a save the runner refuses
-// said beside it without clearing what was typed, Discard and the question
-// before closing unsaved changes; New stack, the stack builder: iii-hq/templates
-// failing then read again, the harness template with a worker it would ignore
-// refused, a pin to a commit, a copy carrying a worker the template ignores
-// (blocked, removed) and Create; a copy created as written when untouched,
-// and with only its changed lines when touched; without a template a worker another brings
-// (blocked, by the registry), a name the registry does not know, and Edit as
-// YAML saved as a new stack; Delete behind the host's confirmation (run once
-// when confirmed twice), a sheet kept when its stack is deleted elsewhere;
-// then the provider credentials: set, add and delete one, by name only. The
-// repository's stacks are the files of stacks/; the runner's answers (what a
-// stack declares, its warnings and the parse error), iii-hq/templates and the
-// registry are stood in for here and covered by the Rust tests.
+// the repository's stacks apart from this Console's (empty, then a copy), and
+// the stack sheet, one screen to create, edit and view a stack with its Form
+// and YAML tabs over one draft. A repository stack opens read-only in both
+// tabs, with Copy YAML and Copy to edit, and the last tab is remembered; a
+// copy is edited in the Form keeping its comments, then in the YAML tab,
+// which the Form reflects; warnings, the runner's refusal, Discard and the
+// question before closing unsaved changes; New stack from the Form:
+// iii-hq/templates failing then read again, the harness template at a fixed
+// revision (its workers read there, one that does not resolve blocking), iii
+// picked from its releases and a typed version the releases do not have, a
+// worker the template would ignore blocked in the Form and in the YAML tab,
+// a pin to a commit and Create; a copy created as written when untouched,
+// and with only its changed lines when touched; without a template a worker
+// another brings (blocked, by the registry) and a name the registry does not
+// know; Delete from the list and from the sheet, a sheet kept when its stack
+// is deleted elsewhere; then the provider credentials: set, add and delete
+// one, by name only. The repository's stacks are the files of stacks/; the
+// runner's answers (what a stack declares, its warnings and the parse error),
+// iii-hq/templates, iii-hq/iii and the registry are stood in for here and
+// covered by the Rust tests.
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -24,16 +28,27 @@ import { createConsoleTestHost } from './console-test-host.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
+const NOT_YAML =
+  'The stack is not YAML: did not find expected node content at line 2 column 1, while parsing a flow node'
+
+/** A scalar as the runner reads it, quoted or not; '' for `""`. */
+const scalar = (text, key) => {
+  const found = new RegExp(`^${key}: *(?:"([^"]*)"|([^\\s"#]+))`, 'm').exec(
+    text,
+  )
+  return found ? (found[1] ?? found[2]) : null
+}
+
 /** What the runner lists for a stack's YAML: its containers and warnings. */
 function view(id, label, source, yaml) {
+  if (/^containers: \[/m.test(yaml)) throw new Error(NOT_YAML)
   if (!/^containers:/m.test(yaml))
     throw new Error('A stack needs a `containers` mapping.')
   const block = yaml.slice(yaml.search(/^containers:/m)).split(/\n(?=\S)/)[0]
   const containers = [
     ...block.matchAll(/^ {2}([\w-]+):\n((?: {4}.*(?:\n|$))*)/gm),
   ].map(([, name, body]) => {
-    const key = (field) =>
-      new RegExp(`^ {4}${field}: "?([^\\s"#]+)"?`, 'm').exec(body)?.[1] ?? null
+    const key = (field) => scalar(body, ` {4}${field}`)
     return {
       name,
       worker: key('worker'),
@@ -58,11 +73,27 @@ function view(id, label, source, yaml) {
     label,
     source,
     yaml,
-    iii: /^iii: (\S+)$/m.exec(yaml)?.[1] ?? null,
-    template: /^template: (\S+)$/m.exec(yaml)?.[1] ?? null,
+    iii: scalar(yaml, 'iii'),
+    template: scalar(yaml, 'template'),
     containers,
     warnings,
     updated_at: source === 'local' ? '2026-09-24T09:00:00Z' : null,
+  }
+}
+
+/** stack-preview: the draft as a saved stack reads, or the refusal. */
+function preview(yaml) {
+  try {
+    const read = view('', '', 'local', yaml)
+    const [id, revision] = read.template?.split('@') ?? []
+    return {
+      iii: read.iii,
+      template: id ? { id, revision: revision || null } : null,
+      containers: read.containers,
+      warnings: read.warnings,
+    }
+  } catch (error) {
+    return { refused: error.message }
   }
 }
 
@@ -85,8 +116,11 @@ const calls = {
   remove: [],
   credentials: [],
   resolve: [],
+  templates: [],
+  releases: [],
 }
-// iii-hq/templates, as the worker lists them: the first read fails.
+// iii-hq/templates, as the worker lists them: the first read fails. At the
+// revision v1.2 the harness template has no browser and needs iii 0.24.3.
 let failTemplates = true
 const templateWorkers = (names) =>
   names.map((name) => ({
@@ -94,10 +128,29 @@ const templateWorkers = (names) =>
     worker: `package://${name}`,
     version: 'latest',
   }))
-const templates = {
+const HARNESS_WORKERS = [
+  'queue',
+  'state',
+  'session-manager',
+  'llm-router',
+  'provider-anthropic',
+  'provider-openai',
+  'provider-deepseek',
+  'context-manager',
+  'iii-directory',
+  'cron',
+  'ade',
+  'ide',
+  'harness',
+  'browser',
+]
+const templatesAt = (ref) => ({
   repository: 'iii-hq/templates',
-  ref: 'main',
-  revision: '4077e670ee4c503f760f2a72c9275b2e00ac6437',
+  ref,
+  revision:
+    ref === 'main'
+      ? '4077e670ee4c503f760f2a72c9275b2e00ac6437'
+      : '9d1e2c3b4a5f60718293a4b5c6d7e8f901234567',
   templates: [
     {
       id: 'starter',
@@ -110,24 +163,33 @@ const templates = {
       id: 'harness',
       name: 'Harness',
       description: 'Build with agents in the ADE, the iii agent workspace',
-      workers: templateWorkers([
-        'queue',
-        'state',
-        'session-manager',
-        'llm-router',
-        'provider-anthropic',
-        'provider-openai',
-        'provider-deepseek',
-        'context-manager',
-        'iii-directory',
-        'cron',
-        'ade',
-        'ide',
-        'harness',
-        'browser',
-      ]),
+      workers: templateWorkers(
+        ref === 'main'
+          ? HARNESS_WORKERS
+          : HARNESS_WORKERS.filter((name) => name !== 'browser'),
+      ),
+      ...(ref === 'main' ? {} : { min_iii_version: '0.24.3' }),
     },
   ],
+})
+// iii-hq/iii's releases as the worker lists them, from the fixture the Rust
+// tests read: iii/v tags only, the alphas left out.
+const CLI_ASSET = 'iii-x86_64-unknown-linux-gnu.tar.gz'
+const iiiReleases = {
+  latest_candidate: '0.24.3-rc.1',
+  releases: JSON.parse(
+    readFileSync(
+      path.join(root, 'tests/fixtures/stack-builder/iii-releases.json'),
+      'utf8',
+    ),
+  )
+    .filter((release) => !release.draft && release.tag_name.startsWith('iii/v'))
+    .map((release) => ({
+      version: release.tag_name.slice('iii/v'.length),
+      prerelease: release.prerelease,
+      published_at: release.published_at,
+      cli: release.assets.some((asset) => asset.name === CLI_ASSET),
+    })),
 }
 // The iii registry: harness brings browser; browser answers once let go.
 const registry = {
@@ -194,6 +256,7 @@ const trigger = (name, request = {}) => {
     }
     return { stacks: [...repository, ...local] }
   }
+  if (id === 'stack-preview') return preview(request.yaml)
   if (id === 'stack-create') {
     if (failCreate) {
       failCreate = false
@@ -213,13 +276,31 @@ const trigger = (name, request = {}) => {
     return request.label === 'Mine' ? mineCreated.then(() => stack) : stack
   }
   if (id === 'stack-templates-list') {
+    const ref = request.revision ?? 'main'
+    calls.templates.push(ref)
     if (failTemplates) {
       failTemplates = false
       throw new Error(
         'GitHub answered 503 Service Unavailable for https://api.github.com/repos/iii-hq/templates/commits/main.',
       )
     }
-    return templates
+    if (ref !== 'main' && ref !== 'v1.2')
+      throw new Error(`iii-hq/templates has no commit, tag or branch ${ref}.`)
+    return templatesAt(ref)
+  }
+  if (id === 'iii-releases-list') {
+    calls.releases.push(request.version ?? null)
+    if (!request.version) return iiiReleases
+    return {
+      ...iiiReleases,
+      checked: {
+        version: request.version,
+        release:
+          iiiReleases.releases.find(
+            (release) => release.version === request.version,
+          ) ?? null,
+      },
+    }
   }
   if (id === 'worker-resolve') {
     calls.resolve.push(request.worker)
@@ -244,10 +325,7 @@ const trigger = (name, request = {}) => {
   }
   if (id === 'stack-update') {
     calls.update.push(request)
-    if (request.yaml?.startsWith('containers: ['))
-      throw new Error(
-        'The stack is not YAML: did not find expected node content at line 2 column 1, while parsing a flow node',
-      )
+    if (request.yaml?.startsWith('containers: [')) throw new Error(NOT_YAML)
     const index = local.findIndex((stack) => stack.id === request.stack_id)
     const saved = view(
       request.stack_id,
@@ -287,6 +365,14 @@ const twice = (button) => {
   button.click()
   button.click()
 }
+
+/** The lines a read-only YAML region shows. */
+const shownLines = (region) =>
+  region
+    .locator('.sk-text')
+    .evaluateAll((lines) =>
+      lines.map((line) => line.textContent.trimEnd()).join('\n'),
+    )
 
 const server = await createConsoleTestHost()
 const browser = await chromium.launch({ headless: true })
@@ -351,8 +437,8 @@ try {
     .getByText('The runner could not copy it.', { exact: true })
     .waitFor()
 
-  // A repository stack opens read-only: what it installs, its workers with
-  // the worker each runs, and its YAML exactly as stacks/ writes it.
+  // A repository stack opens in the same sheet, read-only in both tabs: the
+  // Form on what it declares, beside its YAML exactly as stacks/ writes it.
   await page.getByRole('button', { name: 'View default', exact: true }).click()
   const viewer = page.getByRole('dialog', { name: 'default', exact: true })
   await viewer.getByText('Repository · read-only', { exact: true }).waitFor()
@@ -362,19 +448,50 @@ try {
     })
     .waitFor()
   assert.equal(await page.getByText('The runner could not copy it.').count(), 0)
-  const shownYaml = await viewer
-    .locator('.sk-line .sk-text')
-    .evaluateAll((lines) => lines.map((line) => line.textContent).join('\n'))
-  assert.equal(shownYaml, fallback.yaml.replace(/\n$/, ''))
+  const tab = (sheet, name) =>
+    sheet.getByRole('tab', { name, exact: true }).click()
+  assert.equal(
+    await viewer
+      .getByRole('tab', { name: 'Form', exact: true })
+      .getAttribute('aria-selected'),
+    'true',
+  )
+  assert.equal(
+    await viewer.locator('fieldset.sb-form').evaluate((set) => set.disabled),
+    true,
+  )
+  assert.equal(
+    await shownLines(
+      viewer.getByRole('region', { name: 'Stack YAML, read-only here' }),
+    ),
+    fallback.yaml.replace(/\n$/, ''),
+  )
+  const harness = viewer.locator('[data-worker="harness"]')
+  await harness.getByText('package://harness', { exact: true }).waitFor()
+  assert.equal(
+    await harness
+      .getByRole('button', { name: 'Version of harness', exact: true })
+      .isDisabled(),
+    true,
+  )
+  assert.equal(
+    await viewer.getByRole('button', { name: 'Add worker' }).count(),
+    0,
+  )
+  // The YAML tab: the YAML as written, never an editor, with Copy YAML.
+  await tab(viewer, 'YAML')
+  assert.equal(await viewer.locator('#sb-yaml').count(), 0)
+  assert.equal(
+    await shownLines(
+      viewer.getByRole('region', { name: 'Stack YAML, read-only' }),
+    ),
+    fallback.yaml.replace(/\n$/, ''),
+  )
   await viewer
     .getByText(
       `${fallback.yaml.replace(/\n$/, '').split('\n').length} lines · `,
     )
     .waitFor()
-  const harness = viewer.locator('[data-worker="harness"]')
-  await harness.getByText('package://harness', { exact: true }).waitFor()
-  await harness.getByText('latest', { exact: true }).waitFor()
-  assert.equal(await viewer.locator('#sk-yaml').count(), 0)
   assert.equal(
     await viewer.getByRole('button', { name: 'Save stack' }).count(),
     0,
@@ -385,79 +502,133 @@ try {
     await page.evaluate(() => navigator.clipboard.readText()),
     fallback.yaml,
   )
+  // The last tab is remembered.
+  await viewer.getByRole('button', { name: 'Close', exact: true }).click()
+  await viewer.waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: 'View default', exact: true }).click()
+  assert.equal(
+    await viewer
+      .getByRole('tab', { name: 'YAML', exact: true })
+      .getAttribute('aria-selected'),
+    'true',
+  )
+  await tab(viewer, 'Form')
 
-  // Copy to edit makes a stack of this Console and opens it to edit, its
-  // YAML exactly as the repository writes it.
+  // Copy to edit makes a stack of this Console and opens it to edit in the
+  // same sheet, its YAML exactly as the repository writes it.
   await viewer
     .getByRole('button', { name: 'Copy to edit', exact: true })
     .click()
   await page.getByRole('dialog', { name: 'Edit default copy' }).waitFor()
-  // Named by the stack it edits, which a save renames.
   const editor = page.locator('[data-stack-sheet="edit"]')
   assert.deepEqual(calls.create, [{ from: 'default', label: '' }])
   await editor
     .getByText('Created. Change what you need, then save.', { exact: true })
     .waitFor()
-  const text = editor.locator('#sk-yaml')
-  assert.equal(await text.inputValue(), fallback.yaml)
-  assert.equal(await editor.locator('[data-stack-warnings]').count(), 0)
+  const save = editor.getByRole('button', { name: 'Save stack', exact: true })
+  assert.equal(await save.getAttribute('aria-disabled'), 'true')
 
-  // A path worker pinning a commit is two warnings: saved, and shown beside
-  // the editor as last saved.
-  const edited = fallback.yaml.replace(
-    '    worker: package://harness\n    version: latest\n',
-    '    worker: path://../harness # a local build\n    commit: 8c02f93a1d4e\n',
-  )
-  assert.notEqual(edited, fallback.yaml)
-  await editor.getByLabel('Stack name', { exact: true }).fill('Local harness')
-  await text.fill(edited)
+  // Edited in the Form: harness pinned to a commit changes that line alone;
+  // the comments of the copy stay.
   await editor
-    .getByText(
-      'Unsaved changes. The summary and warnings refresh when you save.',
-      { exact: true },
-    )
-    .waitFor()
-  await editor.getByRole('button', { name: 'Save stack', exact: true }).click()
-  await editor.getByText('Saved with 2 warnings.', { exact: true }).waitFor()
+    .getByRole('button', { name: 'Version of harness', exact: true })
+    .click()
+  const harnessMenu = editor.getByRole('dialog', {
+    name: 'Version of harness',
+    exact: true,
+  })
+  await harnessMenu.getByRole('radio', { name: /^A commit/ }).check()
+  const commit = harnessMenu.getByRole('textbox', { name: 'A commit' })
+  await commit.fill('8c02f93a1d4e')
+  await commit.press('Escape')
+  await harnessMenu.waitFor({ state: 'detached' })
+  const pinnedYaml = fallback.yaml.replace(
+    '    worker: package://harness\n    version: latest\n',
+    '    worker: package://harness\n    commit: "8c02f93a1d4e"\n',
+  )
+  assert.notEqual(pinnedYaml, fallback.yaml)
+  assert.match(pinnedYaml, /\n {2}# The application under test\./)
+  const draftShown = editor.getByRole('region', {
+    name: 'Stack YAML, read-only here',
+  })
+  await draftShown.getByText('    commit: "8c02f93a1d4e"').waitFor()
+  assert.equal(await shownLines(draftShown), pinnedYaml.replace(/\n$/, ''))
+  await editor.getByLabel('Name', { exact: true }).fill('Local harness')
+  await save.click()
+  await editor.getByText('Saved.', { exact: true }).waitFor()
   // Saving never disables what was focused: focus stays on Save stack.
   assert.equal(
     await page.evaluate(() => document.activeElement?.textContent),
     'Save stack',
   )
+  assert.deepEqual(calls.update, [
+    { stack_id: 'stack-1', label: 'Local harness', yaml: pinnedYaml },
+  ])
+
+  // Edited in the YAML tab, and the Form reflects it on the way back.
+  await tab(editor, 'YAML')
+  const text = editor.locator('#sb-yaml')
+  assert.equal(await text.inputValue(), pinnedYaml)
+  const fpPinned = pinnedYaml.replace(
+    '  fp:\n    worker: package://fp\n    version: latest\n',
+    '  fp:\n    worker: package://fp\n    version: "0.2.20"\n',
+  )
+  await text.fill(fpPinned)
+  await tab(editor, 'Form')
+  await editor
+    .getByRole('button', { name: 'Version of fp', exact: true })
+    .getByText('0.2.20', { exact: true })
+    .waitFor()
+  // And the Form writes over what the YAML tab wrote.
+  await tab(editor, 'YAML')
+  assert.equal(await text.inputValue(), fpPinned)
+
+  // A path worker pinning a commit is two warnings, beside the editor as the
+  // runner reads the draft, and saved with them.
+  const edited = fpPinned.replace(
+    '    worker: package://harness\n    commit: "8c02f93a1d4e"\n',
+    '    worker: path://../harness # a local build\n    commit: 8c02f93a1d4e\n',
+  )
+  await text.fill(edited)
   const warnings = [
     'harness runs path://../harness, a path on this machine; the stack runs it only here.',
     'harness pins a commit, but only a package:// worker is built from one; the executor refuses it.',
   ]
-  const saved = editor.locator('[data-stack-warnings]')
-  await saved.getByText('2 warnings as last saved', { exact: true }).waitFor()
+  const beside = editor.locator('[data-stack-warnings]')
+  await beside.getByText('2 warnings', { exact: true }).waitFor()
   for (const warning of warnings)
-    await saved.getByText(warning, { exact: true }).waitFor()
-  assert.deepEqual(calls.update, [
-    { stack_id: 'stack-1', label: 'Local harness', yaml: edited },
-  ])
+    await beside.getByText(warning, { exact: true }).waitFor()
+  await save.click()
+  await editor.getByText('Saved with 2 warnings.', { exact: true }).waitFor()
+  assert.deepEqual(calls.update.at(-1), {
+    stack_id: 'stack-1',
+    label: 'Local harness',
+    yaml: edited,
+  })
 
   // YAML the runner refuses is said beside the editor, which keeps what was
-  // typed and goes on taking it.
+  // typed and goes on taking it; Save waits, and the Form says why.
   await text.fill('containers: [\n')
-  await editor.getByRole('button', { name: 'Save stack', exact: true }).click()
+  const refusal = editor.locator('#sb-refused')
+  await refusal.getByText(NOT_YAML).waitFor()
   await editor
-    .getByRole('alert')
-    .getByText(/^Not saved\. The stack is not YAML: /)
+    .getByText('Can’t save it: the runner refuses this YAML.', { exact: true })
     .waitFor()
-  await editor.getByRole('alert').getByText('Not saved.').waitFor()
-  assert.equal(await text.inputValue(), 'containers: [\n')
+  assert.equal(await save.getAttribute('aria-disabled'), 'true')
   assert.equal(await text.getAttribute('aria-invalid'), 'true')
-  assert.equal(local[0].yaml, edited)
-  await text.press('End')
+  await tab(editor, 'Form')
+  await editor.getByText('The YAML doesn’t read.', { exact: true }).waitFor()
+  await tab(editor, 'YAML')
+  await text.press('Control+End')
   await text.pressSequentially(']')
   assert.equal(await text.inputValue(), 'containers: [\n]')
+  const updates = calls.update.length
+  await save.click({ force: true })
+  assert.equal(calls.update.length, updates)
 
-  // Written back, it saves again and the refusal goes.
+  // Written back, the refusal goes.
   await text.fill(edited)
-  await editor.getByRole('button', { name: 'Save stack', exact: true }).click()
-  await editor.getByRole('alert').waitFor({ state: 'detached' })
-  await editor.getByText('Saved with 2 warnings.', { exact: true }).waitFor()
-  assert.equal(calls.update.length, 3)
+  await refusal.waitFor({ state: 'detached' })
 
   // Discard changes puts back what was saved.
   await text.fill(`${edited}# more\n`)
@@ -466,7 +637,7 @@ try {
     .click()
   assert.equal(await text.inputValue(), edited)
 
-  // Closing with unsaved changes asks first.
+  // Closing with unsaved changes asks first, in either tab.
   await text.fill(`${edited}# more\n`)
   await text.press('Escape')
   const ask = page.getByRole('alertdialog', {
@@ -475,12 +646,13 @@ try {
   await ask.getByRole('button', { name: 'Keep editing', exact: true }).click()
   await ask.waitFor({ state: 'detached' })
   assert.equal(await text.inputValue(), `${edited}# more\n`)
-  await text.press('Escape')
+  await tab(editor, 'Form')
+  await editor.getByLabel('Name', { exact: true }).press('Escape')
   await ask
     .getByRole('button', { name: 'Discard changes', exact: true })
     .click()
   await editor.waitFor({ state: 'detached' })
-  assert.equal(calls.update.length, 3)
+  assert.equal(calls.update.length, updates)
 
   // The copy lists under This Console: what it pins, how it differs from
   // default, its warnings.
@@ -488,9 +660,7 @@ try {
   await copy.getByText('Local harness', { exact: true }).waitFor()
   await copy.getByText(/^stack-1 · saved /).waitFor()
   await copy.getByText('commit 8c02f93a1d4e', { exact: true }).waitFor()
-  await copy
-    .getByText('Against default: changes harness.', { exact: true })
-    .waitFor()
+  await copy.getByText(/^Against default: changes /).waitFor()
   await copy.getByText('2 warnings', { exact: true }).waitFor()
   for (const warning of warnings)
     await copy.getByText(warning, { exact: true }).waitFor()
@@ -498,10 +668,11 @@ try {
     .getByText(/^2 in the repository, read-only · 1 in this Console\. /)
     .waitFor()
 
-  // Edit opens it again, as saved.
+  // Edit opens it again, as saved, on the tab last used.
   await copy.getByRole('button', { name: 'Edit Local harness' }).click()
   const again = page.getByRole('dialog', { name: 'Edit Local harness' })
-  assert.equal(await again.locator('#sk-yaml').inputValue(), edited)
+  await tab(again, 'YAML')
+  assert.equal(await again.locator('#sb-yaml').inputValue(), edited)
   await again.getByRole('button', { name: 'Close', exact: true }).click()
   await again.waitFor({ state: 'detached' })
 
@@ -525,31 +696,32 @@ try {
   ].join('\n')
   local.push(view('stack-env', 'With environment', 'local', envYaml))
 
-  // New stack is the stack builder. iii-hq/templates could not be read: it
-  // says so, the rest still answers, and Try again reads it.
+  // New stack, from the Form. iii-hq/templates could not be read: it says
+  // so, the rest still answers, and Try again reads it.
   await page
     .getByRole('button', { name: 'New stack', exact: true })
     .first()
     .click()
-  const builder = page.getByRole('dialog', { name: 'New stack' })
-  const create = builder.getByRole('button', {
+  const sheet = page.getByRole('dialog', { name: 'New stack' })
+  await tab(sheet, 'Form')
+  const create = sheet.getByRole('button', {
     name: 'Create stack',
     exact: true,
   })
-  const trouble = builder.getByRole('alert')
+  const trouble = sheet.getByRole('alert')
   await trouble.waitFor()
   assert.match(
     await trouble.innerText(),
     /^iii-hq\/templates couldn’t be read\. GitHub answered 503 Service Unavailable/,
   )
-  await builder.getByText('Pick a template.', { exact: true }).waitFor()
+  await sheet.getByText('Pick a template.', { exact: true }).waitFor()
   assert.equal(await create.getAttribute('aria-disabled'), 'true')
   assert.equal(await create.getAttribute('aria-describedby'), 'sb-status')
   await trouble.getByRole('button', { name: 'Try again', exact: true }).click()
   await trouble.waitFor({ state: 'detached' })
 
   // A template without workers can't be picked, and says why.
-  const starter = builder.locator('[data-template="starter"]')
+  const starter = sheet.locator('[data-template="starter"]')
   await starter
     .getByText(
       'Ships no worker-compose.yaml, so a group would start nothing.',
@@ -567,104 +739,221 @@ try {
 
   // The harness template: the stack is named after it, and runs every
   // template worker at the template's version.
-  await builder.locator('[data-template="harness"]').click()
-  const name = builder.getByLabel('Name', { exact: true })
+  await sheet.locator('[data-template="harness"]').click()
+  const name = sheet.getByLabel('Name', { exact: true })
   assert.equal(await name.inputValue(), 'harness')
-  await builder
-    .getByText('harness · main @ 4077e670', { exact: true })
+  await sheet
+    .getByText('iii-hq/templates · main @ 4077e670', { exact: true })
     .waitFor()
-  await builder
+  await sheet
     .getByText(
       'Runs the harness project with every worker at the template’s version.',
       { exact: true },
     )
     .waitFor()
   assert.equal(
-    await builder
+    await sheet
       .getByRole('group', { name: 'From the harness template · 14' })
       .getByRole('listitem')
       .count(),
     14,
   )
 
+  // A fixed revision: one that does not resolve says so and holds Create
+  // back; v1.2 reads the template's workers there.
+  const revision = sheet.getByRole('textbox', { name: 'Revision', exact: true })
+  await sheet
+    .getByText(
+      'Follows main each time it runs. Type a commit or a tag to fix it.',
+      { exact: true },
+    )
+    .waitFor()
+  await revision.fill('nope')
+  await sheet
+    .getByText('iii-hq/templates has no commit, tag or branch nope.', {
+      exact: true,
+    })
+    .waitFor()
+  await sheet
+    .getByText(
+      'Can’t create it yet: iii-hq/templates has no commit, tag or branch nope.',
+      { exact: true },
+    )
+    .waitFor()
+  assert.equal(await revision.getAttribute('aria-invalid'), 'true')
+  assert.equal(await create.getAttribute('aria-disabled'), 'true')
+  await revision.fill('v1.2')
+  await sheet
+    .getByText('iii-hq/templates · v1.2 @ 9d1e2c3b', { exact: true })
+    .first()
+    .waitFor()
+  await sheet
+    .getByRole('group', { name: 'From the harness template · 13' })
+    .waitFor()
+  await sheet
+    .getByRole('region', { name: 'Stack YAML, read-only here' })
+    .getByText('template: harness@v1.2', { exact: true })
+    .waitFor()
+  assert.equal(calls.templates.includes('v1.2'), true)
+
+  // iii: the newest release candidate, a listed release, or a typed version,
+  // checked; one iii-hq/iii does not have is not used.
+  const iii = sheet.getByRole('button', { name: /^iii release / })
+  assert.equal(await iii.innerText(), 'latest · 0.24.3-rc.1')
+  await iii.click()
+  const iiiMenu = sheet.getByRole('dialog', { name: 'iii release' })
+  await iiiMenu
+    .getByText(/^Latest release candidate · 0\.24\.3-rc\.1 /)
+    .waitFor()
+  assert.deepEqual(
+    await iiiMenu
+      .locator('[data-iii-option]')
+      .evaluateAll((options) =>
+        options.map((option) => option.dataset.iiiOption),
+      ),
+    [
+      'latest',
+      '0.24.3',
+      '0.24.3-rc.1',
+      '0.24.2',
+      '0.24.1',
+      '0.24.2-rc.2',
+      '0.24.2-rc.1',
+      '0.24.0-rc.2',
+      '0.24.0',
+      'other',
+    ],
+  )
+  await iiiMenu.locator('[data-iii-option="0.24.2"]').click()
+  await iiiMenu.waitFor({ state: 'detached' })
+  assert.equal(await iii.innerText(), '0.24.2')
+  await sheet
+    .getByRole('region', { name: 'Stack YAML, read-only here' })
+    .getByText('iii: "0.24.2"', { exact: true })
+    .waitFor()
+  // Below the template's min_iii_version it warns, and holds nothing back.
+  await sheet
+    .getByText(
+      'The harness template needs iii 0.24.3 or newer; this is 0.24.2.',
+      { exact: true },
+    )
+    .waitFor()
+  await iii.click()
+  await iiiMenu.getByRole('radio', { name: /^Another version/ }).check()
+  const typedIii = iiiMenu.getByRole('textbox', { name: 'iii version' })
+  await typedIii.fill('9.9.9')
+  await iiiMenu.getByRole('button', { name: 'Use', exact: true }).click()
+  await iiiMenu
+    .getByText('iii-hq/iii has no release iii/v9.9.9.', { exact: true })
+    .waitFor()
+  assert.equal(await iii.innerText(), '0.24.2')
+  assert.equal(calls.releases.includes('9.9.9'), true)
+  await typedIii.press('Escape')
+  await iiiMenu.waitFor({ state: 'detached' })
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute('aria-haspopup'),
+    ),
+    'dialog',
+  )
+
   // Add worker opens the picker in the YAML's place; fp, which the template
-  // would ignore, is not added.
-  await builder.getByRole('button', { name: 'Add worker', exact: true }).click()
-  const picker = builder.getByRole('complementary', { name: 'Add a worker' })
+  // would ignore, is not added; harness is.
+  await sheet.getByRole('button', { name: 'Add worker', exact: true }).click()
+  const picker = sheet.getByRole('complementary', { name: 'Add a worker' })
   const fpPick = picker.locator('[data-pick="fp"]')
   await fpPick
     .getByText('not in the template, ignored', { exact: true })
     .waitFor()
   assert.equal(await fpPick.getAttribute('aria-disabled'), 'true')
   await fpPick.click({ force: true })
-  await builder
+  await sheet
     .getByText(
       'Nothing pinned: every template worker runs at the template’s version. Add one of its workers to pin it.',
       { exact: true },
     )
     .waitFor()
   await picker
+    .getByRole('searchbox', { name: 'Search workers' })
+    .fill('harness')
+  await picker.locator('[data-pick="harness"]').click()
+  await picker
     .getByRole('button', { name: 'Done, back to the YAML', exact: true })
     .click()
-  await builder.getByRole('complementary', { name: 'YAML' }).waitFor()
+  await sheet.getByRole('complementary', { name: 'YAML' }).waitFor()
 
-  // A copy of harness-template brings fp: blocked, its lines marked, and
-  // Create held back until it is removed.
-  await builder.getByRole('radio', { name: /^Copy of a stack/ }).check()
-  await builder
-    .getByRole('radio', { name: /^harness-template stacks\/harness-template/ })
-    .check()
-  assert.equal(await name.inputValue(), 'harness-template · copy')
-  const fpRow = builder.locator('[data-worker="fp"]')
-  assert.equal(await fpRow.getAttribute('data-tone'), 'block')
-  assert.equal(
-    await fpRow.locator('.sb-note strong').innerText(),
-    'Would be ignored.',
+  // fp typed in the YAML tab is blocked there too: said above the editor,
+  // its lines marked in the gutter, Create held back; the Form says the
+  // same on fp's row, and removing it there lets Create go.
+  await tab(sheet, 'YAML')
+  const draft = sheet.locator('#sb-yaml')
+  const withFp = (await draft.inputValue()).replace(
+    '    version: latest\n',
+    '    version: latest\n  fp:\n    worker: package://fp\n    version: latest\n',
   )
-  await builder
+  await draft.fill(withFp)
+  const blocked = sheet.locator('#sb-blocks')
+  await blocked.getByText(/^fp: Would be ignored\. /).waitFor()
+  await sheet
     .getByText(
       'Can’t create it yet: fp would be ignored by the harness template.',
       { exact: true },
     )
     .waitFor()
+  const fpAt = withFp.split('\n').indexOf('  fp:') + 1
   assert.deepEqual(
-    await builder.locator('.sk-line[data-blocked] .sk-text').allTextContents(),
-    ['  fp:', '    worker: package://fp', '    version: latest'],
+    await sheet.locator('.sk-gutter > span[data-blocked]').allTextContents(),
+    [String(fpAt), String(fpAt + 1), String(fpAt + 2)],
   )
+  assert.equal(await draft.getAttribute('aria-describedby'), 'sb-blocks')
   const made = calls.create.length
   await create.click({ force: true })
   assert.equal(calls.create.length, made)
+  await tab(sheet, 'Form')
+  const fpRow = sheet.locator('[data-worker="fp"]')
+  assert.equal(await fpRow.getAttribute('data-tone'), 'block')
+  assert.equal(
+    await fpRow.locator('.sb-note strong').innerText(),
+    'Would be ignored.',
+  )
+  assert.deepEqual(
+    await sheet
+      .locator('.sb-side .sk-line[data-blocked] .sk-text')
+      .allTextContents(),
+    ['  fp:', '    worker: package://fp', '    version: latest'],
+  )
   await fpRow.getByRole('button', { name: 'Remove fp', exact: true }).click()
   await fpRow.waitFor({ state: 'detached' })
-  await builder
-    .getByText('Runs the harness project with 4 pinned.', { exact: true })
+  await sheet
+    .getByText('Runs the harness project with 1 pinned.', { exact: true })
     .waitFor()
 
   // harness pinned to a commit: the menu writes the YAML as it is picked,
-  // and Escape closes the menu, not the builder.
-  const harnessRow = builder.locator('[data-worker="harness"]')
-  const version = harnessRow.getByRole('button', { name: 'Version of harness' })
-  await version.click()
-  const versionMenu = builder.getByRole('dialog', {
+  // an empty commit holds Create back, and Escape closes the menu, not the
+  // sheet.
+  const harnessRow = sheet.locator('[data-worker="harness"]')
+  const version = harnessRow.getByRole('button', {
     name: 'Version of harness',
+    exact: true,
+  })
+  await version.click()
+  const versionMenu = sheet.getByRole('dialog', {
+    name: 'Version of harness',
+    exact: true,
   })
   await versionMenu.getByRole('radio', { name: /^A commit/ }).check()
-  await builder
+  await sheet
     .getByText('Type the commit for harness.', { exact: true })
     .waitFor()
   assert.equal(await create.getAttribute('aria-disabled'), 'true')
-  const commit = versionMenu.getByRole('textbox', { name: 'A commit' })
-  await commit.fill('8c02f93a1d4e')
+  const pinCommit = versionMenu.getByRole('textbox', { name: 'A commit' })
+  await pinCommit.fill('8c02f93a1d4e')
   await version.getByText('commit 8c02f93', { exact: true }).waitFor()
   assert.match(
     await harnessRow.locator('.sb-note').innerText(),
     /^Pins the template’s harness\. The template keeps it, built from commit 8c02f93/,
   )
-  await builder
-    .locator('.sb-chips li[data-pinned]')
-    .getByText('commit 8c02f93', { exact: true })
-    .waitFor()
-  await commit.press('Escape')
+  await pinCommit.press('Escape')
   await versionMenu.waitFor({ state: 'detached' })
   assert.equal(
     await page.evaluate(() =>
@@ -673,72 +962,57 @@ try {
     'Version of harness',
   )
 
-  // Named and created from its YAML; it opens as a copy does.
+  // Named and created from its YAML; it opens to edit, as a copy does.
   await name.fill('Mine')
   await create.click()
-  // While it is created, Edit as YAML waits too.
-  await builder
-    .getByRole('button', { name: 'Creating…', exact: true })
-    .waitFor()
-  assert.equal(
-    await builder
-      .getByRole('button', { name: 'Edit as YAML', exact: true })
-      .getAttribute('aria-disabled'),
-    'true',
-  )
+  await sheet.getByRole('button', { name: 'Creating…', exact: true }).waitFor()
   letMineGo()
   const mineSheet = page.getByRole('dialog', { name: 'Edit Mine' })
   await mineSheet.waitFor()
   const builtYaml = `${[
-    'iii: latest',
-    'template: harness',
+    'iii: "0.24.2"',
+    'template: harness@v1.2',
     '',
     'containers:',
     '  harness:',
     '    worker: package://harness',
     '    commit: "8c02f93a1d4e"',
-    '  harness-e2e:',
-    '    worker: package://harness-e2e',
-    '    version: latest',
-    '  provider-deepseek:',
-    '    worker: package://provider-deepseek',
-    '    version: latest',
-    '  provider-zai:',
-    '    worker: package://provider-zai',
-    '    version: latest',
     '',
     'startup_timeout: 5m',
     'stop_timeout: 30s',
   ].join('\n')}\n`
   assert.deepEqual(calls.create.at(-1), { label: 'Mine', yaml: builtYaml })
-  assert.equal(await mineSheet.locator('#sk-yaml').inputValue(), builtYaml)
   await mineSheet
     .getByText('Created. Change what you need, then save.', { exact: true })
     .waitFor()
+  await tab(mineSheet, 'YAML')
+  assert.equal(await mineSheet.locator('#sb-yaml').inputValue(), builtYaml)
+  await tab(mineSheet, 'Form')
   await mineSheet.getByRole('button', { name: 'Close', exact: true }).click()
   await mineSheet.waitFor({ state: 'detached' })
 
-  // A copy the form did not touch is the stack as written: Create copies it,
-  // comments, environment and all.
-  await page
-    .getByRole('button', { name: 'New stack', exact: true })
-    .first()
-    .click()
-  await builder.getByRole('radio', { name: /^Copy of a stack/ }).check()
-  await builder
+  // A copy the Form did not touch is the stack as written: Create copies
+  // it, comments, environment and all.
+  const openNew = async () => {
+    await page
+      .getByRole('button', { name: 'New stack', exact: true })
+      .first()
+      .click()
+    await sheet.waitFor()
+  }
+  await openNew()
+  await sheet.getByRole('radio', { name: /^Copy of a stack/ }).check()
+  await sheet
     .getByRole('radio', { name: /^With environment stack-env/ })
     .check()
   assert.equal(await name.inputValue(), 'With environment · copy')
-  await builder
+  await sheet
     .getByText('copied as written from stack-env', { exact: true })
     .waitFor()
   assert.equal(
-    await builder
-      .getByRole('region', { name: 'Stack YAML, copied as written' })
-      .locator('.sk-text')
-      .evaluateAll((lines) =>
-        lines.map((line) => line.textContent.trimEnd()).join('\n'),
-      ),
+    await shownLines(
+      sheet.getByRole('region', { name: 'Stack YAML, copied as written' }),
+    ),
     envYaml.replace(/\n$/, ''),
   )
   await create.click()
@@ -750,69 +1024,59 @@ try {
     from: 'stack-env',
     label: 'With environment · copy',
   })
-  assert.equal(await envSheet.locator('#sk-yaml').inputValue(), envYaml)
   await envSheet.getByRole('button', { name: 'Close', exact: true }).click()
   await envSheet.waitFor({ state: 'detached' })
 
-  // Touched, it says what the form leaves out; Edit as YAML keeps it, with
-  // the change made to that container's lines only.
-  await page
-    .getByRole('button', { name: 'New stack', exact: true })
-    .first()
-    .click()
-  await builder.getByRole('radio', { name: /^Copy of a stack/ }).check()
-  await builder
+  // Touched, only the lines of what changed change: fp's block goes, the
+  // comments and harness's environment stay, and Create sends that YAML.
+  await openNew()
+  await sheet.getByRole('radio', { name: /^Copy of a stack/ }).check()
+  await sheet
     .getByRole('radio', { name: /^With environment stack-env/ })
     .check()
-  await builder
+  await sheet
     .locator('[data-worker="fp"]')
     .getByRole('button', { name: 'Remove fp', exact: true })
     .click()
-  await builder
-    .getByText(
-      'Creating from the form keeps each worker and its pin; comments and other keys of With environment are left out. Edit as YAML keeps them.',
-      { exact: true },
-    )
-    .waitFor()
-  await builder
-    .getByRole('button', { name: 'Edit as YAML', exact: true })
-    .click()
-  const envDraft = page.locator('[data-stack-sheet="edit"]')
-  assert.equal(
-    await envDraft.locator('#sk-yaml').inputValue(),
-    envYaml.replace(
-      '  fp:\n    worker: package://fp\n    version: latest\n',
-      '',
-    ),
+  const withoutFp = envYaml.replace(
+    '  fp:\n    worker: package://fp\n    version: latest\n',
+    '',
   )
-  await envDraft.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page
-    .getByRole('alertdialog', { name: 'Discard this new stack?' })
-    .getByRole('button', { name: 'Discard changes', exact: true })
-    .click()
+  assert.equal(
+    await shownLines(
+      sheet.getByRole('region', { name: 'Stack YAML, read-only here' }),
+    ),
+    withoutFp.replace(/\n$/, ''),
+  )
+  await name.fill('Env without fp')
+  await create.click()
+  const envDraft = page.getByRole('dialog', { name: 'Edit Env without fp' })
+  await envDraft.waitFor()
+  assert.deepEqual(calls.create.at(-1), {
+    label: 'Env without fp',
+    yaml: withoutFp,
+  })
+  await envDraft.getByRole('button', { name: 'Close', exact: true }).click()
   await envDraft.waitFor({ state: 'detached' })
 
   // Without a template, what a worker brings comes from the registry:
   // browser, added first, is blocked once harness brings it, even before
   // its own answer.
-  await page
-    .getByRole('button', { name: 'New stack', exact: true })
-    .first()
-    .click()
-  await builder.locator('[data-template="harness"]').waitFor()
-  await builder.getByRole('radio', { name: /^No template/ }).check()
-  await builder.getByText('Add at least one worker.', { exact: true }).waitFor()
-  await builder.getByRole('button', { name: 'Add worker', exact: true }).click()
+  await openNew()
+  await sheet.locator('[data-template="harness"]').waitFor()
+  await sheet.getByRole('radio', { name: /^No template/ }).check()
+  await sheet.getByText('Add at least one worker.', { exact: true }).waitFor()
+  await sheet.getByRole('button', { name: 'Add worker', exact: true }).click()
   const search = picker.getByRole('searchbox', { name: 'Search workers' })
   await search.fill('brow')
   await picker.locator('[data-pick="browser"]').click()
-  const browserRow = builder.locator('[data-worker="browser"]')
+  const browserRow = sheet.locator('[data-worker="browser"]')
   await browserRow
     .getByText('Checking the registry…', { exact: true })
     .waitFor()
   await search.fill('harness')
   await picker.locator('[data-pick="harness"]').click()
-  const harnessDeclared = builder.locator('[data-worker="harness"]')
+  const harnessDeclared = sheet.locator('[data-worker="harness"]')
   await harnessDeclared
     .locator('.sb-note strong')
     .getByText('Brings browser, llm-router, session-manager, state with it.', {
@@ -824,7 +1088,7 @@ try {
     await browserRow.locator('.sb-note strong').innerText(),
     'Already arrives with harness.',
   )
-  await builder
+  await sheet
     .getByText(
       'Can’t create it yet: browser already arrives with another worker.',
       { exact: true },
@@ -843,7 +1107,7 @@ try {
     .waitFor()
   assert.equal(await typed.getAttribute('aria-disabled'), 'true')
   await typed.click({ force: true })
-  assert.equal(await builder.locator('[data-worker="nope-worker"]').count(), 0)
+  assert.equal(await sheet.locator('[data-worker="nope-worker"]').count(), 0)
   assert.deepEqual(
     calls.resolve.filter((worker) => worker === 'nope-worker'),
     ['nope-worker'],
@@ -864,64 +1128,57 @@ try {
     .getByText('package://flaky-worker · found, 0.1.0', { exact: true })
     .waitFor()
 
-  // Escape closes the picker, not the builder.
+  // Escape closes the picker, not the sheet.
   await search.press('Escape')
   await picker.waitFor({ state: 'detached' })
-  await builder.getByRole('complementary', { name: 'YAML' }).waitFor()
+  await sheet.getByRole('complementary', { name: 'YAML' }).waitFor()
 
-  // Edit as YAML hands what the form wrote to the editor, unsaved; Save
-  // stack creates it.
+  // browser removed; without a template nothing names it: Create waits for
+  // a name, then creates what the Form wrote.
   await browserRow
     .getByRole('button', { name: 'Remove browser', exact: true })
     .click()
-  // Without a template nothing names it: Create waits for a name.
-  await builder.getByText('Name the stack.', { exact: true }).waitFor()
+  await sheet.getByText('Name the stack.', { exact: true }).waitFor()
   await name.fill('Harness only')
-  await builder
+  await sheet
     .getByText('Runs the 1 worker declared, plus what they depend on.', {
       exact: true,
     })
     .waitFor()
-  await builder
-    .getByRole('button', { name: 'Edit as YAML', exact: true })
-    .click()
-  await page.locator('[data-stack-builder]').waitFor({ state: 'detached' })
-  const draft = page.locator('[data-stack-sheet="edit"]')
-  const bareYaml =
-    'iii: latest\n\ncontainers:\n  harness:\n    worker: package://harness\n    version: latest\n\nstartup_timeout: 5m\nstop_timeout: 30s\n'
-  assert.equal(await draft.locator('#sk-yaml').inputValue(), bareYaml)
-  assert.equal(
-    await draft.getByLabel('Stack name', { exact: true }).inputValue(),
-    'Harness only',
-  )
-  await draft
-    .getByText('Not saved yet. Save stack creates it in this Console.', {
-      exact: true,
-    })
-    .waitFor()
-  await draft.getByRole('button', { name: 'Save stack', exact: true }).click()
-  const savedDraft = page.getByRole('dialog', { name: 'Edit Harness only' })
-  await savedDraft.waitFor()
+  await create.click()
+  const bareSheet = page.getByRole('dialog', { name: 'Edit Harness only' })
+  await bareSheet.waitFor()
   assert.deepEqual(calls.create.at(-1), {
     label: 'Harness only',
-    yaml: bareYaml,
+    yaml: 'iii: latest\n\ncontainers:\n  harness:\n    worker: package://harness\n    version: latest\n\nstartup_timeout: 5m\nstop_timeout: 30s\n',
   })
-  await savedDraft.getByRole('button', { name: 'Close', exact: true }).click()
-  await savedDraft.waitFor({ state: 'detached' })
 
-  // A stack of this Console is deleted after the host's confirmation.
+  // Deleted from its sheet, after the host's confirmation: the sheet goes
+  // with it.
+  const harnessOnly = calls.create.length
+  await bareSheet.getByRole('button', { name: 'Delete', exact: true }).click()
+  await page
+    .getByRole('alertdialog', { name: 'Delete “Harness only”?' })
+    .getByRole('button', { name: 'Delete stack', exact: true })
+    .click()
+  await bareSheet.waitFor({ state: 'detached' })
+  assert.deepEqual(calls.remove, [{ stack_id: `stack-${harnessOnly}` }])
+
+  // A stack of this Console is deleted from the list after the host's
+  // confirmation.
   const row = mine.locator('[data-stack="stack-2"]')
   await row.getByRole('button', { name: 'Delete Mine' }).click()
   const confirm = page.getByRole('alertdialog', { name: 'Delete “Mine”?' })
   await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
-  assert.deepEqual(calls.remove, [])
+  assert.equal(calls.remove.length, 1)
   await row.getByRole('button', { name: 'Delete Mine' }).click()
   // Confirmed twice before the dialog goes: deleted once.
   await confirm
     .getByRole('button', { name: 'Delete stack', exact: true })
     .evaluate(twice)
   await row.waitFor({ state: 'detached' })
-  assert.deepEqual(calls.remove, [{ stack_id: 'stack-2' }])
+  assert.deepEqual(calls.remove.at(-1), { stack_id: 'stack-2' })
+  assert.equal(calls.remove.length, 2)
   assert.equal(
     await page.evaluate(() => document.activeElement?.id),
     'sk-heading',
@@ -936,7 +1193,7 @@ try {
   const kept = page.locator('[data-stack-sheet="edit"]')
   await page.getByRole('dialog', { name: 'Edit default copy' }).waitFor()
   vanish = `stack-${calls.create.length}`
-  await kept.getByLabel('Stack name', { exact: true }).fill('Vanishing')
+  await kept.getByLabel('Name', { exact: true }).fill('Vanishing')
   await kept.getByRole('button', { name: 'Save stack', exact: true }).click()
   await kept
     .getByText(
@@ -945,12 +1202,13 @@ try {
     )
     .waitFor()
   await mine.locator(`[data-stack="${vanish}"]`).waitFor({ state: 'detached' })
-  await kept.locator('#sk-yaml').fill(`${fallback.yaml}# kept\n`)
+  await tab(kept, 'YAML')
+  await kept.locator('#sb-yaml').fill(`${fallback.yaml}# kept\n`)
   assert.equal(
-    await kept.locator('#sk-yaml').inputValue(),
+    await kept.locator('#sb-yaml').inputValue(),
     `${fallback.yaml}# kept\n`,
   )
-  await kept.locator('#sk-yaml').press('Escape')
+  await kept.locator('#sb-yaml').press('Escape')
   await page
     .getByRole('alertdialog', { name: 'Discard changes to Vanishing?' })
     .getByRole('button', { name: 'Discard changes', exact: true })
@@ -1072,7 +1330,7 @@ try {
     assert.equal(visible.includes(secret), false, `${secret} is shown`)
 
   // Narrow: each stack and credential reflows, and nothing scrolls sideways;
-  // New stack is one column, its YAML below the form.
+  // the sheet is its tabs and one column, the YAML below the Form.
   await page.setViewportSize({ width: 390, height: 844 })
   await page.locator('.sk-page[data-narrow]').waitFor()
   assert.equal(
@@ -1083,41 +1341,45 @@ try {
   )
   await page.getByRole('button', { name: 'More actions', exact: true }).click()
   await page.getByRole('menuitem', { name: 'New stack', exact: true }).click()
-  const narrowBuilder = page.locator('.sb[data-narrow]')
-  await narrowBuilder.locator('[data-template="harness"]').click()
+  const narrowSheet = page.locator('.sb[data-narrow]')
+  await narrowSheet.getByRole('tab', { name: 'YAML', exact: true }).waitFor()
+  await narrowSheet.getByRole('tab', { name: 'Form', exact: true }).click()
+  await narrowSheet.locator('[data-template="harness"]').click()
   const [form, yamlSide] = await Promise.all([
-    narrowBuilder.locator('.sb-form').boundingBox(),
-    narrowBuilder.getByRole('complementary', { name: 'YAML' }).boundingBox(),
+    narrowSheet.locator('.sb-form').boundingBox(),
+    narrowSheet.getByRole('complementary', { name: 'YAML' }).boundingBox(),
   ])
   assert.equal(yamlSide.y >= form.y + form.height - 1, true)
   assert.equal(
-    await narrowBuilder.evaluate(
+    await narrowSheet.evaluate(
       (dialog) => dialog.scrollWidth <= dialog.clientWidth,
     ),
     true,
   )
-  // A template picked: closing asks first.
+  // A template picked: closing asks first, the same in the YAML tab.
   const discard = page.getByRole('alertdialog', {
     name: 'Discard this new stack?',
   })
-  await narrowBuilder
-    .getByRole('button', { name: 'Cancel', exact: true })
-    .click()
+  await narrowSheet.getByRole('button', { name: 'Cancel', exact: true }).click()
   await discard
     .getByRole('button', { name: 'Keep editing', exact: true })
     .click()
   await discard.waitFor({ state: 'detached' })
-  await narrowBuilder.waitFor()
-  await narrowBuilder
-    .getByRole('button', { name: 'Cancel', exact: true })
-    .click()
+  await narrowSheet.getByRole('tab', { name: 'YAML', exact: true }).click()
+  assert.equal(
+    await narrowSheet.evaluate(
+      (dialog) => dialog.scrollWidth <= dialog.clientWidth,
+    ),
+    true,
+  )
+  await narrowSheet.getByRole('button', { name: 'Cancel', exact: true }).click()
   await discard
     .getByRole('button', { name: 'Discard changes', exact: true })
     .click()
-  await narrowBuilder.waitFor({ state: 'detached' })
+  await narrowSheet.waitFor({ state: 'detached' })
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack built from the harness template (templates tried again, fp refused in the picker and blocked from a copy, removed, harness pinned to a commit, created), a copy the form did not touch created as written and a touched one warned and handed to the editor with only its lines changed, without a template (browser blocked as harness brings it, a name the registry does not know, Edit as YAML saved as a new stack); delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport, the builder in one column and closing it with a template picked asking first.',
+    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one opened in the sheet read-only in both tabs, its YAML as written, Copy YAML, the last tab remembered; Copy to edit; the copy edited in the Form keeping its comments, then in the YAML tab and reflected by the Form; a path worker pinning a commit with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor and in the Form while typing goes on; Discard; closing unsaved changes asks first from either tab; New stack from the Form (templates tried again, the harness template at a fixed revision with one that does not resolve blocking, iii from its releases and a typed version refused, below min_iii_version warned, fp refused in the picker and blocked in the YAML tab and the Form, harness pinned to a commit, created), a copy the Form did not touch created as written and a touched one created with only its lines changed, without a template (browser blocked as harness brings it, a name the registry does not know, created); delete from the sheet and from the list behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport, the sheet in one column with its tabs and closing it with a template picked asking first in both tabs.',
   )
 } catch (error) {
   console.error(

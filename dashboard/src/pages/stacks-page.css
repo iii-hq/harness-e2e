@@ -344,12 +344,6 @@
   outline-offset: -1px;
 }
 
-.sk-name-input {
-  max-width: calc(var(--spacing) * 120);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
 .sk-sheet-body {
   display: grid;
   flex: 1 1 0;
@@ -439,43 +433,6 @@
   line-height: calc(var(--spacing) * 4);
 }
 
-.sk-section {
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--spacing) * 2);
-}
-
-.sk-section h3 {
-  margin: 0;
-  font-size: var(--ds-text-sm, 0.8125rem);
-  font-weight: 600;
-  line-height: calc(var(--spacing) * 4.5);
-}
-
-.sk-count {
-  margin-left: var(--spacing);
-  color: var(--color-ink-faint);
-  font-size: var(--text-xs);
-  font-weight: 400;
-}
-
-.sk-installs {
-  display: grid;
-  grid-template-columns: calc(var(--spacing) * 23) minmax(0, 1fr);
-  gap: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
-  margin: 0;
-}
-
-.sk-installs dt {
-  color: var(--color-ink-faint);
-}
-
-.sk-installs dd {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-}
-
 .sk-mono {
   font-family: var(--font-mono);
   font-weight: 500;
@@ -483,79 +440,6 @@
 
 .sk-faint {
   color: var(--color-ink-faint);
-}
-
-.sk-link {
-  display: inline-flex;
-  align-self: flex-start;
-  align-items: center;
-  gap: var(--spacing);
-  color: var(--color-ink);
-  text-decoration: none;
-}
-
-.sk-link:hover {
-  text-decoration: underline;
-}
-
-.sk-link > svg {
-  color: var(--color-ink-faint);
-}
-
-.sk-workers {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  border-radius: var(--radius-sm);
-  outline: 1px solid var(--color-edge);
-  outline-offset: -1px;
-  background: var(--color-panel);
-  list-style: none;
-}
-
-.sk-workers > li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: calc(var(--spacing) * 3);
-  min-height: calc(var(--spacing) * 10);
-  padding: var(--spacing) calc(var(--spacing) * 2.5);
-  font-family: var(--font-mono);
-}
-
-.sk-workers > li + li {
-  border-top: var(--ds-row-divider, 1px solid var(--color-edge));
-}
-
-.sk-worker-name {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  font-weight: 500;
-  line-height: calc(var(--spacing) * 4);
-}
-
-.sk-worker-ref {
-  color: var(--color-ink-faint);
-  font-size: var(--ds-text-label, 0.6875rem);
-  font-weight: 400;
-  overflow-wrap: anywhere;
-}
-
-.sk-worker-ref[data-warn] {
-  color: color-mix(in srgb, var(--color-warn) 75%, var(--color-ink));
-}
-
-.sk-worker-pin {
-  color: var(--color-ink-faint);
-  font-size: var(--ds-text-label, 0.6875rem);
-  white-space: nowrap;
-}
-
-.sk-worker-pin[data-set] {
-  color: var(--color-ink);
 }
 
 /* The YAML, on the panel. */

@@ -21,8 +21,12 @@ use super::read_model::{
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::credentials::CredentialView;
-use crate::plans::stack_sources::{self, WorkerResolveRequest};
-use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
+use crate::plans::stack_sources::{
+    self, IiiReleasesRequest, StackTemplatesRequest, WorkerResolveRequest,
+};
+use crate::plans::stacks::{
+    self, StackCreateRequest, StackPreviewRequest, StackUpdateRequest, StackView,
+};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
     SuiteView,
@@ -55,8 +59,10 @@ pub(super) const STACKS_LIST: &str = "e2e::dashboard::stacks-list";
 pub(super) const STACK_CREATE: &str = "e2e::dashboard::stack-create";
 pub(super) const STACK_UPDATE: &str = "e2e::dashboard::stack-update";
 pub(super) const STACK_DELETE: &str = "e2e::dashboard::stack-delete";
+pub(super) const STACK_PREVIEW: &str = "e2e::dashboard::stack-preview";
 pub(super) const STACK_TEMPLATES_LIST: &str = "e2e::dashboard::stack-templates-list";
 pub(super) const WORKER_RESOLVE: &str = "e2e::dashboard::worker-resolve";
+pub(super) const III_RELEASES_LIST: &str = "e2e::dashboard::iii-releases-list";
 pub(super) const CREDENTIALS_LIST: &str = "e2e::dashboard::credentials-list";
 pub(super) const CREDENTIAL_SET: &str = "e2e::dashboard::credential-set";
 pub(super) const CREDENTIAL_DELETE: &str = "e2e::dashboard::credential-delete";
@@ -759,10 +765,30 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     });
     register(
         iii,
+        STACK_PREVIEW,
+        "Read a stack's YAML as stack-create and stack-update would, without saving it: what it declares (the template's revision apart) and its warnings, or why it would be refused.",
+        RegisterFunction::new_async(move |request: StackPreviewRequest| async move {
+            Ok::<_, Error>(stacks::preview(&request.yaml))
+        }),
+    );
+    register(
+        iii,
         STACK_TEMPLATES_LIST,
-        "List the iii-hq/templates projects a stack can start from, as main has them, each with the workers its worker-compose.yaml declares; kept ten minutes.",
-        RegisterFunction::new_async(move |_request: DashboardEmptyRequest| async move {
-            stack_sources::templates().await.map_err(handler_error)
+        "List the iii-hq/templates projects a stack can start from at a revision (a commit, tag or branch; main when none), each with the workers its worker-compose.yaml declares and the oldest iii it runs on; kept ten minutes.",
+        RegisterFunction::new_async(move |request: StackTemplatesRequest| async move {
+            stack_sources::templates(request.revision.as_deref())
+                .await
+                .map_err(handler_error)
+        }),
+    );
+    register(
+        iii,
+        III_RELEASES_LIST,
+        "List the newest iii CLI releases (iii-hq/iii tags iii/v*, alphas left out), each with its date and whether it publishes the CLI, and the newest release candidate `iii: latest` installs; with a version, whether that release exists. Kept ten minutes.",
+        RegisterFunction::new_async(move |request: IiiReleasesRequest| async move {
+            stack_sources::iii_releases(request.version.as_deref())
+                .await
+                .map_err(handler_error)
         }),
     );
     register(

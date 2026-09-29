@@ -67,6 +67,8 @@ const READS = [
   'stacks-list',
   'stack-templates-list',
   'worker-resolve',
+  'stack-preview',
+  'iii-releases-list',
   'credentials-list',
 ].map((name) => `e2e::dashboard::${name}`)
 // The Console loads page.js; this one sets the route and guards the calls,

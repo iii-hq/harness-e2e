@@ -38,6 +38,8 @@ const runtimeConfig: RuntimeConfig = {
     stack_delete: 'e2e::dashboard::stack-delete',
     stack_templates_list: 'e2e::dashboard::stack-templates-list',
     worker_resolve: 'e2e::dashboard::worker-resolve',
+    stack_preview: 'e2e::dashboard::stack-preview',
+    iii_releases_list: 'e2e::dashboard::iii-releases-list',
     credentials_list: 'e2e::dashboard::credentials-list',
     credential_set: 'e2e::dashboard::credential-set',
     credential_delete: 'e2e::dashboard::credential-delete',
