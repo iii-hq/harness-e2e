@@ -1,4 +1,4 @@
-import { GitCompare, RotateCcw, Square } from 'lucide-react'
+import { GitCompare, PencilLine, RotateCcw, Square } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -9,7 +9,6 @@ import {
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionFacts } from '@/components/ExecutionConfiguration'
-import { ExecutionNameControl } from '@/components/ExecutionNameControl'
 import { EvidenceRecordPage } from '@/components/execution/EvidenceRecord'
 import { ExecutionTotals } from '@/components/execution/ExecutionTotals'
 import {
@@ -81,7 +80,12 @@ import { buildPrimaryMetrics } from '@/lib/primary-metrics'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import { screenshotsOf } from '@/lib/screenshots'
 import { watchExecution } from '@/lib/watch-execution'
-import { buildLedgerRows, DeleteDialog } from '@/pages/ExecutionsPage'
+import {
+  buildLedgerRows,
+  DeleteDialog,
+  type LedgerRow,
+  RenameDialog,
+} from '@/pages/ExecutionsPage'
 import '@/design-system/styles.css'
 import { copyText } from '@/lib/clipboard'
 
@@ -519,7 +523,8 @@ export function ExecutionPage({
   const [copied, setCopied] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
-  const [renameSignal, setRenameSignal] = useState(0)
+  // The list's Rename dialog, on this execution; null while it is closed.
+  const [renaming, setRenaming] = useState<LedgerRow | null>(null)
   const [openScenario, setOpenScenario] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -862,10 +867,8 @@ export function ExecutionPage({
       setCancelling(false)
     }
   }
-  const renameExecution = async (id: string, label: string) => {
-    if (!bridge) return
-    await bridge.renameExecution(id, label)
-    await load()
+  const openRename = () => {
+    if (summary) setRenaming(buildLedgerRows([summary])[0] ?? null)
   }
   const deleteExecution = async () => {
     if (!bridge || !detail) return
@@ -905,13 +908,19 @@ export function ExecutionPage({
           }}
           titleAction={
             ready && detail.plan_execution ? (
-              <ExecutionNameControl
-                executionId={detail.id}
-                fallbackLabel={title}
-                label={detail.plan_execution.label ?? ''}
-                onRename={renameExecution}
-                openSignal={renameSignal}
-              />
+              <button
+                aria-label={`Rename ${title}`}
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                })}
+                title={`Rename ${title}`}
+                type="button"
+                onClick={openRename}
+                data-rename-execution
+              >
+                <PencilLine aria-hidden="true" size={14} strokeWidth={1.8} />
+              </button>
             ) : undefined
           }
           actions={
@@ -984,9 +993,7 @@ export function ExecutionPage({
               ) : null}
               <ExecutionMoreMenu
                 onRename={
-                  ready && detail.plan_execution
-                    ? () => setRenameSignal((signal) => signal + 1)
-                    : undefined
+                  ready && detail.plan_execution ? openRename : undefined
                 }
                 onCopyLink={() => {
                   void copyText(window.location.href).then((ok) => {
@@ -1210,6 +1217,22 @@ export function ExecutionPage({
           document
             .querySelector<HTMLElement>(
               '.execution-header [aria-label="More actions"]',
+            )
+            ?.focus()
+        }
+      />
+      <RenameDialog
+        row={renaming}
+        onClose={() => setRenaming(null)}
+        onRename={async (row, label) => {
+          if (!bridge) return
+          await bridge.renameExecution(row.id, label)
+          await load()
+        }}
+        onClosed={() =>
+          document
+            .querySelector<HTMLElement>(
+              '.execution-header [data-rename-execution]',
             )
             ?.focus()
         }

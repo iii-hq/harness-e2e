@@ -1039,7 +1039,7 @@ export function DeleteDialog({
   )
 }
 
-function RenameDialog({
+export function RenameDialog({
   row,
   onClose,
   onRename,
