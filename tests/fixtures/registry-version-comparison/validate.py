@@ -289,20 +289,22 @@ def verification_observations(task_root, assets, state):
 
 
 def empty_verification(task_root, state, run_root, truth_complete, known_failed, evidence):
+    # Without a readable report the tester verified nothing: an empty failure
+    # set or an untouched source only earns points next to a report.
     observations = []
     if truth_complete:
         observations.append(ratio("verification.recall", 0, len(known_failed), evidence)
                             if known_failed else ratio("verification.recall", 0, 0, evidence,
-                                                      "no_independently_failing_checks", empty_value=1))
+                                                      "no_subject_report", empty_value=0))
     else:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
     observations.append(ratio("verification.precision", 0, 0, evidence,
-                              "no_reported_failures", empty_value=1))
+                              "no_subject_report", empty_value=0))
     observations.append(ratio("verification.execution_coverage", 0,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
                               "no_reported_outcomes", empty_value=0))
-    observations.extend(source_preservation(task_root, state, run_root))
+    observations.append(binary("verification.source_preservation", False, evidence))
     return observations
 
 

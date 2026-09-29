@@ -15,10 +15,10 @@ Verification recall is detection of failing **contract checks**, not an estimate
 
 ## Observations and scoring
 
-Validators retain raw results and evidence paths in `validation/observations.json`. Binary observations contain `value: 0` or `value: 1`. Ratio observations retain integer `numerator` and `denominator` counts. A measured zero-denominator observation also contains the normalized `value` defined by its metric: recall and precision use 1 for an empty failure set, while evidence coverage uses 0 when no outcomes were reported.
+Validators retain raw results and evidence paths in `validation/observations.json`. Binary observations contain `value: 0` or `value: 1`. Ratio observations retain integer `numerator` and `denominator` counts. A measured zero-denominator observation also contains the normalized `value` defined by its metric: recall and precision use 1 for an empty failure set in a readable report, while evidence coverage uses 0 when no outcomes were reported. Without a readable `checks.json` the tester verified nothing: recall, precision, and source preservation score 0.
 
 Measured points are `round(weight × value)`, using the regular integer criterion format. Raw ratios remain available in the evidence. Each scenario is scored independently through the normal Harness reports.
 
-A product failure earns zero for the check it fails. A validator or infrastructure failure remains unavailable. Other zero-denominator ratios remain not applicable. If a required metric cannot be measured, evaluation is unavailable under the existing evaluator contract; partial observations are still retained. No weight is redistributed.
+A product failure earns zero for the check it fails. Delivered source that cannot be started, or a verification task that changed the Registry source, earns zero on every metric. A validator or infrastructure failure, such as an unreachable Docker daemon, remains unavailable. Other zero-denominator ratios remain not applicable. If a required metric cannot be measured, evaluation is unavailable under the existing evaluator contract; partial observations are still retained. No weight is redistributed.
 
 Screenshots let users inspect actual results. Their appearance is not scored.

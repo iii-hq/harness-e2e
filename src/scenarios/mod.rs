@@ -576,19 +576,36 @@ pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
         "criteria": spec
             .criteria
             .iter()
-            .map(|criterion| serde_json::json!({
-                "id": criterion.id,
-                "weight": criterion.weight,
-                "description": criterion.description,
-                "kind": criterion.kind,
-                "policy": criterion.policy,
-                "dimension": criterion.dimension,
-            }))
+            .map(|criterion| {
+                let mut rendered = serde_json::json!({
+                    "id": criterion.id,
+                    "weight": criterion.weight,
+                    "description": criterion.description,
+                    "kind": criterion.kind,
+                    "policy": criterion.policy,
+                    "dimension": criterion.dimension,
+                });
+                // Written only when set, so a definition without gates keeps its digest.
+                if criterion.gate {
+                    rendered["gate"] = true.into();
+                }
+                rendered
+            })
             .collect::<Vec<_>>(),
         "characterization": case.characterization,
         "required_capabilities": case.required_capabilities,
         "deliverable_contract": case.deliverable_contract,
     });
+    // What the subject may call and what it is told next change the task;
+    // written only when a scenario declares them, like `gate` above.
+    let module = id.module();
+    if let Some(functions) = module.allowed_functions(CONTRACT_NAMESPACE) {
+        definition["allowed_functions"] = serde_json::json!(functions);
+    }
+    let followups = module.dialogue_followups(CONTRACT_NAMESPACE);
+    if !followups.is_empty() {
+        definition["dialogue_followups"] = serde_json::json!(followups);
+    }
     let run_dir = std::env::var_os("HARNESS_E2E_RUN_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
