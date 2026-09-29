@@ -22,3 +22,14 @@ Measured points are `round(weight × value)`, using the regular integer criterio
 A product failure earns zero for the check it fails. Delivered source that cannot be started, or a verification task that changed the Registry source, earns zero on every metric. A validator or infrastructure failure, such as an unreachable Docker daemon, remains unavailable. Other zero-denominator ratios remain not applicable. If a required metric cannot be measured, evaluation is unavailable under the existing evaluator contract; partial observations are still retained. No weight is redistributed.
 
 Screenshots let users inspect actual results. Their appearance is not scored.
+
+## Completion
+
+A metric marked `"gate": true` in `metrics.json` names the scenario's primary flow. The scenario is completed only when every gate earns its full points; the score is still the sum of all metrics.
+
+- **Planning:** `planning.plan_delivered` — `plan.md` exists at `/workspace/output/plan.md`, is UTF-8 text, and has a Markdown heading followed by content. The other planning metrics measure plan content only, so this gate was added. Its 5 points come from merging `planning.required_order` and `planning.enum_order` into `planning.schema_sets`, which the requirements state as one rule; the set still has 20 metrics of 5 points.
+- **Implementation:** `implementation.patch_application` and `implementation.function_removal`.
+- **Environment:** `environment.build` and `environment.api_readiness`.
+- **Verification:** `verification.recall`; a partial ratio does not complete the task.
+
+Delivered source that cannot be started scores zero on every metric, gates included, so it is never completed.

@@ -11,6 +11,7 @@ pub(super) struct AssessmentSpec {
     weight: u8,
     description: &'static str,
     dimension: EvaluationDimension,
+    gate: bool,
 }
 
 impl AssessmentSpec {
@@ -20,6 +21,7 @@ impl AssessmentSpec {
             weight,
             description,
             dimension: EvaluationDimension::StructuralIntegrity,
+            gate: false,
         }
     }
 
@@ -34,6 +36,28 @@ impl AssessmentSpec {
             weight,
             description,
             dimension,
+            gate: false,
+        }
+    }
+
+    /// A criterion that decides completion: the task counts as completed only
+    /// when every gate earned its full points. See [`crate::report::gate_completion`].
+    pub(super) const fn gate(id: &'static str, weight: u8, description: &'static str) -> Self {
+        Self {
+            gate: true,
+            ..Self::scored(id, weight, description)
+        }
+    }
+
+    pub(super) const fn gate_in(
+        id: &'static str,
+        weight: u8,
+        description: &'static str,
+        dimension: EvaluationDimension,
+    ) -> Self {
+        Self {
+            gate: true,
+            ..Self::scored_in(id, weight, description, dimension)
         }
     }
 
@@ -113,7 +137,7 @@ impl AssessmentSpec {
             kind: declaration.kind,
             policy: declaration.policy,
             dimension: declaration.dimension,
-            gate: false,
+            gate: self.gate,
         }
     }
 
@@ -160,8 +184,8 @@ pub(super) fn criteria(specs: &[AssessmentSpec]) -> Vec<CriterionSpec> {
         .collect()
 }
 
+/// Completion is left to the gate criteria (`completion: None`).
 pub(super) fn build_evaluation(
-    completion: CompletionState,
     results: impl IntoIterator<Item = AssessmentOutcome>,
 ) -> ObjectiveEvaluation {
     let mut awards = Vec::new();
@@ -175,7 +199,7 @@ pub(super) fn build_evaluation(
     }
 
     ObjectiveEvaluation {
-        completion,
+        completion: None,
         awards,
         infrastructure_error: None,
     }
@@ -221,13 +245,14 @@ fn failed_evaluation(
 ) -> ObjectiveEvaluation {
     let gate_id = gate_id.into();
     let reason = format!("{gate_kind} '{gate_id}' failed: {}", details.into());
-    build_evaluation(
-        completion,
+    let mut evaluation = build_evaluation(
         specs
             .iter()
             .copied()
             .map(|spec| spec.skipped_due_to_prerequisite(reason.clone())),
-    )
+    );
+    evaluation.completion = Some(completion);
+    evaluation
 }
 
 #[cfg(test)]
@@ -256,13 +281,10 @@ mod tests {
 
     #[test]
     fn criteria_preserve_full_zero_and_partial_scores() {
-        let evaluation = build_evaluation(
-            CompletionState::Completed,
-            [
-                REQUIRED.full_or_zero(true, "satisfied"),
-                SIGNAL.award(12, "partial").unwrap(),
-            ],
-        );
+        let evaluation = build_evaluation([
+            REQUIRED.full_or_zero(true, "satisfied"),
+            SIGNAL.award(12, "partial").unwrap(),
+        ]);
 
         assert_eq!(evaluation.awards[0].awarded, Some(70));
         assert_eq!(evaluation.awards[1].awarded, Some(12));
@@ -270,13 +292,10 @@ mod tests {
 
     #[test]
     fn unverified_criterion_has_no_award() {
-        let evaluation = build_evaluation(
-            CompletionState::Completed,
-            [
-                REQUIRED.full_or_zero(true, "satisfied"),
-                SIGNAL.unverified("blocked"),
-            ],
-        );
+        let evaluation = build_evaluation([
+            REQUIRED.full_or_zero(true, "satisfied"),
+            SIGNAL.unverified("blocked"),
+        ]);
         assert_eq!(evaluation.awards[0].awarded, Some(70));
         assert_eq!(evaluation.awards[1].awarded, None);
     }
@@ -286,6 +305,24 @@ mod tests {
         assert_eq!(
             SIGNAL.award(31, "too many").unwrap_err().to_string(),
             "assessment 'signal': award(awarded=31) exceeds max_points=30; expected awarded in 0..=30"
+        );
+    }
+
+    #[test]
+    fn gate_constructors_mark_the_criterion_and_keep_its_fields() {
+        const GATE: AssessmentSpec = AssessmentSpec::gate_in(
+            "delivered",
+            70,
+            "Was it delivered?",
+            EvaluationDimension::Deliverable,
+        );
+        let declared = criteria(&[GATE, SIGNAL]);
+        assert!(declared[0].gate && !declared[1].gate);
+        assert_eq!(declared[0].dimension, EvaluationDimension::Deliverable);
+        assert!(criteria(&[AssessmentSpec::gate("g", 100, "Did it?")])[0].gate);
+        assert_eq!(
+            build_evaluation([GATE.full_or_zero(true, "ok")]).completion,
+            None
         );
     }
 
@@ -302,8 +339,8 @@ mod tests {
             "the subject produced no output",
         );
 
-        assert_eq!(unavailable.completion, CompletionState::Undetermined);
-        assert_eq!(incomplete.completion, CompletionState::TaskIncomplete);
+        assert_eq!(unavailable.completion, Some(CompletionState::Undetermined));
+        assert_eq!(incomplete.completion, Some(CompletionState::TaskIncomplete));
         assert!(unavailable
             .awards
             .iter()

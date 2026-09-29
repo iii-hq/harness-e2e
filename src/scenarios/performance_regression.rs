@@ -47,13 +47,13 @@ const PUBLIC_TESTS: &str =
     include_str!("../../tests/fixtures/performance-regression/tests/test_deduplicate.py");
 const TASK_MANIFEST: &str = include_str!("../../tests/fixtures/performance-regression/task.json");
 
-const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored_in(
+const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::gate_in(
     "functional_correctness",
     40,
     "The complete public suite and runner-owned hidden semantic probes accept the optimized implementation.",
     EvaluationDimension::Deliverable,
 );
-const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::scored_in(
+const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::gate_in(
     "deterministic_improvement",
     35,
     "Instrumented equality/hash work is bounded, scales near-linearly, and improves by at least the declared factor.",
@@ -464,11 +464,6 @@ measure yourself."#,
         let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
         let baseline_median = audit.baseline.as_ref().map(|baseline| baseline.median_ns);
         Ok(assessment::build_evaluation(
-            if audit.production_patch_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             FUNCTIONAL_CORRECTNESS.full_or_zero(
                 audit.functional_correctness(),

@@ -32,7 +32,7 @@ const DELIVERABLE_ID: &str = "validated_child_result";
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const THRESHOLD: u64 = 6;
 const EXPECTED_ROWS: u64 = 8;
-const CHILD_GOAL: AssessmentSpec = AssessmentSpec::scored_in(
+const CHILD_GOAL: AssessmentSpec = AssessmentSpec::gate_in(
     "child_goal",
     35,
     "The child's table work reaches the exact expected count and the verdict key carries the accepted count.",
@@ -289,31 +289,24 @@ impl Scenario for SubagentValidation {
         let reported = !observation.response.trim().is_empty();
         let (_, orchestration_points) = orchestration_outcome(ordered, child_nudges);
 
-        Ok(assessment::build_evaluation(
-            if reported {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                CHILD_GOAL.award(
-                    child_goal_points(goal, rows),
-                    format!(
+        Ok(assessment::build_evaluation([
+            CHILD_GOAL.award(
+                child_goal_points(goal, rows),
+                format!(
                     "rows={rows}, verdict={verdict}, need both above {THRESHOLD}; full marks at \
                      exactly {EXPECTED_ROWS} rows"
                 ),
-                )?,
-                ORCHESTRATION_DISCIPLINE.award(
-                    orchestration_points,
-                    format!(
+            )?,
+            ORCHESTRATION_DISCIPLINE.award(
+                orchestration_points,
+                format!(
                     "validator@{validator_index:?} wake@{wake_index:?} spawn@{spawn_index:?} — \
                      validator and wake must precede the spawn; observed {child_nudges} nudge(s) \
                      in the child transcript"
                 ),
-                )?,
-                WAKE_REPORT.full_or_zero(reported, "expected the exact report line"),
-            ],
-        ))
+            )?,
+            WAKE_REPORT.full_or_zero(reported, "expected the exact report line"),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

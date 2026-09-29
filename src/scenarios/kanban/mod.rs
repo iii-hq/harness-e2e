@@ -579,7 +579,7 @@ async fn evaluate(
     validate_rubric(index, result)?;
     let awards = criterion_awards(index, result);
     Ok(ObjectiveEvaluation {
-        completion: completion(index, result),
+        completion: Some(completion(index, result)),
         awards,
         infrastructure_error: None,
     })

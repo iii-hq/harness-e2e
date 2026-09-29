@@ -35,7 +35,7 @@ const SENTINEL_TICKET: &str = "ticket-99";
 const INITIAL_TEAM: &str = "team-red";
 const TARGET_TEAM: &str = "team-blue";
 
-const CONSISTENT_FINAL_STATE: AssessmentSpec = AssessmentSpec::scored_in(
+const CONSISTENT_FINAL_STATE: AssessmentSpec = AssessmentSpec::gate_in(
     "consistent_final_state",
     35,
     "CRM and billing converge on team-blue and the support ticket closes only afterward.",
@@ -858,11 +858,6 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
         let sentinels_ok = sentinels_unchanged(&audit.snapshot);
         let receipts_ok = receipts_reported(&observation.response, run_id);
         Ok(assessment::build_evaluation(
-            if final_exact {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             CONSISTENT_FINAL_STATE.full_or_zero(
                 final_exact && sequence_ok,

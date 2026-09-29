@@ -26,7 +26,8 @@ const PUBLICATION_INTEGRITY: CriterionSpec = CriterionSpec::scored(
     20,
     "All expected assets exist and the exact Registry version resolves before promotion planning continues.",
     EvaluationDimension::Deliverable,
-);
+)
+.with_gate(true);
 const EVIDENCE_BOUND_REPLAN: CriterionSpec = CriterionSpec::scored(
     "evidence_bound_replan",
     20,
@@ -38,7 +39,8 @@ const SAFE_CAS_PROMOTION: CriterionSpec = CriterionSpec::scored(
     25,
     "A fresh gated operation preserves the real latest pointer and performs one authorized CAS without retrying the stale operation.",
     EvaluationDimension::Deliverable,
-);
+)
+.with_gate(true);
 const RELEASE_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "release_reconciliation",
     10,

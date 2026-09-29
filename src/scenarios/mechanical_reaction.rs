@@ -19,7 +19,7 @@ const REACTIONS_ARMED: AssessmentSpec = AssessmentSpec::scored(
     30,
     "The wake and mechanical call are registered before the source write.",
 );
-const MECHANICAL_MIRROR: AssessmentSpec = AssessmentSpec::scored(
+const MECHANICAL_MIRROR: AssessmentSpec = AssessmentSpec::gate(
     "mechanical_mirror",
     35,
     "The call binding mirrors the complete source event without a root write.",
@@ -237,11 +237,6 @@ impl Scenario for MechanicalReaction {
         let clean_completion = active_bindings == 0 && no_errors && confirmed;
 
         Ok(assessment::build_evaluation(
-            if confirmed {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             REACTIONS_ARMED.full_or_zero(
                 reactions_armed,

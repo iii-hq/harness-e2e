@@ -35,7 +35,7 @@ const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const REQUIRED_NAMES: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
-const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::scored(
+const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::gate(
     "data_repaired",
     40,
     "All invariants hold at the end and every required name survived the repair.",
@@ -331,39 +331,32 @@ impl Scenario for ValidationSelfRepair {
                 && text.contains("duplicate name: beta")
         });
 
-        Ok(assessment::build_evaluation(
-            if repaired {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                DATA_REPAIRED.full_or_zero(
-                    repaired,
-                    format!("rows={row_count}, remaining violations: {remaining:?}"),
-                ),
-                DIAGNOSIS_DRIVEN.full_or_zero(
-                    diagnosed && envelope_mode,
-                    format!(
-                        "first audit nudge: {:?}; observed {} post-turn registration(s); need \
+        Ok(assessment::build_evaluation([
+            DATA_REPAIRED.full_or_zero(
+                repaired,
+                format!("rows={row_count}, remaining violations: {remaining:?}"),
+            ),
+            DIAGNOSIS_DRIVEN.full_or_zero(
+                diagnosed && envelope_mode,
+                format!(
+                    "first audit nudge: {:?}; observed {} post-turn registration(s); need \
                      exactly one targeting {auditor} with no payload",
-                        nudges.first(),
-                        registrations.len()
-                    ),
+                    nudges.first(),
+                    registrations.len()
                 ),
-                DECISIVE_REPAIR.award(
-                    match nudges.len() {
-                        1 => DECISIVE_REPAIR.weight(),
-                        2 => 15,
-                        _ => 0,
-                    },
-                    format!(
-                        "{} audit rejection(s); full marks for repairing in one",
-                        nudges.len()
-                    ),
-                )?,
-            ],
-        ))
+            ),
+            DECISIVE_REPAIR.award(
+                match nudges.len() {
+                    1 => DECISIVE_REPAIR.weight(),
+                    2 => 15,
+                    _ => 0,
+                },
+                format!(
+                    "{} audit rejection(s); full marks for repairing in one",
+                    nudges.len()
+                ),
+            )?,
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

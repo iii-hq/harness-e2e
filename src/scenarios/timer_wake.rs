@@ -25,12 +25,12 @@ const TIMER_ARMED: AssessmentSpec = AssessmentSpec::scored(
     20,
     "One wake-only relative timer is armed before any result write.",
 );
-const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
+const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::gate(
     "parent_woken",
     20,
     "The timer retires after waking the original session exactly once.",
 );
-const WAKE_ACTION: AssessmentSpec = AssessmentSpec::scored(
+const WAKE_ACTION: AssessmentSpec = AssessmentSpec::gate(
     "wake_action",
     25,
     "The timer-woken turn persists the requested result.",
@@ -339,11 +339,6 @@ binding armed."#,
         let clean_completion = active_bindings == 0 && operational_errors == 0 && confirmed;
 
         Ok(assessment::build_evaluation(
-            if confirmed {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             TIMER_ARMED.full_or_zero(
                 timer_armed,

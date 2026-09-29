@@ -50,9 +50,9 @@ const SIMPLE_ASSESSMENTS: &[AssessmentSpec] = &[
         "The generated worker-compose.yaml is valid, run-scoped, has an explicit runtime, and exposes a matching stack.",
         EvaluationDimension::Deliverable,
     ),
-    AssessmentSpec::scored("worker_live", 15, "The expected local worker is installed and running."),
+    AssessmentSpec::gate("worker_live", 15, "The expected local worker is installed and running."),
     AssessmentSpec::scored("function_surface", 15, "All four Todo functions expose the exact descriptions and schemas."),
-    AssessmentSpec::scored("todo_crud_isolated", 30, "Create, list, update, and delete preserve identity and unrelated items."),
+    AssessmentSpec::gate("todo_crud_isolated", 30, "Create, list, update, and delete preserve identity and unrelated items."),
     AssessmentSpec::scored("todo_invalid_contracts", 15, "Empty titles and unknown IDs are rejected."),
     AssessmentSpec::scored_in(
         "evidence_complete",
@@ -74,7 +74,8 @@ pub const PLANNED_CRITERIA: [CriterionSpec; 4] = [
         25,
         "The separate builder materializes the exact run-scoped worker contract and brings it live.",
         EvaluationDimension::Deliverable,
-    ),
+    )
+    .with_gate(true),
     CriterionSpec::scored(
         "validation_coverage",
         25,
@@ -86,7 +87,8 @@ pub const PLANNED_CRITERIA: [CriterionSpec; 4] = [
         25,
         "The compiled hard gates prove lifecycle, function contracts, CRUD isolation, and invalid-input behavior.",
         EvaluationDimension::Deliverable,
-    ),
+    )
+    .with_gate(true),
 ];
 
 mod contracts;

@@ -168,6 +168,40 @@ pub fn criteria_score(criteria: &[CriterionReport]) -> Option<u8> {
     evaluated.then(|| total.min(100) as u8)
 }
 
+/// Completed means the subject delivered the task's primary flow: every gate
+/// criterion earned its full points. A gate that fell short leaves the task
+/// incomplete. A gate nobody evaluated leaves it incomplete when another
+/// criterion already fell short, and undetermined otherwise, as does a rubric
+/// without gates.
+pub fn gate_completion(criteria: &[CriterionReport]) -> CompletionState {
+    let mut gates = criteria
+        .iter()
+        .filter(|criterion| criterion.gate)
+        .peekable();
+    if gates.peek().is_none() {
+        return CompletionState::Undetermined;
+    }
+    let mut unreached = false;
+    for gate in gates {
+        match gate.awarded {
+            Some(awarded) if awarded < gate.possible => return CompletionState::TaskIncomplete,
+            Some(_) => {}
+            None => unreached = true,
+        }
+    }
+    if !unreached {
+        CompletionState::Completed
+    } else if criteria.iter().any(|criterion| {
+        criterion
+            .awarded
+            .is_some_and(|awarded| awarded < criterion.possible)
+    }) {
+        CompletionState::TaskIncomplete
+    } else {
+        CompletionState::Undetermined
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ModelUsageReport {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3928,6 +3962,44 @@ mod tests {
         assert_eq!(
             criteria_score(&[criterion(Some(80), 80), criterion(Some(80), 80)]),
             Some(100)
+        );
+    }
+
+    #[test]
+    fn completion_is_read_from_the_gate_criteria() {
+        let criterion = |gate: bool, awarded: Option<u8>, possible: u8| CriterionReport {
+            id: format!("c{possible}"),
+            description: None,
+            possible,
+            awarded,
+            reason: "observed".into(),
+            gate,
+        };
+        // Every gate at full points completes, whatever the other criteria scored.
+        assert_eq!(
+            gate_completion(&[criterion(true, Some(60), 60), criterion(false, Some(0), 40)]),
+            CompletionState::Completed
+        );
+        // A gate short of its full points leaves the task incomplete.
+        assert_eq!(
+            gate_completion(&[
+                criterion(true, Some(59), 60),
+                criterion(false, Some(40), 40)
+            ]),
+            CompletionState::TaskIncomplete
+        );
+        // A gate never reached: incomplete after another failure, else undetermined.
+        assert_eq!(
+            gate_completion(&[criterion(true, None, 60), criterion(false, Some(0), 40)]),
+            CompletionState::TaskIncomplete
+        );
+        assert_eq!(
+            gate_completion(&[criterion(true, None, 60), criterion(false, Some(40), 40)]),
+            CompletionState::Undetermined
+        );
+        assert_eq!(
+            gate_completion(&[criterion(false, Some(100), 100)]),
+            CompletionState::Undetermined
         );
     }
 

@@ -32,7 +32,8 @@ const COMPATIBILITY_MATRIX: CriterionSpec = CriterionSpec::scored(
     30,
     "Old and new clients pass against the final producer contract across all three repositories.",
     EvaluationDimension::Deliverable,
-);
+)
+.with_gate(true);
 const WORKSPACE_BOUNDARIES: CriterionSpec = CriterionSpec::scored(
     "workspace_boundaries",
     20,

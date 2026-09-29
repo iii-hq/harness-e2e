@@ -30,7 +30,7 @@ const HOOK_TYPE: &str = "harness::hook::post-turn";
 /// Goal: more than 6 rows; 4-row batches → exactly one denial, pass at 8.
 const THRESHOLD: u64 = 6;
 const EXPECTED_ROWS: u64 = 8;
-const GOAL_REACHED: AssessmentSpec = AssessmentSpec::scored(
+const GOAL_REACHED: AssessmentSpec = AssessmentSpec::gate(
     "goal_reached",
     40,
     "The goal table ends with more rows than the validator threshold.",
@@ -180,32 +180,25 @@ impl Scenario for ValidationLoop {
         let no_errors = observation.metrics.totals.function_call_errors == 0;
         let loop_points = loop_evidence_points(nudges, converged_exactly);
         let validator_passed = single_registration && carries_retry_prompt && no_errors;
-        Ok(assessment::build_evaluation(
-            if goal_reached {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                GOAL_REACHED.full_or_zero(
-                    goal_reached,
-                    format!("observed {rows} row(s), need more than {THRESHOLD}"),
-                ),
-                VALIDATOR_DISCIPLINE.full_or_zero(
-                    validator_passed,
-                    format!(
-                        "observed {} post-turn registration(s), expected exactly one; \
+        Ok(assessment::build_evaluation([
+            GOAL_REACHED.full_or_zero(
+                goal_reached,
+                format!("observed {rows} row(s), need more than {THRESHOLD}"),
+            ),
+            VALIDATOR_DISCIPLINE.full_or_zero(
+                validator_passed,
+                format!(
+                    "observed {} post-turn registration(s), expected exactly one; \
                      carries_retry_prompt={carries_retry_prompt}; function_call_errors={}",
-                        registrations.len(),
-                        observation.metrics.totals.function_call_errors
-                    ),
+                    registrations.len(),
+                    observation.metrics.totals.function_call_errors
                 ),
-                LOOP_EVIDENCE.award(
-                    loop_points,
-                    format!("nudges={nudges}, rows={rows} (full marks at exactly {EXPECTED_ROWS})"),
-                )?,
-            ],
-        ))
+            ),
+            LOOP_EVIDENCE.award(
+                loop_points,
+                format!("nudges={nudges}, rows={rows} (full marks at exactly {EXPECTED_ROWS})"),
+            )?,
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

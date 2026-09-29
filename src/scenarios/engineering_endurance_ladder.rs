@@ -59,7 +59,7 @@ const CAPABILITY_DEPTH: AssessmentSpec = AssessmentSpec::scored_in(
     "Points scale with the longest cumulative prefix of independently accepted tickets.",
     EvaluationDimension::Deliverable,
 );
-const TERMINAL_PROTOCOL: AssessmentSpec = AssessmentSpec::scored(
+const TERMINAL_PROTOCOL: AssessmentSpec = AssessmentSpec::gate(
     "terminal_protocol",
     5,
     "The session reaches either all-rungs-complete or an evidence-backed first capability failure.",
@@ -1260,58 +1260,51 @@ or stop merely because one checkpoint was rejected."#,
         } else {
             1
         };
-        Ok(assessment::build_evaluation(
-            if terminal {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                CAPABILITY_DEPTH.award(
-                    depth_points,
-                    format!(
-                        "accepted {}/{} cumulative rungs",
-                        snapshot.accepted_rungs,
-                        TICKETS.len()
-                    ),
-                )?,
-                TERMINAL_PROTOCOL.full_or_zero(
-                    terminal,
-                    format!(
-                        "terminal_status={:?}, terminal_rung={:?}",
-                        snapshot.terminal_status, snapshot.terminal_rung
-                    ),
+        Ok(assessment::build_evaluation([
+            CAPABILITY_DEPTH.award(
+                depth_points,
+                format!(
+                    "accepted {}/{} cumulative rungs",
+                    snapshot.accepted_rungs,
+                    TICKETS.len()
                 ),
-                GIT_INTEGRITY.full_or_zero(
-                    git_integrity,
-                    format!(
-                        "{} accepted checkpoint(s) retained clean Git scope and ancestry",
-                        accepted.len()
-                    ),
+            )?,
+            TERMINAL_PROTOCOL.full_or_zero(
+                terminal,
+                format!(
+                    "terminal_status={:?}, terminal_rung={:?}",
+                    snapshot.terminal_status, snapshot.terminal_rung
                 ),
-                REGRESSION_INTEGRITY.full_or_zero(
-                    regression_integrity,
-                    format!(
-                        "{} accepted checkpoint(s) passed public and cumulative hidden probes",
-                        accepted.len()
-                    ),
+            ),
+            GIT_INTEGRITY.full_or_zero(
+                git_integrity,
+                format!(
+                    "{} accepted checkpoint(s) retained clean Git scope and ancestry",
+                    accepted.len()
                 ),
-                CONVERGENCE.award(
-                    convergence_points,
-                    format!(
-                        "{} rejected round(s) across {} accepted rung(s)",
-                        rejection_count, snapshot.accepted_rungs
-                    ),
-                )?,
-                EFFICIENCY.award(
-                    efficiency_points,
-                    format!(
-                        "{} changed line(s) across accepted rung ranges",
-                        changed_lines
-                    ),
-                )?,
-            ],
-        ))
+            ),
+            REGRESSION_INTEGRITY.full_or_zero(
+                regression_integrity,
+                format!(
+                    "{} accepted checkpoint(s) passed public and cumulative hidden probes",
+                    accepted.len()
+                ),
+            ),
+            CONVERGENCE.award(
+                convergence_points,
+                format!(
+                    "{} rejected round(s) across {} accepted rung(s)",
+                    rejection_count, snapshot.accepted_rungs
+                ),
+            )?,
+            EFFICIENCY.award(
+                efficiency_points,
+                format!(
+                    "{} changed line(s) across accepted rung ranges",
+                    changed_lines
+                ),
+            )?,
+        ]))
     }
 
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {

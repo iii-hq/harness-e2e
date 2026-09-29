@@ -42,7 +42,7 @@ const CHAIN_ORDER: AssessmentSpec = AssessmentSpec::scored(
     40,
     "Exactly two denials, CHAIN-A then CHAIN-B — ascending priority, first deny wins each attempt.",
 );
-const ALL_GATES_SATISFIED: AssessmentSpec = AssessmentSpec::scored(
+const ALL_GATES_SATISFIED: AssessmentSpec = AssessmentSpec::gate(
     "all_gates_satisfied",
     30,
     "Rows AND marker both end satisfied — one passing validator never completes the turn alone.",
@@ -259,31 +259,24 @@ impl Scenario for ValidationChain {
             0
         };
 
-        Ok(assessment::build_evaluation(
-            if satisfied {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                CHAIN_ORDER.full_or_zero(
-                    ordered,
-                    format!("nudges in order: {nudges:?} — expected CHAIN-A then CHAIN-B"),
-                ),
-                ALL_GATES_SATISFIED.full_or_zero(
-                    satisfied,
-                    format!("rows={rows} (need 3), marker={marker} (need 1)"),
-                ),
-                BROKEN_VALIDATOR_SKIPPED.award(
-                    broken_validator_points,
-                    format!(
+        Ok(assessment::build_evaluation([
+            CHAIN_ORDER.full_or_zero(
+                ordered,
+                format!("nudges in order: {nudges:?} — expected CHAIN-A then CHAIN-B"),
+            ),
+            ALL_GATES_SATISFIED.full_or_zero(
+                satisfied,
+                format!("rows={rows} (need 3), marker={marker} (need 1)"),
+            ),
+            BROKEN_VALIDATOR_SKIPPED.award(
+                broken_validator_points,
+                format!(
                     "observed {} post-turn registration(s); broken_registered={broken_registered}; \
                      ordered={ordered}; need three incl. the fail_open broken one",
                     hook_registrations.len()
                 ),
-                )?,
-            ],
-        ))
+            )?,
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

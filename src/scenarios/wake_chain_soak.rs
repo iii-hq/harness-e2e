@@ -63,7 +63,7 @@ struct Rung {
 pub const CANONICAL_SEED: u64 = 5003;
 const RUNG: Rung = Rung { ticks: 50 };
 
-const CHAIN_COMPLETED: AssessmentSpec = AssessmentSpec::scored_in(
+const CHAIN_COMPLETED: AssessmentSpec = AssessmentSpec::gate_in(
     "chain_completed",
     35,
     "The durable counter reaches exactly the rung's tick count and the completion marker is reported.",
@@ -637,63 +637,54 @@ async fn evaluate_chain(
         .peak
         .map_or_else(|| "unavailable".to_string(), |value| value.to_string());
 
-    Ok(assessment::build_evaluation(
-        if counter_final {
-            crate::report::CompletionState::Completed
-        } else {
-            crate::report::CompletionState::TaskIncomplete
-        },
-        [
-            CHAIN_COMPLETED.full_or_zero(
-                counter_final && reported,
-                format!(
-                    "final_counter={observed}, expected_count={ticks}, marker_present={reported}"
-                ),
-            ),
-            WAKE_INTEGRITY.full_or_zero(
-                wake.registrations_exact && wake.fired_exact && active_bindings == 0,
-                format!(
-                    "registrations={}/{ticks} (tick-labeled={}), fired={}/{ticks} (retired={}), \
+    Ok(assessment::build_evaluation([
+        CHAIN_COMPLETED.full_or_zero(
+            counter_final && reported,
+            format!("final_counter={observed}, expected_count={ticks}, marker_present={reported}"),
+        ),
+        WAKE_INTEGRITY.full_or_zero(
+            wake.registrations_exact && wake.fired_exact && active_bindings == 0,
+            format!(
+                "registrations={}/{ticks} (tick-labeled={}), fired={}/{ticks} (retired={}), \
                  active_bindings={active_bindings}",
-                    wake.registration_calls,
-                    wake.tick_registrations,
-                    wake.tick_fired,
-                    wake.retired_fired
-                ),
+                wake.registration_calls,
+                wake.tick_registrations,
+                wake.tick_fired,
+                wake.retired_fired
             ),
-            MONOTONIC_PROGRESS.full_or_zero(
-                chain.passed,
-                format!(
-                    "writes={}, arms={}, fired_events={}, ordered_calls={}, causal_arms={}, \
+        ),
+        MONOTONIC_PROGRESS.full_or_zero(
+            chain.passed,
+            format!(
+                "writes={}, arms={}, fired_events={}, ordered_calls={}, causal_arms={}, \
                  strict_interleave={}, anchor={}",
-                    chain.write_count,
-                    chain.arm_count,
-                    chain.fired_count,
-                    chain.ordered_calls,
-                    chain.causal_arms,
-                    chain.strict_interleave,
-                    chain.anchor
-                ),
+                chain.write_count,
+                chain.arm_count,
+                chain.fired_count,
+                chain.ordered_calls,
+                chain.causal_arms,
+                chain.strict_interleave,
+                chain.anchor
             ),
-            QUIET_CHAIN.full_or_zero(
-                quiet,
-                format!(
-                    "function_errors={errors}, disciplined={disciplined}, \
+        ),
+        QUIET_CHAIN.full_or_zero(
+            quiet,
+            format!(
+                "function_errors={errors}, disciplined={disciplined}, \
                  response_chars={response_chars}/{MAX_REPORT_CHARS}"
-                ),
             ),
-            OUTPUT_BUDGET.full_or_zero(
-                output_budget.passed,
-                format!(
-                    "peak_output_tokens={peak}, limit={MAX_EVALUATED_OUTPUT_TOKENS}, \
+        ),
+        OUTPUT_BUDGET.full_or_zero(
+            output_budget.passed,
+            format!(
+                "peak_output_tokens={peak}, limit={MAX_EVALUATED_OUTPUT_TOKENS}, \
                      coverage={}/{}, missing_usage={} (provider output includes reasoning)",
-                    output_budget.measured,
-                    output_budget.generations,
-                    output_budget.generations - output_budget.measured
-                ),
+                output_budget.measured,
+                output_budget.generations,
+                output_budget.generations - output_budget.measured
             ),
-        ],
-    ))
+        ),
+    ]))
 }
 
 fn deliverable_contract(ticks: u8) -> DeliverableContract {

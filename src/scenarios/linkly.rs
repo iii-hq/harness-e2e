@@ -25,7 +25,7 @@ use tokio::process::Command;
 use super::common::{atomic_awards, evidence_bundle, function_outcomes, state_value};
 use super::*;
 use crate::context::E2eContext;
-use crate::report::{CompletionState, EvaluationDimension};
+use crate::report::EvaluationDimension;
 
 pub const ID: &str = "linkly_tutorial";
 const EVIDENCE_ID: &str = "linkly_evidence";
@@ -53,6 +53,9 @@ const AGENT_DIRECTORIES: [&str; 6] = [
     "auth",
     "frontend",
 ];
+/// The basic shortener is the product: create and redirect. The other chapters
+/// only move the score.
+const GATES: [&str; 2] = ["foundations.create", "foundations.redirect"];
 const CHAPTERS: [&str; 8] = [
     "ch1_foundations",
     "ch2_observe",
@@ -188,12 +191,14 @@ impl Scenario for LinklyTutorial {
             criteria: metrics()
                 .iter()
                 .map(|m| {
+                    let id = m["id"].as_str().unwrap();
                     CriterionSpec::scored(
-                        m["id"].as_str().unwrap(),
+                        id,
                         m["weight"].as_u64().unwrap() as u8,
                         m["question"].as_str().unwrap(),
                         EvaluationDimension::Deliverable,
                     )
+                    .with_gate(GATES.contains(&id))
                 })
                 .collect(),
         }
@@ -436,11 +441,7 @@ impl Scenario for LinklyTutorial {
             .and_then(|deliverable| deliverable.content.as_json())
             .context("Linkly evidence deliverable was not captured")?;
         Ok(ObjectiveEvaluation {
-            completion: if observation.metrics.complete {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
+            completion: None,
             awards: atomic_awards(metrics(), validation)?,
             infrastructure_error: None,
         })

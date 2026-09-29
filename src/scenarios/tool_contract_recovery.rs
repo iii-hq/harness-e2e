@@ -46,7 +46,7 @@ const TITLE: &str = "Release readiness review";
 const STARTS_AT_LOCAL: &str = "2031-09-18T14:30:00";
 const DURATION_MINUTES: u32 = 45;
 
-const RECOVERED_DELIVERABLE: AssessmentSpec = AssessmentSpec::scored_in(
+const RECOVERED_DELIVERABLE: AssessmentSpec = AssessmentSpec::gate_in(
     "recovered_deliverable",
     30,
     "The final response reports the exact receipt issued by the current scheduling function.",
@@ -702,11 +702,6 @@ report containing the scheduling receipt exactly as returned."#,
         let bounded = bounded_recovery(&audit, &snapshot, errors);
 
         Ok(assessment::build_evaluation(
-            if snapshot.scheduled {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             RECOVERED_DELIVERABLE.full_or_zero(
                 receipt_reported,
