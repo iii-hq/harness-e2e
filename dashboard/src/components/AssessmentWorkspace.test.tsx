@@ -1,11 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import {
-  AssessmentDetailDialog,
-  AssessmentPanel,
-} from '@/components/AssessmentWorkspace'
-import type { AssessmentWorkspaceModel } from '@/lib/assessment-view'
-import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import { AssessmentDetailContent } from '@/components/AssessmentWorkspace'
+import type {
+  AssessmentRunView,
+  AssessmentWorkspaceModel,
+} from '@/lib/assessment-view'
 
 const model: AssessmentWorkspaceModel = {
   availability: 'available',
@@ -65,145 +64,68 @@ const model: AssessmentWorkspaceModel = {
   ],
 }
 
-describe('assessment workspace component', () => {
-  it('renders the system outcome, the assessment matrix and its evidence links', () => {
-    const html = renderToStaticMarkup(
-      <AssessmentPanel
-        model={model}
-        filter="all"
-        onTranscript={() => undefined}
-      />,
+const render = (run: AssessmentRunView) =>
+  renderToStaticMarkup(
+    <AssessmentDetailContent run={run} entries={run.assessments} />,
+  )
+
+// What the Evidence record shows for a run without criteria.
+describe('assessment detail', () => {
+  it('renders the system outcome, the run metrics and the assessment matrix with its evidence', () => {
+    const html = render(model.runs[0])
+    expect(html).toContain('data-system-outcome')
+    expect(html).toContain('data-primary-run-metrics')
+    expect(html).toContain('35/100')
+    expect(html).toContain('22,668')
+    expect(html).toContain('aria-label="Run metrics"')
+    expect(html).toContain('Cache written')
+    expect(html).toContain('21,296')
+    expect(html).toContain('161,280')
+    expect(html).toContain('1m 02s')
+    expect(html).toContain('durable_result')
+    expect(html).toContain('data-evidence-target="technical"')
+    expect(html).not.toContain('Evidence register')
+    expect(html).not.toContain('hard gate')
+    expect(html.indexOf('data-run-metrics-detail')).toBeLessThan(
+      html.indexOf('durable_result'),
     )
-    const detailHtml = renderToStaticMarkup(
-      <AssessmentDetailDialog run={model.runs[0]} onClose={() => undefined} />,
-    )
-    const rendered = `${html}${detailHtml}`
-    // One status, in the same shape the execution page uses.
-    expect(rendered).toContain('data-system-outcome')
-    expect(rendered).toContain(
-      'system · completion, execution and infrastructure',
-    )
-    expect(rendered).not.toContain('advisory ·')
-    expect(rendered).not.toContain('effective ·')
-    expect(rendered).toContain('run run-1')
-    expect(rendered).not.toContain('attempt attempt-1')
-    expect(rendered).toContain('data-primary-run-metrics')
-    expect(rendered).toContain('Score')
-    expect(rendered).toContain('35/100')
-    expect(rendered).toContain('Assessment outcomes')
-    expect(rendered).toContain('Subject tokens')
-    expect(rendered).toContain('Tokens')
-    expect(rendered).toContain('22,668')
-    expect(rendered).toContain('Function calls')
-    expect(rendered).toContain('14')
-    expect(rendered).toContain('1m 02s')
-    expect(rendered).toContain('Function errors')
-    expect(rendered).not.toContain('Runtime telemetry')
-    expect(detailHtml).toContain('aria-label="Run metrics"')
-    expect(detailHtml).toContain('Cache written')
-    expect(rendered).toContain('grid-flow-dense')
-    expect(rendered).toContain('sm:grid-cols-2 lg:grid-cols-4')
-    expect(rendered).toContain('Input tokens')
-    expect(rendered).toContain('21,296')
-    expect(rendered).toContain('Cache read')
-    expect(rendered).toContain('161,280')
-    expect(rendered).toContain('durable_result')
-    expect(rendered).not.toContain('Evidence register')
-    expect(rendered).toContain('data-evidence-target="technical"')
-    expect(rendered).not.toContain('href="#technical"')
-    // Nothing is left of the advisory AI conclusion or its narrative.
-    expect(rendered).not.toContain('Advisory AI conclusion')
-    expect(rendered).not.toContain('Diagnostic narrative')
-    expect(rendered).not.toContain('AI-reported facts')
-    expect(rendered).not.toContain('role="tablist"')
-    expect(rendered).not.toContain('Analyzer provenance')
-    expect(rendered).not.toContain('confidence')
-    expect(detailHtml).not.toContain('Suggested next step')
-    expect(detailHtml).not.toContain('hard gate')
-    expect(detailHtml.indexOf('Score')).toBeLessThan(
-      detailHtml.indexOf('System outcome'),
-    )
-    expect(detailHtml.indexOf('data-run-metrics-detail')).toBeLessThan(
-      detailHtml.indexOf('System outcome'),
-    )
-    expect(rendered).toContain('Transcript')
-    expect(rendered).toContain('data-transcript-action=')
-    expect(html).toContain('Review evidence')
-    expect(rendered.match(/<details[^>]*open/g) ?? []).toHaveLength(0)
-    expect(html).toContain('Filter scenario runs by assessment signal')
-    expect(rendered).toContain('Filter assessment matrix')
-    expect(html).toContain('Open details for Direct Answer')
-    expect(html).toContain('<details')
-    expect(detailHtml).toContain('ds-dialog')
-    expect(detailHtml).toContain('ds-dialog-lg')
-    expect(detailHtml).not.toContain('data-transcript-action=')
-    expect(detailHtml).not.toContain(
-      'flex justify-end border-t border-line pt-3',
-    )
-    expect(detailHtml).toContain('Evidence record')
-    expect(detailHtml).toContain('ds-dialog-header')
-    expect(detailHtml).toContain('ds-dialog-actions')
   })
 
-  it('surfaces security review capability metrics before evidence', () => {
-    const securityModel: AssessmentWorkspaceModel = {
-      availability: 'available',
-      runs: [
+  it('surfaces security review capability metrics', () => {
+    const html = render({
+      ...model.runs[0],
+      key: 'security-review',
+      scenarioId: 'security_review',
+      score: 38,
+      assessments: [
         {
-          ...model.runs[0],
-          key: 'security-review',
-          scenarioId: 'security_review',
-          systemStatus: 'passed',
-          score: 38,
-          assessments: [
-            {
-              ...model.runs[0].assessments[0],
-              id: 'gate',
-              criterionId: 'request_identity',
-              outcome: 'passed',
-              score: undefined,
-            },
-            {
-              ...model.runs[0].assessments[0],
-              id: 'detection',
-              criterionId:
-                'scan_commit_a.report.seeded_vulnerability_detection',
-              policy: 'advisory',
-              kind: 'signal',
-              dimension: 'deliverable',
-              outcome: 'partial',
-              score: { awarded: 75, possible: 100 },
-              summary: 'Detected 3 of 4 explicitly seeded vulnerable paths.',
-            },
-            {
-              ...model.runs[0].assessments[0],
-              id: 'patches',
-              criterionId:
-                'suggest_commit_a.report.suggested_patch_applicability',
-              policy: 'advisory',
-              kind: 'signal',
-              dimension: 'deliverable',
-              outcome: 'partial',
-              score: { awarded: 0, possible: 100 },
-              summary:
-                '0 of 4 optional suggested patches passed git apply --check.',
-            },
-          ],
+          ...model.runs[0].assessments[0],
+          id: 'gate',
+          criterionId: 'request_identity',
+          outcome: 'passed',
+          score: undefined,
+        },
+        {
+          ...model.runs[0].assessments[0],
+          id: 'detection',
+          criterionId: 'scan_commit_a.report.seeded_vulnerability_detection',
+          dimension: 'deliverable',
+          outcome: 'partial',
+          score: { awarded: 75, possible: 100 },
+          summary: 'Detected 3 of 4 explicitly seeded vulnerable paths.',
+        },
+        {
+          ...model.runs[0].assessments[0],
+          id: 'patches',
+          criterionId: 'suggest_commit_a.report.suggested_patch_applicability',
+          dimension: 'deliverable',
+          outcome: 'partial',
+          score: { awarded: 0, possible: 100 },
+          summary:
+            '0 of 4 optional suggested patches passed git apply --check.',
         },
       ],
-    }
-    const html = renderToStaticMarkup(
-      <AssessmentPanel model={securityModel} filter="all" />,
-    )
-    const detailHtml = renderToStaticMarkup(
-      <AssessmentDetailDialog
-        run={securityModel.runs[0]}
-        onClose={() => undefined}
-      />,
-    )
-
-    expect(html).toContain('Security Review')
-    expect(html).toContain('Score')
+    })
     expect(html).toContain('38/100')
     expect(html).not.toContain('75/200')
     expect(html).toContain('Seeded detection')
@@ -212,241 +134,24 @@ describe('assessment workspace component', () => {
     expect(html).toContain('Optional patch checks')
     expect(html).toContain('0/4')
     expect(html).toContain('0% applied cleanly')
-    expect(detailHtml).toContain('Runtime')
-    expect(detailHtml).toContain('1m 02s')
     // A passing run reads as passed, with no second, softer verdict beside it.
-    const outcomeIndex = detailHtml.indexOf(
-      'system · completion, execution and infrastructure',
-    )
-    const outcome = detailHtml.slice(outcomeIndex - 400, outcomeIndex + 100)
+    const at = html.indexOf('system · completion, execution and infrastructure')
+    const outcome = html.slice(at - 400, at + 100)
     expect(outcome).toContain('ds-status-passed')
     expect(outcome).not.toContain('ds-status-failed')
   })
 
-  it('keeps workflow checks and artifacts in the selected run evidence modal', () => {
-    const selectedStep = {
-      node_id: 'selected_step',
-      step_type: 'asset.evaluate',
-      required: true,
-      dependencies: ['prepare_asset'],
-      status: 'hard_gate_failed',
-      duration_ms: 1200,
-      hard_gates: [
-        { id: 'selected_gate', passed: false, reason: 'Selected gate failed' },
-      ],
-      assets: [
-        { id: 'selected_asset', artifact: { path: 'selected/asset.json' } },
-      ],
-    }
-    const detail = {
-      id: 'execution-1',
-      reports: [
-        {
-          subject_id: 'codex/terra',
-          report: {
-            scenarios: [
-              {
-                scenario_id: 'direct_answer',
-                runs: [
-                  {
-                    run_id: 'run-1',
-                    attempt_id: 'attempt-1',
-                    semantic_tests: [selectedStep],
-                    scenario_flow: {
-                      cleanup: { status: 'failed', duration_ms: 9 },
-                    },
-                  },
-                  {
-                    run_id: 'run-1',
-                    attempt_id: 'attempt-2',
-                    semantic_tests: [
-                      { ...selectedStep, node_id: 'other_attempt_step' },
-                    ],
-                  },
-                  {
-                    run_id: 'run-2',
-                    attempt_id: 'attempt-1',
-                    semantic_tests: [
-                      { ...selectedStep, node_id: 'other_run_step' },
-                    ],
-                  },
-                ],
-              },
-              {
-                scenario_id: 'other_scenario',
-                runs: [
-                  {
-                    run_id: 'run-1',
-                    attempt_id: 'attempt-1',
-                    semantic_tests: [
-                      { ...selectedStep, node_id: 'other_scenario_step' },
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        },
-        {
-          subject_id: 'other_subject',
-          report: {
-            scenarios: [
-              {
-                scenario_id: 'direct_answer',
-                runs: [
-                  {
-                    run_id: 'run-1',
-                    attempt_id: 'attempt-1',
-                    semantic_tests: [
-                      { ...selectedStep, node_id: 'other_subject_step' },
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      ],
-    } as unknown as DashboardExecutionDetail
-    const html = renderToStaticMarkup(
-      <AssessmentDetailDialog
-        run={model.runs[0]}
-        detail={detail}
-        onClose={() => undefined}
-      />,
-    )
-
-    expect(html).toContain('Execution flow')
-    expect(html).toContain('Selected Step')
-    expect(html).toContain('Runs after Prepare Asset')
-    expect(html).toContain('Selected gate failed')
-    expect(html).toContain('selected/asset.json')
-    expect(html).toContain('Cleanup failed')
-    expect(html).not.toContain('data-transcript-action=')
-    expect(html).not.toContain('Other Attempt Step')
-    expect(html).not.toContain('Other Run Step')
-    expect(html).not.toContain('Other Scenario Step')
-    expect(html).not.toContain('Other Subject Step')
-  })
-
-  // Audit AW-03 / AW-04: a run that retained no assessments gets neither a
-  // filter bar over zero rows nor a "0/0 passed" outcome tile.
-  it('drops the filter bar and reports unavailable outcomes for a run without assessments', () => {
-    const emptyRun = {
+  // Audit ED-25: passing on infrastructure alone is not the same as passing.
+  it('says a run without assessments was only checked on execution and infrastructure', () => {
+    const html = render({
       ...model.runs[0],
-      key: 'subject-error',
-      systemStatus: 'subject_error' as const,
+      systemStatus: 'subject_error',
       score: null,
       assessments: [],
-    }
-    const html = renderToStaticMarkup(
-      <AssessmentPanel
-        model={{ availability: 'available', runs: [emptyRun] }}
-        filter="all"
-      />,
-    )
-    expect(html).not.toContain('Filter scenario runs by assessment signal')
-    expect(html).toContain('Score')
+    })
+    expect(html).toContain('Only execution and infrastructure were checked')
+    expect(html).toContain('nothing about the deliverable')
     expect(html).toContain('Not reported')
-    expect(html).toContain('Assessment outcomes')
-    expect(html).toContain('No assessments retained')
     expect(html).not.toContain('0/0')
-    expect(html).not.toContain('bg-success/5')
-    const detailHtml = renderToStaticMarkup(
-      <AssessmentDetailDialog run={emptyRun} onClose={() => undefined} />,
-    )
-    expect(detailHtml).toContain('No assessments were retained for this run.')
-    // Audit ED-25: passing on infrastructure alone is not the same as passing.
-    expect(detailHtml).toContain(
-      'Only execution and infrastructure were checked',
-    )
-    expect(detailHtml).toContain('nothing about the deliverable')
-    expect(detailHtml).not.toContain('border-t-[3px]')
-    expect(detailHtml).toContain('tabindex="-1"')
-  })
-
-  it('does not blame the subject for criteria an infrastructure failure never reached', () => {
-    // The real shape of a technical failure: the assessments exist, but the run
-    // died before any of them ran.
-    const abortedRun = {
-      ...model.runs[0],
-      key: 'infrastructure-error',
-      systemStatus: 'infrastructure_error' as const,
-      score: null,
-      metrics: { ...model.runs[0].metrics, durationMs: 100 },
-      assessments: model.runs[0].assessments.map((entry) => ({
-        ...entry,
-        outcome: 'not_evaluated' as const,
-        score: undefined,
-      })),
-    }
-    const html = renderToStaticMarkup(
-      <AssessmentPanel
-        model={{ availability: 'available', runs: [abortedRun] }}
-        filter="all"
-      />,
-    )
-    expect(html).toContain('No score retained')
-    expect(html).toContain('1 not evaluated')
-    // The old projection counted not_evaluated as a failure on the subject.
-    expect(html).not.toContain('1 failed')
-    expect(html).not.toContain('1 need review')
-    // The system status is genuinely an error and keeps its red badge; the
-    // metric tiles must not be, since they measured nothing.
-    expect(html).toContain('System: Infrastructure Error')
-    expect(html).not.toContain('[&_[data-metric-value]]:text-danger')
-  })
-
-  it('reads each criterion of the contract against what the run did with it', () => {
-    const spec = {
-      prompt: 'Store the durable result.',
-      criteria: [
-        {
-          id: 'durable_result',
-          weight: 70,
-          description: 'The durable result must be observable after the run.',
-          kind: 'required_check' as const,
-          policy: 'hard_gate' as const,
-          dimension: 'structural_integrity' as const,
-        },
-        {
-          id: 'never_reported',
-          weight: 30,
-          description: 'A criterion this run never reported on.',
-          kind: 'signal' as const,
-          policy: 'advisory' as const,
-          dimension: 'efficiency' as const,
-        },
-      ],
-      execution: { max_turns: 12, stuck_timeout_seconds: 300 },
-      denied_functions: [],
-    }
-    const html = renderToStaticMarkup(
-      <AssessmentPanel
-        model={model}
-        filter="all"
-        spec={spec}
-        onTranscript={() => undefined}
-      />,
-    )
-    expect(html).toContain('what this test required')
-    // The requirement comes from the contract...
-    expect(html).toContain('must be observable after the run')
-    // ...and the verdict from the run.
-    expect(html).toContain('failed')
-    // A criterion the run never reported still shows what it demanded.
-    expect(html).toContain('never_reported')
-    expect(html).toContain('not evaluated')
-  })
-
-  it('renders unavailable assessments without a default verdict', () => {
-    const unavailable = renderToStaticMarkup(
-      <AssessmentPanel
-        model={{ availability: 'unavailable', runs: [] }}
-        filter="all"
-      />,
-    )
-    expect(unavailable).toContain('Assessment data is unavailable')
-    expect(unavailable).toContain('No status has been inferred')
   })
 })

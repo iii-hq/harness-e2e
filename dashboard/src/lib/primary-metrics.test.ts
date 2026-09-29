@@ -4,11 +4,7 @@ import type {
   DashboardRetryAttemptProjection,
   DashboardRunProjection,
 } from '@/lib/dashboard-data-source'
-import {
-  buildPrimaryMetrics,
-  comparePrimaryMetrics,
-  excludeUnsuccessfulTests,
-} from '@/lib/primary-metrics'
+import { buildPrimaryMetrics } from '@/lib/primary-metrics'
 
 type RunOptions = {
   score?: number | null
@@ -149,44 +145,6 @@ describe('primary execution metrics', () => {
     })
   })
 
-  it('excludes zero-score and failed tests from every repetition without mutating evidence', () => {
-    const evidence = detail([
-      { id: 'kept', runs: [run('k1', { score: 0 }), run('k2', { score: 80 })] },
-      { id: 'zero', runs: [run('z', { score: 0 })] },
-      {
-        id: 'failed',
-        runs: [run('f1'), { ...run('f2'), status: 'hard_gate_failed' }],
-      },
-      {
-        id: 'invalid',
-        runs: [{ ...run('i'), technical: 'technical_invalid' }],
-      },
-      { id: 'unreported-score', runs: [run('u', { score: null })] },
-      { id: 'unavailable', available: false },
-    ])
-    const original = JSON.stringify(evidence)
-    const filtered = excludeUnsuccessfulTests(evidence)
-    expect(filtered.reports.map((record) => record.scenario_id)).toEqual([
-      'kept',
-      'unreported-score',
-      'unavailable',
-    ])
-    expect(
-      buildPrimaryMetrics(filtered).tests.find((test) => test.label === 'kept')
-        ?.metrics,
-    ).toMatchObject({
-      score: { value: 40 },
-      inputTokens: { value: 20 },
-      costUsd: { value: 0.2 },
-    })
-    expect(JSON.stringify(evidence)).toBe(original)
-    expect(
-      excludeUnsuccessfulTests(
-        detail([{ id: 'zero', runs: [run('z', { score: 0 })] }]),
-      ).reports,
-    ).toEqual([])
-  })
-
   it('gives each test equal score weight after averaging its repetitions', () => {
     const result = buildPrimaryMetrics(
       detail([
@@ -308,15 +266,6 @@ describe('primary execution metrics', () => {
       ['unscored', 1, 0, 1],
       ['zero', 1, 1, 1],
     ])
-    const comparison = comparePrimaryMetrics(
-      result,
-      buildPrimaryMetrics(detail([{ id: 'zero', runs: [run('z')] }])),
-      false,
-    )
-    expect(
-      comparison.candidate.tests.find((test) => test.label === 'unscored')
-        ?.executedRuns,
-    ).toBe(0)
   })
 
   it('does not declare complete coverage when the planned scope is unknown', () => {
@@ -387,166 +336,5 @@ describe('primary execution metrics', () => {
 
     expect(result.metrics.inputTokens.value).toBeNull()
     expect(result.metrics.inputTokens.observed).toBeNull()
-  })
-})
-
-describe('primary metrics comparison', () => {
-  it('filters zero and missing scores symmetrically and recalculates every metric', () => {
-    const baseline = buildPrimaryMetrics(
-      detail([
-        { id: 'kept', runs: [run('a-kept', { score: 80, input: 10 })] },
-        { id: 'zero', runs: [run('a-zero', { score: 70, input: 30 })] },
-        { id: 'missing', runs: [run('a-missing', { score: 90, input: 50 })] },
-      ]),
-    )
-    const candidate = buildPrimaryMetrics(
-      detail([
-        { id: 'kept', runs: [run('b-kept', { score: 90, input: 8 })] },
-        { id: 'zero', runs: [run('b-zero', { score: 0, input: 15 })] },
-        { id: 'missing', planned: 1, runs: [] },
-      ]),
-    )
-
-    const unfiltered = comparePrimaryMetrics(baseline, candidate, false)
-    expect(unfiltered.baseline.metrics.inputTokens.value).toBe(90)
-    expect(unfiltered.candidate.metrics.score.value).toBeNull()
-    expect(unfiltered.deltas.score).toBe(-35)
-
-    const filtered = comparePrimaryMetrics(baseline, candidate, true)
-    expect(filtered).toMatchObject({ excluded: 2, totalTests: 3 })
-    expect(filtered.baseline.tests.map((test) => test.label)).toEqual(['kept'])
-    expect(filtered.candidate.tests.map((test) => test.label)).toEqual(['kept'])
-    expect(filtered.baseline.metrics.inputTokens.value).toBe(10)
-    expect(filtered.candidate.metrics.inputTokens.value).toBe(8)
-    expect(filtered.deltas.score).toBe(10)
-    expect(filtered.deltas.inputTokens).toBe(-2)
-  })
-
-  it('compares available metrics across different cases, repetitions, and partial reports', () => {
-    const baseline = buildPrimaryMetrics(
-      detail([
-        { id: 'changed-case', caseId: 'case-a', runs: [run('a-case')] },
-        { id: 'changed-runs', runs: [run('a-run')] },
-        { id: 'partial', runs: [run('a-partial')] },
-      ]),
-    )
-    const candidate = buildPrimaryMetrics(
-      detail([
-        { id: 'changed-case', caseId: 'case-b', runs: [run('b-case')] },
-        { id: 'changed-runs', runs: [run('b-run-1'), run('b-run-2')] },
-        { id: 'partial', runs: [run('b-partial', { cacheRead: null })] },
-      ]),
-    )
-
-    const result = comparePrimaryMetrics(baseline, candidate, false)
-
-    expect(result.totalTests).toBe(3)
-    expect(result.baseline.tests.map((test) => test.label)).toEqual([
-      'changed-case',
-      'changed-runs',
-      'partial',
-    ])
-    expect(result.deltas.score).toBe(0)
-    expect(result.deltas.inputTokens).toBe(10)
-    expect(result.deltas.cacheRead).toBe(0)
-    expect(result.candidate.metrics.cacheRead.value).toBeNull()
-  })
-
-  it('keeps a delta when the scenario definition changed', () => {
-    const baseline = detail([{ id: 'moved', runs: [run('a')] }])
-    const candidate = detail([
-      {
-        id: 'moved',
-        definition:
-          'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
-        runs: [run('b')],
-      },
-    ])
-
-    const result = comparePrimaryMetrics(
-      buildPrimaryMetrics(baseline),
-      buildPrimaryMetrics(candidate),
-      false,
-    )
-
-    expect(result.totalTests).toBe(1)
-    expect(result.tests[0].definition).toBe(
-      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
-    )
-    expect(result.deltas.score).toBe(0)
-  })
-
-  it('calculates deltas without report identity', () => {
-    const baseline = detail([{ id: 'identity', runs: [run('a')] }])
-    const candidate = detail([{ id: 'identity', runs: [run('b')] }])
-    const report = candidate.reports[0].report
-    if (!report) throw new Error('fixture must contain a report')
-    report.result_contract_sha256 = ''
-
-    const result = comparePrimaryMetrics(
-      buildPrimaryMetrics(baseline),
-      buildPrimaryMetrics(candidate),
-      false,
-    )
-
-    expect(result.baseline.metrics.score.value).toBe(100)
-    expect(result.candidate.metrics.score.value).toBe(100)
-    expect(result.deltas.score).toBe(0)
-  })
-
-  it('blocks only the missing metric and treats zero as available', () => {
-    const baseline = buildPrimaryMetrics(
-      detail([
-        {
-          id: 'test',
-          runs: [run('a', { score: 0, cost: 0, cacheRead: null })],
-        },
-      ]),
-    )
-    const candidate = buildPrimaryMetrics(
-      detail([
-        {
-          id: 'test',
-          runs: [run('b', { score: 10, cost: 0.1, cacheRead: 20 })],
-        },
-      ]),
-    )
-    expect(
-      comparePrimaryMetrics(baseline, candidate, false).deltas,
-    ).toMatchObject({
-      score: 10,
-      costUsd: 0.1,
-      inputTokens: 0,
-      cacheRead: null,
-    })
-    expect(
-      comparePrimaryMetrics(candidate, baseline, false).deltas.cacheRead,
-    ).toBeNull()
-  })
-
-  it('compares partial means without declaring them complete or filtering them out', () => {
-    const baseline = buildPrimaryMetrics(
-      detail([
-        { id: 'partial', planned: 2, runs: [run('a', { score: 80 })] },
-        { id: 'full', runs: [run('a-full', { score: 60 })] },
-      ]),
-    )
-    const candidate = buildPrimaryMetrics(
-      detail([
-        { id: 'partial', planned: 3, runs: [run('b', { score: 100 })] },
-        { id: 'full', runs: [run('b-full', { score: 80 })] },
-      ]),
-    )
-    const comparison = comparePrimaryMetrics(baseline, candidate, true)
-    expect(comparison.excluded).toBe(0)
-    expect(comparison.baseline.metrics.score).toMatchObject({
-      value: null,
-      observed: 70,
-    })
-    expect(comparison.candidate.metrics.score).toMatchObject({
-      value: null,
-      observed: 90,
-    })
-    expect(comparison.deltas.score).toBe(20)
   })
 })
