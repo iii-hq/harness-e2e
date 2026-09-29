@@ -10,7 +10,6 @@ use anyhow::bail;
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
-use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
@@ -42,7 +41,7 @@ const ALL_KEYS: [&str; 6] = [
     PIPELINE_RECEIPT,
 ];
 
-const RECEIPT_DELIVERED: AssessmentSpec = AssessmentSpec::scored(
+const RECEIPT_DELIVERED: AssessmentSpec = AssessmentSpec::gate(
     "receipt_delivered",
     40,
     "Does pipeline_receipt exactly copy the publish stage name, accepted token, and receipt, with that receipt present in the final response?",
@@ -311,11 +310,6 @@ impl Scenario for SequentialPipeline {
             && tokens.contains(RECEIPT_TOKEN);
 
         Ok(assessment::build_evaluation(
-            if receipt_stored {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
             [
                 RECEIPT_DELIVERED.full_or_zero(
                     receipt_stored && receipt_reported,

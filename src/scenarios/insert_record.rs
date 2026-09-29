@@ -6,7 +6,6 @@ use anyhow::{bail, Context};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
-use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
@@ -21,7 +20,7 @@ const VALUE: &str = "harness-e2e-record";
 const MAX_TURNS_FOR_CREDIT: u64 = 10;
 const DELIVERABLE_ID: &str = "inserted_rows";
 
-const RECORD_CREATED: AssessmentSpec = AssessmentSpec::scored(
+const RECORD_CREATED: AssessmentSpec = AssessmentSpec::gate(
     "record_created",
     80,
     "Does the prepared database table contain exactly one row with the requested text in its value field?",
@@ -166,18 +165,11 @@ impl Scenario for InsertRecord {
         let record_created = values.as_slice() == [Some(VALUE)];
         let turns = observation.metrics.totals.turns;
 
-        Ok(assessment::build_evaluation(
-            if record_created {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
-            [
-                RECORD_CREATED.full_or_zero(record_created, format!("rows={values:?}")),
-                FEWER_THAN_TEN_TURNS
-                    .full_or_zero(turns < MAX_TURNS_FOR_CREDIT, format!("turns={turns}")),
-            ],
-        ))
+        Ok(assessment::build_evaluation([
+            RECORD_CREATED.full_or_zero(record_created, format!("rows={values:?}")),
+            FEWER_THAN_TEN_TURNS
+                .full_or_zero(turns < MAX_TURNS_FOR_CREDIT, format!("turns={turns}")),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

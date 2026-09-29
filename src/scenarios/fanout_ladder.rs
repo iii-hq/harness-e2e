@@ -43,11 +43,16 @@ const PARALLEL_FAN_OUT: AssessmentSpec = AssessmentSpec::scored(
     30,
     "Are all N workers spawned directly as N distinct leaf sessions in one coordinator response?",
 );
-const WORKER_DELIVERABLES: AssessmentSpec = AssessmentSpec::scored_in(
+const WORKER_DELIVERABLES: AssessmentSpec = AssessmentSpec::gate_in(
     "worker_deliverables",
-    30,
-    "Does every worker row exactly match its assignment and come from its own direct leaf session through one state write?",
+    15,
+    "Does every worker key hold exactly its assigned row?",
     EvaluationDimension::Deliverable,
+);
+const WORKER_PROVENANCE: AssessmentSpec = AssessmentSpec::scored(
+    "worker_provenance",
+    15,
+    "Was each worker row written by its own direct leaf session through one exact state write and nothing beyond discovery?",
 );
 const BARRIER_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "barrier_fan_in",
@@ -62,6 +67,7 @@ const AGGREGATED_REPORT: AssessmentSpec = AssessmentSpec::scored(
 const ASSESSMENTS: &[AssessmentSpec] = &[
     PARALLEL_FAN_OUT,
     WORKER_DELIVERABLES,
+    WORKER_PROVENANCE,
     BARRIER_FAN_IN,
     AGGREGATED_REPORT,
 ];
@@ -419,49 +425,50 @@ async fn evaluate_rung(
     let report_aggregates = report_aggregates(&observation.response, run_id, fan_out);
     let no_errors = observation.metrics.totals.function_call_errors == 0;
 
-    Ok(assessment::build_evaluation(
-        if report_aggregates {
-            crate::report::CompletionState::Completed
-        } else {
-            crate::report::CompletionState::TaskIncomplete
-        },
-        [
-            PARALLEL_FAN_OUT.full_or_zero(
-                fanned_out,
-                format!(
-                    "spawns={}, single_response_spawns={single_response_spawns}, \
+    Ok(assessment::build_evaluation([
+        PARALLEL_FAN_OUT.full_or_zero(
+            fanned_out,
+            format!(
+                "spawns={}, single_response_spawns={single_response_spawns}, \
                  direct_sessions={}/{fan_out}, total_sessions={}",
-                    spawns.len(),
-                    worker_sessions.len(),
-                    observation.metrics.totals.sessions
-                ),
+                spawns.len(),
+                worker_sessions.len(),
+                observation.metrics.totals.sessions
             ),
-            WORKER_DELIVERABLES.full_or_zero(
-                audit.rows_exact && audit.direct_provenance,
-                format!(
-                    "exact_rows={}/{fan_out}, distinct_writers={}, leaf_discipline={}",
-                    audit.exact_rows, audit.distinct_writers, audit.leaf_discipline
-                ),
+        ),
+        WORKER_DELIVERABLES.full_or_zero(
+            audit.rows_exact,
+            format!("exact_rows={}/{fan_out}", audit.exact_rows),
+        ),
+        WORKER_PROVENANCE.full_or_zero(
+            audit.direct_provenance,
+            format!(
+                "direct_sessions={}/{fan_out}, distinct_writers={}, leaf_discipline={}, \
+                 single_writes={}",
+                worker_sessions.len(),
+                audit.distinct_writers,
+                audit.leaf_discipline,
+                audit.single_writes
             ),
-            BARRIER_FAN_IN.full_or_zero(
-                armed_before_spawns && barrier_woke,
-                format!(
-                    "registrations={}, armed_before_spawns={armed_before_spawns}, \
+        ),
+        BARRIER_FAN_IN.full_or_zero(
+            armed_before_spawns && barrier_woke,
+            format!(
+                "registrations={}, armed_before_spawns={armed_before_spawns}, \
                  completion_records={}, barrier_woke={barrier_woke}",
-                    registrations.len(),
-                    completion_records.len()
-                ),
+                registrations.len(),
+                completion_records.len()
             ),
-            AGGREGATED_REPORT.full_or_zero(
-                report_aggregates && active_bindings == 0 && no_errors,
-                format!(
-                    "report_aggregates={report_aggregates}, active_bindings={active_bindings}, \
+        ),
+        AGGREGATED_REPORT.full_or_zero(
+            report_aggregates && active_bindings == 0 && no_errors,
+            format!(
+                "report_aggregates={report_aggregates}, active_bindings={active_bindings}, \
                  function_errors={}",
-                    observation.metrics.totals.function_call_errors
-                ),
+                observation.metrics.totals.function_call_errors
             ),
-        ],
-    ))
+        ),
+    ]))
 }
 
 struct WorkerAudit {
@@ -469,6 +476,7 @@ struct WorkerAudit {
     rows_exact: bool,
     distinct_writers: usize,
     leaf_discipline: bool,
+    single_writes: bool,
     direct_provenance: bool,
 }
 
@@ -537,6 +545,7 @@ async fn worker_audit(
         rows_exact,
         distinct_writers,
         leaf_discipline,
+        single_writes,
         direct_provenance,
     })
 }

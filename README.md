@@ -37,6 +37,20 @@ observations already recorded.
 Every score and every audit flag is deterministic. No scenario calls a second
 model to judge the first.
 
+## Completion
+
+Completed means the subject delivered the task's primary flow. Every scenario
+marks the criteria that are that flow, usually one or two, as gates.
+
+- Every gate at full points: completed, whatever the other criteria scored.
+- A gate below full points: incomplete.
+- A gate nobody evaluated: incomplete when another criterion already fell
+  short, undetermined otherwise.
+
+A scenario overrides this only when a prerequisite decides before any gate,
+such as an application that never built. The gates are part of the behavior
+digest, so changing one redefines the scenario.
+
 ## Requirements
 
 `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog` prepare their

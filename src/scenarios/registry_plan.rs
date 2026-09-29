@@ -2,7 +2,8 @@
 //!
 //! `registry_planning` asks the subject for an implementation plan and scores
 //! it against the twenty binary planning metrics in `metrics.json`. Each
-//! metric is answered here by inspecting the plan text itself: contract
+//! metric is answered here by inspecting the plan text itself: a Markdown
+//! document to begin with (the completion gate), contract
 //! terms that must be stated, pinned-source paths that must be cited, an
 //! ordered implementation sequence, proposed tests that carry an expected
 //! result, and the absence of excluded work. Every observation cites the plan
@@ -436,6 +437,30 @@ fn test_expectations(document: &Document) -> Outcome {
     }
 }
 
+/// The plan is a Markdown document: a heading with content under it. The
+/// caller has already established that the file exists and is UTF-8 text.
+fn delivered(document: &Document) -> Outcome {
+    let content = document.sections().into_iter().find_map(|section| {
+        section
+            .lines
+            .iter()
+            .find(|line| !line.normalized.is_empty() && heading_level(&line.normalized).is_none())
+            .map(|line| (section.title, line.original.clone()))
+    });
+    match content {
+        Some((title, line)) => Outcome {
+            passed: true,
+            reason: format!("plan.md is a Markdown document; section '{title}' has content"),
+            evidence: vec![line],
+        },
+        None => Outcome {
+            passed: false,
+            reason: "plan.md has no Markdown heading followed by content".into(),
+            evidence: Vec::new(),
+        },
+    }
+}
+
 /// Excluded work may appear only in sentences that rule it out.
 fn scope(document: &Document) -> Outcome {
     let mut violations = Vec::new();
@@ -476,6 +501,7 @@ fn scope(document: &Document) -> Outcome {
 
 fn check(document: &Document, id: &str) -> Option<Outcome> {
     Some(match id {
+        "planning.plan_delivered" => delivered(document),
         "planning.endpoint" => all_groups(
             document,
             &[&["/w/:slug/compare/:from...:to", "compare/:from...:to"]],
@@ -554,8 +580,7 @@ fn check(document: &Document, id: &str) -> Option<Outcome> {
                 ],
             ],
         ),
-        "planning.required_order" => all_groups(document, &[&["required"], SET_TERMS]),
-        "planning.enum_order" => all_groups(document, &[&["enum"], SET_TERMS]),
+        "planning.schema_sets" => all_groups(document, &[&["required"], &["enum"], SET_TERMS]),
         "planning.config_array_order" => all_groups(
             document,
             &[
@@ -743,6 +768,20 @@ mod tests {
         };
         assert_eq!(value(proposing).1, 0, "{}", value(proposing).2);
         assert_eq!(value(ruling_out).1, 1, "{}", value(ruling_out).2);
+    }
+
+    #[test]
+    fn only_a_heading_with_content_counts_as_a_delivered_plan() {
+        let delivered = |plan: &str| {
+            values(plan)
+                .into_iter()
+                .find(|(id, _, _)| id == "planning.plan_delivered")
+                .unwrap()
+                .1
+        };
+        assert_eq!(delivered("# Plan\n\nAdd the comparison endpoint.\n"), 1);
+        assert_eq!(delivered("Add the comparison endpoint.\n"), 0);
+        assert_eq!(delivered("# Plan\n\n## Steps\n"), 0);
     }
 
     #[test]

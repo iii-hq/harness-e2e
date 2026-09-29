@@ -70,12 +70,12 @@ const NO_FABRICATION: AssessmentSpec = AssessmentSpec::scored_in(
     "Do all editorial summaries avoid currency amounts and calendar years that their sources do not state?",
     EvaluationDimension::Deliverable,
 );
-const SITE_STRUCTURE: AssessmentSpec = AssessmentSpec::scored(
+const SITE_STRUCTURE: AssessmentSpec = AssessmentSpec::gate(
     "site_structure",
     20,
     "Does the site contain a valid HTML index, one RSS item per post, and a parseable manifest?",
 );
-const EDITORIAL_COVERAGE: AssessmentSpec = AssessmentSpec::scored(
+const EDITORIAL_COVERAGE: AssessmentSpec = AssessmentSpec::gate(
     "editorial_coverage",
     15,
     "Are exactly the top-ranked topics covered once each with no duplicates or off-brief selections?",
@@ -643,16 +643,13 @@ fn audit_site(root: &Path) -> SiteAudit {
 }
 
 fn build(audit: &SiteAudit) -> ObjectiveEvaluation {
-    assessment::build_evaluation(
-        crate::report::CompletionState::Completed,
-        [
-            FACTUAL_ANCHORING.full_or_zero(audit.anchoring_ok, audit.detail.clone()),
-            NO_FABRICATION.full_or_zero(audit.no_fabrication_ok, audit.detail.clone()),
-            SITE_STRUCTURE.full_or_zero(audit.structure_ok, audit.detail.clone()),
-            EDITORIAL_COVERAGE.full_or_zero(audit.coverage_ok, audit.detail.clone()),
-            PRESENTATION_QUALITY.full_or_zero(audit.presentation_ok, audit.detail.clone()),
-        ],
-    )
+    assessment::build_evaluation([
+        FACTUAL_ANCHORING.full_or_zero(audit.anchoring_ok, audit.detail.clone()),
+        NO_FABRICATION.full_or_zero(audit.no_fabrication_ok, audit.detail.clone()),
+        SITE_STRUCTURE.full_or_zero(audit.structure_ok, audit.detail.clone()),
+        EDITORIAL_COVERAGE.full_or_zero(audit.coverage_ok, audit.detail.clone()),
+        PRESENTATION_QUALITY.full_or_zero(audit.presentation_ok, audit.detail.clone()),
+    ])
 }
 
 fn deliverable_contract() -> DeliverableContract {

@@ -117,13 +117,13 @@ const SHAPE_CHECKS: &[&str] = &[
     "readme_documents_service",
 ];
 
-const SERVICE_CONTRACT: AssessmentSpec = AssessmentSpec::scored_in(
+const SERVICE_CONTRACT: AssessmentSpec = AssessmentSpec::gate_in(
     "service_contract",
     15,
     "Does the application boot, serve documented endpoints and status codes, authenticate with the provider, and refuse to start without credentials?",
     EvaluationDimension::Deliverable,
 );
-const STREAMING_FIDELITY: AssessmentSpec = AssessmentSpec::scored_in(
+const STREAMING_FIDELITY: AssessmentSpec = AssessmentSpec::gate_in(
     "streaming_fidelity",
     20,
     "Do provider fragments reach the client as individual live delta events and does the turn close with accurate usage?",
@@ -361,11 +361,6 @@ observed it. If any goal is unmet, report `INCOMPLETE` instead and name the goal
         let audit = audit(run_id).await?;
         let failed = audit.probe.failed();
         Ok(assessment::build_evaluation(
-            if audit.implementation_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
                 SERVICE_CONTRACT.full_or_zero(
                     audit.probe.group(SERVICE_CONTRACT_CHECKS),

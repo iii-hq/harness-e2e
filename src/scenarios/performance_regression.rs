@@ -48,13 +48,13 @@ const PUBLIC_TESTS: &str =
     include_str!("../../tests/fixtures/performance-regression/tests/test_deduplicate.py");
 const TASK_MANIFEST: &str = include_str!("../../tests/fixtures/performance-regression/task.json");
 
-const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored_in(
+const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::gate_in(
     "functional_correctness",
     40,
     "Does the candidate implementation preserve the expected results in all public and hidden tests?",
     EvaluationDimension::Deliverable,
 );
-const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::scored_in(
+const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::gate_in(
     "deterministic_improvement",
     45,
     "At 256 items, does the code use between 1 and 2,048 equality and hash operations, no more than one eighth of the baseline work, and at most three times the work at 128 items?",
@@ -466,11 +466,6 @@ measure yourself."#,
         let audit = audit_fixture(run_id).await?;
         let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
         Ok(assessment::build_evaluation(
-            if audit.production_patch_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             FUNCTIONAL_CORRECTNESS.full_or_zero(
                 audit.functional_correctness(),
