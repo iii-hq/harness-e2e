@@ -151,6 +151,14 @@ two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.
 
+**Group by** (`&group=day|release` in the hash) draws one point per day, on the
+reader's clock, or per Harness release, in the order they first ran, instead of
+one per execution. A group reads its executions together: means weighted by
+counted runs, tests completed per execution, the function calls summed, its
+versions its last execution's. Its panel lists its executions and says when they
+did not all run the same versions. An execution with no recorded Harness version
+is in no release, and the page says how many are left out.
+
 On the page, an execution can be pinned as the **baseline**, from the Baseline
 picker next to Period or from a point's panel (`&base=<execution id>` in the
 hash; the worker is never asked about it). The cards and the panel

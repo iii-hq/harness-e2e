@@ -7,6 +7,7 @@ import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
 import {
   changesAt,
   comparedPair,
+  groupPoints,
   pointTime,
   previousCounted,
   trendMetric,
@@ -457,6 +458,51 @@ describe('trends page parts', () => {
       )
       expect(panel(failed, BASE)).not.toContain('Set as baseline')
     })
+  })
+
+  it('draws a day as one point and opens it on its executions', () => {
+    const all = seriesPoints('regression')
+    const days = groupPoints(all, 'day')
+    const dayChanges = days.map((_, index) => changesAt(days, index))
+    const sep24 = days.findIndex((point) => point.group?.key === '2026-09-24')
+    const large = renderToStaticMarkup(
+      <LargeChart
+        metric={trendMetric('score')}
+        points={days}
+        changes={dayChanges}
+        selected={-1}
+        baseline={-1}
+        narrow={false}
+        onPick={() => undefined}
+      />,
+    )
+    expect(large).toContain('One step per day')
+    expect(large).toMatch(/aria-label="Sep 24 · Score 95\.2"/)
+    const html = renderToStaticMarkup(
+      <PointPanel
+        points={days}
+        index={sep24}
+        changes={dayChanges[sep24]}
+        previous={previousCounted(days, sep24)}
+        baseline={null}
+        bridge={null}
+        here="#/ext/harness-e2e/trends?group=day"
+        onClose={() => undefined}
+        onBaseline={() => undefined}
+      />,
+    )
+    expect(html).toContain('>Sep 24<')
+    expect(html).toContain('2 executions · 18 counted runs')
+    expect(html).toContain('did not all run the same versions and tests')
+    expect(html).toContain('Its executions')
+    expect(html.match(/href="#\/ext\/harness-e2e\/execution\//g)).toHaveLength(
+      2,
+    )
+    // Compare and Open execution take one execution, not a day.
+    expect(html).not.toContain('Open execution')
+    expect(html).not.toContain('Compare with')
+    expect(html).toContain('>Set as baseline<')
+    expect(html).toContain('Its last execution: ')
   })
 
   it('scores each test by execution, with not run and a changed definition', () => {

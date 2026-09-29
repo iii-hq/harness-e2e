@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { dashboardHash, dashboardRouteHash } from '@/lib/dashboard-runtime'
 import {
   baseFromParams,
+  groupFromParams,
   periodFromParams,
+  type TrendGroupBy,
   type TrendPeriod,
   type TrendsRequest,
   trendsRequestFromParams,
@@ -39,6 +41,8 @@ export type DashboardRoute =
       period: TrendPeriod
       /** The execution pinned as the baseline. */
       base: string | null
+      /** One point per execution, day or Harness release. */
+      group: TrendGroupBy
     }
 
 const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
@@ -149,6 +153,7 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
       request: trendsRequestFromParams(params),
       period: periodFromParams(params),
       base: baseFromParams(params),
+      group: groupFromParams(params),
     }
   return null
 }

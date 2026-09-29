@@ -40,6 +40,8 @@ import {
   counted,
   customDays,
   emptyText,
+  GROUP_CHOICES,
+  groupPoints,
   modelChoices,
   NOT_RECORDED_STACK,
   PERIOD_CHOICES,
@@ -57,6 +59,7 @@ import {
   suiteChoices,
   summaryText,
   TREND_METRICS,
+  type TrendGroupBy,
   type TrendMetricId,
   type TrendPeriod,
   type TrendPoint,
@@ -66,7 +69,9 @@ import {
   type TrendsResponse,
   trendMetric,
   trendsParams,
+  unversioned,
   withBase,
+  withGroup,
   withPeriod,
 } from '@/lib/trends'
 import { rerunParameters } from '@/pages/ExecutionPage'
@@ -420,6 +425,56 @@ function PeriodMenu({
   )
 }
 
+/** One point per execution, per day or per Harness release. */
+function GroupMenu({
+  group,
+  onPick,
+}: {
+  group: TrendGroupBy
+  onPick: (group: TrendGroupBy) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className="tr-control" data-picker="group">
+          <span className="tr-faint-ink">Group by</span>
+          <span>
+            {GROUP_CHOICES.find((choice) => choice.value === group)?.label}
+          </span>
+          <ChevronDown size={16} aria-hidden="true" className="tr-faint-ink" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        aria-label="Group by"
+        className="tr-menu tr-stack-menu"
+      >
+        <DropdownMenuRadioGroup
+          value={group}
+          onValueChange={(value) => onPick(value as TrendGroupBy)}
+        >
+          {GROUP_CHOICES.map((choice) => (
+            <DropdownMenuRadioItem
+              key={choice.value}
+              value={choice.value}
+              className="tr-menu-item"
+            >
+              <span className="tr-menu-text">
+                <span className="tr-strong">{choice.label}</span>
+                <span className="tr-faint">{choice.sub}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <p className="tr-menu-note">
+          A day or a release reads its executions together: means weighted by
+          counted runs, tests completed per execution.
+        </p>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 /** A custom period's two days; From after To is said beside them and asks
  *  for nothing. */
 function CustomPeriod({
@@ -466,12 +521,12 @@ function CustomPeriod({
   )
 }
 
-function Legend({ mixed }: { mixed: boolean }) {
+function Legend({ mixed, unit }: { mixed: boolean; unit: string }) {
   return (
     <ul className="tr-legend" aria-label="Legend">
       <li>
         <span className="tr-legend-dot" aria-hidden="true" />
-        execution
+        {unit}
       </li>
       <li>
         <X size={12} aria-hidden="true" className="tr-danger" />
@@ -523,16 +578,19 @@ export function TrendsPage({
   request,
   period: routePeriod,
   base: routeBase,
+  group: routeGroup = 'execution',
 }: {
   request: TrendsRequest
   period: TrendPeriod
   base: string | null
+  group?: TrendGroupBy
 }) {
   const narrow = useDashboardChrome()?.narrow ?? false
   const [query, setQuery] = useState<TrendsRequest>(request)
   const [period, setPeriod] = useState<TrendPeriod>(routePeriod)
   // The execution pinned as the baseline; it lives in the hash.
   const [base, setBase] = useState<string | null>(routeBase)
+  const [groupBy, setGroupBy] = useState<TrendGroupBy>(routeGroup)
   // The two days being typed for a custom period, until they make one.
   const [draft, setDraft] = useState<{ since: string; until: string } | null>(
     null,
@@ -559,9 +617,10 @@ export function TrendsPage({
     setQuery(request)
     setPeriod(routePeriod)
     setBase(routeBase)
+    setGroupBy(routeGroup)
     setDraft(null)
     setFocus('score')
-  }, [request, routePeriod, routeBase])
+  }, [request, routePeriod, routeBase, routeGroup])
 
   const load = useCallback(async () => {
     const pending = beginRequest()
@@ -625,7 +684,7 @@ export function TrendsPage({
 
   // The hash names what is on screen, once the worker said what that is.
   const viewParams = withBase(
-    withPeriod(requestParams(view), period),
+    withGroup(withPeriod(requestParams(view), period), groupBy),
     base,
   ).toString()
   useEffect(() => {
@@ -633,17 +692,23 @@ export function TrendsPage({
   }, [viewParams])
 
   const points = data?.points ?? []
+  // What the charts draw: each execution, or one point per day or release.
+  const drawn = useMemo(() => groupPoints(points, groupBy), [points, groupBy])
   const changes = useMemo(
-    () => points.map((_, index) => changesAt(points, index)),
-    [points],
+    () => drawn.map((_, index) => changesAt(drawn, index)),
+    [drawn],
   )
   const here = hashForTrends(new URLSearchParams(viewParams))
-  const selected = points.findIndex((item) => item.execution_id === picked)
+  const selected = drawn.findIndex((item) => item.execution_id === picked)
   // Where the baseline is in this view, else why it is not used.
-  const baseline = baselineOf(points, base)
+  const baseline = baselineOf(drawn, base)
   const pick = (index: number) => {
-    const id = points[index]?.execution_id ?? null
+    const id = drawn[index]?.execution_id ?? null
     setPicked((current) => (current === id ? null : id))
+  }
+  const pickGroup = (next: TrendGroupBy) => {
+    setPicked(null)
+    setGroupBy(next)
   }
 
   const openRunner = useCallback((next: Runner) => {
@@ -726,7 +791,7 @@ export function TrendsPage({
   const note = data ? stackNote(points, data.stack) : null
   const notice = data ? stackNotice(query, data) : null
   const empty = emptyText(points)
-  const point = selected >= 0 ? points[selected] : undefined
+  const point = selected >= 0 ? drawn[selected] : undefined
 
   return (
     <div className="ds-root ex-page tr-page">
@@ -777,8 +842,9 @@ export function TrendsPage({
                     onChange={typeDay}
                   />
                 ) : null}
+                <GroupMenu group={groupBy} onPick={pickGroup} />
                 <BaselineMenu
-                  points={points}
+                  points={drawn}
                   base={base}
                   why={baseline.why}
                   onPick={setBase}
@@ -789,12 +855,26 @@ export function TrendsPage({
                     data.selected?.model === ANY ||
                     data.selected?.profile === ANY
                   }
+                  unit={
+                    groupBy === 'day'
+                      ? 'day'
+                      : groupBy === 'release'
+                        ? 'Harness release'
+                        : 'execution'
+                  }
                 />
               </div>
               <div className="tr-summary" aria-busy={loading || undefined}>
                 <p className="tr-faint tr-num-text" data-trend-summary>
                   {summaryText(points, period)}
                 </p>
+                {groupBy === 'release' && unversioned(points).length > 0 ? (
+                  <p className="tr-faint" data-group-note>
+                    {plural(unversioned(points).length, 'execution')} ran with
+                    no recorded Harness version, so no release holds{' '}
+                    {unversioned(points).length === 1 ? 'it' : 'them'}.
+                  </p>
+                ) : null}
                 {note ? <p className="tr-faint">{note}</p> : null}
                 {notice ? (
                   <p className="tr-faint tr-notice" data-stack-notice>
@@ -900,7 +980,7 @@ export function TrendsPage({
               >
                 <LargeChart
                   metric={metric}
-                  points={points}
+                  points={drawn}
                   changes={changes}
                   selected={selected}
                   baseline={baseline.index}
@@ -910,12 +990,12 @@ export function TrendsPage({
                 {point ? (
                   <PointPanel
                     key={point.execution_id}
-                    points={points}
+                    points={drawn}
                     index={selected}
                     changes={changes[selected]}
-                    previous={previousCounted(points, selected)}
+                    previous={previousCounted(drawn, selected)}
                     baseline={
-                      baseline.index >= 0 ? points[baseline.index] : null
+                      baseline.index >= 0 ? drawn[baseline.index] : null
                     }
                     bridge={bridge}
                     here={here}
@@ -934,7 +1014,7 @@ export function TrendsPage({
                     <SmallChart
                       key={item.id}
                       metric={item}
-                      points={points}
+                      points={drawn}
                       changes={changes}
                       selected={selected}
                       baseline={baseline.index}
@@ -945,7 +1025,7 @@ export function TrendsPage({
                 )}
               </section>
               <ByTest
-                points={points}
+                points={drawn}
                 changes={changes}
                 selected={selected}
                 narrow={narrow}
@@ -953,7 +1033,7 @@ export function TrendsPage({
               />
               <ExecutionsTable
                 points={points}
-                selected={selected}
+                selected={groupBy === 'execution' ? selected : -1}
                 narrow={narrow}
               />
             </>

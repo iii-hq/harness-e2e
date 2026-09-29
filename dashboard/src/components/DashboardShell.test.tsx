@@ -56,6 +56,7 @@ describe('section navigation in the Console header', () => {
         request: {},
         period: { range: '30d' },
         base: null,
+        group: 'execution',
       }),
     ).toBe('trends')
     expect(

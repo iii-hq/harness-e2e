@@ -107,6 +107,8 @@ export type TrendPoint = {
   measures: TrendMeasures | null
   /** Planned tests first, in plan order, then any other that ran. */
   tests: TrendTest[]
+  /** A point that stands for several executions (Group by day or release). */
+  group?: TrendGroup
 }
 
 export type TrendsResponse = {
@@ -380,10 +382,10 @@ export function periodLabel(period: TrendPeriod) {
 
 /** `Sep 28, 2:17 AM`; the year only when it is not `now`'s. */
 export function pointTime(
-  point: Pick<TrendPoint, 'started_at'>,
+  point: Pick<TrendPoint, 'started_at' | 'group'>,
   now = new Date(),
 ) {
-  return formatDateTime(point.started_at, now)
+  return point.group?.label ?? formatDateTime(point.started_at, now)
 }
 
 export function counted(point: Pick<TrendPoint, 'counted'>) {
@@ -829,7 +831,7 @@ export function deltaOf(
   const a = metric.value(previous)
   const b = metric.value(current)
   if (a === null || b === null) return null
-  if (metric.delta === 'tests') return b - a
+  if (metric.delta === 'tests') return round1(b - a) || 0
   if (metric.delta === 'percent') {
     if (a === 0) return null
     return round1(((b - a) / a) * 100) || 0
@@ -924,7 +926,11 @@ export function baselineOf(
   base: string | null,
 ): { index: number; why: BaselineWhy | null } {
   if (!base) return { index: -1, why: null }
-  const index = points.findIndex((point) => point.execution_id === base)
+  const index = points.findIndex(
+    (point) =>
+      point.execution_id === base ||
+      point.group?.members.some((member) => member.execution_id === base),
+  )
   if (index < 0) return { index: -1, why: 'not_in_view' }
   return counted(points[index])
     ? { index, why: null }
@@ -1164,4 +1170,205 @@ export function versionsText(point: TrendPoint) {
     `harness ${point.workers?.harness ?? 'not recorded'}`,
     `stack ${stackText(point)}${workers ? ` (${workers} workers)` : ''}`,
   ].join(' · ')
+}
+
+/* --------------------------------------------------------------- groups */
+
+export type TrendGroupBy = 'execution' | 'day' | 'release'
+
+export const GROUP_CHOICES: Array<{
+  value: TrendGroupBy
+  label: string
+  sub: string
+}> = [
+  { value: 'execution', label: 'None', sub: 'one point per execution' },
+  { value: 'day', label: 'Day', sub: 'one point per day, on your clock' },
+  {
+    value: 'release',
+    label: 'Harness release',
+    sub: 'one point per Harness version, in the order they first ran',
+  },
+]
+
+export type TrendGroup = {
+  by: Exclude<TrendGroupBy, 'execution'>
+  /** The day (`2026-09-23`) or the Harness version. */
+  key: string
+  label: string
+  /** Its executions, oldest first. */
+  members: TrendPoint[]
+  /** What differs between its first and its last execution: its measures
+   *  mix those versions. */
+  mixed: TrendChange[]
+}
+
+export function groupFromParams(params: URLSearchParams): TrendGroupBy {
+  const group = params.get('group')
+  return group === 'day' || group === 'release' ? group : 'execution'
+}
+
+export function withGroup(params: URLSearchParams, group: TrendGroupBy) {
+  if (group !== 'execution') params.set('group', group)
+  return params
+}
+
+/** Executions with no recorded Harness version: no release holds them. */
+export function unversioned(points: TrendPoint[]) {
+  return points.filter((point) => !point.workers?.harness)
+}
+
+/** One point per day or per Harness release (an execution with no recorded
+ *  version is in none); each execution as it is when grouping by execution. */
+export function groupPoints(
+  points: TrendPoint[],
+  by: TrendGroupBy,
+  now = new Date(),
+): TrendPoint[] {
+  if (by === 'execution') return points
+  const groups = new Map<string, TrendPoint[]>()
+  for (const point of points) {
+    const key =
+      by === 'day'
+        ? localDay(new Date(point.started_at))
+        : point.workers?.harness
+    if (!key) continue
+    const members = groups.get(key)
+    if (members) members.push(point)
+    else groups.set(key, [point])
+  }
+  return [...groups].map(([key, members]) =>
+    consolidate(
+      by,
+      key,
+      by === 'day' ? formatDay(members[0].started_at, now) : `harness ${key}`,
+      members,
+    ),
+  )
+}
+
+/** A group's measures over its counted runs: means weighted by each
+ *  execution's counted runs, completed and planned runs per execution (a
+ *  sum would grow with the executions), the function calls summed. Its
+ *  versions, stack and plan are its last execution's. */
+function consolidate(
+  by: TrendGroup['by'],
+  key: string,
+  label: string,
+  members: TrendPoint[],
+): TrendPoint {
+  const last = members[members.length - 1]
+  const valid = members.filter(
+    (member): member is TrendPoint & { measures: TrendMeasures } =>
+      counted(member) && member.measures !== null,
+  )
+  const weighted = (pick: (measures: TrendMeasures) => number | null) => {
+    let sum = 0
+    let weight = 0
+    for (const member of valid) {
+      const value = pick(member.measures)
+      if (value === null) continue
+      sum += value * member.counted
+      weight += member.counted
+    }
+    return weight ? sum / weight : null
+  }
+  const total = (pick: (measures: TrendMeasures) => number | null) => {
+    const values = valid
+      .map((member) => pick(member.measures))
+      .filter((value): value is number => value !== null)
+    return values.length ? values.reduce((sum, value) => sum + value, 0) : null
+  }
+  const ids = [
+    ...new Set([...members].reverse().flatMap((m) => m.tests.map((t) => t.id))),
+  ]
+  const order = new Map(last.tests.map((test, index) => [test.id, index]))
+  ids.sort(
+    (one, two) =>
+      (order.get(one) ?? Number.MAX_SAFE_INTEGER) -
+      (order.get(two) ?? Number.MAX_SAFE_INTEGER),
+  )
+  const tests = ids.map((id): TrendTest => {
+    const entries = members.flatMap((member) =>
+      member.tests.filter((test) => test.id === id),
+    )
+    const scores = entries
+      .map((test) => test.score)
+      .filter((score): score is number => score !== null)
+    const has = (state: TrendTestState) =>
+      entries.some((test) => test.state === state)
+    return {
+      id,
+      state: scores.length
+        ? 'scored'
+        : has('no_score')
+          ? 'no_score'
+          : has('technical_invalid')
+            ? 'technical_invalid'
+            : 'not_run',
+      score: scores.length
+        ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+        : null,
+      behavior_sha256: entries[entries.length - 1]?.behavior_sha256 ?? null,
+    }
+  })
+  return {
+    ...last,
+    execution_id: `${by}:${key}`,
+    label: null,
+    runs: members.reduce((sum, member) => sum + member.runs, 0),
+    counted: members.reduce((sum, member) => sum + member.counted, 0),
+    reason: valid.length
+      ? null
+      : members.length === 1
+        ? last.reason
+        : `None of its ${members.length} executions has a counted run.`,
+    measures: valid.length
+      ? {
+          score_mean: weighted((m) => m.score_mean),
+          completed: round1(
+            valid.reduce((sum, m) => sum + m.measures.completed, 0) /
+              valid.length,
+          ),
+          planned: round1(
+            valid.reduce((sum, m) => sum + m.measures.planned, 0) /
+              valid.length,
+          ),
+          duration_ms_mean: weighted((m) => m.duration_ms_mean),
+          input_tokens_mean: weighted((m) => m.input_tokens_mean),
+          function_calls_mean: weighted((m) => m.function_calls_mean),
+          function_calls: total((m) => m.function_calls),
+          function_call_errors: total((m) => m.function_call_errors),
+          turns_mean: weighted((m) => m.turns_mean),
+        }
+      : null,
+    tests,
+    group: {
+      by,
+      key,
+      label,
+      members,
+      mixed:
+        members.length > 1
+          ? changesBetween(members, 0, members.length - 1)
+          : [],
+    },
+  }
+}
+
+/** Under the plot: where each day starts, or each release's version. */
+export function axisMarks(points: TrendPoint[], now = new Date()) {
+  if (points[0]?.group?.by === 'release')
+    return points.map((point, index) => ({
+      index,
+      text: point.group?.key ?? '',
+    }))
+  return dayMarks(points, now)
+}
+
+/** The execution a point stands for when it is set as the baseline: a
+ *  group's last one. */
+export function baselineId(point: TrendPoint) {
+  return point.group
+    ? point.group.members[point.group.members.length - 1].execution_id
+    : point.execution_id
 }

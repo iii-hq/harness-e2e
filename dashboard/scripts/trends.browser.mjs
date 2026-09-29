@@ -668,6 +668,61 @@ try {
     .click()
   await hashMatches(/model=deepseek-flash&profile=&stack=any&range=all$/)
 
+  // Group by day: a point per day, its panel on its executions; a day set as
+  // the baseline pins its last execution, kept when back to executions.
+  const groupPicker = page.locator('[data-picker="group"]')
+  assert.match(await groupPicker.innerText(), /Group by\s*None/)
+  const groupBy = async (name) => {
+    await groupPicker.click()
+    await page
+      .getByRole('menu', { name: 'Group by' })
+      .getByRole('menuitemradio', { name })
+      .click()
+  }
+  await groupBy(/^Day/)
+  await hashMatches(/range=all&group=day$/)
+  const scorePoints = page.locator('[data-trend-chart="score"] button.tr-point')
+  assert.equal(await scorePoints.count(), 7)
+  await page
+    .locator('[data-trend-chart="score"]')
+    .getByRole('button', { name: 'Sep 24 · Score 95.2' })
+    .click()
+  const sep24 = page.locator('[data-trend-panel="day:2026-09-24"]')
+  await sep24.getByText('2 executions · 18 counted runs').waitFor()
+  await sep24
+    .getByText('did not all run the same versions', { exact: false })
+    .waitFor()
+  assert.equal(await sep24.locator('.tr-members a').count(), 2)
+  await sep24.getByRole('button', { name: 'Set as baseline' }).click()
+  await page
+    .locator('[data-picker="baseline"]')
+    .getByText('Sep 24', { exact: true })
+    .waitFor()
+  await hashMatches(/group=day&base=github-36010839787-2$/)
+  await groupBy(/^None/)
+  await hashMatches(/range=all&base=github-36010839787-2$/)
+  await page
+    .locator('[data-picker="baseline"]')
+    .getByText('Sep 24, 11:10 AM', { exact: true })
+    .waitFor()
+  await pickBaseline(/^Previous execution/)
+  // Group by Harness release: its versions under the plot, the executions
+  // with no recorded version said and left out.
+  await groupBy(/^Harness release/)
+  await hashMatches(/range=all&group=release$/)
+  assert.equal(await scorePoints.count(), 4)
+  await page
+    .getByText('5 executions ran with no recorded Harness version', {
+      exact: false,
+    })
+    .waitFor()
+  await page
+    .locator('[data-trend-chart="score"]')
+    .getByText('1.8.31', { exact: true })
+    .waitFor()
+  await groupBy(/^None/)
+  assert.equal(await scorePoints.count(), 11)
+
   // Nothing counted: say why, open the execution or run it again.
   // Regression again (its latest series is deepseek's), then the model that
   // ran it once.
@@ -734,7 +789,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, a model of a suite and the empty state’s Run again, narrow pane with the Baseline picker.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, grouped by day (a day’s panel on its executions, a day as the baseline kept on its last execution) and by Harness release (unrecorded ones said and left out), a model of a suite and the empty state’s Run again, narrow pane with the Baseline picker.',
   )
 } finally {
   await browser.close()

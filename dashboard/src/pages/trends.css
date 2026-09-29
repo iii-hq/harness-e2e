@@ -718,6 +718,24 @@
   height: calc(var(--spacing) * 1.75);
 }
 
+/* A group's executions, newest first. */
+.tr-members {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+}
+
+.tr-members > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 0.5) calc(var(--spacing) * 2);
+}
+
 .tr-inline-link {
   color: var(--color-ink);
   text-decoration: underline;
