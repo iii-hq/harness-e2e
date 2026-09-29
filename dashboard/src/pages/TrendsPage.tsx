@@ -14,6 +14,7 @@ import { useDashboardChrome } from '@/components/DashboardShell'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import type { HeaderAction } from '@/components/shell/HeaderActions'
+import { BaselineChip } from '@/components/trends/BaselineChip'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
@@ -33,6 +34,7 @@ import { buildExecutionPresentation } from '@/lib/execution-view'
 import { plural } from '@/lib/format'
 import {
   ANY_STACK,
+  baselineOf,
   changesAt,
   counted,
   customDays,
@@ -63,6 +65,7 @@ import {
   type TrendsResponse,
   trendMetric,
   trendsParams,
+  withBase,
   withPeriod,
 } from '@/lib/trends'
 import { rerunParameters } from '@/pages/ExecutionPage'
@@ -492,13 +495,17 @@ type Runner = { parameters: ExecutionParameters | null; label: string }
 export function TrendsPage({
   request,
   period: routePeriod,
+  base: routeBase,
 }: {
   request: TrendsRequest
   period: TrendPeriod
+  base: string | null
 }) {
   const narrow = useDashboardChrome()?.narrow ?? false
   const [query, setQuery] = useState<TrendsRequest>(request)
   const [period, setPeriod] = useState<TrendPeriod>(routePeriod)
+  // The execution pinned as the baseline; it lives in the hash.
+  const [base, setBase] = useState<string | null>(routeBase)
   // The two days being typed for a custom period, until they make one.
   const [draft, setDraft] = useState<{ since: string; until: string } | null>(
     null,
@@ -524,9 +531,10 @@ export function TrendsPage({
   useEffect(() => {
     setQuery(request)
     setPeriod(routePeriod)
+    setBase(routeBase)
     setDraft(null)
     setFocus('score')
-  }, [request, routePeriod])
+  }, [request, routePeriod, routeBase])
 
   const load = useCallback(async () => {
     const pending = beginRequest()
@@ -589,7 +597,10 @@ export function TrendsPage({
   }, [bridge, load])
 
   // The hash names what is on screen, once the worker said what that is.
-  const viewParams = withPeriod(requestParams(view), period).toString()
+  const viewParams = withBase(
+    withPeriod(requestParams(view), period),
+    base,
+  ).toString()
   useEffect(() => {
     replaceRouteParams(new URLSearchParams(viewParams))
   }, [viewParams])
@@ -601,6 +612,10 @@ export function TrendsPage({
   )
   const here = hashForTrends(new URLSearchParams(viewParams))
   const selected = points.findIndex((item) => item.execution_id === picked)
+  // Where the baseline is in this view, else why it is not used.
+  const baseline = baselineOf(points, base)
+  const baselinePoint =
+    points.find((item) => item.execution_id === base) ?? null
   const pick = (index: number) => {
     const id = points[index]?.execution_id ?? null
     setPicked((current) => (current === id ? null : id))
@@ -651,9 +666,10 @@ export function TrendsPage({
     }
   }
 
-  // Another series starts over: every stack, the score in front.
+  // Another series starts over: every stack, the score in front, no baseline.
   const pickSeries = (request: TrendsRequest) => {
     setFocus('score')
+    setBase(null)
     setQuery(request)
   }
   const pickStack = (stack: string) =>
@@ -734,6 +750,16 @@ export function TrendsPage({
                     since={days.since}
                     until={days.until}
                     onChange={typeDay}
+                  />
+                ) : null}
+                {base ? (
+                  <BaselineChip
+                    point={baselinePoint}
+                    why={baseline.why ?? (baselinePoint ? null : 'not_in_view')}
+                    onPick={() =>
+                      baselinePoint && setPicked(baselinePoint.execution_id)
+                    }
+                    onClear={() => setBase(null)}
                   />
                 ) : null}
                 <span className="tr-spacer" />
@@ -851,6 +877,7 @@ export function TrendsPage({
                   points={points}
                   changes={changes}
                   selected={selected}
+                  baseline={baseline.index}
                   narrow={narrow}
                   onPick={pick}
                 />
@@ -861,9 +888,13 @@ export function TrendsPage({
                     index={selected}
                     changes={changes[selected]}
                     previous={previousCounted(points, selected)}
+                    baseline={
+                      baseline.index >= 0 ? points[baseline.index] : null
+                    }
                     bridge={bridge}
                     here={here}
                     onClose={() => setPicked(null)}
+                    onBaseline={setBase}
                   />
                 ) : null}
               </div>
@@ -880,6 +911,7 @@ export function TrendsPage({
                       points={points}
                       changes={changes}
                       selected={selected}
+                      baseline={baseline.index}
                       narrow={narrow}
                       onFocus={() => setFocus(item.id)}
                     />

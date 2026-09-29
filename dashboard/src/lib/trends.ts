@@ -422,6 +422,7 @@ function versionChange(
   name: string,
   from: string | null,
   to: string | null,
+  reversed = false,
 ): TrendChange {
   const change: TrendChange = {
     kind,
@@ -438,19 +439,21 @@ function versionChange(
     }
   // More than one build of a worker in one execution ("a, b"): no one range.
   if (from.includes(', ') || to.includes(', ')) return change
-  const base = commitOf(from)
-  const head = commitOf(to)
+  // The text reads from → to; the commits run from the earlier to the later.
+  const [earlier, later] = reversed ? [to, from] : [from, to]
+  const base = commitOf(earlier)
+  const head = commitOf(later)
   if (base && head)
     return {
       ...change,
       compare: { name, base, head },
-      note: to.includes('*')
+      note: later.includes('*')
         ? '* the checkout also had uncommitted edits'
         : null,
     }
   // A release on one side and a checkout on the other: no range to count.
   if (base || head) return change
-  return { ...change, compare: { name, base: from, head: to } }
+  return { ...change, compare: { name, base: earlier, head: later } }
 }
 
 function lastBefore(
@@ -458,8 +461,15 @@ function lastBefore(
   index: number,
   test: (point: TrendPoint) => boolean,
 ) {
-  for (let at = index - 1; at >= 0; at -= 1)
-    if (test(points[at])) return points[at]
+  return lastAtOrBefore(points, index - 1, test)
+}
+
+function lastAtOrBefore(
+  points: TrendPoint[],
+  index: number,
+  test: (point: TrendPoint) => boolean,
+) {
+  for (let at = index; at >= 0; at -= 1) if (test(points[at])) return points[at]
   return null
 }
 
@@ -467,12 +477,27 @@ function lastBefore(
  *  right before it; workers, planned tests and definitions against
  *  the last one that recorded them. */
 export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
-  if (index <= 0) return []
-  const current = points[index]
-  const previous = points[index - 1]
+  return index <= 0 ? [] : changesBetween(points, index - 1, index)
+}
+
+/** What differs from execution `from` to execution `to`, each change
+ *  written from → to. iii and the stack are read on those two executions;
+ *  workers, planned tests and definitions against the last one at or before
+ *  `from` that recorded them. `from` after `to` reads the same way, its
+ *  commit ranges still running from the earlier version to the later. */
+export function changesBetween(
+  points: TrendPoint[],
+  from: number,
+  to: number,
+): TrendChange[] {
+  const current = points[to]
+  const previous = points[from]
+  const reversed = from > to
   const out: TrendChange[] = []
   if (previous.engine && current.engine && previous.engine !== current.engine)
-    out.push(versionChange('iii', 'iii', previous.engine, current.engine))
+    out.push(
+      versionChange('iii', 'iii', previous.engine, current.engine, reversed),
+    )
   // Only two recorded stacks say the stack changed: one not recorded may
   // have run the same workers.
   if (
@@ -488,7 +513,7 @@ export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
       note: null,
       compare: null,
     })
-  const withWorkers = lastBefore(points, index, (point) => !!point.workers)
+  const withWorkers = lastAtOrBefore(points, from, (point) => !!point.workers)
   if (current.workers && withWorkers?.workers) {
     const before = withWorkers.workers
     const after = current.workers
@@ -496,20 +521,19 @@ export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
       .filter((name) => name !== 'compose')
       .sort()
     for (const name of names) {
-      const from = before[name] ?? null
-      const to = after[name] ?? null
-      if (from !== to)
+      if ((before[name] ?? null) !== (after[name] ?? null))
         out.push(
           versionChange(
             name === 'harness' ? 'harness' : 'worker',
             name,
-            from,
-            to,
+            before[name] ?? null,
+            after[name] ?? null,
+            reversed,
           ),
         )
     }
   }
-  const withPlan = lastBefore(points, index, (point) => !!point.planned)
+  const withPlan = lastAtOrBefore(points, from, (point) => !!point.planned)
   if (current.planned && withPlan?.planned) {
     const before = withPlan.planned
     const after = current.planned
@@ -537,7 +561,7 @@ export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
       const digestOf = (point: TrendPoint) =>
         point.tests.find((item) => item.id === test.id)?.behavior_sha256
       const earlier = test.behavior_sha256
-        ? lastBefore(points, index, (point) =>
+        ? lastAtOrBefore(points, from, (point) =>
             Boolean(counted(point) && digestOf(point)),
           )
         : null
@@ -748,18 +772,98 @@ export function deltaFormat(metric: TrendMetric) {
   return fixed1
 }
 
-/** The latest point with a value and the one with a value before it. */
-export function latestPair(points: TrendPoint[], metric: TrendMetric) {
-  const valued = points.filter((point) => metric.value(point) !== null)
-  return {
-    current: valued.at(-1) ?? null,
-    previous: valued.at(-2) ?? null,
+/** The execution a card shows and the one its delta is against.
+ *
+ *  It shows `at` (the picked execution, -1 for none) or else the latest with
+ *  a value. The delta is against the baseline (an index, -1 for none) when
+ *  it has a value and is not the execution shown; otherwise against the one
+ *  with a value before it. */
+export function comparedPair(
+  points: TrendPoint[],
+  metric: TrendMetric,
+  at: number,
+  baseline: number,
+) {
+  const has = (index: number) =>
+    index >= 0 && index < points.length && metric.value(points[index]) !== null
+  let head = at
+  if (at < 0) {
+    head = points.length - 1
+    while (head >= 0 && !has(head)) head -= 1
   }
+  if (!has(head))
+    return {
+      current: null,
+      previous: null,
+      headIsBaseline: false,
+      againstBaseline: false,
+    }
+  let against = -1
+  if (baseline >= 0 && baseline !== head && has(baseline)) against = baseline
+  else
+    for (let index = head - 1; index >= 0; index -= 1)
+      if (has(index)) {
+        against = index
+        break
+      }
+  return {
+    current: points[head],
+    previous: against >= 0 ? points[against] : null,
+    headIsBaseline: head === baseline,
+    againstBaseline: against >= 0 && against === baseline,
+  }
+}
+
+/** A card's line under its value: which two executions it compares. */
+export function referenceText(pair: ReturnType<typeof comparedPair>) {
+  if (!pair.current) return null
+  const now = `${pointTime(pair.current)}${pair.headIsBaseline ? ' (baseline)' : ''}`
+  if (!pair.previous) return now
+  return `${now} against ${pointTime(pair.previous)}${pair.againstBaseline ? ' (baseline)' : ''}`
 }
 
 /** The previous execution with a counted run, what deltas are against. */
 export function previousCounted(points: TrendPoint[], index: number) {
   return lastBefore(points, index, counted)
+}
+
+/* ------------------------------------------------------------- baseline */
+
+/** The baseline execution in the hash, if it names one. */
+export function baseFromParams(params: URLSearchParams) {
+  return params.get('base') || null
+}
+
+export function withBase(params: URLSearchParams, base: string | null) {
+  if (base) params.set('base', base)
+  return params
+}
+
+export type BaselineWhy = 'not_in_view' | 'no_counted_run'
+
+/** Where the baseline is in this view: its index when it is shown and has a
+ *  counted run, else why it is not used. */
+export function baselineOf(
+  points: TrendPoint[],
+  base: string | null,
+): { index: number; why: BaselineWhy | null } {
+  if (!base) return { index: -1, why: null }
+  const index = points.findIndex((point) => point.execution_id === base)
+  if (index < 0) return { index: -1, why: 'not_in_view' }
+  return counted(points[index])
+    ? { index, why: null }
+    : { index: -1, why: 'no_counted_run' }
+}
+
+/** iii, the Harness, the tests and the stack first, then the rest as they
+ *  came. */
+export function majorsFirst(changes: TrendChange[]) {
+  const majors = changes
+    .filter((change) => change.major)
+    .sort(
+      (one, two) => LANE_RANK.indexOf(one.kind) - LANE_RANK.indexOf(two.kind),
+    )
+  return [...majors, ...changes.filter((change) => !change.major)]
 }
 
 /* ---------------------------------------------------------------- axes */

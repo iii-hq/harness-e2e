@@ -2,14 +2,15 @@ import { ArrowDown, ArrowUp, Maximize2, X } from 'lucide-react'
 import { DeltaValue, deltaDirection, deltaTone } from '@/design-system'
 import { useMeasuredWidth } from '@/hooks/use-measured-width'
 import {
+  comparedPair,
   counted,
   dayMarks,
   deltaFormat,
   deltaOf,
   domain,
   laneLabel,
-  latestPair,
   pointTime,
+  referenceText,
   roomyMarks,
   segments,
   slotX,
@@ -59,16 +60,20 @@ function Direction({ better }: { better: TrendMetric['better'] }) {
   )
 }
 
-/** The latest value of a measure and its delta against the previous
- *  execution with a counted run. */
+/** The value of a measure on the execution compared (the picked one, else the
+ *  latest) and its delta against the baseline, else the execution before. */
 function Latest({
   metric,
   points,
+  selected,
+  baseline,
 }: {
   metric: TrendMetric
   points: TrendPoint[]
+  selected: number
+  baseline: number
 }) {
-  const { current, previous } = latestPair(points, metric)
+  const { current, previous } = comparedPair(points, metric, selected, baseline)
   const value = current ? metric.value(current) : null
   return (
     <>
@@ -83,36 +88,42 @@ function Latest({
   )
 }
 
-/** Which executions the latest value and its delta are, said under them. */
+/** Which executions the value and its delta are, said under them. */
 function Reference({
   metric,
   points,
+  selected,
+  baseline,
 }: {
   metric: TrendMetric
   points: TrendPoint[]
+  selected: number
+  baseline: number
 }) {
-  const { current, previous } = latestPair(points, metric)
-  if (!current) return null
-  return (
-    <p className="tr-footnote tr-reference">
-      {pointTime(current)}
-      {previous ? ` against ${pointTime(previous)}` : null}
-    </p>
-  )
+  const pair = comparedPair(points, metric, selected, baseline)
+  const picked = selected >= 0 ? points[selected] : undefined
+  const text =
+    referenceText(pair) ??
+    (picked
+      ? `${pointTime(picked)} · ${counted(picked) ? 'no value for this measure' : 'no counted run'}`
+      : null)
+  return text ? <p className="tr-footnote tr-reference">{text}</p> : null
 }
 
 const LARGE = { top: 52, bottom: 22, gutter: 52, right: 10 }
 const SMALL = { top: 8, bottom: 20, gutter: 46, right: 8 }
+const BASELINE_LABEL = { w: 60, h: 16 }
 
 /** The plot: one step per execution, a line through the counted ones (faint
- *  across those without), dashed where something major changed and a
- *  solid rule on the picked one. The large plot carries the lane of
- *  diamonds and its points are buttons. */
+ *  across those without), dashed where something major changed, a solid
+ *  rule on the picked one and a heavier one on the baseline. The large plot
+ *  carries the lane of diamonds and its points are buttons. */
 function Plot({
   metric,
   points,
   changes,
   selected,
+  baseline,
   height,
   onPick,
 }: {
@@ -120,6 +131,7 @@ function Plot({
   points: TrendPoint[]
   changes: TrendChange[][]
   selected: number
+  baseline: number
   height: number
   /** Only the large chart picks. */
   onPick?: (index: number) => void
@@ -199,6 +211,16 @@ function Plot({
             y2={bottom}
           />
         ) : null}
+        {baseline >= 0 && baseline < points.length ? (
+          <line
+            className="tr-baseline"
+            data-large={large || undefined}
+            x1={xAt(baseline)}
+            x2={xAt(baseline)}
+            y1={large ? g.top - 12 : g.top}
+            y2={bottom}
+          />
+        ) : null}
         {segments(values).map((segment) => (
           <line
             key={segment.from}
@@ -211,6 +233,21 @@ function Plot({
             y2={yAt(values[segment.to] as number)}
           />
         ))}
+        {large && baseline >= 0 && baseline < points.length ? (
+          <g
+            className="tr-baseline-label"
+            transform={`translate(${xAt(baseline) + (xAt(baseline) > width * 0.78 ? -BASELINE_LABEL.w - 6 : 6)} ${bottom - BASELINE_LABEL.h - 2})`}
+          >
+            <rect width={BASELINE_LABEL.w} height={BASELINE_LABEL.h} rx={4} />
+            <text
+              x={BASELINE_LABEL.w / 2}
+              y={BASELINE_LABEL.h - 4}
+              textAnchor="middle"
+            >
+              baseline
+            </text>
+          </g>
+        ) : null}
         {roomyMarks(dayMarks(points), (mark) => xAt(mark.index), 56).map(
           (mark) => (
             <text
@@ -316,6 +353,7 @@ export function LargeChart({
   points,
   changes,
   selected,
+  baseline,
   narrow,
   onPick,
 }: {
@@ -323,6 +361,7 @@ export function LargeChart({
   points: TrendPoint[]
   changes: TrendChange[][]
   selected: number
+  baseline: number
   narrow: boolean
   onPick: (index: number) => void
 }) {
@@ -341,14 +380,25 @@ export function LargeChart({
         </span>
         <span className="tr-faint">{metric.note}</span>
         <span className="tr-spacer" />
-        <Latest metric={metric} points={points} />
+        <Latest
+          metric={metric}
+          points={points}
+          selected={selected}
+          baseline={baseline}
+        />
       </div>
-      <Reference metric={metric} points={points} />
+      <Reference
+        metric={metric}
+        points={points}
+        selected={selected}
+        baseline={baseline}
+      />
       <Plot
         metric={metric}
         points={points}
         changes={changes}
         selected={selected}
+        baseline={baseline}
         height={narrow ? 270 : 320}
         onPick={onPick}
       />
@@ -366,6 +416,7 @@ export function SmallChart({
   points,
   changes,
   selected,
+  baseline,
   narrow,
   onFocus,
 }: {
@@ -373,6 +424,7 @@ export function SmallChart({
   points: TrendPoint[]
   changes: TrendChange[][]
   selected: number
+  baseline: number
   narrow: boolean
   onFocus: () => void
 }) {
@@ -389,9 +441,19 @@ export function SmallChart({
           <Maximize2 size={14} aria-hidden="true" />
         </button>
         <span className="tr-spacer" />
-        <Latest metric={metric} points={points} />
+        <Latest
+          metric={metric}
+          points={points}
+          selected={selected}
+          baseline={baseline}
+        />
       </div>
-      <Reference metric={metric} points={points} />
+      <Reference
+        metric={metric}
+        points={points}
+        selected={selected}
+        baseline={baseline}
+      />
       <p className="tr-footnote">
         <Direction better={metric.better} /> · {metric.note}
       </p>
@@ -400,6 +462,7 @@ export function SmallChart({
         points={points}
         changes={changes}
         selected={selected}
+        baseline={baseline}
         height={narrow ? 150 : 132}
       />
     </div>

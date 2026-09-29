@@ -1,5 +1,5 @@
 import { ArrowUpRight, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { buttonClassName } from '@/design-system'
 import {
   hashForComparison,
@@ -9,10 +9,12 @@ import {
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import {
   CHANGE_KIND_TEXT,
+  changesBetween,
   commitsLinkText,
   compareKey,
   counted,
   deltaOf,
+  majorsFirst,
   notRun,
   pointTime,
   releaseControlId,
@@ -27,6 +29,9 @@ import { DeltaPill } from './TrendsChart'
 
 type Lookup = VersionCompareResponse | 'pending' | 'failed'
 
+/** The other changes shown before the rest fold behind a button. */
+const SHOWN_MINORS = 5
+
 /** version-compare for each change that names a range, asked once the panel
  *  shows it. */
 function useCommitLookups(
@@ -34,28 +39,36 @@ function useCommitLookups(
   changes: TrendChange[],
 ) {
   const [found, setFound] = useState<Record<string, Lookup>>({})
+  // A range is asked once while the panel is open; one that failed is asked
+  // again the next time it is shown.
+  const asked = useRef(new Set<string>())
+  const open = useRef(true)
+  useEffect(() => {
+    open.current = true
+    return () => {
+      open.current = false
+    }
+  }, [])
   useEffect(() => {
     if (!bridge) return
-    let cancelled = false
     for (const change of changes) {
       const request = change.compare
       if (!request) continue
       const key = compareKey(request)
-      setFound((current) =>
-        key in current ? current : { ...current, [key]: 'pending' },
-      )
+      if (asked.current.has(key)) continue
+      asked.current.add(key)
+      setFound((current) => ({ ...current, [key]: 'pending' }))
       bridge
         .compareVersions(request)
         .then((answer) => {
-          if (!cancelled) setFound((current) => ({ ...current, [key]: answer }))
+          if (open.current)
+            setFound((current) => ({ ...current, [key]: answer }))
         })
         .catch(() => {
-          if (!cancelled)
+          asked.current.delete(key)
+          if (open.current)
             setFound((current) => ({ ...current, [key]: 'failed' }))
         })
-    }
-    return () => {
-      cancelled = true
     }
   }, [bridge, changes])
   return found
@@ -88,29 +101,55 @@ function CommitsLink({
 }
 
 /** One execution of the trend: what changed since the one before it, its
- *  measures against the previous counted one, and where to go from here. */
+ *  measures against the previous counted one, and where to go from here.
+ *  With a baseline pinned, all of it reads against the baseline instead. */
 export function PointPanel({
   points,
   index,
   changes,
   previous,
+  baseline,
   bridge,
   here,
   onClose,
+  onBaseline,
 }: {
   points: TrendPoint[]
   index: number
   changes: TrendChange[]
   /** The previous execution with a counted run. */
   previous: TrendPoint | null
+  /** The pinned baseline, when this view shows it. */
+  baseline: TrendPoint | null
   bridge: DashboardDataBridge | null
   /** This view's hash, for Compare to come back to. */
   here: string
   onClose: () => void
+  onBaseline: (id: string | null) => void
 }) {
   const point = points[index]
+  const isBaseline = baseline?.execution_id === point.execution_id
+  const against = baseline && !isBaseline ? baseline : null
+  const againstIndex = against
+    ? points.findIndex((item) => item.execution_id === against.execution_id)
+    : -1
   const before = index > 0 ? points[index - 1] : null
-  const lookups = useCommitLookups(bridge, changes)
+  // Unfolded only for the reference it was unfolded against.
+  const referenceId = against?.execution_id ?? ''
+  const [unfolded, setUnfolded] = useState<string | null>(null)
+  const showAll = unfolded === referenceId
+  const listed = useMemo(() => {
+    const all = against ? changesBetween(points, againstIndex, index) : changes
+    const ordered = majorsFirst(all)
+    const minors = ordered.filter((change) => !change.major)
+    const hidden = showAll ? 0 : Math.max(0, minors.length - SHOWN_MINORS)
+    return {
+      shown: hidden ? ordered.slice(0, ordered.length - hidden) : ordered,
+      hidden,
+      total: all.length,
+    }
+  }, [against, againstIndex, changes, index, points, showAll])
+  const lookups = useCommitLookups(bridge, listed.shown)
   const missing = notRun(point)
   const rc = releaseControlId(point)
   const source = [
@@ -120,7 +159,12 @@ export function PointPanel({
   ]
     .filter(Boolean)
     .join(' · ')
-  const canCompare = previous !== null && counted(point)
+  // What the measures and Compare read against.
+  const reference = against ?? previous
+  const canCompare = reference !== null && counted(point)
+  // The comparison opens with the earlier execution as A.
+  const [earlier, later] =
+    againstIndex > index ? [point, reference] : [reference, point]
   return (
     <aside
       className="tr-card tr-panel"
@@ -129,9 +173,12 @@ export function PointPanel({
     >
       <div className="tr-panel-head">
         <div className="tr-panel-title">
-          <h2 id="tr-pn" className="tr-h2">
-            {pointTime(point)}
-          </h2>
+          <div className="tr-panel-heading">
+            <h2 id="tr-pn" className="tr-h2">
+              {pointTime(point)}
+            </h2>
+            {isBaseline ? <span className="tr-tag">baseline</span> : null}
+          </div>
           <span className="tr-mono tr-small tr-faint-ink">{source}</span>
         </div>
         <button
@@ -156,19 +203,21 @@ export function PointPanel({
       ) : null}
       <section className="tr-panel-section" aria-labelledby="tr-ch">
         <h3 id="tr-ch" className="tr-h3">
-          {before
-            ? `What changed since ${pointTime(before)}`
-            : 'The first execution in this view'}
+          {against
+            ? `What changed between ${pointTime(against)} (baseline) and ${pointTime(point)}`
+            : before
+              ? `What changed since ${pointTime(before)}`
+              : 'The first execution in this view'}
         </h3>
-        {changes.length === 0 ? (
+        {listed.total === 0 ? (
           <p className="tr-faint">
-            {before
+            {against || before
               ? 'Nothing recorded changed: same iii, stack, workers and test definitions.'
               : 'There is nothing before it to compare with.'}
           </p>
         ) : (
           <ul className="tr-changes">
-            {changes.map((change) => (
+            {listed.shown.map((change) => (
               <li
                 key={`${change.kind}:${change.name}`}
                 data-change={change.kind}
@@ -200,11 +249,25 @@ export function PointPanel({
             ))}
           </ul>
         )}
+        {listed.hidden > 0 || showAll ? (
+          <button
+            type="button"
+            className={buttonClassName({ variant: 'quiet', size: 'compact' })}
+            aria-expanded={showAll}
+            onClick={() => setUnfolded(showAll ? null : referenceId)}
+          >
+            {showAll ? 'Show fewer' : `Show ${listed.hidden} more`}
+          </button>
+        ) : null}
       </section>
       {counted(point) ? (
         <section className="tr-panel-section" aria-labelledby="tr-mx">
           <h3 id="tr-mx" className="tr-h3">
-            {previous ? `Against ${pointTime(previous)}` : 'Measures'}
+            {against
+              ? `Against the baseline, ${pointTime(against)}`
+              : previous
+                ? `Against ${pointTime(previous)}`
+                : 'Measures'}
           </h3>
           <dl className="tr-measures">
             {TREND_METRICS.map((metric) => {
@@ -218,7 +281,9 @@ export function PointPanel({
                   <dd>
                     <DeltaPill
                       metric={metric}
-                      value={previous ? deltaOf(metric, point, previous) : null}
+                      value={
+                        reference ? deltaOf(metric, point, reference) : null
+                      }
                     />
                   </dd>
                 </div>
@@ -247,19 +312,30 @@ export function PointPanel({
         >
           Open execution
         </a>
-        {canCompare && previous ? (
+        {canCompare && reference && earlier && later ? (
           <a
             className={buttonClassName({
               variant: 'secondary',
               className: 'no-underline',
             })}
             href={hashFrom(
-              hashForComparison(previous.execution_id, point.execution_id),
+              hashForComparison(earlier.execution_id, later.execution_id),
               here,
             )}
           >
-            Compare with {pointTime(previous)}
+            {against
+              ? 'Compare with the baseline'
+              : `Compare with ${pointTime(reference)}`}
           </a>
+        ) : null}
+        {counted(point) ? (
+          <button
+            type="button"
+            className={buttonClassName({ variant: 'secondary' })}
+            onClick={() => onBaseline(isBaseline ? null : point.execution_id)}
+          >
+            {isBaseline ? 'Clear baseline' : 'Set as baseline'}
+          </button>
         ) : null}
       </div>
     </aside>

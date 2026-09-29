@@ -148,6 +148,14 @@ two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.
 
+On the page, an execution can be pinned as the **baseline** (`&base=<execution
+id>` in the hash; the worker is never asked about it). The cards and the panel
+then read the picked execution, or else the latest, against the baseline instead
+of the execution before it, and the panel lists everything that differs between
+the two, each version change with the commits from the earlier version to the
+later. The baseline stays across a stack or period change while its execution is
+shown, and another series or the Trends tab clears it.
+
 The execution label is optional and intentionally descriptive only. The local
 page does not infer a system version from that label: it uses the immutable
 source revision or registry stack lock captured in `results.json`. Tests compares

@@ -140,6 +140,7 @@ describe('dashboard hash routes', () => {
       page: 'trends',
       request: {},
       period: { range: '30d' },
+      base: null,
     })
     expect(
       routeFromHash(
@@ -152,6 +153,7 @@ describe('dashboard hash routes', () => {
             stack: 'not_recorded',
             since: '2026-09-01',
             until: '2026-09-10',
+            base: 'github-35821773226-2',
           }),
         ),
       ),
@@ -165,6 +167,7 @@ describe('dashboard hash routes', () => {
         stack: 'not_recorded',
       },
       period: { since: '2026-09-01', until: '2026-09-10' },
+      base: 'github-35821773226-2',
     })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()

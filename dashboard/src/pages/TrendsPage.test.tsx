@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { BaselineChip } from '@/components/trends/BaselineChip'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
 import {
   changesAt,
-  latestPair,
+  comparedPair,
   pointTime,
   previousCounted,
   trendMetric,
@@ -131,6 +132,7 @@ describe('trends page parts', () => {
         points={regression}
         changes={changes}
         selected={-1}
+        baseline={-1}
         narrow={false}
         onPick={() => undefined}
       />,
@@ -155,6 +157,7 @@ describe('trends page parts', () => {
         points={regression}
         changes={changes}
         selected={-1}
+        baseline={-1}
         narrow={false}
         onFocus={() => undefined}
       />,
@@ -168,7 +171,7 @@ describe('trends page parts', () => {
 
   it('says which executions the latest value and its delta are', () => {
     const metric = trendMetric('duration')
-    const { current, previous } = latestPair(regression, metric)
+    const { current, previous } = comparedPair(regression, metric, -1, -1)
     if (!current || !previous) throw new Error('the fixture has two measured')
     const html = renderToStaticMarkup(
       <SmallChart
@@ -176,6 +179,7 @@ describe('trends page parts', () => {
         points={regression}
         changes={changes}
         selected={-1}
+        baseline={-1}
         narrow={false}
         onFocus={() => undefined}
       />,
@@ -189,6 +193,7 @@ describe('trends page parts', () => {
         points={[current]}
         changes={[[]]}
         selected={-1}
+        baseline={-1}
         narrow={false}
         onFocus={() => undefined}
       />,
@@ -208,6 +213,7 @@ describe('trends page parts', () => {
         points={unmeasured}
         changes={changes}
         selected={-1}
+        baseline={-1}
         narrow={false}
         onPick={() => undefined}
       />,
@@ -220,6 +226,7 @@ describe('trends page parts', () => {
         points={unmeasured}
         changes={changes}
         selected={-1}
+        baseline={-1}
         narrow={false}
         onFocus={() => undefined}
       />,
@@ -236,9 +243,11 @@ describe('trends page parts', () => {
         index={index}
         changes={changes[index]}
         previous={previousCounted(regression, index)}
+        baseline={null}
         bridge={null}
         here="#/ext/harness-e2e/trends?stack=default"
         onClose={() => undefined}
+        onBaseline={() => undefined}
       />,
     )
     expect(html).toContain('GitHub #36381232467 · Release Control cd674932')
@@ -269,15 +278,185 @@ describe('trends page parts', () => {
         index={index}
         changes={changes[index]}
         previous={previousCounted(regression, index)}
+        baseline={null}
         bridge={null}
         here="#/ext/harness-e2e/trends"
         onClose={() => undefined}
+        onBaseline={() => undefined}
       />,
     )
     expect(html).toContain('did not register e2e::scenarios-list within 300 s')
     expect(html).toContain('Worker versions: not recorded.')
     expect(html).not.toContain('Compare with')
     expect(html).not.toContain('tr-measures')
+  })
+
+  describe('with a baseline', () => {
+    const all = seriesPoints('regression')
+    const allChanges = all.map((_, index) => changesAt(all, index))
+    const BASE = all.findIndex(
+      (point) => point.execution_id === 'github-35821773226-2',
+    )
+    const SEP25 = all.findIndex(
+      (point) => point.execution_id === 'github-36097908502-1',
+    )
+
+    it('draws the baseline rule, labelled on the large chart, and names it under every value', () => {
+      const large = renderToStaticMarkup(
+        <LargeChart
+          metric={trendMetric('score')}
+          points={all}
+          changes={allChanges}
+          selected={-1}
+          baseline={BASE}
+          narrow={false}
+          onPick={() => undefined}
+        />,
+      )
+      expect(large.match(/class="tr-baseline"/g)).toHaveLength(1)
+      expect(large).toContain('>baseline</text>')
+      expect(large).toContain(
+        '<p class="tr-footnote tr-reference">Sep 28, 2:17 AM against Sep 23, 2:17 AM (baseline)</p>',
+      )
+      const small = renderToStaticMarkup(
+        <SmallChart
+          metric={trendMetric('duration')}
+          points={all}
+          changes={allChanges}
+          selected={SEP25}
+          baseline={BASE}
+          narrow={false}
+          onFocus={() => undefined}
+        />,
+      )
+      expect(small.match(/class="tr-baseline"/g)).toHaveLength(1)
+      expect(small).not.toContain('>baseline</text>')
+      expect(small).toContain(
+        'Sep 25, 2:17 AM against Sep 23, 2:17 AM (baseline)',
+      )
+      expect(small).toContain('data-selected="true"')
+    })
+
+    it('says why a card is blank when the picked execution has nothing to show', () => {
+      const failed = all.findIndex(
+        (point) => point.execution_id === 'github-36220337119-1',
+      )
+      const html = renderToStaticMarkup(
+        <SmallChart
+          metric={trendMetric('duration')}
+          points={all}
+          changes={allChanges}
+          selected={failed}
+          baseline={BASE}
+          narrow={false}
+          onFocus={() => undefined}
+        />,
+      )
+      expect(html).toContain(
+        `<p class="tr-footnote tr-reference">${pointTime(all[failed])} · no counted run</p>`,
+      )
+      expect(html).toContain('>—<')
+    })
+
+    it('draws no rule without one', () => {
+      const html = renderToStaticMarkup(
+        <LargeChart
+          metric={trendMetric('score')}
+          points={all}
+          changes={allChanges}
+          selected={-1}
+          baseline={-1}
+          narrow={false}
+          onPick={() => undefined}
+        />,
+      )
+      expect(html).not.toContain('tr-baseline')
+    })
+
+    it('says the baseline in the toolbar, or that this view does not show it', () => {
+      const set = renderToStaticMarkup(
+        <BaselineChip
+          point={all[BASE]}
+          why={null}
+          onPick={() => undefined}
+          onClear={() => undefined}
+        />,
+      )
+      expect(set).toContain('data-baseline-chip="set"')
+      expect(set).toContain('Baseline')
+      expect(set).toContain('Sep 23, 2:17 AM')
+      expect(set).toContain('aria-label="Clear baseline"')
+      const out = renderToStaticMarkup(
+        <BaselineChip
+          point={null}
+          why="not_in_view"
+          onPick={() => undefined}
+          onClear={() => undefined}
+        />,
+      )
+      expect(out).toContain('Baseline not in this view')
+      expect(out).toMatch(/class="tr-chip-pick"[^>]*disabled/)
+      expect(out).toContain('aria-label="Clear baseline"')
+    })
+
+    const panel = (index: number, baseline: number | null) =>
+      renderToStaticMarkup(
+        <PointPanel
+          points={all}
+          index={index}
+          changes={allChanges[index]}
+          previous={previousCounted(all, index)}
+          baseline={baseline === null ? null : all[baseline]}
+          bridge={null}
+          here="#/ext/harness-e2e/trends?stack=any"
+          onClose={() => undefined}
+          onBaseline={() => undefined}
+        />,
+      )
+
+    it('lists what differs from the baseline, folds the minor ones and compares the pair', () => {
+      const html = panel(SEP25, BASE)
+      expect(html).toContain(
+        'What changed between Sep 23, 2:17 AM (baseline) and Sep 25, 2:17 AM',
+      )
+      expect(html).toContain('1.8.31 → 1.8.35')
+      expect(html).toContain('Against the baseline, Sep 23, 2:17 AM')
+      // iii, the Harness and the tests first, then five other changes.
+      expect(html.match(/data-change="harness"/g)).toHaveLength(1)
+      expect(html.match(/data-change="tests"/g)).toHaveLength(1)
+      expect(html).toMatch(/Show \d+ more/)
+      expect(html).toContain('>Set as baseline<')
+      expect(html).toContain(
+        `href="#/ext/harness-e2e/compare/github-35821773226-2/github-36097908502-1?from=${encodeURIComponent('#/ext/harness-e2e/trends?stack=any')}"`,
+      )
+      expect(html).toContain('>Compare with the baseline<')
+    })
+
+    it('opens the comparison with the earlier execution as A when the pick is before the baseline', () => {
+      const earlier = all.findIndex(
+        (point) => point.execution_id === 'github-35742568444-1',
+      )
+      const html = panel(earlier, BASE)
+      expect(html).toContain(
+        'compare/github-35742568444-1/github-35821773226-2?from=',
+      )
+    })
+
+    it('tags the baseline’s own panel and offers to clear it, against the execution before', () => {
+      const html = panel(BASE, BASE)
+      expect(html).toContain('>baseline</span>')
+      expect(html).toContain('>Clear baseline<')
+      expect(html).not.toContain('Set as baseline')
+      expect(html).not.toContain('(baseline)')
+      expect(html).toContain('What changed since ')
+    })
+
+    it('offers no baseline on an execution without a counted run', () => {
+      const failed = all.findIndex(
+        (point) => point.execution_id === 'github-36220337119-1',
+      )
+      expect(panel(failed, BASE)).not.toContain('Set as baseline')
+    })
   })
 
   it('scores each test by execution, with not run and a changed definition', () => {
