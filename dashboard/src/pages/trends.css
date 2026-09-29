@@ -155,11 +155,58 @@
 }
 
 .tr-control:focus-visible,
+.tr-chip-pick:focus-visible,
 .tr-mini-title:focus-visible,
 .tr-column:focus-visible,
 .tr-icon-button:focus-visible {
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 1px;
+}
+
+/* The baseline chip: its time picks it, the cross clears it. */
+.tr-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  height: calc(var(--spacing) * 9);
+  align-items: center;
+  gap: calc(var(--spacing) * 0.5);
+  padding-right: calc(var(--spacing) * 1);
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+}
+
+.tr-chip-pick {
+  display: inline-flex;
+  min-width: 0;
+  height: calc(var(--spacing) * 8);
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  padding: 0 calc(var(--spacing) * 2) 0 calc(var(--spacing) * 3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--ds-text-sm, 0.8125rem);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tr-chip-pick:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.tr-chip-pick:disabled {
+  cursor: default;
+}
+
+.tr-chip-rule {
+  width: 0;
+  height: calc(var(--spacing) * 3.5);
+  flex: none;
+  border-left: 2px solid var(--color-ink-faint);
 }
 
 .tr-menu {
@@ -423,6 +470,29 @@
   stroke-width: 1;
 }
 
+/* The baseline: a heavier rule than the pick's, in faint ink, labelled on
+   the large plot and quiet on the small ones. */
+.tr-baseline {
+  stroke: var(--color-ink-faint);
+  stroke-width: 2;
+}
+
+.tr-baseline:not([data-large]) {
+  stroke-opacity: 0.6;
+}
+
+.tr-baseline-label rect {
+  fill: var(--color-panel-raised);
+  stroke: var(--color-edge);
+  stroke-width: 1;
+}
+
+.tr-baseline-label text {
+  fill: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
 /* Data in ink, as the test history draws its first series; the accent is
    kept for what is live, focused or primary. */
 .tr-line {
@@ -600,6 +670,13 @@
   display: flex;
   align-items: flex-start;
   gap: calc(var(--spacing) * 2);
+}
+
+.tr-panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
 }
 
 .tr-panel-title {

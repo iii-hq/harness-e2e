@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  baseFromParams,
+  baselineOf,
   changesAt,
+  changesBetween,
   commitsLinkText,
+  comparedPair,
   customDays,
   DEFAULT_PERIOD,
   dayMarks,
@@ -10,9 +14,10 @@ import {
   domain,
   emptyText,
   laneLabel,
-  latestPair,
+  majorsFirst,
   modelChoices,
   notRun,
+  panelAgainst,
   periodBounds,
   periodError,
   periodFromParams,
@@ -21,6 +26,7 @@ import {
   pointTime,
   previousCounted,
   profileChoices,
+  referenceText,
   roomyMarks,
   segments,
   stackNote,
@@ -35,6 +41,7 @@ import {
   trendsRequestFromParams,
   utcOffsetText,
   versionsText,
+  withBase,
   withPeriod,
 } from '@/lib/trends'
 import { seriesPoints, trendSeries } from '@/test-fixtures/trends'
@@ -197,7 +204,7 @@ describe('what changed between executions', () => {
 describe('measures', () => {
   const metric = (id: string) => trendMetric(id)
   const delta = (id: string, points: TrendPoint[]) => {
-    const { current, previous } = latestPair(points, metric(id))
+    const { current, previous } = comparedPair(points, metric(id), -1, -1)
     return current && previous ? deltaOf(metric(id), current, previous) : null
   }
 
@@ -207,7 +214,12 @@ describe('measures', () => {
     expect(delta('completed', regression)).toBe(0)
     expect(delta('error_rate', regression)).toBe(0)
     expect(delta('input_tokens', regression)).toBe(-9.6)
-    const { current, previous } = latestPair(regression, metric('score'))
+    const { current, previous } = comparedPair(
+      regression,
+      metric('score'),
+      -1,
+      -1,
+    )
     expect(current?.execution_id).toBe('github-36381232467-1')
     expect(previous?.execution_id).toBe('github-36296751640-1')
   })
@@ -253,6 +265,153 @@ describe('measures', () => {
     expect(done.figure(9, latest)).toBe('9 of 9 planned')
     expect(versionsText(latest)).toBe(
       'iii 0.24.3-rc.1 · harness 1.8.36 · stack default (21 workers)',
+    )
+  })
+})
+
+describe('a baseline', () => {
+  const all = seriesPoints('regression')
+  const score = trendMetric('score')
+  const BASE = at(all, 'github-35821773226-2')
+  const SEP25 = at(all, 'github-36097908502-1')
+  const SEP22 = at(all, 'github-35742568444-1')
+  const pair = (metricId: string, picked: number, baseline: number) =>
+    comparedPair(all, trendMetric(metricId), picked, baseline)
+  const readout = (metricId: string, picked: number, baseline: number) => {
+    const { current, previous } = pair(metricId, picked, baseline)
+    return current && previous
+      ? deltaOf(trendMetric(metricId), current, previous)
+      : null
+  }
+
+  it('lists what differs between two executions, each written baseline → this', () => {
+    const list = changesBetween(all, BASE, SEP25)
+    const text = (name: string) =>
+      list.find((change) => change.name === name)?.text
+    expect(text('harness')).toBe('1.8.31 → 1.8.35')
+    expect(text('ade')).toBe('1.9.39 → 1.9.43')
+    expect(text('judge')).toBe('not in the stack → 0.2.1')
+    expect(list.some((change) => change.kind === 'tests')).toBe(true)
+    // The Harness is one change over two releases, not the sum of the steps.
+    expect(list.filter((change) => change.name === 'harness')).toHaveLength(1)
+  })
+
+  it('reads an execution before the baseline the same way, commits still earlier → later', () => {
+    const forward = changesBetween(all, BASE, SEP25)
+    const back = changesBetween(all, SEP25, BASE)
+    const harness = back.find((change) => change.name === 'harness')
+    expect(harness?.text).toBe('1.8.35 → 1.8.31')
+    expect(harness?.compare).toEqual({
+      name: 'harness',
+      base: '1.8.31',
+      head: '1.8.35',
+    })
+    expect(harness?.compare).toEqual(
+      forward.find((change) => change.name === 'harness')?.compare,
+    )
+    expect(back.find((change) => change.name === 'judge')?.text).toBe(
+      '0.2.1 → left the stack',
+    )
+  })
+
+  it('takes a worker that went A → B → A as no change', () => {
+    const [one, two, three] = [all[1], all[3], all[5]]
+    const looped = [
+      one,
+      { ...two, workers: { ...two.workers, ade: '9.9.9' } },
+      { ...three, workers: { ...one.workers } },
+    ] as TrendPoint[]
+    expect(
+      changesBetween(looped, 0, 2).find((change) => change.name === 'ade'),
+    ).toBeUndefined()
+    expect(
+      changesBetween(looped, 0, 1).find((change) => change.name === 'ade')
+        ?.text,
+    ).toBe(`${one.workers?.ade} → 9.9.9`)
+  })
+
+  it('puts iii, the Harness, the tests and the stack before the rest', () => {
+    const kinds = majorsFirst(changesBetween(all, BASE, all.length - 1)).map(
+      (change) => change.kind,
+    )
+    expect(kinds.slice(0, 4)).toEqual(['iii', 'harness', 'tests', 'worker'])
+    expect(kinds.at(-1)).toBe('definition')
+  })
+
+  it('shows the latest against the baseline, and any pick against it too', () => {
+    expect(readout('score', -1, BASE)).toBe(2.2)
+    expect(readout('score', SEP25, BASE)).toBe(6.1)
+    // Before the baseline: how far it was from it.
+    expect(readout('score', SEP22, BASE)).toBe(-1.7)
+    expect(referenceText(pair('score', -1, BASE))).toBe(
+      'Sep 28, 2:17 AM against Sep 23, 2:17 AM (baseline)',
+    )
+    expect(referenceText(pair('score', SEP22, BASE))).toBe(
+      'Sep 22, 11:45 AM against Sep 23, 2:17 AM (baseline)',
+    )
+  })
+
+  it('reads the baseline itself against the execution before it', () => {
+    const own = pair('score', BASE, BASE)
+    expect(own.headIsBaseline).toBe(true)
+    expect(own.previous?.execution_id).toBe(all[BASE - 1].execution_id)
+    expect(referenceText(own)).toBe(
+      'Sep 23, 2:17 AM (baseline) against Sep 22, 3:27 PM',
+    )
+  })
+
+  it('follows the pick without a baseline, and is today’s latestPair with neither', () => {
+    expect(referenceText(pair('score', SEP25, -1))).toBe(
+      'Sep 25, 2:17 AM against Sep 24, 11:10 AM',
+    )
+    const none = pair('score', -1, -1)
+    expect(none.current?.execution_id).toBe('github-36381232467-1')
+    expect(none.previous?.execution_id).toBe('github-36296751640-1')
+    expect(none.againstBaseline).toBe(false)
+  })
+
+  it('skips a baseline with no value for the measure', () => {
+    const bare = all.map((point, index) =>
+      index === BASE ? { ...point, measures: null } : point,
+    ) as TrendPoint[]
+    const { previous } = comparedPair(bare, score, -1, BASE)
+    expect(previous?.execution_id).toBe(all.at(-2)?.execution_id)
+  })
+
+  it('finds the baseline in the view, or says why not', () => {
+    expect(baselineOf(all, 'github-35821773226-2')).toEqual({
+      index: BASE,
+      why: null,
+    })
+    expect(baselineOf(all, 'github-elsewhere')).toEqual({
+      index: -1,
+      why: 'not_in_view',
+    })
+    expect(baselineOf(all, 'github-36220337119-1')).toEqual({
+      index: -1,
+      why: 'no_counted_run',
+    })
+    expect(baselineOf(all, null)).toEqual({ index: -1, why: null })
+  })
+
+  it('reads the panel against the baseline, else the previous counted execution', () => {
+    expect(panelAgainst(all, SEP25, BASE)).toMatchObject({ isBaseline: true })
+    expect(panelAgainst(all, SEP25, BASE).point?.execution_id).toBe(
+      all[BASE].execution_id,
+    )
+    expect(panelAgainst(all, BASE, BASE).isBaseline).toBe(false)
+    expect(panelAgainst(all, SEP25, -1).point?.execution_id).toBe(
+      previousCounted(all, SEP25)?.execution_id,
+    )
+  })
+
+  it('keeps the baseline in the hash', () => {
+    const params = withBase(new URLSearchParams('stack=any'), 'plan-1')
+    expect(params.toString()).toBe('stack=any&base=plan-1')
+    expect(baseFromParams(params)).toBe('plan-1')
+    expect(baseFromParams(new URLSearchParams('base='))).toBeNull()
+    expect(withBase(new URLSearchParams('stack=any'), null).toString()).toBe(
+      'stack=any',
     )
   })
 })

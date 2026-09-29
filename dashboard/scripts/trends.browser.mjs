@@ -392,6 +392,155 @@ try {
     .waitFor()
   assert.equal(await from.count(), 0)
 
+  // A baseline: pin Sep 23, read the others against it, keep it in the URL.
+  const chip = page.locator('[data-baseline-chip]')
+  const scoreCard = page.locator('[data-trend-chart="score"]')
+  const scoreRef = scoreCard.locator('.tr-reference')
+  const scoreAt = (label) => scoreCard.getByRole('button', { name: label })
+  assert.equal(await chip.count(), 0)
+  await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
+  const sep23 = page.locator('[data-trend-panel="github-35821773226-2"]')
+  await sep23.getByRole('button', { name: 'Set as baseline' }).click()
+  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await hashMatches(/&range=all&base=github-35821773226-2$/)
+  // Focus stays in the panel, on the button that now clears it.
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Clear baseline',
+  )
+  // Its own panel is tagged, and the cards read it against the execution before.
+  assert.equal(await sep23.getByText('baseline', { exact: true }).count(), 1)
+  assert.equal(
+    await scoreRef.innerText(),
+    'Sep 23, 2:17 AM (baseline) against Sep 22, 3:27 PM',
+  )
+  await sep23.getByRole('button', { name: 'Close' }).click()
+  assert.equal(
+    await scoreRef.innerText(),
+    'Sep 28, 2:17 AM against Sep 23, 2:17 AM (baseline)',
+  )
+  assert.match(await scoreCard.locator('.tr-delta').innerText(), /2\.2/)
+  // A rule on every chart, labelled only on the large one.
+  assert.equal(await page.locator('.tr-baseline').count(), 7)
+  assert.equal(await page.locator('.tr-baseline-label').count(), 1)
+
+  // Sep 25 against it: the commits from the earlier version to the later,
+  // the minor changes folded past five, and the pair to compare.
+  await scoreAt(/^Sep 25, 2:17 AM · Score 96\.9$/).click()
+  const sep25 = page.locator('[data-trend-panel="github-36097908502-1"]')
+  await sep25
+    .getByRole('heading', {
+      name: 'What changed between Sep 23, 2:17 AM (baseline) and Sep 25, 2:17 AM',
+    })
+    .waitFor()
+  await sep25.getByText('1.8.31 → 1.8.35').waitFor()
+  await sep25
+    .getByRole('link', {
+      name: '26 commits between the tags in iii-hq/workers',
+    })
+    .waitFor()
+  assert.ok(
+    requests('version-compare').some(
+      (call) =>
+        call.name === 'harness' &&
+        call.base === '1.8.31' &&
+        call.head === '1.8.35',
+    ),
+  )
+  assert.equal(await sep25.locator('li[data-change]').count(), 7)
+  await sep25.getByRole('button', { name: 'Show 3 more' }).click()
+  assert.equal(await sep25.locator('li[data-change]').count(), 10)
+  await sep25.getByRole('button', { name: 'Show fewer' }).click()
+  assert.equal(await sep25.locator('li[data-change]').count(), 7)
+  await sep25.getByText('Against the baseline, Sep 23, 2:17 AM').waitFor()
+  assert.equal(
+    await scoreRef.innerText(),
+    'Sep 25, 2:17 AM against Sep 23, 2:17 AM (baseline)',
+  )
+  assert.match(await scoreCard.locator('.tr-delta').innerText(), /6\.1/)
+  assert.match(
+    await sep25
+      .getByRole('link', { name: 'Compare with the baseline' })
+      .getAttribute('href'),
+    /\/compare\/github-35821773226-2\/github-36097908502-1\?from=/,
+  )
+  // Before the baseline it reads how far it was from it, still earlier as A.
+  await scoreAt(/^Sep 22, 11:45 AM · Score 89\.1$/).click()
+  const sep22 = page.locator('[data-trend-panel="github-35742568444-1"]')
+  assert.match(await scoreCard.locator('.tr-delta').innerText(), /1\.7/)
+  assert.match(
+    await sep22
+      .getByRole('link', { name: 'Compare with the baseline' })
+      .getAttribute('href'),
+    /\/compare\/github-35742568444-1\/github-35821773226-2\?from=/,
+  )
+  await sep22.getByRole('button', { name: 'Close' }).click()
+
+  // It survives a reload; a period that leaves it out says so and reads
+  // against the execution before; all time brings it back.
+  await page.reload()
+  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  assert.equal(
+    await scoreRef.innerText(),
+    'Sep 28, 2:17 AM against Sep 23, 2:17 AM (baseline)',
+  )
+  await period.click()
+  await page.getByRole('menuitemradio', { name: 'Custom' }).click()
+  await from.fill('2026-09-26')
+  await chip.getByText('Baseline not in this view').waitFor()
+  assert.equal(
+    await scoreRef.innerText(),
+    'Sep 28, 2:17 AM against Sep 27, 2:17 AM',
+  )
+  assert.equal(await page.locator('.tr-baseline').count(), 0)
+  await hashMatches(
+    /since=2026-09-26&until=2026-09-28&base=github-35821773226-2$/,
+  )
+  await period.click()
+  await page.getByRole('menuitemradio', { name: 'All time' }).click()
+  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  assert.equal(await page.locator('.tr-baseline').count(), 7)
+
+  // The chip's time shows the baseline; its cross clears it.
+  await chip.getByRole('button', { name: /^Baseline/ }).click()
+  await sep23.waitFor()
+  await sep23.getByRole('button', { name: 'Clear baseline' }).click()
+  assert.equal(await chip.count(), 0)
+  assert.equal(await page.locator('.tr-baseline').count(), 0)
+  assert.doesNotMatch(await hash(), /base=/)
+  await sep23.getByRole('button', { name: 'Close' }).click()
+  assert.equal(
+    await scoreRef.innerText(),
+    'Sep 28, 2:17 AM against Sep 27, 2:17 AM',
+  )
+  await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
+  await sep23.getByRole('button', { name: 'Set as baseline' }).click()
+  await chip.getByRole('button', { name: 'Clear baseline' }).click()
+  assert.equal(await chip.count(), 0)
+
+  // Another series, and the Trends tab, start without one. Sep 23's panel
+  // is still open.
+  await sep23.getByRole('button', { name: 'Set as baseline' }).click()
+  await chip.waitFor()
+  await suite.click()
+  await page.getByRole('menuitemradio', { name: /^Regression/ }).click()
+  await page
+    .getByRole('menuitemradio', { name: /^Regression/ })
+    .waitFor({ state: 'detached' })
+  assert.equal(await chip.count(), 0)
+  assert.doesNotMatch(await hash(), /base=/)
+  await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
+  await sep23.getByRole('button', { name: 'Set as baseline' }).click()
+  await chip.waitFor()
+  await page.getByRole('link', { name: 'Trends', exact: true }).click()
+  await summary.getByText('in the last 30 days', { exact: false }).waitFor()
+  await hashMatches(/stack=any&range=30d$/)
+  assert.equal(await chip.count(), 0)
+  // Back to all time, where the flow goes on.
+  await period.click()
+  await page.getByRole('menuitemradio', { name: 'All time' }).click()
+  await summary.getByText('over all time', { exact: false }).waitFor()
+
   // This harness: nothing changed between its executions, no diamond.
   await suite.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
@@ -450,10 +599,21 @@ try {
     .click()
   await page.locator('[data-trend-panel]').waitFor()
   assert.equal(await page.locator('.tr-top[data-panel]').count(), 0)
+  // The baseline chip wraps under the pickers instead of running off the pane.
+  await page.getByRole('button', { name: 'Set as baseline' }).click()
+  await chip.waitFor()
+  const box = await chip.boundingBox()
+  assert.ok(box && box.x >= 0 && box.x + box.width <= 640, 'the chip fits')
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    true,
+  )
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a model of a suite and the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, a model of a suite and the empty state’s Run again, narrow pane with the chip.',
   )
 } finally {
   await browser.close()
