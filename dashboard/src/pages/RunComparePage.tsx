@@ -69,9 +69,13 @@ export function runsInvestigation(
   a: Side,
   b: Side,
 ): Investigation {
+  // Two rounds of one plan are its two native executions.
+  const same = listedExecution(a.observation) === listedExecution(b.observation)
+  const execution = ({ observation }: Side) =>
+    same ? observation.execution_id : listedExecution(observation)
   return {
-    executionId: listedExecution(a.observation),
-    comparisonExecutionId: listedExecution(b.observation),
+    executionId: execution(a),
+    comparisonExecutionId: execution(b),
     focus: {
       scenarioId: testId,
       runId: a.run?.run_id,

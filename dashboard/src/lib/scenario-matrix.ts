@@ -293,12 +293,15 @@ function neverStarted(
   )
 }
 
+/** The id of a report that named no scenario. */
+export const UNKNOWN_SCENARIO = 'unknown_scenario'
+
 function unavailableScenario(
   detail: DashboardExecutionDetail,
   reportIndex: number,
 ): ScenarioMatrixItem {
   const record = detail.reports[reportIndex]
-  const scenarioId = record?.scenario_id || 'unknown_scenario'
+  const scenarioId = record?.scenario_id || UNKNOWN_SCENARIO
   const summary = detail.subjects
     .find((subject) => subject.id === record?.subject_id)
     ?.scenarios.find((scenario) => scenario.id === scenarioId)

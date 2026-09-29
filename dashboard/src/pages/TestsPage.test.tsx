@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { InvestigationContext } from '@/components/InvestigationAction'
 import type {
   TestCatalogRow,
   TestObservation,
@@ -177,33 +178,56 @@ describe('comparison row states', () => {
     expect(html).toContain('open history')
   })
 
-  it('investigates a test across the versions from the latest execution on each side', () => {
-    const seen = (execution_id: string, completed_at: string) =>
-      ({ execution_id, completed_at }) as TestObservation
-    const result = row(side(), side(), {}, 'contract_changed').result
+  it('investigates a test across the versions: the latest in B against the same case in A', () => {
+    const seen = (
+      execution_id: string,
+      completed_at: string,
+      case_id: string,
+      system_label: string,
+    ) =>
+      ({
+        execution_id,
+        completed_at,
+        case_id,
+        system_label,
+        status: 'passed',
+        mean_score: 90,
+        scored_runs: 1,
+      }) as TestObservation
+    const result = row(side(), side(), {}, 'assessment_changed').result
     if (!result) throw new Error('missing result fixture')
     expect(versionInvestigation(result)).toBeNull()
-    expect(
-      versionInvestigation({
-        ...result,
-        compatibility_reasons: ['criterion weights differ'],
-        from_observations: [
-          seen('a-late', '2026-09-03T00:00:00Z'),
-          seen('a-early', '2026-09-01T00:00:00Z'),
-        ],
-        to_observations: [seen('b', '2026-09-05T00:00:00Z')],
-      }),
-    ).toEqual({
+    const both = {
+      ...result,
+      compatibility_reasons: ['criterion weights differ'],
+      from_observations: [
+        seen('a-other-case', '2026-09-04T00:00:00Z', 'case-2', 'source a'),
+        seen('a-late', '2026-09-03T00:00:00Z', 'case-1', 'source a'),
+        seen('a-early', '2026-09-01T00:00:00Z', 'case-1', 'source a'),
+      ],
+      to_observations: [
+        seen('b', '2026-09-05T00:00:00Z', 'case-1', 'source b'),
+      ],
+    }
+    expect(versionInvestigation(both)).toEqual({
       executionId: 'a-late',
       comparisonExecutionId: 'b',
       focus: { scenarioId: 'direct_answer' },
       changes: [
+        { what: 'system', change: 'source a → source b' },
         {
-          what: 'test contract',
-          change: 'contract changed; criterion weights differ',
+          what: 'comparability',
+          change: 'assessment changed; criterion weights differ',
         },
       ],
     })
+    // Several rows open at once: each button names its test.
+    const html = renderToStaticMarkup(
+      <InvestigationContext value={() => {}}>
+        <RowDetails result={both} aLabel="source a" bLabel="source b" />
+      </InvestigationContext>,
+    )
+    expect(html).toContain('aria-label="Investigate A and B · direct_answer"')
   })
 
   // Audit CP-20: two sides that share nothing produce a table of empty delta

@@ -50,6 +50,20 @@ describe('two runs of a test', () => {
     })
   })
 
+  it('reads two rounds of one plan as its two native executions', () => {
+    const round = (execution_id: string) =>
+      side({ ...a.observation, execution_id })
+    const { executionId, comparisonExecutionId } = runsInvestigation(
+      'form_flow_build',
+      round('native-1'),
+      round('native-2'),
+    )
+    expect([executionId, comparisonExecutionId]).toEqual([
+      'native-1',
+      'native-2',
+    ])
+  })
+
   it('says what the runs share and what changed', () => {
     const shared = comparability(a.observation, b.observation)
     expect(shared.same).toBe('Same definition 0c5c0902, model and system.')

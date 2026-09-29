@@ -507,6 +507,7 @@ export function rowMenuItems(
       label: 'Investigate',
       hint: 'In a new Harness chat',
       icon: icon(Search),
+      disabledReason: importing ? 'Wait for the import to finish' : undefined,
       onSelect: () => investigate(row),
     })
   if (renamable(row))

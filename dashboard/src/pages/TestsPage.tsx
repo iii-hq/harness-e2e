@@ -408,7 +408,8 @@ function summaryStatusFromObservation(status: string): {
 }
 
 /** The chat reads a test across the two versions as its latest execution
- *  on each side, A before B; null until both sides have one. */
+ *  in B and the latest of the same case in A; null until both sides have
+ *  one. The system that changed is what the page compares. */
 export function versionInvestigation(
   result: TestVersionResult,
 ): Investigation | null {
@@ -416,25 +417,33 @@ export function versionInvestigation(
     [...observations]
       .sort((x, y) => x.completed_at.localeCompare(y.completed_at))
       .at(-1)
-  const a = latest(result.from_observations)
   const b = latest(result.to_observations)
+  const a =
+    latest(
+      result.from_observations.filter((item) => item.case_id === b?.case_id),
+    ) ?? latest(result.from_observations)
   if (!a || !b) return null
   return {
     executionId: a.execution_id,
     comparisonExecutionId: b.execution_id,
     focus: { scenarioId: result.test_id },
-    changes:
-      result.compatibility === 'compatible'
+    changes: [
+      {
+        what: 'system',
+        change: `${a.system_label ?? 'not recorded'} → ${b.system_label ?? 'not recorded'}`,
+      },
+      ...(result.compatibility === 'compatible'
         ? []
         : [
             {
-              what: 'test contract',
+              what: 'comparability',
               change: [
                 result.compatibility.replaceAll('_', ' '),
                 ...result.compatibility_reasons,
               ].join('; '),
             },
-          ],
+          ]),
+    ],
   }
 }
 

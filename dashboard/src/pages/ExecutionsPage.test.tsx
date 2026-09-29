@@ -356,6 +356,13 @@ describe('the row menu', () => {
         .slice(0, 2)
         .map((item) => `${item.label}(${item.hint ?? ''})`),
     ).toEqual(['Open()', 'Investigate(In a new Harness chat)'])
+    // An import has nothing to read yet.
+    expect(
+      rowMenuItems(row('plan-e5b0a2c4'), {
+        ...actions,
+        investigate: () => {},
+      })[1].disabledReason,
+    ).toBe('Wait for the import to finish')
   })
 
   it('runs again what ran here, and imports again what came from GitHub', () => {
