@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { InvestigationContext } from '@/components/InvestigationAction'
 import { matchesFilter, rowNote } from '@/components/ScenarioMatrix'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
@@ -319,13 +320,15 @@ describe('evidence record (canvas)', () => {
       evidence: [],
     } as never
     const html = renderToStaticMarkup(
-      <EvidenceRecordPage
-        run={run}
-        detail={detail}
-        backHref="#"
-        transcriptHref="#/transcript"
-        onOpenFile={async () => {}}
-      />,
+      <InvestigationContext value={() => {}}>
+        <EvidenceRecordPage
+          run={run}
+          detail={detail}
+          backHref="#"
+          transcriptHref="#/transcript"
+          onOpenFile={async () => {}}
+        />
+      </InvestigationContext>,
     )
     const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
     expect(text).toContain('3 audit warnings, one cause')
@@ -333,9 +336,12 @@ describe('evidence record (canvas)', () => {
     expect(text).toContain(
       'The subject used browser session b64. Audit flags don’t change the score.',
     )
-    // Ask in chat says so; each criterion links to its evidence: the
+    // Investigate opens the chat on this run; one attempt has no picker
+    // beside Transcript. Each criterion links to its evidence: the
     // transcript as its page, a file by opening it.
-    expect(text).toContain('Ask in chat')
+    expect(html).toContain('aria-label="Investigate form_flow_build"')
+    expect(text).not.toContain('Ask in chat')
+    expect(text).not.toContain('View transcript')
     expect(html).toMatch(
       /<a[^>]*href="#\/transcript"[^>]*aria-label="Evidence for runtime_contract"[^>]*>Evidence<\/a>/,
     )

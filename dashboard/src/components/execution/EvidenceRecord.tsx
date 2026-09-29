@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useId, useState } from 'react'
 import { AssessmentDetailContent } from '@/components/AssessmentWorkspace'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { runCriteria } from '@/components/ScenarioMatrix'
 import { SemanticTestFlow } from '@/components/SemanticTestFlow'
@@ -342,13 +343,25 @@ export function EvidenceRecordPage({
               </a>
             ) : null}
             <ScenarioChatAction
-              label="Ask in chat"
+              multipleOnly
               buttonClass={buttonClassName({ variant: 'quiet' })}
               detail={detail}
               scenarioId={run.scenarioId}
               subjectId={run.subjectId}
               runId={run.runId}
             />
+            {detail ? (
+              <InvestigationAction
+                label="Investigate"
+                buttonClass={buttonClassName({ variant: 'quiet' })}
+                executionId={detail.id}
+                focus={{
+                  scenarioId: run.scenarioId,
+                  subjectId: run.subjectId,
+                  runId: run.runId || undefined,
+                }}
+              />
+            ) : null}
             {onRerun ? (
               <button
                 type="button"

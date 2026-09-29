@@ -195,6 +195,29 @@ describe('scenario chat action', () => {
     expect(html).toContain('aria-haspopup="menu"')
   })
 
+  it('stays beside Transcript only while there is more than one to pick', () => {
+    const html = renderToStaticMarkup(
+      <ScenarioChatAction
+        multipleOnly
+        detail={detail()}
+        scenarioId="direct_answer"
+      />,
+    )
+    expect(html).toContain('Transcripts · 2')
+    const single = detail()
+    const run = single.reports[0].report?.scenarios[0].runs[0]
+    if (run) run.retry_attempts = []
+    expect(
+      renderToStaticMarkup(
+        <ScenarioChatAction
+          multipleOnly
+          detail={single}
+          scenarioId="direct_answer"
+        />,
+      ),
+    ).toBe('')
+  })
+
   it('offers a retained transcript without host chat integration', () => {
     const value = detail()
     const run = value.reports[0].report?.scenarios[0].runs[0]

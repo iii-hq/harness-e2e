@@ -17,6 +17,7 @@ import {
   choiceCounting,
   choiceFromParams,
   choiceToParams,
+  comparisonInvestigation,
   ExecutionComparePage,
   loadExecutionPair,
   viewParams,
@@ -48,6 +49,21 @@ const view = (a = imported(), b = local(), choice = {}) =>
   )
 
 describe('execution comparison page', () => {
+  it('hands the chat the counted tests, the ones left out and what changed', () => {
+    expect(
+      comparisonInvestigation(compareExecutions(imported(), local())),
+    ).toEqual({
+      executionId: 'import-a',
+      comparisonExecutionId: 'local-b',
+      visibleScenarioIds: ['minimal_path', 'persistent_state'],
+      excludedScenarios: [
+        { scenario_id: 'shell_coder_sandbox', reason: 'technical_invalid' },
+      ],
+      unavailableDeltas: [],
+      changes: [{ what: 'llm-router', change: '1.2.0 → @a1b2c3d + changes' }],
+    })
+  })
+
   it('keeps the reader’s choices in the hash', () => {
     const choice = choiceFromParams(
       new URLSearchParams('include=shell_coder_sandbox&exclude=a,b'),

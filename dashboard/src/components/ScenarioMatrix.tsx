@@ -16,6 +16,7 @@ import {
   plural,
 } from '@/components/execution/ExecutionTotals'
 import { ScreenshotGallery } from '@/components/execution/screenshots'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -865,11 +866,21 @@ function ScenarioResult({
                       </a>
                     ) : null}
                     <ScenarioChatAction
-                      label="Ask in chat"
+                      multipleOnly
                       buttonClass="ep-act ep-row-act"
                       detail={detail}
                       scenarioId={item.scenarioId}
                       subjectId={item.subjectId}
+                    />
+                    <InvestigationAction
+                      label="Investigate"
+                      buttonClass="ep-act ep-row-act"
+                      executionId={executionId}
+                      focus={{
+                        scenarioId: item.scenarioId,
+                        subjectId: item.subjectId,
+                        runId: runId || undefined,
+                      }}
                     />
                     {onRerun ? (
                       <button

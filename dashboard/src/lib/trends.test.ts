@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { pointInvestigation } from '@/components/trends/PointPanel'
 import {
   axisMarks,
   baseFromParams,
@@ -302,6 +303,23 @@ describe('a baseline', () => {
     expect(list.some((change) => change.kind === 'tests')).toBe(true)
     // The Harness is one change over two releases, not the sum of the steps.
     expect(list.filter((change) => change.name === 'harness')).toHaveLength(1)
+  })
+
+  it('investigates a point against its reference, the reference as A, with the commits behind each change', () => {
+    const { executionId, comparisonExecutionId, changes } = pointInvestigation(
+      all,
+      all[BASE],
+      SEP25,
+    )
+    expect([executionId, comparisonExecutionId]).toEqual([
+      'github-35821773226-2',
+      'github-36097908502-1',
+    ])
+    expect(changes).toContainEqual({
+      what: 'harness (the Harness under test)',
+      change: '1.8.31 → 1.8.35',
+      commits: { name: 'harness', base: '1.8.31', head: '1.8.35' },
+    })
   })
 
   it('reads an execution before the baseline the same way, commits still earlier → later', () => {

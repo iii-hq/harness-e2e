@@ -1,5 +1,6 @@
 import { ArrowUpRight, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { buttonClassName } from '@/design-system'
 import {
   hashForComparison,
@@ -8,6 +9,7 @@ import {
 } from '@/hooks/use-hash-route'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { plural } from '@/lib/format'
+import type { Investigation } from '@/lib/investigation'
 import {
   baselineId,
   CHANGE_KIND_TEXT,
@@ -102,6 +104,27 @@ function CommitsLink({
       <ArrowUpRight size={12} aria-hidden="true" />
     </a>
   )
+}
+
+/** The chat reads the point against its reference, the reference as A,
+ *  with what changed between them. */
+export function pointInvestigation(
+  points: TrendPoint[],
+  reference: TrendPoint,
+  index: number,
+): Investigation {
+  const from = points.findIndex(
+    (item) => item.execution_id === reference.execution_id,
+  )
+  return {
+    executionId: reference.execution_id,
+    comparisonExecutionId: points[index].execution_id,
+    changes: changesBetween(points, from, index).map((change) => ({
+      what: `${change.name} (${CHANGE_KIND_TEXT[change.kind]})`,
+      change: change.text,
+      commits: change.compare,
+    })),
+  }
 }
 
 /** One execution of the trend: what changed since the one before it, its
@@ -389,6 +412,11 @@ export function PointPanel({
               ? 'Compare with the baseline'
               : `Compare with ${pointTime(reference)}`}
           </a>
+        ) : null}
+        {canCompare && reference ? (
+          <InvestigationAction
+            {...pointInvestigation(points, reference, index)}
+          />
         ) : null}
         {counted(point) ? (
           <button

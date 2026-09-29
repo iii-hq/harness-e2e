@@ -9,6 +9,7 @@ import {
 import { ComparisonView, type Sides } from '@/components/compare/ComparisonView'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ExecutionMoreMenu } from '@/components/execution/NeedsAttention'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { buttonClassName, EmptyState, PageHeader } from '@/design-system'
 import {
@@ -34,6 +35,7 @@ import {
 } from '@/lib/execution-comparison'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import { plural } from '@/lib/format'
+import type { Investigation } from '@/lib/investigation'
 import { watchExecution } from '@/lib/watch-execution'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
@@ -148,6 +150,40 @@ function summaryLine(comparison: ExecutionComparison) {
   ]
     .filter(Boolean)
     .join(' · ')
+}
+
+/** What the chat gets from this page: the tests the totals count, the ones
+ *  left out and why, the deltas that cannot be read, and what changed. */
+export function comparisonInvestigation({
+  a,
+  b,
+  scenarios,
+  exclusions,
+  totals,
+  parameters,
+  stack,
+  runner,
+}: ExecutionComparison): Investigation {
+  return {
+    executionId: a.id,
+    comparisonExecutionId: b.id,
+    visibleScenarioIds: scenarios
+      .filter((scenario) => scenario.counted)
+      .map((scenario) => scenario.id),
+    excludedScenarios: exclusions
+      .filter((exclusion) => exclusion.applied)
+      .map(({ scenario_id, reason }) => ({ scenario_id, reason })),
+    unavailableDeltas: totals
+      .filter((metric) => metric.delta === null)
+      .map((metric) => metric.id),
+    changes: [
+      ...parameters,
+      ...stack.changed,
+      ...(runner.differs
+        ? [{ field: 'runner', a: runner.a ?? '—', b: runner.b ?? '—' }]
+        : []),
+    ].map(({ field, a, b }) => ({ what: field, change: `${a} → ${b}` })),
+  }
 }
 
 /** The header every state of the page shares: back to Executions, the
@@ -402,6 +438,7 @@ export function ExecutionComparePage({
               <ClipboardCopy size={16} aria-hidden="true" />
               {copied === 'summary' ? 'Summary copied' : 'Copy summary'}
             </button>
+            <InvestigationAction {...comparisonInvestigation(comparison)} />
             {bridge ? (
               <button
                 className={buttonClassName({ variant: 'primary' })}

@@ -31,6 +31,9 @@ type ScenarioChatActionProps = {
   className?: string
   /** Replaces the button's own class (a page with its own action style). */
   buttonClass?: string
+  /** Only when there is more than one transcript to pick from (retries or
+   *  repetitions): a single one already has its own Transcript button. */
+  multipleOnly?: boolean
 }
 
 type MenuPosition = CSSProperties & { width: number }
@@ -54,6 +57,7 @@ export function ScenarioChatAction({
   compact = false,
   className = '',
   buttonClass,
+  multipleOnly = false,
 }: ScenarioChatActionProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -119,6 +123,7 @@ export function ScenarioChatAction({
 
   if (!resolvedExecutionId) return null
   if (detailTargets?.length === 0) return null
+  if (multipleOnly && (detailTargets?.length ?? 0) < 2) return null
 
   const positionMenu = (count: number) => {
     const rect = triggerRef.current?.getBoundingClientRect()
