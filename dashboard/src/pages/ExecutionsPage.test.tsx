@@ -350,6 +350,21 @@ describe('the row menu', () => {
         .trim(),
     )
 
+  it('offers Investigate right after Open, only when the host has a chat', () => {
+    expect(
+      rowMenuItems(row('c3cdb199'), { ...actions, investigate: () => {} })
+        .slice(0, 2)
+        .map((item) => `${item.label}(${item.hint ?? ''})`),
+    ).toEqual(['Open()', 'Investigate(In a new Harness chat)'])
+    // An import has nothing to read yet.
+    expect(
+      rowMenuItems(row('plan-e5b0a2c4'), {
+        ...actions,
+        investigate: () => {},
+      })[1].disabledReason,
+    ).toBe('Wait for the import to finish')
+  })
+
   it('runs again what ran here, and imports again what came from GitHub', () => {
     expect(menu('plan-cf6ab5f9')).toEqual([
       'Open',

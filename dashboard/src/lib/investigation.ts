@@ -12,8 +12,14 @@ export type Investigation = {
     change: string
     commits?: { name: string; base: string; head: string } | null
   }>
-  /** The test (and run) the reader asked about. */
-  focus?: { scenarioId: string; subjectId?: string; runId?: string }
+  /** The test (and run, in B too when comparing two runs) the reader asked
+   *  about. */
+  focus?: {
+    scenarioId: string
+    subjectId?: string
+    runId?: string
+    comparedRunId?: string
+  }
   /** Why the Console could not read the execution's native evidence. */
   evidenceUnavailable?: string
 }
@@ -27,7 +33,7 @@ export function investigationPrompt(context: Investigation) {
       : 'Investigate this E2E execution: what went wrong, unusual behavior, and issues that deserve attention, even if the system outcome is passed.'
   }${
     focus
-      ? ` Start from the focused test${focus.runId ? ' and run' : ''} in the context below: explain what happened in it (outcome, criteria lost, failures, retries) and mention findings elsewhere only briefly.`
+      ? ` Start from the focused test${focus.comparedRunId ? ' and runs' : focus.runId ? ' and run' : ''} in the context below: explain what happened in it (outcome, criteria lost, failures, retries) and mention findings elsewhere only briefly.`
       : ''
   }
 
@@ -40,6 +46,7 @@ ${JSON.stringify(
       scenario_id: focus.scenarioId,
       subject_id: focus.subjectId,
       run_id: focus.runId,
+      compared_run_id: focus.comparedRunId,
     },
     visible_scenario_ids: context.visibleScenarioIds,
     scenarios_left_out_of_totals: context.excludedScenarios,

@@ -296,6 +296,7 @@ describe('running a test again', () => {
               kind: 'test',
               key: 'k',
               scenarioId: 'kanban_c7_live',
+              subjectId: 'deepseek-flash',
               tone: 'error',
               summary: 'left no run: compose::add failed',
               detail: null,

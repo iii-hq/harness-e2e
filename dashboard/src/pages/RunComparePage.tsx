@@ -7,6 +7,7 @@ import {
   PairedBars,
   SessionTree,
 } from '@/components/history/SessionTree'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import {
   buttonClassName,
   EmptyState,
@@ -30,6 +31,7 @@ import {
   NOT_REPORTED,
   plural,
 } from '@/lib/format'
+import type { Investigation } from '@/lib/investigation'
 import type { TestSpec } from '@/lib/test-catalog'
 import {
   ALL_DEFINITIONS,
@@ -41,6 +43,7 @@ import {
   type HistoryResponse,
   type HistoryRun,
   keyExecution,
+  listedExecution,
   modelText,
   observationState,
   runState,
@@ -57,6 +60,31 @@ export type Side = { observation: HistoryObservation; run: HistoryRun | null }
 /** A run as the A × B reads it: the observation and its last attempt. */
 export function side(observation: HistoryObservation): Side {
   return { observation, run: observation.runs?.at(-1) ?? null }
+}
+
+/** The chat reads the two runs as a comparison of their executions,
+ *  focused on this test and these runs, with what the page says differs. */
+export function runsInvestigation(
+  testId: string,
+  a: Side,
+  b: Side,
+): Investigation {
+  // Two rounds of one plan are its two native executions.
+  const same = listedExecution(a.observation) === listedExecution(b.observation)
+  const execution = ({ observation }: Side) =>
+    same ? observation.execution_id : listedExecution(observation)
+  return {
+    executionId: execution(a),
+    comparisonExecutionId: execution(b),
+    focus: {
+      scenarioId: testId,
+      runId: a.run?.run_id,
+      comparedRunId: b.run?.run_id,
+    },
+    changes: comparability(a.observation, b.observation).changed.map(
+      ({ label, value }) => ({ what: label, change: value }),
+    ),
+  }
 }
 
 function listText(items: string[]) {
@@ -751,6 +779,10 @@ export function RunComparePage({ testId }: { testId: string }) {
             <Link2 size={16} aria-hidden="true" />
             Copy link
           </button>
+          <InvestigationAction
+            label="Investigate A and B"
+            {...runsInvestigation(testId, sides.a, sides.b)}
+          />
         </>,
       )}
       <RunComparison
