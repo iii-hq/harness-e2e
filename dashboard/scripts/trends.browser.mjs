@@ -114,6 +114,17 @@ try {
   page.on('pageerror', (error) => errors.push(error.message))
   const summary = page.locator('[data-trend-summary]')
   const hash = () => page.evaluate(() => location.hash)
+  // The page pins the hash after it renders: wait for it, then check it.
+  const hashMatches = async (pattern) => {
+    await page
+      .waitForFunction(
+        (source) => new RegExp(source).test(location.hash),
+        pattern.source,
+        { timeout: 5000 },
+      )
+      .catch(() => undefined)
+    assert.match(await hash(), pattern)
+  }
 
   // The series with the latest execution, on every stack it ran on.
   // A first load that fails says so on the host's StatusPanel and retries.
@@ -211,8 +222,7 @@ try {
     1,
   )
   // The default view is pinned to what it showed, in the hash too.
-  assert.match(
-    await hash(),
+  await hashMatches(
     /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any&range=30d$/,
   )
 
@@ -257,10 +267,7 @@ try {
   await summary.getByText('11 executions ', { exact: false }).waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'default')
   assert.equal(requests('trends-get').at(-1).suite, 'regression')
-  assert.match(
-    await hash(),
-    /\/trends\?suite=regression&.*stack=default&range=30d$/,
-  )
+  await hashMatches(/\/trends\?suite=regression&.*stack=default&range=30d$/)
   const here = await hash()
 
   // Compare with the previous counted execution, and back to this view.
@@ -321,10 +328,7 @@ try {
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
   await summary.getByText('14 executions ', { exact: false }).waitFor()
   assert.match(await suite.innerText(), /Regression/)
-  assert.match(
-    await hash(),
-    /\/trends\?suite=regression&.*stack=any&range=30d$/,
-  )
+  await hashMatches(/\/trends\?suite=regression&.*stack=any&range=30d$/)
 
   // A link to a stack the series never ran on: the worker applies its
   // default, and the page says so.
@@ -342,7 +346,7 @@ try {
     .waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'lean')
   assert.match(await stack.innerText(), /any/)
-  assert.match(await hash(), /stack=any&range=30d$/)
+  await hashMatches(/stack=any&range=30d$/)
 
   // The period: all time, a custom one, From after To said and not asked,
   // then one with nothing in it and the way back to all time.
@@ -353,7 +357,7 @@ try {
     .getByText('14 executions over all time ·', { exact: false })
     .waitFor()
   assert.equal(requests('trends-get').at(-1).since, undefined)
-  assert.match(await hash(), /stack=any&range=all$/)
+  await hashMatches(/stack=any&range=all$/)
   await period.click()
   await page.getByRole('menuitemradio', { name: 'Custom' }).click()
   const from = page.getByLabel('From', { exact: true })
@@ -369,7 +373,7 @@ try {
     { since, until },
     { since: '2026-09-26T03:00:00.000Z', until: '2026-09-29T02:59:59.999Z' },
   )
-  assert.match(await hash(), /stack=any&since=2026-09-26&until=2026-09-28$/)
+  await hashMatches(/stack=any&since=2026-09-26&until=2026-09-28$/)
   const before = requests('trends-get').length
   await from.fill('2026-09-29')
   await page.getByText('From must be on or before To.').waitFor()
