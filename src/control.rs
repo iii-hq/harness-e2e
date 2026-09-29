@@ -17,15 +17,13 @@ use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
 use crate::artifact::{self, ArtifactReference};
 use crate::context::E2eContext;
 use crate::durable::{
-    ArchiveHeadResponse, ArchiveResponse, ArchiveRestoreResponse, DurableArchiveReference,
-    DurableHistory, HistoryListRequest, RetentionClass, RetentionSweepRequest, ARCHIVE_HEAD_ID,
-    ARCHIVE_ID, ARCHIVE_RESTORE_ID, HISTORY_LIST_ID, RETENTION_SWEEP_ID,
+    ArchiveHeadResponse, ArchiveResponse, DurableArchiveReference, DurableHistory, RetentionClass,
+    ARCHIVE_HEAD_ID, ARCHIVE_ID,
 };
 use crate::journal::{
     ExecutionJournal, ExecutionJournalEventKind, ExecutionJournalHeader, JournalProgress,
     JournalTerminalState, EXECUTION_JOURNAL_SCHEMA,
 };
-use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
 use crate::persistence::Persistence;
 use crate::report::{
     E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
@@ -50,7 +48,6 @@ pub const STATUS_ID: &str = "e2e::status";
 pub const CANCEL_ID: &str = "e2e::cancel";
 pub const RESULTS_GET_ID: &str = "e2e::results-get";
 pub const RESULTS_LIST_ID: &str = "e2e::results-list";
-pub const COMPARE_ID: &str = "e2e::compare";
 pub const SCENARIOS_LIST_ID: &str = "e2e::scenarios-list";
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_CONCURRENT_EXECUTIONS: usize = 4;
@@ -297,20 +294,6 @@ pub struct ResultsListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CompareRequest {
-    pub from_execution_id: String,
-    pub to_execution_id: String,
-    /// Explicit policy override. Omit to gate on the reviewed baseline.
-    #[serde(default)]
-    pub policy: Option<ComparisonPolicy>,
-    /// Reviewed baseline file to load thresholds from. Omit to use the
-    /// checked-in `config/baselines/default.json` when it exists, falling back
-    /// to the code-default thresholds. Ignored when `policy` is set.
-    #[serde(default)]
-    pub baseline: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScenariosListRequest {
     /// Optional deterministic seed used to materialize each listed test case.
     /// Omit it to use each scenario's canonical seed.
@@ -465,61 +448,6 @@ impl ControlPlane {
         );
         register_function(
             &self.inner.iii,
-            ARCHIVE_RESTORE_ID,
-            "Restore and verify an archived execution from its immutable manifest.",
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: ExecutionRequest| {
-                    let control = control.clone();
-                    async move {
-                        control
-                            .archive_restore(&request.execution_id)
-                            .await
-                            .map_err(handler_error)
-                    }
-                })
-            },
-        );
-        register_function(
-            &self.inner.iii,
-            HISTORY_LIST_ID,
-            "List hash-validated E2E history records from the iii database worker.",
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: HistoryListRequest| {
-                    let control = control.clone();
-                    async move {
-                        control
-                            .inner
-                            .durable
-                            .history_list(request)
-                            .await
-                            .map_err(handler_error)
-                    }
-                })
-            },
-        );
-        register_function(
-            &self.inner.iii,
-            RETENTION_SWEEP_ID,
-            "Delete expired E2E objects and tombstone their history records.",
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: RetentionSweepRequest| {
-                    let control = control.clone();
-                    async move {
-                        control
-                            .inner
-                            .durable
-                            .retention_sweep(request)
-                            .await
-                            .map_err(handler_error)
-                    }
-                })
-            },
-        );
-        register_function(
-            &self.inner.iii,
             RUN_ID,
             "Admit an asynchronous, idempotent E2E execution.",
             {
@@ -590,18 +518,6 @@ impl ControlPlane {
                 RegisterFunction::new_async(move |request: ResultsListRequest| {
                     let control = control.clone();
                     async move { control.results_list(request).await.map_err(handler_error) }
-                })
-            },
-        );
-        register_function(
-            &self.inner.iii,
-            COMPARE_ID,
-            "Compare two completed executions when their identities are eligible.",
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: CompareRequest| {
-                    let control = control.clone();
-                    async move { control.compare(request).await.map_err(handler_error) }
                 })
             },
         );
@@ -1234,18 +1150,6 @@ impl ControlPlane {
         self.inner.durable.head(archive).await
     }
 
-    async fn archive_restore(&self, execution_id: &str) -> Result<ArchiveRestoreResponse> {
-        let archive = self
-            .record(execution_id)
-            .await?
-            .archive
-            .context("execution has not been archived")?;
-        self.inner
-            .durable
-            .restore(archive, &self.inner.output_root.join("restored"))
-            .await
-    }
-
     pub async fn results_list(&self, request: ResultsListRequest) -> Result<ResultsListResponse> {
         if request.limit == 0 || request.limit > 500 {
             bail!("results list limit must be between 1 and 500");
@@ -1269,32 +1173,6 @@ impl ControlPlane {
         records.truncate(usize::from(request.limit));
         Ok(ResultsListResponse {
             executions: records.iter().map(status_response).collect(),
-        })
-    }
-
-    async fn compare(&self, request: CompareRequest) -> Result<ComparisonResponse> {
-        if request.from_execution_id == request.to_execution_id {
-            bail!("comparison requires two distinct executions");
-        }
-        let from = self.record(&request.from_execution_id).await?;
-        let to = self.record(&request.to_execution_id).await?;
-        for (side, record) in [("from", &from), ("to", &to)] {
-            if record.phase != ExecutionPhase::Completed {
-                bail!("{side} execution must be completed before comparison");
-            }
-        }
-        let policy = match request.policy {
-            Some(policy) => policy,
-            None => longitudinal::load_comparison_policy(request.baseline.as_deref())?,
-        };
-        let comparison = compare_records(&from, &to, policy)?;
-        let artifacts = longitudinal::write_comparison(
-            &self.inner.output_root.join(&to.execution_id),
-            &comparison,
-        )?;
-        Ok(ComparisonResponse {
-            comparison,
-            artifacts,
         })
     }
 
@@ -2547,30 +2425,6 @@ fn execution_phase_from_journal(state: JournalTerminalState) -> ExecutionPhase {
         JournalTerminalState::NeedsReconciliation => ExecutionPhase::NeedsReconciliation,
         JournalTerminalState::Unsupported => ExecutionPhase::Unsupported,
     }
-}
-
-fn compare_records(
-    from: &ExecutionRecord,
-    to: &ExecutionRecord,
-    policy: ComparisonPolicy,
-) -> Result<crate::longitudinal::ComparisonSummary> {
-    let from_report = from
-        .report
-        .as_ref()
-        .context("from execution has no completed report")?;
-    let to_report = to
-        .report
-        .as_ref()
-        .context("to execution has no completed report")?;
-    longitudinal::compare_reports(
-        &from.execution_id,
-        &from.request.lane,
-        from_report,
-        &to.execution_id,
-        &to.request.lane,
-        to_report,
-        policy,
-    )
 }
 
 fn relative_result_path(root: &Path, path: &Path) -> String {

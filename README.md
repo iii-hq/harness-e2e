@@ -691,10 +691,9 @@ files and never appear in contract, Compose, evidence, or archive artifacts.
 The worker exposes:
 
 - `e2e::run`, `e2e::status`, `e2e::cancel`
-- `e2e::results-get`, `e2e::results-list`, `e2e::compare`
+- `e2e::results-get`, `e2e::results-list`
 - `e2e::scenarios-list`
-- `e2e::archive`, `e2e::archive-head`, `e2e::archive-restore`
-- `e2e::history-list`, `e2e::retention-sweep`
+- `e2e::archive`, `e2e::archive-head`
 
 Subject policies deny `e2e::*`.
 
@@ -763,19 +762,11 @@ unsupported infrastructure. There is no fallback that polls `harness::status`
 or `harness::metrics`. After the tree completes, the runner still collects
 terminal status, metrics, transcripts, and deliverables.
 
-## Comparison
+## Evidence
 
 Every completed execution records the subject and E2E revisions, observed wire
 contracts, definition digest, materialized inputs, seed, policies, artifacts,
-and raw structural evidence. `e2e::compare` takes two distinct completed
-execution ids (`from_execution_id` and `to_execution_id`) and writes
-`comparisons/<comparison-id>/e2e-delta.json` plus `e2e-summary.md`. Numeric
-deltas stay disabled when the case set or the canonical contract differs.
-
-Deliverable, structural, technical, cost, latency, turn, and retry deltas stay
-independent. A case is repeatable after five local runs meet the deliverable,
-structural, and technical thresholds. Cost and wall time are observed metrics
-and are compared only inside a compatible baseline and candidate cohort.
+and raw structural evidence.
 
 Deterministic assessment has one payload shape, written only to `results.json`.
 Scenario contracts are the only versioned domain. Before cleanup, asset
@@ -787,8 +778,8 @@ the canonical deterministic validation portion, which is aggregated into
 
 | Path | Owns |
 | --- | --- |
-| `src/` | Runner, wire adapters, scenarios, evaluation, longitudinal comparison, and the E2E control worker. |
-| `config/` | Comparison and cutover policies, fault profiles, and the master test plan. |
+| `src/` | Runner, wire adapters, scenarios, evaluation, and the E2E control worker. |
+| `config/` | The cutover policy, fault profiles, and the master test plan. |
 | `stacks/` | Stacks a campaign runs on: iii Compose projects plus the iii release. |
 | `tests/` | Test-only fixtures, golden wire schemas, and the Node and Python suites. |
 | `schemas/` | Public contracts for generated E2E artifacts. |
