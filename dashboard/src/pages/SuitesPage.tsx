@@ -40,6 +40,7 @@ import {
   routeParams,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
+import { useRunChanges } from '@/hooks/use-run-changes'
 import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
@@ -983,27 +984,7 @@ export function SuitesPage() {
   }, [bridge, loadGroups])
 
   // A finished run changes a suite's last execution and its tests' results.
-  useEffect(() => {
-    if (!bridge) return
-    let cancelled = false
-    let dispose: (() => void) | undefined
-    let timer: number | undefined
-    bridge
-      .subscribeRunChanges(() => {
-        if (timer) window.clearTimeout(timer)
-        timer = window.setTimeout(() => void load(), 400)
-      })
-      .then((off) => {
-        if (cancelled) off()
-        else dispose = off
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-      if (timer) window.clearTimeout(timer)
-      dispose?.()
-    }
-  }, [bridge, load])
+  useRunChanges(bridge, load)
 
   // The open suite lives in the hash, so Back leaves a suite for the list.
   useEffect(() => {
