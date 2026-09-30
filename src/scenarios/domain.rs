@@ -56,6 +56,8 @@ pub enum Capability {
     E2eShell,
     #[serde(rename = "e2e::subagents")]
     E2eSubagents,
+    // No scenario requires it since workflow resume was removed; kept so results
+    // that declared it still decode.
     #[serde(rename = "e2e::workflow-resume-v1")]
     E2eWorkflowResumeV1,
     #[serde(rename = "fixture::multi-origin-http")]

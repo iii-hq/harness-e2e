@@ -1,7 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -68,8 +65,6 @@ pub struct AgentPlannerRequest<'a> {
     pub execution_id: &'a str,
     pub run_id: &'a str,
     pub attempt_id: &'a str,
-    pub state_root: &'a Path,
-    pub restored_attempt: bool,
     pub cancellation: Option<&'a watch::Receiver<bool>>,
 }
 
@@ -90,7 +85,6 @@ pub struct AgentPlannerUsageEvidence {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentPlannerEvidence {
-    pub restored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub policy_sha256: String,
@@ -131,217 +125,19 @@ struct AgentPlanRevisionTwo {
     evidence_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentPlannerBinding {
-    execution_id: String,
-    run_id: String,
-    attempt_id: String,
-    scenario_id: String,
-    model: String,
-    provider: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    agent: Option<String>,
-    policy_sha256: String,
-    prompt_sha256: String,
-    metadata_sha256: String,
-}
-
-impl AgentPlannerBinding {
-    fn validate(&self) -> Result<()> {
-        for (label, value) in [
-            ("execution id", self.execution_id.as_str()),
-            ("run id", self.run_id.as_str()),
-            ("attempt id", self.attempt_id.as_str()),
-            ("scenario id", self.scenario_id.as_str()),
-        ] {
-            validate_path_identifier(value, label)?;
-        }
-        if self.model.trim().is_empty() || self.provider.trim().is_empty() {
-            bail!("adaptive planner binding requires model and provider");
-        }
-        for (label, digest) in [
-            ("policy", self.policy_sha256.as_str()),
-            ("prompt", self.prompt_sha256.as_str()),
-            ("metadata", self.metadata_sha256.as_str()),
-        ] {
-            validate_sha256(digest).with_context(|| format!("validate {label} digest"))?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentPlannerPrivateEnvelope {
-    binding: AgentPlannerBinding,
-    plans_sha256: String,
-    plans: Vec<AdaptiveWorkflowPlan>,
-}
-
-#[derive(Debug, Clone)]
-struct AgentPlannerStore {
-    state_root: PathBuf,
-    relative_path: PathBuf,
-}
-
-impl AgentPlannerStore {
-    fn new(
-        state_root: impl AsRef<Path>,
-        execution_id: &str,
-        run_id: &str,
-        attempt_id: &str,
-    ) -> Result<Self> {
-        validate_path_identifier(execution_id, "execution id")?;
-        validate_path_identifier(run_id, "run id")?;
-        validate_path_identifier(attempt_id, "attempt id")?;
-        Ok(Self {
-            state_root: state_root.as_ref().to_path_buf(),
-            relative_path: PathBuf::from("adaptive-plans")
-                .join(execution_id)
-                .join(run_id)
-                .join(attempt_id)
-                .join("plans.json"),
-        })
-    }
-
-    fn path(&self) -> PathBuf {
-        self.state_root.join(&self.relative_path)
-    }
-
-    fn persist(
-        &self,
-        binding: &AgentPlannerBinding,
-        plans: &[AdaptiveWorkflowPlan],
-    ) -> Result<String> {
-        binding.validate()?;
-        let plans_sha256 = crate::artifact::sha256_value(&plans)?;
-        let envelope = AgentPlannerPrivateEnvelope {
-            binding: binding.clone(),
-            plans_sha256: plans_sha256.clone(),
-            plans: plans.to_vec(),
-        };
-        let mut bytes = serde_json::to_vec_pretty(&envelope)
-            .context("encode private adaptive planner state")?;
-        bytes.push(b'\n');
-        let path = self.path();
-        let parent = path
-            .parent()
-            .context("adaptive planner state path has no parent")?;
-        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-        #[cfg(unix)]
-        fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-            .with_context(|| format!("protect {}", parent.display()))?;
-
-        if path.exists() {
-            let existing = self.load_envelope()?;
-            if existing.binding != *binding || existing.plans_sha256 != plans_sha256 {
-                bail!("refusing to replace conflicting adaptive planner state");
-            }
-            return Ok(plans_sha256);
-        }
-
-        let temporary = path.with_file_name(".plans.json.tmp");
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(&temporary)
-            .with_context(|| format!("write {}", temporary.display()))?;
-        file.write_all(&bytes)
-            .with_context(|| format!("write {}", temporary.display()))?;
-        file.sync_all()
-            .with_context(|| format!("sync {}", temporary.display()))?;
-        drop(file);
-        fs::rename(&temporary, &path).with_context(|| format!("replace {}", path.display()))?;
-        Ok(plans_sha256)
-    }
-
-    fn load(&self, expected: &AgentPlannerBinding) -> Result<(Vec<AdaptiveWorkflowPlan>, String)> {
-        expected.validate()?;
-        let envelope = self.load_envelope()?;
-        if envelope.binding != *expected {
-            bail!("adaptive planner state does not match the current attempt binding");
-        }
-        Ok((envelope.plans, envelope.plans_sha256))
-    }
-
-    fn load_envelope(&self) -> Result<AgentPlannerPrivateEnvelope> {
-        let path = self.path();
-        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let envelope: AgentPlannerPrivateEnvelope =
-            serde_json::from_slice(&bytes).with_context(|| format!("decode {}", path.display()))?;
-        envelope.binding.validate()?;
-        validate_sha256(&envelope.plans_sha256)?;
-        let observed = crate::artifact::sha256_value(&envelope.plans)?;
-        if observed != envelope.plans_sha256 {
-            bail!("adaptive planner state plan digest mismatch");
-        }
-        Ok(envelope)
-    }
-}
-
-/// Ask the subject for two bounded plan revisions or recover the exact plans
-/// already persisted for this attempt. Restore never calls Harness.
+/// Ask the subject for two bounded plan revisions.
 pub async fn plan_adaptive_workflow(
     request: AgentPlannerRequest<'_>,
 ) -> Result<AgentPlannerOutcome> {
     validate_request(&request)?;
     let policy_sha256 = request.policy.canonical_sha256()?;
-    let binding = AgentPlannerBinding {
-        execution_id: request.execution_id.into(),
-        run_id: request.run_id.into(),
-        attempt_id: request.attempt_id.into(),
-        scenario_id: request.metadata.scenario_id.clone(),
-        model: request.model.into(),
-        provider: request.provider.into(),
-        agent: request.agent.map(str::to_owned),
-        policy_sha256: policy_sha256.clone(),
-        prompt_sha256: crate::artifact::sha256_bytes(request.scenario_prompt.as_bytes()),
-        metadata_sha256: crate::artifact::sha256_value(request.metadata)?,
-    };
-    let store = AgentPlannerStore::new(
-        request.state_root,
-        request.execution_id,
-        request.run_id,
-        request.attempt_id,
-    )?;
-
-    if request.restored_attempt {
-        let (plans, plans_sha256) = store.load(&binding)?;
-        let completed_node_ids = revision_one_node_ids(&plans)?;
-        validate_invalidation_binding(&plans, request.metadata)?;
-        let materialized = request
-            .policy
-            .materialize(&plans, &completed_node_ids, request.catalog)
-            .context("validate restored adaptive plans")?;
-        return Ok(AgentPlannerOutcome {
-            evidence: AgentPlannerEvidence {
-                restored: true,
-                session_id: None,
-                policy_sha256,
-                plans_sha256,
-                transcript_sha256: None,
-                usage: None,
-                revisions: materialized.revisions.clone(),
-            },
-            plans,
-            completed_node_ids,
-            materialized,
-        });
-    }
-
     let session_id = format!("adaptive_planner_{}", request.attempt_id);
     request
         .context
         .bind_turn_completed()
         .await
         .context("bind adaptive planner turn observation")?;
-    let result = run_fresh_planner(&request, &binding, &store, &session_id, &policy_sha256).await;
+    let result = run_fresh_planner(&request, &session_id, &policy_sha256).await;
     let teardown = request.context.teardown(&session_id).await;
     let unbind = request.context.unbind_turn_completed().await;
     match result {
@@ -364,8 +160,6 @@ pub async fn plan_adaptive_workflow(
 
 async fn run_fresh_planner(
     request: &AgentPlannerRequest<'_>,
-    binding: &AgentPlannerBinding,
-    store: &AgentPlannerStore,
     session_id: &str,
     policy_sha256: &str,
 ) -> Result<AgentPlannerOutcome> {
@@ -457,7 +251,7 @@ async fn run_fresh_planner(
         .policy
         .materialize(&plans, &completed_node_ids, request.catalog)
         .context("validate agent-authored adaptive plans")?;
-    let plans_sha256 = store.persist(binding, &plans)?;
+    let plans_sha256 = crate::artifact::sha256_value(&plans)?;
     let transcript_sha256 = crate::artifact::sha256_value(&transcript)?;
     let usage = AgentPlannerUsageEvidence {
         turns: metrics.totals.turns,
@@ -470,7 +264,6 @@ async fn run_fresh_planner(
     };
     Ok(AgentPlannerOutcome {
         evidence: AgentPlannerEvidence {
-            restored: false,
             session_id: Some(session_id.into()),
             policy_sha256: policy_sha256.into(),
             plans_sha256,
@@ -710,21 +503,6 @@ mod tests {
         .unwrap()
     }
 
-    fn binding() -> AgentPlannerBinding {
-        AgentPlannerBinding {
-            execution_id: "execution-1".into(),
-            run_id: "run-1".into(),
-            attempt_id: "attempt-1".into(),
-            scenario_id: "scenario-1".into(),
-            model: "model".into(),
-            provider: "provider".into(),
-            agent: None,
-            policy_sha256: crate::artifact::sha256_bytes(b"policy"),
-            prompt_sha256: crate::artifact::sha256_bytes(b"prompt"),
-            metadata_sha256: crate::artifact::sha256_bytes(b"metadata"),
-        }
-    }
-
     fn policy_and_catalog() -> (AdaptiveWorkflowPolicy, StepCatalog) {
         let descriptor = |id: &str| StepTypeDescriptor {
             id: id.into(),
@@ -848,41 +626,6 @@ mod tests {
             plans[1].supersedes_sha256.as_deref(),
             Some(plans[0].canonical_sha256().unwrap().as_str())
         );
-    }
-
-    #[test]
-    fn store_rejects_tampering_and_binding_changes() {
-        let root = tempfile::tempdir().unwrap();
-        let store =
-            AgentPlannerStore::new(root.path(), "execution-1", "run-1", "attempt-1").unwrap();
-        let plans = bind_agent_document(
-            parse_agent_plan_document(&document_json()).unwrap(),
-            &binding().policy_sha256,
-        )
-        .unwrap();
-        store.persist(&binding(), &plans).unwrap();
-        let (loaded, _) = store.load(&binding()).unwrap();
-        assert_eq!(loaded[1].nodes.len(), 2);
-
-        let mut changed = binding();
-        changed.prompt_sha256 = crate::artifact::sha256_bytes(b"different prompt");
-        assert!(store.load(&changed).is_err());
-
-        let path = store.path();
-        let mut envelope: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        envelope["plans"][1]["reason"] = Value::String("tampered".into());
-        fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
-        assert!(store.load(&binding()).is_err());
-    }
-
-    #[test]
-    fn path_identifiers_cannot_escape_private_root() {
-        let root = tempfile::tempdir().unwrap();
-        for invalid in ["", ".", "..", "../escape", "a/b", "a\\b", "white space"] {
-            assert!(AgentPlannerStore::new(root.path(), invalid, "run", "attempt").is_err());
-        }
-        let store = AgentPlannerStore::new(root.path(), "exec.good", "run_1", "attempt-1").unwrap();
-        assert!(store.path().starts_with(root.path()));
     }
 
     #[test]

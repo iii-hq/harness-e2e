@@ -6,18 +6,15 @@ use anyhow::{bail, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{
-    read_json, CrossRepoSimulator, ProducerContract, WorkspaceBoundaryGates, CANARY_EVIDENCE_ID,
-    SCENARIO_ID,
-};
+use super::{CrossRepoSimulator, WorkspaceBoundaryGates, CANARY_EVIDENCE_ID, SCENARIO_ID};
 use crate::workflow::{
     ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow, AdaptiveNodeTemplate,
     AdaptivePlanNode, AdaptiveTrustedAnchor, AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy,
     BooleanCondition, ControlSource, DependencyPolicy, PortValueKind, ReplayPolicy, StepCatalog,
     StepExecutor, StepExecutorContext, StepExecutorOutput, StepOperationalKind, StepPortDescriptor,
-    StepReconcileOutcome, StepReconcileState, StepTypeDescriptor, TypedPortValue,
-    WorkflowCleanupContext, WorkflowCleanupHook, WorkflowCriterionDeclaration,
-    WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowLimits, WorkflowNode,
+    StepTypeDescriptor, TypedPortValue, WorkflowCleanupContext, WorkflowCleanupHook,
+    WorkflowCriterionDeclaration, WorkflowEvaluationOutcome, WorkflowEvaluationResult,
+    WorkflowLimits, WorkflowNode,
 };
 
 const MATERIALIZE: &str = "cross_repo.materialize";
@@ -481,35 +478,6 @@ impl StepExecutor for CrossRepoStep {
             Ok(output(evidence))
         }
     }
-
-    async fn reconcile(
-        &self,
-        _context: &StepExecutorContext,
-        _previous: &StepReconcileState,
-    ) -> Result<StepReconcileOutcome> {
-        let state = lock_state(&self.state)?;
-        let simulator = &state.simulator;
-        let completed = match self.operation {
-            CrossRepoOperation::Materialize => simulator.workspace_root().exists(),
-            CrossRepoOperation::MigrateVisible => {
-                let producer: ProducerContract =
-                    read_json(&simulator.workspace_root().join("producer/contract.json"))?;
-                producer.current_contract_version == 2
-            }
-            CrossRepoOperation::RevealCanary => simulator.consumer_b_revealed,
-            CrossRepoOperation::AddAlias => simulator
-                .validate_full_matrix()
-                .is_ok_and(|matrix| matrix.iter().all(|result| result.passed)),
-            _ => false,
-        };
-        if completed {
-            Ok(StepReconcileOutcome::Completed(output(json!({
-                "reconciled": true
-            }))))
-        } else {
-            Ok(StepReconcileOutcome::RetrySafe)
-        }
-    }
 }
 
 fn execute_operation(
@@ -734,7 +702,6 @@ mod tests {
                     run_id: "cross-repo-runtime-test".into(),
                     attempt_id: "attempt-1".into(),
                     node: node.clone(),
-                    replay_policy: registered.descriptor.replay_policy,
                     inputs: BTreeMap::new(),
                     output_dir: temporary.path().join("output"),
                     cancellation: tokio::sync::watch::channel(false).1,

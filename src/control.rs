@@ -116,10 +116,6 @@ pub struct ActiveAttempt {
     pub run_id: String,
     pub attempt_id: String,
     pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_state_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_state_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -141,6 +137,8 @@ pub struct ExecutionRecord {
     pub journal_progress: JournalProgress,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_attempt: Option<ActiveAttempt>,
+    /// Written by the removed workflow resume. Kept, never set, so records
+    /// stored before its removal still decode under `deny_unknown_fields`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_state_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -886,7 +884,6 @@ impl ControlPlane {
                 run_id,
                 attempt_id,
                 session_id,
-                resume_state_path,
             } => {
                 let progress = self.append_journal_event(
                     execution_id,
@@ -903,35 +900,7 @@ impl ControlPlane {
                         run_id: run_id.clone(),
                         attempt_id: attempt_id.clone(),
                         session_id: session_id.clone(),
-                        resume_state_path: resume_state_path.clone(),
-                        resume_state_sha256: None,
                     });
-                    record.resume_state_path = resume_state_path.clone();
-                    record.resume_state_sha256 = None;
-                    record.journal_progress = progress;
-                })
-                .await
-            }
-            SuiteEvent::AdaptiveResumeState {
-                attempt_id,
-                state_sha256,
-            } => {
-                let progress = self.append_journal_event(
-                    execution_id,
-                    ExecutionJournalEventKind::AttemptCheckpointed {
-                        attempt_id: attempt_id.clone(),
-                        state_sha256: state_sha256.clone(),
-                    },
-                )?;
-                self.update_record(execution_id, |record| {
-                    if let Some(active) = record
-                        .active_attempt
-                        .as_mut()
-                        .filter(|active| active.attempt_id == *attempt_id)
-                    {
-                        active.resume_state_sha256 = Some(state_sha256.clone());
-                    }
-                    record.resume_state_sha256 = Some(state_sha256.clone());
                     record.journal_progress = progress;
                 })
                 .await

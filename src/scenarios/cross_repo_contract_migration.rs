@@ -125,7 +125,6 @@ impl Scenario for CrossRepoContractMigration {
             }),
             vec![
                 Capability::E2eAdaptiveFlowV1,
-                Capability::E2eWorkflowResumeV1,
                 Capability::GitDeterministicFixtureV1,
                 Capability::CrossRepoContractSimulatorV1,
             ],
