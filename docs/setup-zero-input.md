@@ -35,15 +35,15 @@ Há três configurações de recursos que bloqueiam cenários específicos:
 
 Evidências: [fixture compartilhada](../src/scenarios/shell_coder_sandbox.rs), [launcher oficial](../scripts/run_exact_stack_group.sh), [setup Kanban](../src/scenarios/kanban/mod.rs), [bootstrap Kanban](../scripts/kanban_eval/bootstrap.py), [incidente](../src/workflow/incident_response/helpers.rs).
 
-### Inicialização e persistência têm duas fontes de configuração
+### Inicialização e persistência
 
 O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e a configuração, fornecidos pelo Compose: `III_CONFIG` (arquivo, iii antes de 0.24.3) ou `III_CONFIG_NAME` (entrada do serviço de configuração lida com `configuration::get`, iii 0.24.3 em diante); caminhos relativos saem do diretório do arquivo ou, sem arquivo, do diretório de trabalho. Seu YAML define `data_dir`, `control_database` e `control_namespace`; `github_repository` (padrão `iii-hq/harness-e2e`) escolhe o repositório cujas execuções o Console importa do GitHub com o `gh` autenticado. Modelo e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
 
-O setup documentado exige iniciar dois arquivos Compose em ordem. [worker-compose.control.yaml](../worker-compose.control.yaml) depende de `path://../workers/database` e contém um caminho absoluto da máquina do autor; [worker-compose.yaml](../worker-compose.yaml) aponta para o banco desse namespace. O pacote declara dependências, mas isso não comprova que a instalação inicial configure automaticamente o banco nomeado e a ligação entre namespaces.
+Na instalação padrão, `control_namespace` é opcional e assume o `III_NAMESPACE` do E2E. O worker descobre a configuração da dependência `database` e acrescenta, apenas em memória, o pool `harness_e2e`, com uma conexão e arquivo `<data_dir>/control.sqlite`. Os outros pools e a configuração salva são preservados. Uma edição salva dessa configuração substitui o valor ativo; o worker assina a entrada e recoloca o pool após cada mudança. Como o worker de banco cria todos os pools ou nenhum, um pool que não fica pronto é removido antes de o E2E encerrar. O reinício completo recria o pool sobre o mesmo arquivo; Engines sem suporte a `configuration::set` com `flush: false` exigem atualização ou provisionamento explícito.
 
-Além disso, `migrate-storage` cria a persistência por `Persistence::from_client`, que lê `HARNESS_E2E_CONTROL_DATABASE` e `HARNESS_E2E_CONTROL_NAMESPACE`, enquanto o worker usa o YAML. Uma configuração personalizada pode fazer o comando administrativo procurar outro banco. [CLI](../src/main.rs), [persistência](../src/persistence.rs).
+Para isolar o banco de controle em outro namespace, o operador sobe um worker de banco com o pool nesse namespace e define `control_namespace` no E2E. Um destino explícito continua sob responsabilidade do operador e não é provisionado automaticamente.
 
-Proposta: uma configuração efetiva do projeto deve determinar banco, namespace proprietário e diretórios tanto no worker quanto nos comandos administrativos. Preservar a separação entre o namespace do sujeito avaliado e o dono do banco de controle; derivar valores coerentes não significa igualá-los. Remover caminhos pessoais e dependência obrigatória do checkout de Workers no fluxo publicado.
+Proposta: na instalação padrão, o sujeito avaliado no mesmo namespace alcança o pool `harness_e2e`. Preservar a separação entre o namespace do sujeito e o dono do banco de controle continua exigindo um destino explícito.
 
 ### A prontidão do plano não cobre a preparação real
 

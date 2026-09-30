@@ -41,11 +41,17 @@ mod tests {
             serde_json::json!({
                 "data_dir": "~/.iii/data/harness-e2e",
                 "control_database": "harness_e2e",
-                "control_namespace": "harness-e2e-control",
                 "github_repository": "iii-hq/harness-e2e",
                 "docker_parallel_groups": 2,
             })
         );
         assert_eq!(manifest.supported_targets, [env!("TARGET")]);
+    }
+
+    #[test]
+    fn registry_defaults_use_the_installation_namespace() {
+        let config = build_manifest().default_config;
+        assert!(config.get("control_namespace").is_none());
+        assert_eq!(config["control_database"], "harness_e2e");
     }
 }
