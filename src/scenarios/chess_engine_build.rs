@@ -16,7 +16,7 @@ use shakmaty::{CastlingMode, Chess, EnPassantMode};
 use tokio::process::Command;
 
 use crate::context::E2eContext;
-use crate::report::{CompletionState, EvaluationDimension};
+use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
@@ -90,7 +90,7 @@ const CONSOLE_DELIVERY: AssessmentSpec = AssessmentSpec::scored_in(
     "The Worker registers loadable script and style assets; the Console manifest reports fresh hashes, no warnings, and an enabled worker.",
     EvaluationDimension::Deliverable,
 );
-const PLAYABLE_UI: AssessmentSpec = AssessmentSpec::scored_in(
+const PLAYABLE_UI: AssessmentSpec = AssessmentSpec::gate_in(
     "playable_ui",
     10,
     "The real iii Console renders the Worker's 64-square page and plays e2-e4 and e7-e5 through Worker functions to both oracle FENs.",
@@ -273,7 +273,7 @@ manifest, then drive the page at `#/worker/{worker}/chess` after you finish."#,
             .find(|item| item.id == EVIDENCE_ID)
             .and_then(|item| item.content.as_json())
             .context("chess Worker evidence deliverable is missing")?;
-        Ok(evaluate_evidence(evidence, observation.metrics.complete))
+        Ok(evaluate_evidence(evidence))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -835,21 +835,14 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     Ok(json!({"identity":identity,"checks":checks,"files":files}))
 }
 
-fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
-    assessment::build_evaluation(
-        if complete {
-            CompletionState::Completed
+fn evaluate_evidence(evidence: &Value) -> ObjectiveEvaluation {
+    assessment::build_evaluation(ASSESSMENTS.iter().copied().map(|spec| {
+        if evidence["checks"][spec.id()]["status"] == "blocked" {
+            spec.unverified(reason(evidence, spec.id()))
         } else {
-            CompletionState::TaskIncomplete
-        },
-        ASSESSMENTS.iter().copied().map(|spec| {
-            if evidence["checks"][spec.id()]["status"] == "blocked" {
-                spec.unverified(reason(evidence, spec.id()))
-            } else {
-                spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
-            }
-        }),
-    )
+            spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
+        }
+    }))
 }
 
 fn result_value(result: Result<Value>) -> Value {
@@ -1479,8 +1472,8 @@ mod tests {
                 )
             })
             .collect::<serde_json::Map<_, _>>();
-        let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
-        assert_eq!(evaluation.completion, CompletionState::Completed);
+        let evaluation = evaluate_evidence(&json!({"checks":checks}));
+        assert_eq!(evaluation.completion, None);
         assert_eq!(
             evaluation
                 .awards

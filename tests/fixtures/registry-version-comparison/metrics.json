@@ -5,6 +5,17 @@
       "title": "Planning",
       "metrics": [
         {
+          "id": "planning.plan_delivered",
+          "question": "Is the plan delivered as a readable Markdown document at the expected path?",
+          "expected": "/workspace/output/plan.md exists, is UTF-8 text, and has at least one Markdown heading followed by content. This is the completion gate; its 5 points come from merging the schema required-order and enum-order metrics into planning.schema_sets.",
+          "measurement": "binary",
+          "evidence": [
+            "Plan lines matched by the deterministic plan check."
+          ],
+          "weight": 5,
+          "gate": true
+        },
+        {
           "id": "planning.endpoint",
           "question": "Does the plan specify the comparison route?",
           "expected": "The planned route is GET /w/:slug/compare/:from...:to.",
@@ -105,19 +116,9 @@
           "weight": 5
         },
         {
-          "id": "planning.required_order",
-          "question": "Does the plan treat schema required arrays as sets?",
-          "expected": "Reordering a schema required array does not produce a difference.",
-          "measurement": "binary",
-          "evidence": [
-            "Plan lines matched by the deterministic plan check."
-          ],
-          "weight": 5
-        },
-        {
-          "id": "planning.enum_order",
-          "question": "Does the plan treat schema enum arrays as sets?",
-          "expected": "Reordering a schema enum array does not produce a difference.",
+          "id": "planning.schema_sets",
+          "question": "Does the plan treat schema required and enum arrays as sets?",
+          "expected": "Reordering a schema required or enum array does not produce a difference. The requirements state both in one rule, so this metric replaces planning.required_order and planning.enum_order.",
           "measurement": "binary",
           "evidence": [
             "Plan lines matched by the deterministic plan check."
@@ -218,7 +219,8 @@
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
           ],
-          "weight": 4
+          "weight": 4,
+          "gate": true
         },
         {
           "id": "implementation.function_removal",
@@ -228,7 +230,8 @@
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
           ],
-          "weight": 4
+          "weight": 4,
+          "gate": true
         },
         {
           "id": "implementation.required_impact",
@@ -474,7 +477,8 @@
           "evidence": [
             "Independent clean-executor record for this check."
           ],
-          "weight": 8
+          "weight": 8,
+          "gate": true
         },
         {
           "id": "environment.migration",
@@ -504,7 +508,8 @@
           "evidence": [
             "Independent clean-executor record for this check."
           ],
-          "weight": 8
+          "weight": 8,
+          "gate": true
         },
         {
           "id": "environment.frontend_reachability",
@@ -618,6 +623,8 @@
           "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1 when the tester delivered a readable report, 0 when it did not.",
           "measurement": "ratio",
           "weight": 35,
+          "gate": true,
+          "gate_minimum": 1,
           "numerator": "Required check IDs reported as failing and independently reproduced.",
           "denominator": "Required check IDs independently observed to fail.",
           "evidence": [

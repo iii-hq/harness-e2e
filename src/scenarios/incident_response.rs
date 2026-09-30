@@ -144,7 +144,8 @@ const SAFE_TERMINAL_ACTION: CriterionSpec = CriterionSpec::scored(
     25,
     "Exactly one terminal action occurs: promote the exact validated candidate or restore the exact known-good revision.",
     EvaluationDimension::StructuralIntegrity,
-);
+)
+.with_gate(true);
 const FINAL_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "final_reconciliation",
     15,

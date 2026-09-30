@@ -40,7 +40,7 @@ const DATABASE_WRITES: [&str; 3] = [
     "database::transaction",
 ];
 
-const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::scored_in(
+const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::gate_in(
     "balanced_ledger",
     35,
     "The accumulator reads exactly 15 and the audit holds exactly the fifteen per-writer sequence rows.",
@@ -306,52 +306,45 @@ impl Scenario for ContentionLedger {
             discovery_errors,
         );
 
-        Ok(assessment::build_evaluation(
-            if report_verified {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                BALANCED_LEDGER.full_or_zero(
-                    balanced,
-                    format!(
-                        "accumulator_rows={}, accumulator={}, audit_rows={}, \
-                     sequences_exact={sequences_exact}",
-                        snapshot.accumulator_rows,
-                        snapshot.accumulator,
-                        snapshot.audit_rows(),
-                    ),
+        Ok(assessment::build_evaluation([
+            BALANCED_LEDGER.full_or_zero(
+                balanced,
+                format!(
+                    "accumulator_rows={}, accumulator={}, audit_rows={}, \
+                 sequences_exact={sequences_exact}",
+                    snapshot.accumulator_rows,
+                    snapshot.accumulator,
+                    snapshot.audit_rows(),
                 ),
-                CONTENDED_WRITES.full_or_zero(
-                    contended,
-                    format!(
-                        "children_in_tree={}/{WRITERS}, contended_children={}, \
-                     no_extra_sessions={}, root_clean={root_clean}",
-                        audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
-                    ),
+            ),
+            CONTENDED_WRITES.full_or_zero(
+                contended,
+                format!(
+                    "children_in_tree={}/{WRITERS}, contended_children={}, \
+                 no_extra_sessions={}, root_clean={root_clean}",
+                    audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
                 ),
-                QUORUM_FREE_FAN_IN.full_or_zero(
-                    fan_in,
-                    format!(
-                        "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
-                     single_response_spawns={single_response_spawns}, completion_records={}, \
-                     barrier_woke={barrier_woke}",
-                        registrations.len(),
-                        spawns.len(),
-                        completion_records.len(),
-                    ),
+            ),
+            QUORUM_FREE_FAN_IN.full_or_zero(
+                fan_in,
+                format!(
+                    "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
+                 single_response_spawns={single_response_spawns}, completion_records={}, \
+                 barrier_woke={barrier_woke}",
+                    registrations.len(),
+                    spawns.len(),
+                    completion_records.len(),
                 ),
-                VERIFIED_REPORT.full_or_zero(
-                    report_verified && operational_errors == 0,
-                    format!(
-                        "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
-                        observation.response.chars().count(),
-                        observation.metrics.totals.function_call_errors,
-                    ),
+            ),
+            VERIFIED_REPORT.full_or_zero(
+                report_verified && operational_errors == 0,
+                format!(
+                    "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                    observation.response.chars().count(),
+                    observation.metrics.totals.function_call_errors,
                 ),
-            ],
-        ))
+            ),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

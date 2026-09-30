@@ -37,7 +37,7 @@ struct Rung {
 pub const CANONICAL_SEED: u64 = 4003;
 const RUNG: Rung = Rung { depth: 6 };
 
-const RELAY_DELIVERED: AssessmentSpec = AssessmentSpec::scored_in(
+const RELAY_DELIVERED: AssessmentSpec = AssessmentSpec::gate_in(
     "relay_delivered",
     35,
     "Every relay level row is exact in state and the woken report carries the completion marker \
@@ -358,50 +358,43 @@ async fn evaluate_rung(
     let no_errors = observation.metrics.totals.function_call_errors == 0;
     let compact = dispatch_report_compact(&observation.response);
 
-    Ok(assessment::build_evaluation(
-        if report_complete {
-            crate::report::CompletionState::Completed
-        } else {
-            crate::report::CompletionState::TaskIncomplete
-        },
-        [
-            RELAY_DELIVERED.full_or_zero(
-                audit.rows_exact && report_complete,
-                format!(
-                    "exact_rows={}/{depth}, report_complete={report_complete}",
-                    audit.exact_rows
-                ),
+    Ok(assessment::build_evaluation([
+        RELAY_DELIVERED.full_or_zero(
+            audit.rows_exact && report_complete,
+            format!(
+                "exact_rows={}/{depth}, report_complete={report_complete}",
+                audit.exact_rows
             ),
-            DEPTH_PROVENANCE.full_or_zero(
-                audit.chain_provenance,
-                format!(
-                    "lane_chained={}, single_writes={}, spawn_counts={}, lane_discipline={}",
-                    audit.lane_chained,
-                    audit.single_writes,
-                    audit.spawn_counts_ok,
-                    audit.lane_discipline
-                ),
+        ),
+        DEPTH_PROVENANCE.full_or_zero(
+            audit.chain_provenance,
+            format!(
+                "lane_chained={}, single_writes={}, spawn_counts={}, lane_discipline={}",
+                audit.lane_chained,
+                audit.single_writes,
+                audit.spawn_counts_ok,
+                audit.lane_discipline
             ),
-            SINGLE_LANE.full_or_zero(
-                sessions_expected && spawns.len() == 1 && wake_before_spawn && no_errors,
-                format!(
-                    "total_sessions={} (expected {}), root_spawns={}, \
+        ),
+        SINGLE_LANE.full_or_zero(
+            sessions_expected && spawns.len() == 1 && wake_before_spawn && no_errors,
+            format!(
+                "total_sessions={} (expected {}), root_spawns={}, \
                  wake_before_spawn={wake_before_spawn}, function_errors={}",
-                    observation.metrics.totals.sessions,
-                    u64::from(depth) + 1,
-                    spawns.len(),
-                    observation.metrics.totals.function_call_errors
-                ),
+                observation.metrics.totals.sessions,
+                u64::from(depth) + 1,
+                spawns.len(),
+                observation.metrics.totals.function_call_errors
             ),
-            DISPATCH_REPORT.full_or_zero(
-                compact,
-                format!(
-                    "response_chars={} (limit {MAX_REPORT_CHARS})",
-                    observation.response.chars().count()
-                ),
+        ),
+        DISPATCH_REPORT.full_or_zero(
+            compact,
+            format!(
+                "response_chars={} (limit {MAX_REPORT_CHARS})",
+                observation.response.chars().count()
             ),
-        ],
-    ))
+        ),
+    ]))
 }
 
 struct RelayAudit {

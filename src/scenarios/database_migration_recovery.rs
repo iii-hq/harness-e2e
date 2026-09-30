@@ -9,7 +9,6 @@ use anyhow::bail;
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
-use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
@@ -48,15 +47,15 @@ const TARGET_ROWS: [(i64, &str, i64, &str, i64); 5] = [
 ];
 const QUARANTINED_LEGACY_ID: i64 = 103;
 
-const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::scored(
+const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::gate(
     "exact_migration_result",
     40,
     "Five target rows with exact cents, one quarantine row for legacy id 103, and six compatibility rows with only 103 quarantined.",
 );
-const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::scored(
+const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::gate(
     "idempotent_replay",
     20,
-    "The journal shows one complete order-money-v2 entry with replay_count=2, no duplicates, and exactly two successful database::transaction calls.",
+    "The journal shows one complete order-money-v2 entry with replay_count=2 and no duplicates, and the target and quarantine rows are exact.",
 );
 const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
     "source_and_sentinel_preserved",
@@ -382,7 +381,7 @@ impl Scenario for DatabaseMigrationRecovery {
         let reported = reply == EXPECTED_REPORT;
 
         let exact_migration = target_ok && quarantine_ok && compat_ok;
-        let idempotent = journal_ok && successful_transactions == 2 && target_ok && quarantine_ok;
+        let idempotent = journal_ok && target_ok && quarantine_ok;
         let preserved = source_preserved(legacy_ok, sentinel_ok, successful_transactions);
         let disciplined = !writes.is_empty()
             && non_transaction_writes == 0
@@ -392,11 +391,6 @@ impl Scenario for DatabaseMigrationRecovery {
             && reported;
 
         Ok(assessment::build_evaluation(
-            if journal_ok {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
             [
                 EXACT_MIGRATION_RESULT.full_or_zero(
                     exact_migration,

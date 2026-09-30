@@ -37,6 +37,24 @@ observations already recorded.
 Every score and every audit flag is deterministic. No scenario calls a second
 model to judge the first.
 
+## Completion
+
+Completed means the subject met the task's purpose. Every scenario marks the
+criteria that are that purpose, usually one or two, as gates. Exactness,
+discipline, efficiency, and polish never gate: they only move the score, so two
+runs can both complete and still differ in points.
+
+- Every gate passed: completed, whatever the other criteria scored. A gate
+  passes at full points, or at its `gate_minimum` when fewer points already
+  meet the purpose (a proportional check).
+- A gate that did not pass: incomplete.
+- A gate nobody evaluated: incomplete when another criterion already fell
+  short, undetermined otherwise.
+
+A scenario overrides this only when a prerequisite decides before any gate,
+such as an application that never built. The gates are part of the behavior
+digest, so changing one redefines the scenario.
+
 ## Requirements
 
 `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog` prepare their

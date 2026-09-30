@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::context::E2eContext;
+use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
@@ -53,14 +54,21 @@ const GROUNDED_ANALYSIS: AssessmentSpec = AssessmentSpec::scored(
 );
 const BARRIER_SYNTHESIS: AssessmentSpec = AssessmentSpec::scored(
     "barrier_synthesis",
-    20,
-    "The named barrier retires after both outputs and the coordinator returns a traceable merged brief with no binding left armed.",
+    10,
+    "Does the named barrier retire after both outputs, with no binding left armed and no function-call errors?",
+);
+const GROUNDED_BRIEF: AssessmentSpec = AssessmentSpec::gate_in(
+    "grounded_brief",
+    10,
+    "Does the coordinator's final brief carry every claim id, source id, and digest plus the resolved conflict from the analysts' artifacts?",
+    EvaluationDimension::Deliverable,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CORPUS_DISCOVERY,
     PARALLEL_ANALYSIS,
     GROUNDED_ANALYSIS,
     BARRIER_SYNTHESIS,
+    GROUNDED_BRIEF,
 ];
 
 #[derive(Debug, Clone)]
@@ -484,13 +492,7 @@ impl Scenario for ResearchPipeline {
         let active_bindings = common::active_binding_count(context, &names.root_session).await?;
         let report_grounded = response_grounded(&observation.response, &evidence, &conflicts);
 
-        Ok(assessment::build_evaluation(
-            if report_grounded {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
+        Ok(assessment::build_evaluation([
             CORPUS_DISCOVERY.full_or_zero(
                 discovery_complete,
                 format!(
@@ -515,16 +517,19 @@ impl Scenario for ResearchPipeline {
             ),
             BARRIER_SYNTHESIS.full_or_zero(
                 barrier_retired
-                    && report_grounded
                     && active_bindings == 0
                     && observation.metrics.totals.function_call_errors == 0,
                 format!(
-                    "barrier_retired={barrier_retired}, report_grounded={report_grounded}, active_bindings={active_bindings}, function_errors={}",
+                    "barrier_retired={barrier_retired}, active_bindings={active_bindings}, function_errors={}",
                     observation.metrics.totals.function_call_errors
                 ),
             ),
-            ],
-        ))
+            GROUNDED_BRIEF.full_or_zero(
+                report_grounded,
+                "brief must carry every claim id, source id, and source digest, the conflict topic \
+                 and both source ids, and state that the superseded guidance does not authorize a retry",
+            ),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

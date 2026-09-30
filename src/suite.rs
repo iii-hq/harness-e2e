@@ -1810,7 +1810,7 @@ async fn run_adaptive_once(
                                 }
                                 match outcome {
                                     Ok(ResumableWorkflowOutcome::Completed(workflow)) => {
-                                        populate_composite_report(&mut report, *workflow)
+                                        populate_composite_report(&mut report, *workflow, &spec)
                                     }
                                     Ok(ResumableWorkflowOutcome::ExplicitlyCancelled) => {
                                         report.push_failure(
@@ -2107,7 +2107,7 @@ async fn run_composite_once(
                         }
                     }
                     match outcome {
-                        Ok(workflow) => populate_composite_report(&mut report, workflow),
+                        Ok(workflow) => populate_composite_report(&mut report, workflow, &spec),
                         Err(error) => report.push_failure(
                             RunStatus::InfrastructureError,
                             FailurePhase::Execute,
@@ -2157,6 +2157,7 @@ async fn run_composite_once(
 fn populate_composite_report(
     report: &mut E2eRunReport,
     workflow: crate::workflow::WorkflowAttemptReport,
+    spec: &ScenarioSpec,
 ) {
     report.session_id = workflow
         .steps
@@ -2167,17 +2168,24 @@ fn populate_composite_report(
     report.criteria = workflow
         .criteria
         .iter()
-        .map(|criterion| CriterionReport {
-            id: criterion.id.clone(),
-            description: None,
-            possible: criterion.weight,
-            awarded: criterion.score.and_then(|score| {
-                score
-                    .is_finite()
-                    .then(|| (score.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8)
-            }),
-            reason: criterion.summary.clone(),
-            gate: false,
+        .map(|criterion| {
+            let declared = spec
+                .criteria
+                .iter()
+                .find(|declared| declared.id == criterion.id.as_str());
+            CriterionReport {
+                id: criterion.id.clone(),
+                description: declared.map(|criterion| criterion.description.to_owned()),
+                possible: criterion.weight,
+                awarded: criterion.score.and_then(|score| {
+                    score.is_finite().then(|| {
+                        (score.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8
+                    })
+                }),
+                reason: criterion.summary.clone(),
+                gate: declared.map(|criterion| criterion.gate).unwrap_or(false),
+                gate_minimum: declared.and_then(|criterion| criterion.gate_minimum),
+            }
         })
         .collect();
     report.score = crate::report::criteria_score(&report.criteria);
@@ -2232,6 +2240,10 @@ fn populate_composite_report(
     });
     report.semantic_tests = workflow.steps;
     if report.failures.is_empty() {
+        report.set_completion(
+            crate::report::gate_completion(&report.criteria),
+            crate::report::EvaluatorAvailability::Available,
+        );
         report.finish(RunStatus::Passed);
     }
 }
@@ -2605,11 +2617,13 @@ fn apply_objective_evaluation(
             error.to_string(),
         )
     })?;
+    report.criteria = criterion_reports(spec, objective.awards);
     report.set_completion(
-        objective.completion,
+        objective
+            .completion
+            .unwrap_or_else(|| crate::report::gate_completion(&report.criteria)),
         crate::report::EvaluatorAvailability::Available,
     );
-    report.criteria = criterion_reports(spec, objective.awards);
     report.assessment_results = materialize_assessment_results(spec, &report.criteria);
     update_score(report);
     if let Some(error) = objective.infrastructure_error {
@@ -3271,6 +3285,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
                     .map(|(_, reason)| reason)
                     .unwrap_or_else(|| "not evaluated".into()),
                 gate: criterion.gate,
+                gate_minimum: criterion.gate_minimum,
             }
         })
         .collect()
@@ -3418,7 +3433,7 @@ mod tests {
             assert!(!observation.metrics.complete);
             assert_eq!(observation.deliverables.len(), 1);
             Ok(ObjectiveEvaluation {
-                completion: crate::report::CompletionState::TaskIncomplete,
+                completion: Some(crate::report::CompletionState::TaskIncomplete),
                 awards: vec![
                     CriterionAward {
                         id: "delivered".into(),
@@ -4357,6 +4372,7 @@ mod tests {
                 awarded: Some(35),
                 reason: "required behavior was incomplete".into(),
                 gate: false,
+                gate_minimum: None,
             },
             CriterionReport {
                 id: "signal".into(),
@@ -4365,6 +4381,7 @@ mod tests {
                 awarded: Some(12),
                 reason: "partial efficiency evidence".into(),
                 gate: false,
+                gate_minimum: None,
             },
         ];
         let results = materialize_assessment_results(&spec, &criteria);
@@ -4419,7 +4436,7 @@ mod tests {
             &spec,
             &mut report,
             ObjectiveEvaluation {
-                completion: CompletionState::TaskIncomplete,
+                completion: Some(CompletionState::TaskIncomplete),
                 awards: vec![
                     CriterionAward {
                         id: "required".into(),
@@ -4485,7 +4502,7 @@ mod tests {
             &spec,
             &mut report,
             ObjectiveEvaluation {
-                completion: CompletionState::TaskIncomplete,
+                completion: Some(CompletionState::TaskIncomplete),
                 awards: vec![
                     CriterionAward {
                         id: "required".into(),
@@ -4544,7 +4561,7 @@ mod tests {
             &spec,
             &mut report,
             ObjectiveEvaluation {
-                completion: CompletionState::Undetermined,
+                completion: Some(CompletionState::Undetermined),
                 awards: vec![
                     CriterionAward {
                         id: "required".into(),
@@ -4632,7 +4649,7 @@ mod tests {
         assert!(validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Completed,
+                completion: Some(crate::report::CompletionState::Completed),
                 infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "objective".into(),
@@ -4645,7 +4662,7 @@ mod tests {
         assert!(validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Completed,
+                completion: Some(crate::report::CompletionState::Completed),
                 infrastructure_error: None,
                 awards: Vec::new(),
             }
@@ -4654,7 +4671,7 @@ mod tests {
         let error = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Completed,
+                completion: Some(crate::report::CompletionState::Completed),
                 infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "objective".into(),
@@ -4702,7 +4719,7 @@ mod tests {
         let unknown = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Completed,
+                completion: Some(crate::report::CompletionState::Completed),
                 infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "unknown".into(),
@@ -4720,7 +4737,7 @@ mod tests {
         let duplicate = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Completed,
+                completion: Some(crate::report::CompletionState::Completed),
                 infrastructure_error: None,
                 awards: vec![
                     CriterionAward {

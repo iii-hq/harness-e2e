@@ -780,6 +780,7 @@ pub(crate) mod tests {
                 awarded: Some(90),
                 reason: "matches".into(),
                 gate: false,
+                gate_minimum: None,
             },
             crate::report::CriterionReport {
                 id: "runtime_contract".into(),
@@ -788,6 +789,7 @@ pub(crate) mod tests {
                 awarded: Some(0),
                 reason: "function_surface=false".into(),
                 gate: false,
+                gate_minimum: None,
             },
         ];
         let run_dir = root.path().join("history-sessions");

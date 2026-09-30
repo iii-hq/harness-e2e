@@ -43,7 +43,7 @@ const CROSS_SITE_NAVIGATION: AssessmentSpec = AssessmentSpec::scored(
     25,
     "The browser visits support, the current knowledge-base policy, and order admin through their distinct origins.",
 );
-const CURRENT_POLICY_APPLIED: AssessmentSpec = AssessmentSpec::scored(
+const CURRENT_POLICY_APPLIED: AssessmentSpec = AssessmentSpec::gate(
     "current_policy_applied",
     25,
     "The current policy, rather than the superseded policy linked by the ticket, determines the order action.",
@@ -875,11 +875,6 @@ before replying, and include the genuine receipt in the final response."#,
             && audit.other_calls == 0
             && observation.metrics.totals.function_call_errors == 0;
         Ok(assessment::build_evaluation(
-            if oracle.current_policy_opened {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
             [
             CROSS_SITE_NAVIGATION.full_or_zero(
                 oracle.visited_origins,

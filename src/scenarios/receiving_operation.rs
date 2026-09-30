@@ -37,10 +37,15 @@ const COURIER_FUNCTIONS: [&str; 6] = [
     "engine::functions::info",
     "engine::functions::list",
 ];
-const COURIER_WORKLOAD: AssessmentSpec = AssessmentSpec::scored(
+const COURIER_WORKLOAD: AssessmentSpec = AssessmentSpec::gate(
     "courier_workload",
-    30,
-    "Three least-privilege couriers produce the exact shipments, corrections, and completion rows.",
+    15,
+    "Do the result relations hold the exact shipments with corrections, every courier marked done, and exactly one completion row?",
+);
+const COURIER_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
+    "courier_discipline",
+    15,
+    "Are exactly three minimal-privilege couriers the only child sessions, each doing its own ordered writes through the database alone?",
 );
 const LIVE_LEDGER: AssessmentSpec = AssessmentSpec::scored(
     "live_ledger",
@@ -59,6 +64,7 @@ const VERIFICATION_CLEANUP: AssessmentSpec = AssessmentSpec::scored(
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     COURIER_WORKLOAD,
+    COURIER_DISCIPLINE,
     LIVE_LEDGER,
     DATABASE_FAN_IN,
     VERIFICATION_CLEANUP,
@@ -407,11 +413,9 @@ impl Scenario for ReceivingOperation {
             .count();
         let response_has_evidence = valid_final_response(&observation.response);
 
-        let workload_passed = required_relations
-            && shipments_match
-            && couriers_done
-            && completion_rows == 1
-            && spawn_policy_ok
+        let workload_passed =
+            required_relations && shipments_match && couriers_done && completion_rows == 1;
+        let discipline_passed = spawn_policy_ok
             && courier_execution_ok.completed
             && no_extra_sessions
             && no_shared_medium_violation;
@@ -426,49 +430,47 @@ impl Scenario for ReceivingOperation {
         let cleanup_passed =
             response_has_evidence && active_bindings == 0 && standing_sql_triggers == 0;
 
-        Ok(assessment::build_evaluation(
-            if response_has_evidence {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                COURIER_WORKLOAD.full_or_zero(
-                    workload_passed,
-                    format!(
-                        "relations={required_relations}, shipments={shipments_match}, \
-                         couriers_done={couriers_done}, completion_rows={completion_rows}, \
-                         minimal_spawns={spawn_policy_ok}, courier_execution={}, \
-                         sessions={}, shared_medium={no_shared_medium_violation}",
-                        courier_execution_ok.completed,
-                        observation.metrics.by_session.len(),
-                    ),
+        Ok(assessment::build_evaluation([
+            COURIER_WORKLOAD.full_or_zero(
+                workload_passed,
+                format!(
+                    "relations={required_relations}, shipments={shipments_match}, \
+                         couriers_done={couriers_done}, completion_rows={completion_rows}"
                 ),
-                LIVE_LEDGER.full_or_zero(
-                    ledger_passed,
-                    format!(
+            ),
+            COURIER_DISCIPLINE.full_or_zero(
+                discipline_passed,
+                format!(
+                    "minimal_spawns={spawn_policy_ok}, courier_execution={}, \
+                         sessions={}, shared_medium={no_shared_medium_violation}",
+                    courier_execution_ok.completed,
+                    observation.metrics.by_session.len(),
+                ),
+            ),
+            LIVE_LEDGER.full_or_zero(
+                ledger_passed,
+                format!(
                     "live_strategy={live_strategy}, no_late_root_repair={no_late_root_repair}, \
                         expected={ledger_matches_expected}, source={ledger_matches_source}"
                 ),
-                ),
-                DATABASE_FAN_IN.full_or_zero(
-                    fan_in_passed,
-                    format!(
-                        "watch_before_spawn={completion_watch_before_spawn}, \
+            ),
+            DATABASE_FAN_IN.full_or_zero(
+                fan_in_passed,
+                format!(
+                    "watch_before_spawn={completion_watch_before_spawn}, \
                          wake_records={wake_records}, notifications={}, no_polling={no_polling}, \
                          root_did_not_signal={root_did_not_signal_completion}",
-                        notifications.len(),
-                    ),
+                    notifications.len(),
                 ),
-                VERIFICATION_CLEANUP.full_or_zero(
-                    cleanup_passed,
-                    format!(
-                        "response_evidence={response_has_evidence}, \
+            ),
+            VERIFICATION_CLEANUP.full_or_zero(
+                cleanup_passed,
+                format!(
+                    "response_evidence={response_has_evidence}, \
                         active_bindings={active_bindings}, sql_triggers={standing_sql_triggers}"
-                    ),
                 ),
-            ],
-        ))
+            ),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

@@ -63,13 +63,15 @@ const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     10,
     "The checkout is the pinned bundle revision or a descendant of it.",
 );
-const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
+const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
     "match_equivalent",
     70,
     "Each live call to route::match returns the frozen receivers and group-by labels.",
     EvaluationDimension::Deliverable,
-);
-const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
+)
+// Four in five oracle cases (56 of 70 points) already delegate route matching.
+.at_least(56);
+const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,
     "Upstream TestRouteMatch passes through route::match and fails without the engine.",
@@ -136,18 +138,6 @@ impl Snapshot {
         self.function_registered
             && !self.match_cases.is_empty()
             && self.match_cases.iter().all(|(_, passed, _)| *passed)
-    }
-
-    /// The task is done once `route::match` answers with a match payload and
-    /// the Go router calls it. Exact agreement with the oracle stays in the
-    /// score.
-    fn task_completed(&self) -> bool {
-        self.delegation_wired
-            && self.function_registered
-            && self
-                .match_cases
-                .iter()
-                .any(|(_, passed, reason)| call_answered(*passed, reason))
     }
 
     fn match_awarded(&self) -> u8 {
@@ -329,21 +319,12 @@ and process started from this workspace."#,
         run_id: &str,
     ) -> Result<ObjectiveEvaluation> {
         let snapshot = collect_snapshot(context, &workspace_root(run_id)).await?;
-        Ok(assessment::build_evaluation(
-            if snapshot.task_completed() {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                REVISION_PINNED
-                    .full_or_zero(snapshot.revision_pinned(), revision_reason(&snapshot)),
-                MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(&snapshot))?,
-                DELEGATION_WIRED
-                    .full_or_zero(snapshot.delegation_wired, delegation_reason(&snapshot)),
-                SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(&snapshot)),
-            ],
-        ))
+        Ok(assessment::build_evaluation([
+            REVISION_PINNED.full_or_zero(snapshot.revision_pinned(), revision_reason(&snapshot)),
+            MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(&snapshot))?,
+            DELEGATION_WIRED.full_or_zero(snapshot.delegation_wired, delegation_reason(&snapshot)),
+            SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(&snapshot)),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -736,10 +717,6 @@ fn revision_reason(snapshot: &Snapshot) -> String {
             snapshot.head
         )
     }
-}
-
-fn call_answered(passed: bool, reason: &str) -> bool {
-    passed || reason.starts_with("receivers ")
 }
 
 fn match_reason(snapshot: &Snapshot) -> String {
@@ -1227,7 +1204,6 @@ mod tests {
             "receivers [\"team-X-pager\"]".into(),
         ));
         assert!(!snapshot.match_equivalent());
-        assert!(snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), 35);
         assert!(match_reason(&snapshot).contains("1 of 2 live calls"));
         snapshot.match_cases = vec![(
@@ -1235,17 +1211,12 @@ mod tests {
             false,
             "receivers [\"team-X-pager\"]".into(),
         )];
-        assert!(snapshot.task_completed());
-        snapshot.delegation_wired = false;
-        assert!(!snapshot.task_completed());
-        snapshot.delegation_wired = true;
         assert_eq!(snapshot.match_awarded(), 0);
         snapshot.match_cases = vec![(
             "route_test_owner-team-A".into(),
             false,
             "trigger failed".into(),
         )];
-        assert!(!snapshot.task_completed());
         snapshot.function_registered = false;
         assert_eq!(snapshot.match_awarded(), 0);
         assert!(match_reason(&snapshot).contains("not registered"));
@@ -1324,11 +1295,6 @@ mod tests {
             .expect("evaluate");
         let _ = remove_directory(&root);
         context.shutdown().await;
-        assert!(
-            snapshot.task_completed(),
-            "task incomplete: {}",
-            match_reason(&snapshot)
-        );
         assert_eq!(
             snapshot.match_awarded(),
             MATCH_EQUIVALENT.weight(),
@@ -1342,10 +1308,7 @@ mod tests {
             "{}",
             delegation_reason(&snapshot)
         );
-        assert_eq!(
-            evaluation.completion,
-            crate::report::CompletionState::Completed
-        );
+        assert_eq!(evaluation.completion, None);
         let match_award = evaluation
             .awards
             .iter()

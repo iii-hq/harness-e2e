@@ -13,7 +13,7 @@ use tokio::process::Command;
 
 use super::*;
 use crate::context::E2eContext;
-use crate::report::{CompletionState, EvaluationDimension};
+use crate::report::EvaluationDimension;
 
 pub const PLANNING_ID: &str = "registry_planning";
 pub const IMPLEMENTATION_ID: &str = "registry_implementation";
@@ -271,7 +271,13 @@ fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
         filesystem_root: None,
         execution: ExecutionPolicy { max_turns: Some(128), max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
         denied_functions: &[],
-        criteria: metrics(N).iter().map(|m| CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable)).collect(),
+        criteria: metrics(N).iter().map(|m| {
+            let criterion = CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable).with_gate(m["gate"] == true);
+            match m["gate_minimum"].as_u64() {
+                Some(points) => criterion.with_gate_minimum(points as u8),
+                None => criterion,
+            }
+        }).collect(),
     }
 }
 
@@ -404,12 +410,16 @@ async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
 
 fn check_plan(run_id: &str) -> Result<Value> {
     let plan_path = root(1, run_id).join("workspace/output/plan.md");
+    let undelivered = |reason: &str| json!({"observations":metrics(1).iter().map(|m| json!({"id":m["id"],"status":"measured","value":0,"reason":reason})).collect::<Vec<_>>()});
     if !plan_path.is_file() {
-        return Ok(
-            json!({"observations":metrics(1).iter().map(|m| json!({"id":m["id"],"status":"measured","value":0,"reason":"No plan.md was delivered"})).collect::<Vec<_>>()}),
-        );
+        return Ok(undelivered("No plan.md was delivered"));
     }
-    let plan = std::fs::read_to_string(&plan_path)?;
+    let plan = match std::fs::read_to_string(&plan_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            return Ok(undelivered("plan.md is not UTF-8 text"))
+        }
+        read => read?,
+    };
     let observations = super::registry_plan::observations(&plan, metrics(1));
     std::fs::write(
         root(1, run_id).join("validation/plan-checks.json"),
@@ -752,13 +762,7 @@ async fn evaluate<const N: u8>(
     let validation =
         json!({"observations": evidence["observations"], "error": evidence["validation_error"]});
     Ok(ObjectiveEvaluation {
-        completion: if observation.metrics.complete
-            && evidence["delivery"]["runtime_ready"] != false
-        {
-            CompletionState::Completed
-        } else {
-            CompletionState::TaskIncomplete
-        },
+        completion: None,
         awards: awards(N, &validation)?,
         infrastructure_error: None,
     })
@@ -839,10 +843,38 @@ mod tests {
 
     #[test]
     fn all_registry_criteria_are_atomic_and_use_catalog_weights() {
+        let gates: [&[&str]; 4] = [
+            &["planning.plan_delivered"],
+            &[
+                "implementation.same_version",
+                "implementation.function_removal",
+            ],
+            &["environment.build", "environment.api_readiness"],
+            &["verification.recall"],
+        ];
+        // Finding one real failure is the verification's purpose.
+        assert_eq!(
+            Registry(4)
+                .spec("test")
+                .criteria
+                .iter()
+                .find(|c| c.id == "verification.recall")
+                .and_then(|c| c.gate_minimum),
+            Some(1)
+        );
         for n in 1..=4 {
             let scenario = Registry(n).spec("test");
             scenario.validate().unwrap();
             assert_eq!(scenario.criteria.len(), metrics(n).len());
+            assert_eq!(
+                scenario
+                    .criteria
+                    .iter()
+                    .filter(|c| c.gate)
+                    .map(|c| c.id)
+                    .collect::<Vec<_>>(),
+                gates[usize::from(n - 1)]
+            );
             assert!(scenario
                 .criteria
                 .iter()

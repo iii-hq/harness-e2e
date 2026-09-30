@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use crate::context::E2eContext;
-use crate::report::{CompletionState, EvaluationDimension};
+use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
@@ -37,7 +37,7 @@ const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "The run-scoped Worker is ready and exposes its described domain, Canvas, and UI functions.",
     EvaluationDimension::Deliverable,
 );
-const DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
+const DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::gate(
     "domain_primary",
     20,
     "The primary deterministic domain path matches the independent Harness oracle.",
@@ -62,7 +62,7 @@ const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     10,
     "The live editor updates the same Canvas id to the expected Mermaid projection.",
 );
-const CONSOLE: AssessmentSpec = AssessmentSpec::scored_in(
+const CONSOLE: AssessmentSpec = AssessmentSpec::gate_in(
     "console_delivery",
     10,
     "The Console reports fresh, warning-free script and style assets for the Worker.",
@@ -209,7 +209,7 @@ macro_rules! scenario_impl {
                     .find(|item| item.id == evidence_id($kind))
                     .and_then(|item| item.content.as_json())
                     .context("visual Worker evidence deliverable is missing")?;
-                Ok(evaluate_evidence(evidence, observation.metrics.complete))
+                Ok(evaluate_evidence(evidence))
             }
 
             async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -1269,21 +1269,14 @@ async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value> {
     )
 }
 
-fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
-    assessment::build_evaluation(
-        if complete {
-            CompletionState::Completed
+fn evaluate_evidence(evidence: &Value) -> ObjectiveEvaluation {
+    assessment::build_evaluation(ASSESSMENTS.iter().copied().map(|spec| {
+        if evidence["checks"][spec.id()]["status"] == "blocked" {
+            spec.unverified(reason(evidence, spec.id()))
         } else {
-            CompletionState::TaskIncomplete
-        },
-        ASSESSMENTS.iter().copied().map(|spec| {
-            if evidence["checks"][spec.id()]["status"] == "blocked" {
-                spec.unverified(reason(evidence, spec.id()))
-            } else {
-                spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
-            }
-        }),
-    )
+            spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
+        }
+    }))
 }
 
 async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
@@ -1600,7 +1593,8 @@ mod tests {
             let blocked=matches!(spec.id(),"canvas_update"|"browser_interaction"|"evidence_complete");
             (spec.id().to_string(),json!({"passed":!blocked,"status":if blocked{"blocked"}else{"evaluated"},"reason":"probe"}))
         }).collect::<serde_json::Map<_,_>>();
-        let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
+        let evaluation = evaluate_evidence(&json!({"checks":checks}));
+        assert_eq!(evaluation.completion, None);
         assert_eq!(
             evaluation
                 .awards

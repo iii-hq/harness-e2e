@@ -731,13 +731,13 @@ fn objective_evaluation(subject_complete: bool, result: &Value) -> Result<Object
         .as_array()
         .context("infrastructure_errors missing")?;
     Ok(ObjectiveEvaluation {
-        completion: if !errors.is_empty() {
+        completion: Some(if !errors.is_empty() {
             CompletionState::Undetermined
         } else if subject_complete && gates_passed(result) {
             CompletionState::Completed
         } else {
             CompletionState::TaskIncomplete
-        },
+        }),
         awards: awards(result)?,
         infrastructure_error: (!errors.is_empty()).then(|| {
             format!(
@@ -901,11 +901,11 @@ mod tests {
         );
         assert_eq!(
             objective_evaluation(true, &passed).unwrap().completion,
-            CompletionState::Completed
+            Some(CompletionState::Completed)
         );
         assert_eq!(
             objective_evaluation(false, &passed).unwrap().completion,
-            CompletionState::TaskIncomplete
+            Some(CompletionState::TaskIncomplete)
         );
         let with = |id: &str, status: &str| {
             let mut value = passed.clone();
@@ -921,19 +921,19 @@ mod tests {
             objective_evaluation(true, &with("B06", "failed"))
                 .unwrap()
                 .completion,
-            CompletionState::Completed
+            Some(CompletionState::Completed)
         );
         assert_eq!(
             objective_evaluation(true, &with("B03", "failed"))
                 .unwrap()
                 .completion,
-            CompletionState::TaskIncomplete
+            Some(CompletionState::TaskIncomplete)
         );
         assert_eq!(
             objective_evaluation(true, &with("B05", "unverified"))
                 .unwrap()
                 .completion,
-            CompletionState::TaskIncomplete
+            Some(CompletionState::TaskIncomplete)
         );
 
         let mut missing = passed.clone();

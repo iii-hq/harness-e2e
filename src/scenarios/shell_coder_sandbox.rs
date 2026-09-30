@@ -197,7 +197,7 @@ const PUBLIC_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
     25,
     "The subject reruns the public suite after editing and the runner independently observes it green.",
 );
-const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
+const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::gate(
     "hidden_correctness",
     30,
     "Runner-owned probes accept generators, out-of-order revisions, account migration, conflicts, validation, idempotency, and input immutability.",
@@ -432,83 +432,74 @@ baseline, green public suite, and host demo results."#,
             && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
             && fixture.demo.stderr.trim().is_empty();
         let scope = fixture.scope_valid() && workflow.evidence_ordered;
-        Ok(assessment::build_evaluation(
-            if fixture.production_patch_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                WORKER_SETUP.full_or_zero(
-                    worker_setup,
-                    format!("shell={shell_ready}, coder={coder_ready}"),
+        Ok(assessment::build_evaluation([
+            WORKER_SETUP.full_or_zero(
+                worker_setup,
+                format!("shell={shell_ready}, coder={coder_ready}"),
+            ),
+            INVESTIGATION.award(
+                workflow.investigation_points(),
+                format!(
+                    "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
+                    workflow.coder_info,
+                    workflow.source_read,
+                    workflow.tests_read,
+                    workflow.task_read,
+                    workflow.red_baseline,
+                    workflow.first_source_edit
                 ),
-                INVESTIGATION.award(
-                    workflow.investigation_points(),
-                    format!(
-                        "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
-                        workflow.coder_info,
-                        workflow.source_read,
-                        workflow.tests_read,
-                        workflow.task_read,
-                        workflow.red_baseline,
-                        workflow.first_source_edit
-                    ),
-                )?,
-                DIAGNOSIS.award(
-                    if workflow.diagnosis_complete() && fixture.diagnosis_present {
-                        DIAGNOSIS.weight()
-                    } else {
-                        0
-                    },
-                    format!(
-                        "create={:?}, move={:?}, retained={}",
-                        workflow.diagnosis_create,
-                        workflow.diagnosis_move,
-                        fixture.diagnosis_present
-                    ),
-                )?,
-                PUBLIC_CORRECTNESS.full_or_zero(
-                    public_correctness,
-                    format!(
-                        "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
-                        workflow.red_baseline,
-                        workflow.green_public,
-                        fixture.public.success,
-                        fixture.public.stdout,
-                        fixture.public.stderr
-                    ),
+            )?,
+            DIAGNOSIS.award(
+                if workflow.diagnosis_complete() && fixture.diagnosis_present {
+                    DIAGNOSIS.weight()
+                } else {
+                    0
+                },
+                format!(
+                    "create={:?}, move={:?}, retained={}",
+                    workflow.diagnosis_create, workflow.diagnosis_move, fixture.diagnosis_present
                 ),
-                HIDDEN_CORRECTNESS.full_or_zero(
-                    fixture.hidden.passed,
-                    format!(
-                        "checks={:?}; output={:?}",
-                        fixture.hidden.checks, fixture.hidden_output
-                    ),
+            )?,
+            PUBLIC_CORRECTNESS.full_or_zero(
+                public_correctness,
+                format!(
+                    "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
+                    workflow.red_baseline,
+                    workflow.green_public,
+                    fixture.public.success,
+                    fixture.public.stdout,
+                    fixture.public.stderr
                 ),
-                HOST_EXECUTION.full_or_zero(
-                    host_execution,
-                    format!(
-                        "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
-                        workflow.host_demo,
-                        fixture.demo.success,
-                        fixture.demo.stdout,
-                        fixture.demo.stderr
-                    ),
+            ),
+            HIDDEN_CORRECTNESS.full_or_zero(
+                fixture.hidden.passed,
+                format!(
+                    "checks={:?}; output={:?}",
+                    fixture.hidden.checks, fixture.hidden_output
                 ),
-                SCOPE_AND_LIFECYCLE.full_or_zero(
-                    scope,
-                    format!(
-                        "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
-                        fixture.protected_files_exact,
-                        fixture.production_patch_present,
-                        fixture.diagnosis_present,
-                        fixture.unexpected_paths,
-                        workflow.evidence_ordered
-                    ),
+            ),
+            HOST_EXECUTION.full_or_zero(
+                host_execution,
+                format!(
+                    "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
+                    workflow.host_demo,
+                    fixture.demo.success,
+                    fixture.demo.stdout,
+                    fixture.demo.stderr
                 ),
-            ],
-        ))
+            ),
+            SCOPE_AND_LIFECYCLE.full_or_zero(
+                scope,
+                format!(
+                    "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
+                    fixture.protected_files_exact,
+                    fixture.production_patch_present,
+                    fixture.diagnosis_present,
+                    fixture.unexpected_paths,
+                    workflow.evidence_ordered
+                ),
+            ),
+        ]))
     }
 
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {

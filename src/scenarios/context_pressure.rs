@@ -49,13 +49,13 @@ pub const CANONICAL_SEED: u64 = 3003;
 const RUNG: Rung = Rung { segments: 48 };
 const MAX_SEGMENTS: u32 = 48;
 
-const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::scored_in(
+const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::gate_in(
     "charter_preserved",
     40,
     "The final report reproduces every planted charter fact verbatim after the full distractor load.",
     EvaluationDimension::Deliverable,
 );
-const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::scored(
+const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::gate(
     "needles_recovered",
     30,
     "Every segment needle appears in the report exactly once each, in ascending segment order.",
@@ -484,49 +484,42 @@ fn evaluate_rung(
         && report.needles_ordered
         && response_chars <= report_budget_chars(segments);
 
-    Ok(assessment::build_evaluation(
-        if report.charter_preserved && report.needles_ordered {
-            crate::report::CompletionState::Completed
-        } else {
-            crate::report::CompletionState::TaskIncomplete
-        },
-        [
-            CHARTER_PRESERVED.full_or_zero(
-                report.charter_preserved,
-                format!(
-                    "report must start with `{}` and reproduce mission, checkpoint, quorum, \
+    Ok(assessment::build_evaluation([
+        CHARTER_PRESERVED.full_or_zero(
+            report.charter_preserved,
+            format!(
+                "report must start with `{}` and reproduce mission, checkpoint, quorum, \
                  and seal verbatim",
-                    report_header(segments)
-                ),
+                report_header(segments)
             ),
-            NEEDLES_RECOVERED.full_or_zero(
-                report.needles_ordered,
-                format!(
-                    "missing {} of {segments} needle(s); needles must appear in ascending order",
-                    report.missing_needles
-                ),
+        ),
+        NEEDLES_RECOVERED.full_or_zero(
+            report.needles_ordered,
+            format!(
+                "missing {} of {segments} needle(s); needles must appear in ascending order",
+                report.missing_needles
             ),
-            INGESTION_DISCIPLINE.full_or_zero(
-                disciplined,
-                format!(
-                    "charter_calls={} (first={}), segment_calls={}/{segments} exact={}, \
+        ),
+        INGESTION_DISCIPLINE.full_or_zero(
+            disciplined,
+            format!(
+                "charter_calls={} (first={}), segment_calls={}/{segments} exact={}, \
                  other_calls={}, function_errors={errors}",
-                    ingestion.charter_calls,
-                    ingestion.charter_first,
-                    ingestion.segment_calls,
-                    ingestion.segments_exact,
-                    ingestion.other_calls
-                ),
+                ingestion.charter_calls,
+                ingestion.charter_first,
+                ingestion.segment_calls,
+                ingestion.segments_exact,
+                ingestion.other_calls
             ),
-            CONCISE_REPORT.full_or_zero(
-                concise,
-                format!(
-                    "observed {response_chars} character(s); budget {}",
-                    report_budget_chars(segments)
-                ),
+        ),
+        CONCISE_REPORT.full_or_zero(
+            concise,
+            format!(
+                "observed {response_chars} character(s); budget {}",
+                report_budget_chars(segments)
             ),
-        ],
-    ))
+        ),
+    ]))
 }
 
 fn deliverable_contract() -> DeliverableContract {

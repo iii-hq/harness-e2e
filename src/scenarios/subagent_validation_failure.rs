@@ -46,7 +46,7 @@ const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     30,
     "Validator scoped to the child and the deadline wake armed before the spawn.",
 );
-const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::scored(
+const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::gate(
     "expiry_report",
     30,
     "The parent is woken by the expiry notice and reports the give-up with the exact line.",
@@ -316,31 +316,24 @@ impl Scenario for SubagentValidationFailure {
         let reported = observation.response.contains("CHILD GAVE UP")
             && observation.response.contains("PARENT DONE");
 
-        Ok(assessment::build_evaluation(
-            if reported {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                BOUNDED_FAILURE.full_or_zero(
-                    child_failed && verdict_absent && bounded,
-                    format!(
-                        "child status `{child_status}`, expected `failed`; verdict key holds \
+        Ok(assessment::build_evaluation([
+            BOUNDED_FAILURE.full_or_zero(
+                child_failed && verdict_absent && bounded,
+                format!(
+                    "child status `{child_status}`, expected `failed`; verdict key holds \
                      {verdict}, expected null; observed {child_nudges} nudge(s), expected exactly \
                      {EXPECTED_NUDGES} (the child budget)"
-                    ),
                 ),
-                ORCHESTRATION_DISCIPLINE.full_or_zero(
-                    ordered,
-                    format!(
-                        "validator@{validator_index:?} wake@{wake_index:?} \
+            ),
+            ORCHESTRATION_DISCIPLINE.full_or_zero(
+                ordered,
+                format!(
+                    "validator@{validator_index:?} wake@{wake_index:?} \
                      spawn@{spawn_index:?} — both must precede the spawn"
-                    ),
                 ),
-                EXPIRY_REPORT.full_or_zero(reported, "expected the exact give-up report line"),
-            ],
-        ))
+            ),
+            EXPIRY_REPORT.full_or_zero(reported, "expected the exact give-up report line"),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

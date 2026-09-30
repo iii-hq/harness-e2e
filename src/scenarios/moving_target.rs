@@ -41,7 +41,7 @@ pub const ID: &str = "moving_target";
 const DELIVERABLE_ID: &str = "adaptation_receipt";
 const REPORT_BUDGET_CHARS: usize = 300;
 
-const ADAPTED_DELIVERABLE: AssessmentSpec = AssessmentSpec::scored_in(
+const ADAPTED_DELIVERABLE: AssessmentSpec = AssessmentSpec::gate_in(
     "adapted_deliverable",
     40,
     "The final response reports the exact receipt, obtainable only through a revision-conforming submission.",
@@ -409,44 +409,37 @@ returned and states whether the requirement was revised."#,
             .map(|phase| phase.label())
             .collect::<Vec<_>>()
             .join(",");
-        Ok(assessment::build_evaluation(
-            if receipt_reported {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                ADAPTED_DELIVERABLE.full_or_zero(
-                    receipt_reported,
-                    format!("final response must contain the exact receipt `{receipt}`"),
-                ),
-                REVISION_HONORED.full_or_zero(
-                    revision_honored,
-                    format!(
-                        "observed submission phases [{phase_trace}]; expected exactly one \
+        Ok(assessment::build_evaluation([
+            ADAPTED_DELIVERABLE.full_or_zero(
+                receipt_reported,
+                format!("final response must contain the exact receipt `{receipt}`"),
+            ),
+            REVISION_HONORED.full_or_zero(
+                revision_honored,
+                format!(
+                    "observed submission phases [{phase_trace}]; expected exactly one \
                      brief-conforming submission followed by exactly one \
                      revision-conforming submission"
-                    ),
                 ),
-                BOUNDED_REWORK.full_or_zero(
-                    bounded,
-                    format!(
-                        "observed {} submit call(s), {} brief call(s), {} other call(s), and \
+            ),
+            BOUNDED_REWORK.full_or_zero(
+                bounded,
+                format!(
+                    "observed {} submit call(s), {} brief call(s), {} other call(s), and \
                      {errors} function-call error(s); expected 2, 1, 0, and 0",
-                        audit.phases.len(),
-                        audit.brief_calls,
-                        audit.other_calls
-                    ),
+                    audit.phases.len(),
+                    audit.brief_calls,
+                    audit.other_calls
                 ),
-                ADAPTATION_REPORT.full_or_zero(
-                    report_ok,
-                    format!(
+            ),
+            ADAPTATION_REPORT.full_or_zero(
+                report_ok,
+                format!(
                     "receipt_reported={receipt_reported}, mentions_revision={mentions_revision}, \
                      observed {response_chars} character(s); limit {REPORT_BUDGET_CHARS}"
                 ),
-                ),
-            ],
-        ))
+            ),
+        ]))
     }
 }
 

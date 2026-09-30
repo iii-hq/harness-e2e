@@ -67,7 +67,7 @@ const ENDPOINTS_REPRODUCED: AssessmentSpec = AssessmentSpec::scored(
     20,
     "Were the known-good and known-bad revisions reproduced as required?",
 );
-const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::scored(
+const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::gate(
     "first_bad_identified",
     40,
     "Was the first bad commit correctly identified?",
@@ -410,50 +410,43 @@ clean at the known-bad revision."#,
         let culprit = snapshot.culprit_passed();
         let evidence = snapshot.evidence_passed();
         let efficiency_points = efficiency_points(&snapshot, observation);
-        Ok(assessment::build_evaluation(
-            if evidence {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                REPOSITORY_ACQUIRED.full_or_zero(
-                    acquisition,
-                    criterion_reason(
-                        acquisition_observed(&snapshot),
-                        acquisition_scoring_reason(&snapshot),
-                    ),
+        Ok(assessment::build_evaluation([
+            REPOSITORY_ACQUIRED.full_or_zero(
+                acquisition,
+                criterion_reason(
+                    acquisition_observed(&snapshot),
+                    acquisition_scoring_reason(&snapshot),
                 ),
-                ENDPOINTS_REPRODUCED.full_or_zero(
-                    endpoints,
-                    criterion_reason(
-                        endpoints_observed(&snapshot),
-                        endpoints_scoring_reason(&snapshot),
-                    ),
+            ),
+            ENDPOINTS_REPRODUCED.full_or_zero(
+                endpoints,
+                criterion_reason(
+                    endpoints_observed(&snapshot),
+                    endpoints_scoring_reason(&snapshot),
                 ),
-                FIRST_BAD_IDENTIFIED.full_or_zero(
-                    culprit,
-                    criterion_reason(
-                        culprit_observed(&snapshot),
-                        culprit_scoring_reason(&snapshot),
-                    ),
+            ),
+            FIRST_BAD_IDENTIFIED.full_or_zero(
+                culprit,
+                criterion_reason(
+                    culprit_observed(&snapshot),
+                    culprit_scoring_reason(&snapshot),
                 ),
-                EVIDENCE_GROUNDED.full_or_zero(
-                    evidence,
-                    criterion_reason(
-                        evidence_observed(&snapshot),
-                        evidence_scoring_reason(&snapshot),
-                    ),
+            ),
+            EVIDENCE_GROUNDED.full_or_zero(
+                evidence,
+                criterion_reason(
+                    evidence_observed(&snapshot),
+                    evidence_scoring_reason(&snapshot),
                 ),
-                SEARCH_EFFICIENCY.award(
-                    efficiency_points,
-                    criterion_reason(
-                        efficiency_observed(&snapshot, observation),
-                        efficiency_scoring_reason(&snapshot, observation, efficiency_points),
-                    ),
-                )?,
-            ],
-        ))
+            ),
+            SEARCH_EFFICIENCY.award(
+                efficiency_points,
+                criterion_reason(
+                    efficiency_observed(&snapshot, observation),
+                    efficiency_scoring_reason(&snapshot, observation, efficiency_points),
+                ),
+            )?,
+        ]))
     }
 
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {

@@ -7,7 +7,6 @@ use anyhow::bail;
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
-use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
@@ -21,7 +20,7 @@ const KEY: &str = "migration_record";
 const OWNER: &str = "quality-suite";
 const DELIVERABLE_ID: &str = "migration_record";
 
-const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::scored(
+const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::gate(
     "exact_migrated_state",
     50,
     "The stored value exactly equals the migrated record with no missing or additional fields.",
@@ -279,11 +278,6 @@ impl Scenario for PersistentState {
             && mentions_number(reply, 3);
 
         Ok(assessment::build_evaluation(
-            if exact {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
             [
                 EXACT_MIGRATED_STATE.full_or_zero(exact, format!("state_matches={exact}")),
                 READ_THEN_WRITE_ONCE.full_or_zero(
