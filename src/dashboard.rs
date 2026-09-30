@@ -377,18 +377,15 @@ pub(crate) mod tests {
             ExecutionJournal, ExecutionJournalEventKind, ExecutionJournalHeader,
             EXECUTION_JOURNAL_SCHEMA,
         };
+        use crate::plans::store::tests::{manager, FakeRunner};
         let root = tempfile::tempdir().unwrap();
-        // Initialize before writing metadata so startup recovery does not cancel the fixture.
-        let controller = controller::Controller::new(
-            "ws://localhost:49134".into(),
-            root.path().into(),
-            None,
-            None,
-            "iii-hq/harness-e2e".into(),
-            Default::default(),
-        )
-        .await
-        .unwrap();
+        let controller = controller::tests::without_control_plane(
+            manager(
+                root.path(),
+                std::sync::Arc::new(FakeRunner::new(root.path().into())),
+            ),
+            root.path(),
+        );
         let mut metadata = metadata();
         metadata.status = JobStatus::Running;
         metadata.completed_at.clear();

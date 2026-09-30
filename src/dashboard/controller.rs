@@ -741,11 +741,37 @@ fn read_log_chunk(path: &Path, after: Option<u64>) -> Result<LogChunk> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::time::Duration;
 
     use super::*;
     use crate::plans::store::tests::{fake_gh, manager_with_gh, FakeRunner};
+    use crate::plans::store::PlanStore;
+
+    /// A controller without a control plane, on this plan store.
+    pub(in crate::dashboard) fn without_control_plane(
+        plan_store: Arc<PlanStore>,
+        runs_dir: &Path,
+    ) -> Arc<Controller> {
+        Arc::new(Controller {
+            plan_store,
+            github_repository: "o/r".into(),
+            runs_dir: runs_dir.into(),
+            defaults: Defaults {
+                url: "ws://localhost:49134".into(),
+                model: String::new(),
+                provider: String::new(),
+                runs: 1,
+                technical_retries: 1,
+                seed: None,
+            },
+            control: None,
+            state: Mutex::new(ControllerState { job: None }),
+            read_model: RwLock::new(None),
+            events: None,
+            github_imports: Semaphore::new(GITHUB_IMPORTS),
+        })
+    }
 
     #[tokio::test]
     async fn github_imports_answer_at_once_and_download_two_at_a_time() {
@@ -763,24 +789,10 @@ case "$*" in
 esac"#,
         );
         gh.api_timeout = Duration::from_secs(30);
-        let controller = Arc::new(Controller {
-            plan_store: manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
-            github_repository: "o/r".into(),
-            runs_dir: data.clone(),
-            defaults: Defaults {
-                url: "ws://localhost:49134".into(),
-                model: String::new(),
-                provider: String::new(),
-                runs: 1,
-                technical_retries: 1,
-                seed: None,
-            },
-            control: None,
-            state: Mutex::new(ControllerState { job: None }),
-            read_model: RwLock::new(None),
-            events: None,
-            github_imports: Semaphore::new(GITHUB_IMPORTS),
-        });
+        let controller = without_control_plane(
+            manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
+            &data,
+        );
         let downloads = || {
             fs::read_to_string(root.path().join("downloads"))
                 .unwrap_or_default()

@@ -869,13 +869,274 @@ fn validate_saved_execution(execution: &PlanExecution) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
+
+    /// A database worker that keeps its rows in memory. It runs the
+    /// statements `Persistence` sends for the Console's suites, stacks and
+    /// executions, and answers any other statement with an error naming it.
+    // ponytail: the primary key is the only constraint it keeps.
+    #[derive(Clone, Default)]
+    pub(crate) struct MemoryDatabase(Arc<Mutex<MemoryTables>>);
+
+    #[derive(Default)]
+    struct MemoryTables {
+        /// Each table's rows in insertion order, as SQLite's rowid keeps them.
+        rows: BTreeMap<String, Vec<Value>>,
+        refuse_writes: bool,
+    }
+
+    /// Ends the client's connection loop when the server answering it goes.
+    struct Connection(IIIClient);
+
+    impl Drop for Connection {
+        fn drop(&mut self) {
+            let _ = futures_util::FutureExt::now_or_never(self.0.shutdown_async());
+        }
+    }
+
+    impl MemoryDatabase {
+        /// A `Persistence` whose engine is this database. Call it inside a
+        /// Tokio runtime: the connection ends with the runtime.
+        pub(crate) fn persistence(&self) -> Persistence {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let client = iii_sdk::register_worker(
+                &format!("ws://{}", listener.local_addr().unwrap()),
+                iii_sdk::InitOptions::default(),
+            );
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            let (database, connection) = (self.clone(), Connection(client.clone()));
+            tokio::spawn(async move {
+                let _connection = connection;
+                while let Ok((socket, _)) = listener.accept().await {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(socket).await else {
+                        continue;
+                    };
+                    while let Some(Ok(frame)) = socket.next().await {
+                        let Message::Text(message) = frame else {
+                            continue;
+                        };
+                        let message: Value = serde_json::from_str(&message).unwrap();
+                        if message["type"] != "invokefunction" || message["invocation_id"].is_null()
+                        {
+                            continue;
+                        }
+                        let mut reply = json!({
+                            "type": "invocationresult",
+                            "invocation_id": message["invocation_id"],
+                            "function_id": message["function_id"],
+                        });
+                        match database.invoke(&message["function_id"], &message["data"]) {
+                            Ok(result) => reply["result"] = result,
+                            Err(error) => {
+                                reply["error"] =
+                                    json!({"code": "memory_database", "message": error})
+                            }
+                        }
+                        if socket.send(Message::Text(reply.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+            Persistence::new(client, "harness_e2e".into(), "default".into())
+        }
+
+        /// Refuse every transaction from now on, as a database that cannot write.
+        pub(crate) fn refuse_writes(&self) {
+            self.0.lock().unwrap().refuse_writes = true;
+        }
+
+        /// The row of `table` with this id.
+        pub(crate) fn row(&self, table: &str, id: &str) -> Option<Value> {
+            self.0
+                .lock()
+                .unwrap()
+                .rows
+                .get(table)?
+                .iter()
+                .find(|row| row["id"] == id)
+                .cloned()
+        }
+
+        /// Keep a row as another runner wrote it.
+        pub(crate) fn insert(&self, table: &str, row: Value) {
+            self.0
+                .lock()
+                .unwrap()
+                .rows
+                .entry(table.into())
+                .or_default()
+                .push(row);
+        }
+
+        fn invoke(&self, function_id: &Value, data: &Value) -> Result<Value, String> {
+            let mut tables = self.0.lock().unwrap();
+            let statement = |statement: &Value| {
+                (
+                    statement["sql"].as_str().unwrap_or_default().to_owned(),
+                    statement["params"].clone(),
+                )
+            };
+            if function_id == DATABASE_QUERY {
+                let (sql, params) = statement(data);
+                return Ok(json!({"rows": execute(&mut tables.rows, &sql, &params)?}));
+            }
+            if function_id != DATABASE_TRANSACTION {
+                return Err(format!("unexpected function {function_id}"));
+            }
+            if tables.refuse_writes {
+                return Ok(json!({"committed": false, "error": "the database refuses writes"}));
+            }
+            // All or nothing: the statements run on a copy kept when all ran.
+            let mut rows = tables.rows.clone();
+            for (sql, params) in data["statements"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(statement)
+            {
+                execute(&mut rows, &sql, &params)?;
+            }
+            tables.rows = rows;
+            Ok(json!({"committed": true, "results": []}))
+        }
+    }
+
+    /// One of the statements `Persistence` sends for rows keyed by `id`.
+    fn execute(
+        rows: &mut BTreeMap<String, Vec<Value>>,
+        sql: &str,
+        params: &Value,
+    ) -> Result<Vec<Value>, String> {
+        let unexpected = || format!("unexpected statement: {sql}");
+        if let Some(rest) = sql.strip_prefix("SELECT id, payload_json, payload_sha256 FROM ") {
+            let (table, clause) = rest.split_once(' ').ok_or_else(unexpected)?;
+            let mut found = rows.get(table).cloned().unwrap_or_default();
+            if clause == "WHERE id = ?" {
+                found.retain(|row| row["id"] == params[0]);
+                return Ok(found);
+            }
+            let order = clause.strip_prefix("ORDER BY ").ok_or_else(unexpected)?;
+            // Stable: ties keep insertion order.
+            found.sort_by(|a, b| {
+                order
+                    .split(", ")
+                    .map(|term| {
+                        let (column, descending) = term
+                            .strip_suffix(" DESC")
+                            .map_or((term, false), |column| (column, true));
+                        let ordering = a[column].as_str().cmp(&b[column].as_str());
+                        if descending {
+                            ordering.reverse()
+                        } else {
+                            ordering
+                        }
+                    })
+                    .fold(std::cmp::Ordering::Equal, std::cmp::Ordering::then)
+            });
+            return Ok(found);
+        }
+        if let Some(rest) = sql.strip_prefix("DELETE FROM ") {
+            let table = rest.strip_suffix(" WHERE id = ?").ok_or_else(unexpected)?;
+            if let Some(table) = rows.get_mut(table) {
+                table.retain(|row| row["id"] != params[0]);
+            }
+            return Ok(Vec::new());
+        }
+        // INSERT INTO t(id, ...) VALUES (?, ...) ON CONFLICT(id) DO UPDATE SET c=excluded.c, ...
+        let rest = sql.strip_prefix("INSERT INTO ").ok_or_else(unexpected)?;
+        let (table, rest) = rest.split_once('(').ok_or_else(unexpected)?;
+        let (columns, rest) = rest.split_once(')').ok_or_else(unexpected)?;
+        let (_, updated) = rest
+            .split_once(" ON CONFLICT(id) DO UPDATE SET ")
+            .ok_or_else(unexpected)?;
+        let values = params.as_array().ok_or_else(unexpected)?;
+        let columns = columns.split(", ").collect::<Vec<_>>();
+        if columns.len() != values.len() {
+            return Err(unexpected());
+        }
+        let row = Value::Object(
+            columns
+                .into_iter()
+                .map(str::to_owned)
+                .zip(values.iter().cloned())
+                .collect(),
+        );
+        let table = rows.entry(table.into()).or_default();
+        let Some(existing) = table
+            .iter_mut()
+            .find(|existing| existing["id"] == row["id"])
+        else {
+            table.push(row);
+            return Ok(Vec::new());
+        };
+        for assignment in updated.split(", ") {
+            match assignment.split_once('=') {
+                Some((column, value)) if value == format!("excluded.{column}") => {
+                    existing[column] = row[column].clone();
+                }
+                _ => return Err(unexpected()),
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    #[tokio::test]
+    async fn the_memory_database_keeps_what_persistence_writes() {
+        let database = MemoryDatabase::default();
+        let persistence = database.persistence();
+        let suite = |id: &str, updated_at: &str| LocalSuite {
+            id: id.into(),
+            label: "Mine".into(),
+            scenarios: vec!["context_pressure".into()],
+            repetitions: 1,
+            technical_retries: 0,
+            created_at: "2026-09-24T00:00:00Z".into(),
+            updated_at: updated_at.into(),
+        };
+        let (old, new) = (
+            suite("suite-old", "2026-09-24T00:00:00Z"),
+            suite("suite-new", "2026-09-25T00:00:00Z"),
+        );
+        persistence.save_local_suite(&old).await.unwrap();
+        persistence.save_local_suite(&new).await.unwrap();
+        let renamed = LocalSuite {
+            label: "Renamed".into(),
+            ..old.clone()
+        };
+        persistence.save_local_suite(&renamed).await.unwrap();
+        assert_eq!(
+            persistence.local_suites().await.unwrap(),
+            vec![new.clone(), renamed]
+        );
+        persistence.delete_local_suite(&new.id).await.unwrap();
+        assert_eq!(persistence.local_suite(&new.id).await.unwrap(), None);
+
+        // An unreadable row is deleted on read; a statement it does not know
+        // fails with the statement; a refused transaction keeps nothing.
+        database.insert(
+            "local_suites",
+            json!({"id": "suite-tampered", "payload_json": "{}", "payload_sha256": "sha256:other"}),
+        );
+        assert_eq!(persistence.local_suites().await.unwrap().len(), 1);
+        assert!(database.row("local_suites", "suite-tampered").is_none());
+        let error = persistence
+            .query("SELECT * FROM local_suites", json!([]))
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("SELECT * FROM local_suites"));
+        database.refuse_writes();
+        assert!(persistence.save_local_suite(&new).await.is_err());
+        assert!(database.row("local_suites", &new.id).is_none());
+    }
 
     #[test]
     fn every_layout_statement_belongs_to_one_table() {

@@ -1736,7 +1736,7 @@ mod tests {
 
     use tokio::sync::Mutex;
 
-    use super::super::tests::{exact_stack_bundle, suite_parameters, FakeRunner};
+    use super::super::tests::{database, exact_stack_bundle, suite_parameters, FakeRunner};
     use super::super::{github, ExecutionStack, Runner, Where};
     use super::*;
     use crate::control::{execution_id_for_key, RunRequest};
@@ -2032,12 +2032,9 @@ mod tests {
         launcher: Arc<FakeLauncher>,
         settings: DockerSettings,
     ) -> Arc<PlanStore> {
-        for directory in ["suites", "stacks", "executions"] {
-            fs::create_dir_all(root.join("plan-store").join(directory)).unwrap();
-        }
         Arc::new(PlanStore {
             root: root.into(),
-            persistence: None,
+            persistence: Some(database(root).persistence()),
             runner: Some(runner),
             github: github::GithubCli::default(),
             docker: Docker::with_launcher(settings, launcher),
@@ -2646,8 +2643,11 @@ mod tests {
             settled(execution) && execution.error.is_some()
         })
         .await;
+        // Each once, in whatever order the executions are listed.
+        let mut removed = launcher.removed.lock().unwrap().clone();
+        removed.sort();
         assert_eq!(
-            *launcher.removed.lock().unwrap(),
+            removed,
             vec![id.clone(), "plan-preparing".into()]
                 .into_iter()
                 .collect::<BTreeSet<_>>()

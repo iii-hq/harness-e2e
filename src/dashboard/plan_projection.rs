@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
-#[cfg(test)]
-use std::fs;
 
 use crate::plans::store::{
     execution_summary, native_runs, ExecutionSource, PlanExecution, PlanStore, Slot,
@@ -15,29 +13,7 @@ impl PlanStore {
     ) -> Result<(Vec<Value>, std::collections::BTreeMap<String, String>)> {
         let mut values = Vec::new();
         let mut children = std::collections::BTreeMap::new();
-        #[cfg(not(test))]
-        let executions = self.executions().await?;
-        #[cfg(test)]
-        let executions = {
-            let mut values = Vec::new();
-            for entry in fs::read_dir(self.root.join("plan-store/executions"))? {
-                let path = entry?.path();
-                if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-                    continue;
-                }
-                let Some(id) = path.file_stem().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-                match self.read_execution(id).await {
-                    Ok(execution) => values.push(execution),
-                    Err(error) => {
-                        tracing::warn!(path = %path.display(), %error, "ignoring an unsupported or corrupt local E2E execution")
-                    }
-                }
-            }
-            values
-        };
-        for execution in executions {
+        for execution in self.executions().await? {
             let parameters = execution.parameters.as_ref();
             let model = parameters.map(|p| p.model.as_str()).unwrap_or_default();
             let provider = parameters.map(|p| p.provider.as_str()).unwrap_or_default();
