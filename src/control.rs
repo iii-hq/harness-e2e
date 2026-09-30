@@ -38,8 +38,8 @@ use crate::scenarios::{
     ScenarioCharacterization,
 };
 use crate::suite::{
-    run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
-    SuitePhase, SuiteRunConfig,
+    run_suite, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope, SuitePhase,
+    SuiteRunConfig,
 };
 
 pub const CONTROL_CONTRACT_NAME: &str = "e2e-control-plane";
@@ -720,8 +720,7 @@ impl ControlPlane {
             "execution admitted",
         )
         .await?;
-        self.spawn_execution(execution_id.clone(), request, None)
-            .await;
+        self.spawn_execution(execution_id.clone(), request).await;
         Ok(RunAccepted {
             execution_id,
             phase: ExecutionPhase::Admitted,
@@ -731,12 +730,7 @@ impl ControlPlane {
         })
     }
 
-    async fn spawn_execution(
-        &self,
-        execution_id: String,
-        request: RunRequest,
-        adaptive_resume: Option<AdaptiveResumeAttempt>,
-    ) {
+    async fn spawn_execution(&self, execution_id: String, request: RunRequest) {
         let (cancellation, receiver) = watch::channel(false);
         self.inner
             .cancellations
@@ -745,9 +739,7 @@ impl ControlPlane {
             .insert(execution_id.clone(), cancellation);
         let control = self.clone();
         tokio::spawn(async move {
-            control
-                .execute(execution_id, request, receiver, adaptive_resume)
-                .await;
+            control.execute(execution_id, request, receiver).await;
         });
     }
 
@@ -756,7 +748,6 @@ impl ControlPlane {
         execution_id: String,
         request: RunRequest,
         cancellation: watch::Receiver<bool>,
-        adaptive_resume: Option<AdaptiveResumeAttempt>,
     ) {
         if let Err(error) = preflight_run_contract(&request) {
             let result = self
@@ -809,7 +800,6 @@ impl ControlPlane {
                 lane: request.lane.clone(),
                 events,
                 cancellation: cancellation.clone(),
-                adaptive_resume,
             }),
             observation_contract: request.run_contract.clone(),
         })
