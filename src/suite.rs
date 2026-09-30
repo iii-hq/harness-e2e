@@ -146,14 +146,12 @@ pub struct SuiteRunOutcome {
     pub report_path: Option<PathBuf>,
 }
 
-enum PreparedSuiteCase {
-    BuiltIn {
-        key: ScenarioId,
-        seed: u64,
-        definition: MaterializedScenario,
-        preflight_error: Option<String>,
-        runs: Vec<E2eRunReport>,
-    },
+struct PreparedSuiteCase {
+    key: ScenarioId,
+    seed: u64,
+    definition: MaterializedScenario,
+    preflight_error: Option<String>,
+    runs: Vec<E2eRunReport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,7 +363,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                 .await
                 .err()
                 .map(|error| format!("preflight case {}: {error:#}", definition.case.case_id));
-            prepared_cases.push(PreparedSuiteCase::BuiltIn {
+            prepared_cases.push(PreparedSuiteCase {
                 key: *scenario_key,
                 seed,
                 definition,
@@ -394,9 +392,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             suite_started.elapsed(),
             suite_deadline,
         ) {
-            let (key, seed) = match prepared {
-                PreparedSuiteCase::BuiltIn { key, seed, .. } => (key, *seed),
-            };
+            let (key, seed) = (&prepared.key, prepared.seed);
             preserve_event(
                 config.control.as_ref(),
                 SuiteEvent::SlotDeferred {
@@ -408,49 +404,48 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             .await;
             continue;
         }
-        let (slot_key, seed, mut run, subject_observed) = match prepared {
-            PreparedSuiteCase::BuiltIn {
+        let (slot_key, seed, mut run, subject_observed) = {
+            let PreparedSuiteCase {
                 key,
                 seed,
                 definition,
                 preflight_error,
                 ..
-            } => {
-                let scenario_id = *key;
-                tracing::info!(
-                    scenario = scenario_id.as_str(),
-                    case_id = definition.case.case_id,
-                    seed = *seed,
-                    run = repetition + 1,
-                    total_runs = config.runs,
-                    "running E2E quality scenario case"
-                );
-                let subject_observed = preflight_error.is_none();
-                let run = if let Some(error) = preflight_error.as_ref() {
-                    preflight_failure_run(&definition.spec, error.clone())
-                } else {
-                    run_with_technical_retries(
-                        &context,
-                        RetryRequest {
-                            scenario_id,
-                            subject: &config.subject,
-                            seed: *seed,
-                            technical_retries: config.technical_retries,
-                            progress_interval: config.progress_interval,
-                            control: config.control.as_ref(),
-                            output: &config.output,
-                            system_identity_sha256: &system_identity_sha256,
-                            adaptive_resume: config
-                                .control
-                                .as_ref()
-                                .and_then(|control| control.adaptive_resume.as_ref())
-                                .filter(|resume| resume.scenario_id == scenario_id),
-                        },
-                    )
-                    .await
-                };
-                (*key, *seed, run, subject_observed)
-            }
+            } = prepared;
+            let scenario_id = *key;
+            tracing::info!(
+                scenario = scenario_id.as_str(),
+                case_id = definition.case.case_id,
+                seed = *seed,
+                run = repetition + 1,
+                total_runs = config.runs,
+                "running E2E quality scenario case"
+            );
+            let subject_observed = preflight_error.is_none();
+            let run = if let Some(error) = preflight_error.as_ref() {
+                preflight_failure_run(&definition.spec, error.clone())
+            } else {
+                run_with_technical_retries(
+                    &context,
+                    RetryRequest {
+                        scenario_id,
+                        subject: &config.subject,
+                        seed: *seed,
+                        technical_retries: config.technical_retries,
+                        progress_interval: config.progress_interval,
+                        control: config.control.as_ref(),
+                        output: &config.output,
+                        system_identity_sha256: &system_identity_sha256,
+                        adaptive_resume: config
+                            .control
+                            .as_ref()
+                            .and_then(|control| control.adaptive_resume.as_ref())
+                            .filter(|resume| resume.scenario_id == scenario_id),
+                    },
+                )
+                .await
+            };
+            (*key, *seed, run, subject_observed)
         };
         incorporate_worker_contracts(&mut worker_contracts, &mut run);
         let checkpoint_result = commit_run_checkpoint(
@@ -461,9 +456,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             subject_observed,
         )
         .await;
-        match prepared {
-            PreparedSuiteCase::BuiltIn { runs, .. } => runs.push(run),
-        }
+        prepared.runs.push(run);
         if let Err(error) = checkpoint_result {
             persistence_errors.push(format!("commit run checkpoint: {error:#}"));
         }
@@ -471,15 +464,13 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
 
     let mut scenario_reports = prepared_cases
         .into_iter()
-        .map(|prepared| match prepared {
-            PreparedSuiteCase::BuiltIn {
-                definition, runs, ..
-            } => E2eScenarioReport::aggregate_case_with_planned(
-                definition.case,
-                definition.spec.execution,
+        .map(|prepared| {
+            E2eScenarioReport::aggregate_case_with_planned(
+                prepared.definition.case,
+                prepared.definition.spec.execution,
                 config.runs,
-                runs,
-            ),
+                prepared.runs,
+            )
         })
         .chain(deferred_cases)
         .collect::<Vec<_>>();

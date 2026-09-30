@@ -556,19 +556,6 @@ impl Persistence {
         ).await
     }
 
-    pub async fn execution_for_key(&self, key: &str) -> Result<Option<ExecutionRecord>> {
-        let rows = self
-            .query(
-                "SELECT record_json, record_sha256 FROM executions WHERE idempotency_key = ?",
-                json!([key]),
-            )
-            .await?;
-        rows.into_iter()
-            .next()
-            .map(|row| decode_record(&row))
-            .transpose()
-    }
-
     pub async fn active_count(&self) -> Result<u64> {
         let rows = self
             .query(
