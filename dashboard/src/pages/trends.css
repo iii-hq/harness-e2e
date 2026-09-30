@@ -20,10 +20,6 @@
   color: var(--color-ink-faint);
 }
 
-.tr-ghost {
-  color: var(--color-ink-ghost);
-}
-
 .tr-danger {
   color: var(--ds-danger-text);
 }

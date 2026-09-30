@@ -470,25 +470,3 @@ export function suitesByTest(
       ])
   return byTest
 }
-
-/* ------------------------------------------------------ test history */
-
-const realismLabels = {
-  synthetic: 'synthetic',
-  realistic_simulator: 'realistic simulator',
-  frozen_real_artifact: 'frozen real artifact',
-} as const
-
-/** How real a test's environment is, for the test history's header;
- *  `value: null` when the test does not declare it. */
-export function catalogRealismPresentation(row: TestCatalogRow): {
-  value: string | null
-  detail: string | null
-} {
-  const realism = row.characterization?.realism
-  const execution = realism?.execution
-  return {
-    value: execution ? realismLabels[execution] : null,
-    detail: realism?.shadow === 'read_only' ? 'read-only shadow' : null,
-  }
-}

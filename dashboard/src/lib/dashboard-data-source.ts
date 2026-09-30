@@ -332,12 +332,6 @@ export type ExecutionTotals = JsonObject & {
   tokens_per_completion?: number | null
 }
 
-export type DashboardModelIdentity = JsonObject & {
-  id?: string
-  model?: string
-  provider?: string
-}
-
 export type DashboardScenarioSummary = JsonObject & {
   id: string
   behavior_sha256?: string

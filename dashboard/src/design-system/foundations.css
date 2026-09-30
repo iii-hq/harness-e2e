@@ -13,7 +13,6 @@
   --ds-text-lg: var(--text-base, 1rem);
   --ds-text-xl: var(--text-xl, 1.25rem);
   --ds-text-display: 1.375rem;
-  --ds-leading-tight: var(--leading-tight, 1.25);
   --ds-leading-body: var(--text-base--line-height, 1.5);
   --ds-tracking-tight: var(--tracking-tight, -0.025em);
   --ds-tracking-label: 0.06em;
@@ -65,23 +64,6 @@
 .ds-root :where(button, a, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 3px;
-}
-
-.ds-display {
-  max-width: 72rem;
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--ds-text-display);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: var(--ds-leading-tight);
-  text-transform: lowercase;
-  text-wrap: balance;
-}
-
-.ds-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
 }
 
 /* The one uppercase style in the dashboard: 11px mono labels over data
