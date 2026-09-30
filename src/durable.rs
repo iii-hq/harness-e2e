@@ -20,13 +20,9 @@ use crate::report::{E2eObservationEnvelope, E2eReport};
 
 pub const ARCHIVE_ID: &str = "e2e::archive";
 pub const ARCHIVE_HEAD_ID: &str = "e2e::archive-head";
-pub const ARCHIVE_RESTORE_ID: &str = "e2e::archive-restore";
-pub const RETENTION_SWEEP_ID: &str = "e2e::retention-sweep";
-pub const HISTORY_LIST_ID: &str = "e2e::history-list";
 const STORAGE_PUT: &str = "storage::putObject";
 const STORAGE_GET: &str = "storage::getObject";
 const STORAGE_HEAD: &str = "storage::headObject";
-const STORAGE_DELETE: &str = "storage::deleteObject";
 const DATABASE_EXECUTE: &str = "database::execute";
 const DATABASE_QUERY: &str = "database::query";
 const CHUNK_BYTES: usize = 6 * 1024 * 1024;
@@ -198,44 +194,6 @@ pub struct ArchiveHeadResponse {
     pub archive: DurableArchiveReference,
     pub availability: ArchiveAvailability,
     pub verified_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ArchiveRestoreResponse {
-    pub archive: DurableArchiveReference,
-    pub availability: ArchiveAvailability,
-    pub restored_files: u32,
-    pub restored_root: Option<String>,
-    pub restored_from_backup: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct HistoryListRequest {
-    #[serde(default)]
-    pub lane: Option<String>,
-    #[serde(default = "default_history_limit")]
-    pub limit: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct HistoryListResponse {
-    pub records: Vec<HistoryRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RetentionSweepRequest {
-    pub before: String,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default = "default_sweep_limit")]
-    pub limit: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RetentionSweepResponse {
-    pub inspected: u32,
-    pub deleted_archives: Vec<String>,
-    pub dry_run: bool,
 }
 
 #[async_trait]
@@ -473,223 +431,6 @@ impl DurableHistory {
         })
     }
 
-    pub async fn restore(
-        &self,
-        archive: DurableArchiveReference,
-        restore_root: &Path,
-    ) -> Result<ArchiveRestoreResponse> {
-        validate_archive_reference(&archive)?;
-        if expired(&archive, Utc::now())? {
-            return Ok(ArchiveRestoreResponse {
-                archive,
-                availability: ArchiveAvailability::Expired,
-                restored_files: 0,
-                restored_root: None,
-                restored_from_backup: false,
-            });
-        }
-        let (manifest_bytes, restored_from_backup) = match self.get_object(&archive.manifest).await
-        {
-            Ok(bytes) => (bytes, false),
-            Err(primary_error) => match self.get_object(&archive.manifest_backup).await {
-                Ok(bytes) => (bytes, true),
-                Err(backup_error) => {
-                    return Err(primary_error
-                        .context(format!("manifest backup also failed: {backup_error:#}")))
-                }
-            },
-        };
-        let manifest: DurableArchiveManifest =
-            serde_json::from_slice(&manifest_bytes).context("decode durable archive manifest")?;
-        validate_manifest(&manifest)?;
-        if manifest.archive_id != archive.archive_id
-            || manifest.identity_sha256 != archive.identity_sha256
-            || manifest.execution_id != archive.execution_id
-        {
-            bail!("restored manifest identity does not match archive reference");
-        }
-        let destination = restore_root.join(&archive.archive_id);
-        if destination.exists() {
-            validate_restored_payload(&destination)
-                .context("validate previously restored E2E result and evidence")?;
-            return Ok(ArchiveRestoreResponse {
-                archive,
-                availability: ArchiveAvailability::Available,
-                restored_files: u32::try_from(manifest.objects.len()).unwrap_or(u32::MAX),
-                restored_root: Some(destination.to_string_lossy().to_string()),
-                restored_from_backup,
-            });
-        }
-        std::fs::create_dir_all(&destination)?;
-        let restore_result = async {
-            for object in &manifest.objects {
-                let relative = safe_path(&object.relative_path)?;
-                let mut bytes = Vec::with_capacity(
-                    usize::try_from(object.size_bytes)
-                        .context("artifact is too large to restore")?,
-                );
-                for chunk in &object.chunks {
-                    bytes.extend(self.get_object(&chunk.object).await?);
-                }
-                if bytes.len() as u64 != object.size_bytes || sha256_bytes(&bytes) != object.sha256
-                {
-                    bail!(
-                        "restored artifact {} failed hash verification",
-                        object.relative_path
-                    );
-                }
-                self.redaction.assert_clean(&bytes)?;
-                let path = destination.join(relative);
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                artifact::write_atomic(&path, &bytes)?;
-            }
-            validate_restored_payload(&destination)
-                .context("validate reconstructed E2E result and evidence")?;
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-        if let Err(error) = restore_result {
-            let _ = std::fs::remove_dir_all(&destination);
-            return Err(error);
-        }
-        Ok(ArchiveRestoreResponse {
-            archive,
-            availability: ArchiveAvailability::Available,
-            restored_files: u32::try_from(manifest.objects.len()).unwrap_or(u32::MAX),
-            restored_root: Some(destination.to_string_lossy().to_string()),
-            restored_from_backup,
-        })
-    }
-
-    pub async fn history_list(&self, request: HistoryListRequest) -> Result<HistoryListResponse> {
-        if request.limit == 0 || request.limit > 500 {
-            bail!("history list limit must be between 1 and 500");
-        }
-        self.ensure_history_table().await?;
-        let (sql, params) = match request.lane.as_ref() {
-            Some(lane) => (
-                format!("SELECT record_json, record_sha256 FROM {HISTORY_TABLE} WHERE deleted_at IS NULL AND lane = ? ORDER BY occurred_at DESC LIMIT ?"),
-                json!([lane, request.limit]),
-            ),
-            None => (
-                format!("SELECT record_json, record_sha256 FROM {HISTORY_TABLE} WHERE deleted_at IS NULL ORDER BY occurred_at DESC LIMIT ?"),
-                json!([request.limit]),
-            ),
-        };
-        let value = self
-            .caller
-            .call(
-                DATABASE_QUERY,
-                json!({
-                    "db": self.config.database,
-                    "sql": sql,
-                    "params": params,
-                }),
-            )
-            .await?;
-        let rows = value
-            .get("rows")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut records = Vec::new();
-        for row in rows {
-            let parsed = (|| -> Result<HistoryRecord> {
-                let encoded = row
-                    .get("record_json")
-                    .and_then(Value::as_str)
-                    .context("history row is missing record_json")?;
-                let expected = row
-                    .get("record_sha256")
-                    .and_then(Value::as_str)
-                    .context("history row is missing record_sha256")?;
-                let record: HistoryRecord = serde_json::from_str(encoded)?;
-                validate_history_record(&record)?;
-                if sha256_bytes(encoded.as_bytes()) != expected {
-                    bail!(
-                        "history record {} failed hash verification",
-                        record.ingestion_id
-                    );
-                }
-                Ok(record)
-            })();
-            match parsed {
-                Ok(record) => records.push(record),
-                Err(error) => tracing::warn!(
-                    error = %format!("{error:#}"),
-                    "skipping one corrupt E2E history row"
-                ),
-            }
-        }
-        Ok(HistoryListResponse { records })
-    }
-
-    pub async fn retention_sweep(
-        &self,
-        request: RetentionSweepRequest,
-    ) -> Result<RetentionSweepResponse> {
-        if request.limit == 0 || request.limit > 500 {
-            bail!("retention sweep limit must be between 1 and 500");
-        }
-        let before = DateTime::parse_from_rfc3339(&request.before)
-            .context("retention sweep before must be RFC 3339")?
-            .with_timezone(&Utc);
-        self.ensure_history_table().await?;
-        let value = self
-            .caller
-            .call(
-                DATABASE_QUERY,
-                json!({
-                    "db": self.config.database,
-                    "sql": format!("SELECT record_json, record_sha256 FROM {HISTORY_TABLE} WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at LIMIT ?"),
-                    "params": [before.to_rfc3339(), request.limit],
-                }),
-            )
-            .await?;
-        let rows = value
-            .get("rows")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut deleted_archives = Vec::new();
-        for row in &rows {
-            let encoded = row
-                .get("record_json")
-                .and_then(Value::as_str)
-                .context("retention row is missing record_json")?;
-            let expected = row
-                .get("record_sha256")
-                .and_then(Value::as_str)
-                .context("retention row is missing record_sha256")?;
-            if sha256_bytes(encoded.as_bytes()) != expected {
-                bail!("retention row failed hash verification");
-            }
-            let record: HistoryRecord = serde_json::from_str(encoded)?;
-            validate_history_record(&record)?;
-            if !request.dry_run {
-                self.delete_archive(&record.archive).await?;
-                self.caller
-                    .call(
-                        DATABASE_EXECUTE,
-                        json!({
-                            "db": self.config.database,
-                            "sql": format!("UPDATE {HISTORY_TABLE} SET deleted_at = ? WHERE ingestion_id = ? AND deleted_at IS NULL"),
-                            "params": [now(), record.ingestion_id],
-                        }),
-                    )
-                    .await?;
-            }
-            deleted_archives.push(record.archive.archive_id);
-        }
-        Ok(RetentionSweepResponse {
-            inspected: u32::try_from(rows.len()).unwrap_or(u32::MAX),
-            deleted_archives,
-            dry_run: request.dry_run,
-        })
-    }
-
     async fn put_object(
         &self,
         bucket: &str,
@@ -774,33 +515,6 @@ impl DurableHistory {
             );
         }
         Ok(bytes)
-    }
-
-    async fn delete_archive(&self, archive: &DurableArchiveReference) -> Result<()> {
-        let manifest_bytes = match self.get_object(&archive.manifest).await {
-            Ok(bytes) => bytes,
-            Err(_) => self.get_object(&archive.manifest_backup).await?,
-        };
-        let manifest: DurableArchiveManifest = serde_json::from_slice(&manifest_bytes)?;
-        validate_manifest(&manifest)?;
-        for object in manifest.objects {
-            for chunk in object.chunks {
-                self.delete_object(&chunk.object).await?;
-            }
-        }
-        self.delete_object(&archive.manifest).await?;
-        self.delete_object(&archive.manifest_backup).await?;
-        Ok(())
-    }
-
-    async fn delete_object(&self, reference: &StorageObjectReference) -> Result<()> {
-        self.caller
-            .call(
-                STORAGE_DELETE,
-                json!({"bucket": reference.bucket, "key": reference.key}),
-            )
-            .await?;
-        Ok(())
     }
 
     async fn ingest(&self, record: &HistoryRecord) -> Result<bool> {
@@ -916,21 +630,6 @@ struct ArchiveBasis {
     subject_revision: String,
     e2e_repository: String,
     e2e_revision: String,
-}
-
-fn validate_restored_payload(destination: &Path) -> Result<()> {
-    let has_report = destination.join("results.json").is_file();
-    let has_observation = destination.join("observation.json").is_file();
-    if !has_report && !has_observation {
-        bail!("restored archive has neither results.json nor observation.json");
-    }
-    if has_report {
-        E2eReport::read_from(destination)?;
-    }
-    if has_observation {
-        E2eObservationEnvelope::read_from(destination)?;
-    }
-    Ok(())
 }
 
 fn archive_basis(
@@ -1251,14 +950,6 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-const fn default_history_limit() -> u16 {
-    100
-}
-
-const fn default_sweep_limit() -> u16 {
-    100
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -1417,10 +1108,6 @@ mod tests {
         let second = archive_id(&basis, RetentionClass::Longitudinal).unwrap();
         assert_eq!(first, second);
         assert_eq!(basis.execution_id, "execution-1");
-
-        let output = tempfile::tempdir().unwrap();
-        observation.write_to(output.path()).unwrap();
-        validate_restored_payload(output.path()).unwrap();
     }
 
     #[tokio::test]
