@@ -140,7 +140,11 @@ def run(binary, directory):
         for process in reversed(processes):
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=10)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
         processes.clear()
 
     try:
@@ -171,8 +175,17 @@ def run(binary, directory):
                     {"sql": "INSERT INTO bootstrap_smoke VALUES ('retained')"},
                 ]})
             else:
-                assert call("database::query", {"db": "harness_e2e", "sql":
-                    "SELECT value FROM bootstrap_smoke"})["rows"] == [{"value": "retained"}]
+                retained = {"db": "harness_e2e", "sql": "SELECT value FROM bootstrap_smoke"}
+                assert call("database::query", retained)["rows"] == [{"value": "retained"}]
+                # A saved edit replaces the runtime value, dropping the pool
+                # before it returns; only the worker can have put it back.
+                call("configuration::set", {"id": CONFIG, "value": before, "flush": True}, "default")
+                deadline = time.monotonic() + 30
+                while "harness_e2e" not in call("configuration::get", {"id": CONFIG, "raw": True},
+                                                "default")["value"]["databases"]:
+                    assert time.monotonic() < deadline, "the E2E pool was not restored after a save"
+                    time.sleep(0.2)
+                assert wait("database::query", retained)["rows"] == [{"value": "retained"}]
             print(f"PASS: packaged install {'after full restart' if attempt else 'from defaults'}; "
                   f"{len(catalog['scenarios'])} scenarios; saved database settings unchanged", flush=True)
             stop()

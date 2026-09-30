@@ -15,6 +15,11 @@ use crate::persistence::Persistence;
 
 mod control_database;
 
+use control_database::ControlPool;
+
+const STARTUP_DEADLINE: Duration = Duration::from_secs(60);
+const RETRY_INTERVAL: Duration = Duration::from_millis(250);
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerConfig {
@@ -107,12 +112,20 @@ impl WorkerConfig {
         Ok(self)
     }
 
-    fn persistence_namespace<'a>(&'a self, worker_namespace: &'a str) -> &'a str {
-        if self.control_namespace.trim().is_empty() {
-            worker_namespace
-        } else {
-            &self.control_namespace
+    /// The namespace holding the control database, and the built-in pool to
+    /// provision there. Explicit destinations remain operator-owned; only the
+    /// default pool in the installation namespace is added automatically.
+    fn control_destination<'a>(
+        &'a self,
+        worker_namespace: &'a str,
+        data_dir: &Path,
+    ) -> (&'a str, Option<ControlPool>) {
+        if !self.control_namespace.trim().is_empty() {
+            return (&self.control_namespace, None);
         }
+        let pool = (self.control_database == default_control_database())
+            .then(|| ControlPool::new(worker_namespace, &self.control_database, data_dir));
+        (worker_namespace, pool)
     }
 
     /// How Docker executions run, with paths resolved as `data_dir` is.
@@ -224,13 +237,19 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
     let data_dir = resolve_data_dir(&config.data_dir, &base)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
-    let control_namespace = config.persistence_namespace(&environment.namespace);
-    // Explicit destinations remain operator-owned. Only the built-in pool
-    // in the installation namespace is added automatically.
-    let provision = (config.control_namespace.trim().is_empty()
-        && config.control_database == default_control_database())
-    .then_some(data_dir.as_path());
-    wait_for_persistence(&iii, control_namespace, &config.control_database, provision).await?;
+    let (control_namespace, pool) = config.control_destination(&environment.namespace, &data_dir);
+    wait_for_persistence(
+        &iii,
+        control_namespace,
+        &config.control_database,
+        pool.as_ref(),
+    )
+    .await?;
+    if let Some(pool) = pool {
+        pool.keep(&iii)
+            .await
+            .context("keep the E2E pool in the database worker's runtime configuration")?;
+    }
     tracing::info!(
         data_dir = %data_dir.display(),
         namespace = %environment.namespace,
@@ -346,56 +365,96 @@ async fn wait_for_persistence(
     iii: &iii_sdk::IIIClient,
     namespace: &str,
     database: &str,
-    provision: Option<&Path>,
+    pool: Option<&ControlPool>,
 ) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let mut provisioned = false;
-    let mut provisioning_error = None;
+    let deadline = tokio::time::Instant::now() + STARTUP_DEADLINE;
+    let Err(error) = poll_ready(
+        deadline,
+        || query_control_database(iii, namespace, database),
+        pool.map(|pool| move || pool.provision(iii, deadline)),
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    // The database worker builds every pool or none: an E2E pool it cannot
+    // open would make its next restart fail for every other database too.
+    if let Some(pool) = pool {
+        if let Err(cleanup) = pool.withdraw(iii).await {
+            tracing::warn!(
+                error = format!("{cleanup:#}"),
+                "could not check the database configuration for an E2E pool to remove"
+            );
+        }
+    }
+    bail!(
+        "control-plane database was not ready before the startup deadline \
+         (namespace {namespace}, database {database}): {error:#}"
+    )
+}
+
+/// Poll `ready` until `deadline`, running `setup` between polls until it
+/// first succeeds. Every setup failure is retried; the deadline error keeps
+/// the last one that has not since been resolved.
+async fn poll_ready<R, RF, S, SF>(
+    deadline: tokio::time::Instant,
+    mut ready: R,
+    mut setup: Option<S>,
+) -> Result<()>
+where
+    R: FnMut() -> RF,
+    RF: std::future::Future<Output = Result<()>>,
+    S: FnMut() -> SF,
+    SF: std::future::Future<Output = Result<()>>,
+{
+    let mut setup_error = None;
     loop {
-        let response = iii
-            .trigger(
-                TriggerRequest {
-                    function_id: "database::query".into(),
-                    payload: serde_json::json!({
-                        "db": database,
-                        "sql": "SELECT 1",
-                        "params": [],
-                    }),
-                    action: None,
-                    timeout_ms: Some(15_000),
-                }
-                .namespace(namespace),
-            )
-            .await;
-        let error = match response {
-            Ok(_) => return Ok(()),
+        let error = match ready().await {
+            Ok(()) => return Ok(()),
             Err(error) => error,
         };
         if tokio::time::Instant::now() >= deadline {
-            bail!(
-                "control-plane database was not ready before the startup deadline \
-                 (namespace {namespace}, database {database}): {error}{}",
-                provisioning_error
-                    .map(|error| format!("; pool setup: {error}"))
-                    .unwrap_or_default()
-            );
+            return Err(match setup_error {
+                Some(setup) => anyhow::anyhow!("{error:#}; pool setup: {setup}"),
+                None => error,
+            });
         }
-        if let Some(data_dir) = provision.filter(|_| !provisioned) {
-            match control_database::provision(iii, namespace, database, data_dir, deadline).await {
-                Ok(()) => provisioned = true,
-                Err(error) if control_database::retryable(&error) => {
-                    tracing::debug!(%error, "waiting to provision the control database");
-                    provisioning_error = Some(error.to_string());
-                }
+        if let Some(run) = setup.as_mut() {
+            match run().await {
+                Ok(()) => (setup, setup_error) = (None, None),
                 Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("provision control database {database} in namespace {namespace}")
-                    })
+                    tracing::debug!(
+                        error = format!("{error:#}"),
+                        "control database setup pending"
+                    );
+                    setup_error = Some(format!("{error:#}"));
                 }
             }
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(RETRY_INTERVAL).await;
     }
+}
+
+async fn query_control_database(
+    iii: &iii_sdk::IIIClient,
+    namespace: &str,
+    database: &str,
+) -> Result<()> {
+    iii.trigger(
+        TriggerRequest {
+            function_id: "database::query".into(),
+            payload: serde_json::json!({
+                "db": database,
+                "sql": "SELECT 1",
+                "params": [],
+            }),
+            action: None,
+            timeout_ms: Some(15_000),
+        }
+        .namespace(namespace),
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -452,9 +511,11 @@ mod tests {
         let config = load_config(&path).unwrap();
         assert_eq!(config.control_database, "custom_db");
         assert_eq!(config.control_namespace, "campaign-123");
-        assert_eq!(
-            config.persistence_namespace("another-installation"),
-            "campaign-123"
+        let (namespace, pool) = config.control_destination("another-installation", Path::new("/e"));
+        assert_eq!(namespace, "campaign-123");
+        assert!(
+            pool.is_none(),
+            "explicit destinations are operator-provisioned"
         );
         assert_eq!(
             resolve_data_dir(&config.data_dir, &config_file_dir(&path).unwrap()).unwrap(),
@@ -465,9 +526,70 @@ mod tests {
     #[test]
     fn omitted_control_namespace_routes_to_the_worker_installation() {
         let config = config_from_value(serde_json::json!({"data_dir": "evidence"})).unwrap();
-        assert_eq!(config.persistence_namespace("project-one"), "project-one");
-        assert_eq!(config.persistence_namespace("project-two"), "project-two");
+        for installation in ["project-one", "project-two"] {
+            let (namespace, pool) = config.control_destination(installation, Path::new("/e"));
+            assert_eq!(namespace, installation);
+            assert!(pool.is_some(), "the built-in pool is provisioned");
+        }
         assert_eq!(config.control_database, "harness_e2e");
+        let renamed =
+            config_from_value(serde_json::json!({"data_dir": "e", "control_database": "other"}))
+                .unwrap();
+        let (namespace, pool) = renamed.control_destination("project-one", Path::new("/e"));
+        assert_eq!(namespace, "project-one");
+        assert!(pool.is_none(), "a renamed pool is operator-provisioned");
+    }
+
+    fn outcomes(
+        results: Vec<Result<(), &'static str>>,
+    ) -> (
+        std::rc::Rc<std::cell::Cell<usize>>,
+        impl FnMut() -> std::future::Ready<Result<()>>,
+    ) {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = calls.clone();
+        let mut results = results.into_iter();
+        let next = move || {
+            counter.set(counter.get() + 1);
+            let result = results.next().unwrap_or(Err("exhausted"));
+            std::future::ready(result.map_err(anyhow::Error::msg))
+        };
+        (calls, next)
+    }
+
+    #[tokio::test]
+    async fn setup_failures_are_retried_until_setup_succeeds_once() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let (queries, ready) =
+            outcomes(vec![Err("no pool"), Err("no pool"), Err("no pool"), Ok(())]);
+        let (setups, setup) = outcomes(vec![Err("invocation timed out"), Ok(())]);
+        poll_ready(deadline, ready, Some(setup)).await.unwrap();
+        assert_eq!(queries.get(), 4);
+        assert_eq!(setups.get(), 2, "setup stops after its first success");
+    }
+
+    #[tokio::test]
+    async fn the_deadline_reports_the_query_and_only_an_unresolved_setup_error() {
+        let deadline = tokio::time::Instant::now();
+        let (_, ready) = outcomes(vec![Err("unknown database")]);
+        let (_, setup) = outcomes(vec![]);
+        let error = poll_ready(deadline, ready, Some(setup)).await.unwrap_err();
+        assert_eq!(error.to_string(), "unknown database");
+
+        let deadline = tokio::time::Instant::now() + RETRY_INTERVAL;
+        let (_, ready) = outcomes(vec![Err("unknown database"); 3]);
+        let (_, setup) = outcomes(vec![Err("upgrade iii")]);
+        let error = poll_ready(deadline, ready, Some(setup)).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "unknown database; pool setup: upgrade iii"
+        );
+
+        let deadline = tokio::time::Instant::now() + RETRY_INTERVAL * 2;
+        let (_, ready) = outcomes(vec![Err("unknown database"); 4]);
+        let (_, setup) = outcomes(vec![Err("not registered yet"), Ok(())]);
+        let error = poll_ready(deadline, ready, Some(setup)).await.unwrap_err();
+        assert_eq!(error.to_string(), "unknown database");
     }
 
     #[test]
