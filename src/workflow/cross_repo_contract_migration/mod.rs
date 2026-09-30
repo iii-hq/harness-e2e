@@ -10,10 +10,7 @@ use sha2::{Digest, Sha256};
 
 mod adaptive_runtime;
 
-pub use adaptive_runtime::{
-    adaptive_policy, build_adaptive_runtime, reference_adaptive_plans, CrossRepoAdaptiveRuntime,
-    CrossRepoRuntimeState,
-};
+pub use adaptive_runtime::build_adaptive_runtime;
 
 pub const SCENARIO_ID: &str = "cross_repo_contract_migration";
 pub const CANARY_EVIDENCE_ID: &str = "canary.consumer_b_missing_alias";
@@ -49,39 +46,6 @@ pub struct TemplateDescriptor {
     pub replay_safety: ReplaySafety,
     pub allowed_roots: Vec<String>,
     pub network_allowed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanRevisionRequest {
-    pub revision: u8,
-    #[serde(default)]
-    pub selected_templates: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supersedes_sha256: Option<String>,
-    #[serde(default)]
-    pub evidence_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AdaptiveNode {
-    pub id: String,
-    pub template_id: String,
-    pub depends_on: Vec<String>,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MaterializedAdaptiveDag {
-    pub scenario_id: String,
-    pub revision: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supersedes_sha256: Option<String>,
-    pub evidence_ids: Vec<String>,
-    pub nodes: Vec<AdaptiveNode>,
-    pub sha256: String,
 }
 
 pub fn template_catalog() -> Vec<TemplateDescriptor> {
@@ -195,154 +159,6 @@ pub fn template_catalog() -> Vec<TemplateDescriptor> {
     .collect()
 }
 
-pub fn materialize_plan(request: &PlanRevisionRequest) -> Result<MaterializedAdaptiveDag> {
-    if !matches!(request.revision, 1 | 2) {
-        bail!("cross-repository migration supports exactly two plan revisions");
-    }
-    if request.revision == 1 {
-        if request.supersedes_sha256.is_some() || !request.evidence_ids.is_empty() {
-            bail!("revision 1 cannot supersede a plan or cite canary evidence");
-        }
-    } else {
-        let supersedes = request
-            .supersedes_sha256
-            .as_deref()
-            .filter(|value| is_sha256(value))
-            .context("revision 2 requires a valid supersedes_sha256")?;
-        if supersedes.chars().all(|value| value == '0') {
-            bail!("revision 2 cannot supersede an all-zero hash");
-        }
-        if !request
-            .evidence_ids
-            .iter()
-            .any(|value| value == CANARY_EVIDENCE_ID)
-        {
-            bail!("revision 2 must cite '{CANARY_EVIDENCE_ID}'");
-        }
-    }
-
-    let catalog = template_catalog()
-        .into_iter()
-        .map(|descriptor| (descriptor.id.clone(), descriptor))
-        .collect::<BTreeMap<_, _>>();
-    let mut selected = BTreeSet::new();
-    for template_id in &request.selected_templates {
-        let descriptor = catalog
-            .get(template_id)
-            .with_context(|| format!("unknown cross-repository template '{template_id}'"))?;
-        if descriptor.revision != request.revision
-            || descriptor.phase != TemplatePhase::AgentSelected
-        {
-            bail!(
-                "template '{template_id}' is not agent-selectable in revision {}",
-                request.revision
-            );
-        }
-        if !selected.insert(template_id.clone()) {
-            bail!("template '{template_id}' was selected more than once");
-        }
-    }
-    if selected.is_empty() || selected.len() > 3 {
-        bail!("each migration revision must select between one and three analysis templates");
-    }
-
-    let nodes = if request.revision == 1 {
-        first_revision_nodes(selected.into_iter().collect())
-    } else {
-        second_revision_nodes(selected.into_iter().collect())
-    };
-    let sha256 = canonical_sha256(&(
-        SCENARIO_ID,
-        request.revision,
-        &request.supersedes_sha256,
-        &request.evidence_ids,
-        &nodes,
-    ))?;
-    Ok(MaterializedAdaptiveDag {
-        scenario_id: SCENARIO_ID.into(),
-        revision: request.revision,
-        supersedes_sha256: request.supersedes_sha256.clone(),
-        evidence_ids: request.evidence_ids.clone(),
-        nodes,
-        sha256,
-    })
-}
-
-fn first_revision_nodes(selected: Vec<String>) -> Vec<AdaptiveNode> {
-    let mut nodes = vec![node("materialize", "materialize_visible_repositories", &[])];
-    let mut analyses = Vec::new();
-    for (index, template) in selected.into_iter().enumerate() {
-        let id = format!("analysis_{}", index + 1);
-        analyses.push(id.clone());
-        nodes.push(AdaptiveNode {
-            id,
-            template_id: template,
-            depends_on: vec!["materialize".into()],
-            required: true,
-        });
-    }
-    nodes.push(AdaptiveNode {
-        id: "migrate_visible".into(),
-        template_id: "migrate_visible_contract".into(),
-        depends_on: analyses,
-        required: true,
-    });
-    nodes.push(node(
-        "visible_matrix",
-        "validate_visible_matrix",
-        &["migrate_visible"],
-    ));
-    nodes.push(node(
-        "trusted_canary",
-        "reveal_consumer_b_canary",
-        &["visible_matrix"],
-    ));
-    nodes
-}
-
-fn second_revision_nodes(selected: Vec<String>) -> Vec<AdaptiveNode> {
-    let mut nodes = vec![node("resume", "resume_from_canary", &[])];
-    let mut analyses = Vec::new();
-    for (index, template) in selected.into_iter().enumerate() {
-        let id = format!("replan_analysis_{}", index + 1);
-        analyses.push(id.clone());
-        nodes.push(AdaptiveNode {
-            id,
-            template_id: template,
-            depends_on: vec!["resume".into()],
-            required: true,
-        });
-    }
-    nodes.push(AdaptiveNode {
-        id: "legacy_alias".into(),
-        template_id: "add_legacy_alias".into(),
-        depends_on: analyses,
-        required: true,
-    });
-    nodes.push(node(
-        "full_matrix",
-        "validate_full_matrix",
-        &["legacy_alias"],
-    ));
-    nodes.push(node(
-        "boundaries",
-        "validate_workspace_boundaries",
-        &["full_matrix"],
-    ));
-    nodes.push(node("reconcile", "reconcile_repositories", &["boundaries"]));
-    nodes.push(node("cleanup", "cleanup_workspace", &["reconcile"]));
-    nodes
-}
-
-fn node(id: &str, template_id: &str, depends_on: &[&str]) -> AdaptiveNode {
-    AdaptiveNode {
-        id: id.into(),
-        template_id: template_id.into(),
-        depends_on: depends_on.iter().map(|value| (*value).into()).collect(),
-        required: true,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RouteContract {
@@ -452,10 +268,6 @@ impl CrossRepoSimulator {
             repositories.push("consumer-b".into());
         }
         repositories
-    }
-
-    pub fn initial_commit(&self, repository: &str) -> Option<&str> {
-        self.initial_commits.get(repository).map(String::as_str)
     }
 
     pub fn apply_reference_plan_a(&mut self) -> Result<()> {
@@ -607,11 +419,6 @@ impl CrossRepoSimulator {
                 .all(|template| !template.network_allowed),
             changed_paths: changed,
         })
-    }
-
-    pub fn reject_network_access(&self, target: &str) -> Result<()> {
-        self.ensure_active()?;
-        bail!("network access is disabled for cross-repository fixture target '{target}'")
     }
 
     pub fn cleanup(&mut self) -> Result<()> {
@@ -925,14 +732,6 @@ fn collect_source_files(root: &Path, current: &Path, paths: &mut Vec<PathBuf>) -
         }
     }
     Ok(())
-}
-
-fn canonical_sha256(value: &impl Serialize) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
-}
-
-fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 const PRODUCER_PLAN_A_SOURCE: &str = r#"def get_profile_v1(user_id: str) -> dict:
