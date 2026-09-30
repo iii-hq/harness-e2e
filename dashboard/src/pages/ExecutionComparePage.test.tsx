@@ -475,28 +475,48 @@ describe('execution comparison page', () => {
         group={{
           executions: [a, b, c],
           pairs,
+          group,
+          scoring: new Map(),
           compareHref: (id) => `#compare-${id}`,
           referenceHref: (id) => `#reference-${id}`,
+          withoutHref: (ids) => `#without-${ids.join('-')}`,
+          onAdd: () => undefined,
         }}
         swap="#swap"
         onCount={() => undefined}
       />,
     )
+    // The group first: what differs, the tests, highlights, the matrix.
+    expect(html.indexOf('data-group-changes')).toBeLessThan(
+      html.indexOf('data-comparison-matrix'),
+    )
+    expect(html).toContain('Highlights · 3 executions against A')
     expect(html).toContain('3 executions side by side')
+    expect(html).toContain('data-add-executions')
     expect(
       [...html.matchAll(/data-matrix-execution="([^"]+)"/g)].map(
         (match) => match[1],
       ),
     ).toEqual(['a', 'b', 'c'])
-    expect(html).toContain('data-role="reference"')
-    expect(html).toContain('href="#compare-c"')
-    expect(html).not.toContain('href="#compare-b"')
-    expect(html).toContain('href="#reference-b"')
+    expect(html).toMatch(/data-matrix-execution="a" data-role="reference"/)
+    // The one in detail is a selection: neutral, marked as such.
+    expect(html).toMatch(
+      /data-matrix-execution="b" data-role="compared" data-selected="true"/,
+    )
+    // Each column's menu: C can be read in detail, B already is.
+    expect(html).toContain('data-column-menu="c"')
+    expect(html.match(/Read against A in detail/g)).toHaveLength(1)
+    expect(html).toContain('data-remove="c"')
+    expect(html).toContain('B becomes the reference')
     expect(html).toContain('data-matrix-metric="score"')
+    expect(html).toContain('data-matrix-version="runner"')
     // C's invalid run takes test_1 out of every total, B's included.
     expect(html).toContain('data-matrix-scenario="test_1" data-counted="false"')
+    expect(html).toContain('technically invalid in C')
     expect(html).toContain('data-matrix-cell="c"')
-    expect(html).toContain('In detail: the reference and')
+    expect(html).toContain('A against B')
+    // The test picker reads the whole group.
+    expect(html).toContain('Score varies')
     // Two executions keep the page as it was.
     expect(view()).not.toContain('data-comparison-group')
   })

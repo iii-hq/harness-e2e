@@ -276,6 +276,13 @@ const server = await createConsoleTestHost()
 const browser = await chromium.launch({ headless: true })
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  // Screenshots only when asked: COMPARE_SHOTS=<dir>.
+  const shot = async (name) => {
+    if (process.env.COMPARE_SHOTS)
+      await page.screenshot({
+        path: `${process.env.COMPARE_SHOTS}/${name}.png`,
+      })
+  }
   await server.install(page, trigger)
   page.setDefaultTimeout(10_000)
   const errors = []
@@ -659,7 +666,13 @@ try {
         ),
       )
   const before = await figures()
-  await page.screenshot({ path: '/tmp/multi-compare/compare-3-1280.png' })
+  // The group is read first: what differs, then highlights against A.
+  await page.locator('[data-group-changes]').waitFor()
+  await page
+    .locator('[data-comparison-highlights]')
+    .getByRole('heading', { name: 'Highlights · 3 executions against A' })
+    .waitFor()
+  await shot('compare-3-1280')
 
   // A figure of C opens that test of C against the reference, below.
   await matrix
@@ -672,14 +685,18 @@ try {
     c.id,
   )
   await page
-    .getByRole('heading', { name: 'In detail: the reference and smoke third' })
+    .getByRole('heading', { name: 'A against C · smoke third' })
     .waitFor()
   await page.locator('[data-scenario-detail="persistent_state"]').waitFor()
-
-  // B made the reference: every figure stays, only the differences move.
+  // The column in detail is a selection, marked as one.
   await matrix
-    .getByRole('link', { name: 'Make smoke rerun the reference' })
-    .click()
+    .locator(`[data-matrix-execution="${c.id}"][data-selected="true"]`)
+    .waitFor()
+
+  // B made the reference from its column's menu: every figure stays, only
+  // the differences move.
+  await matrix.locator(`[data-column-menu="${b.id}"]`).click()
+  await page.getByRole('menuitem', { name: /^Make reference/ }).click()
   await matrix
     .locator(`[data-matrix-execution="${b.id}"][data-role="reference"]`)
     .waitFor()
@@ -712,14 +729,21 @@ try {
     .focus()
   await page.keyboard.press('Enter')
   await page.waitForFunction(() => !location.hash.includes('compared='))
-  await page
-    .getByRole('heading', { name: 'In detail: the reference and smoke' })
-    .waitFor()
+  await page.getByRole('heading', { name: 'B against A · smoke' }).waitFor()
   // Another figure for the tests.
-  await matrix.getByLabel('Figure').selectOption('tokens')
-  await page.waitForFunction(
-    () => document.querySelector('.cmp-matrix-pick select')?.value === 'tokens',
-  )
+  await matrix.getByRole('radio', { name: 'Tokens', exact: true }).click()
+  await matrix
+    .getByRole('radio', { name: 'Tokens', exact: true })
+    .and(page.locator('[aria-checked="true"]'))
+    .waitFor()
+  // Another pair in detail by its letter.
+  await page
+    .getByRole('radiogroup', { name: 'Execution read against B' })
+    .getByRole('radio', { name: 'C', exact: true })
+    .click()
+  await page
+    .getByRole('heading', { name: 'B against C · smoke third' })
+    .waitFor()
 
   // Narrow: the executions scroll sideways, the test column stays in view.
   await page.setViewportSize({ width: 390, height: 844 })
@@ -744,8 +768,45 @@ try {
     'the page itself does not scroll sideways',
   )
   await matrix.scrollIntoViewIfNeeded()
-  await page.screenshot({ path: '/tmp/multi-compare/compare-3-390.png' })
+  await shot('compare-3-390')
   await page.setViewportSize({ width: 1280, height: 900 })
+
+  // Add executions: the ones ticked take the next letters, in order.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}/${c.id}`,
+  )
+  await matrix.waitFor()
+  await page.locator('[data-add-executions]').click()
+  const dialog = page.locator('[data-add-dialog]')
+  await dialog.getByRole('radio', { name: 'All executions' }).click()
+  await dialog.getByRole('checkbox', { name: /^Add older 0,/ }).check()
+  await dialog.getByText('1 execution ticked · it becomes D').waitFor()
+  await shot('compare-add-1280')
+  await dialog.getByRole('button', { name: 'Add 1 execution' }).click()
+  await page.waitForFunction(
+    (tail) => location.hash.split('?')[0].endsWith(tail),
+    `/compare/${a.id}/${b.id}/${c.id}/${older[0].id}`,
+  )
+  await matrix.locator(`[data-matrix-execution="${older[0].id}"]`).waitFor()
+
+  // Removing a column leaves the others; two left is the pair page.
+  for (const id of [older[0].id, c.id]) {
+    await matrix.locator(`[data-column-menu="${id}"]`).click()
+    await page
+      .getByRole('menuitem', { name: /^Remove from comparison/ })
+      .click()
+    await page.waitForFunction(
+      (gone) => !location.hash.split('?')[0].includes(gone),
+      id,
+    )
+  }
+  // The pair's cards are on the group page too: wait for the matrix to go.
+  await page.locator('[data-comparison-matrix]').waitFor({ state: 'detached' })
+  await page.locator('[data-comparison-side="b"]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`/compare/${a.id}/${b.id}(\\?|$)`),
+  )
 
   // Compare with…: several ticked, one from an older page, compared together.
   await page.goto(`${server.url}#/ext/harness-e2e/compare/${b.id}`)
@@ -765,7 +826,7 @@ try {
     new RegExp(`/compare/${b.id}/${older[0].id}/${older.at(-1).id}$`),
   )
   console.log(
-    'Group compare browser flow passed: three ticked in the list, A, B and C side by side in order, a test out of every total because of C, a figure of C opened in detail, B made the reference with every figure kept, a run page back to the same group and picks, a figure by keyboard, another figure for the tests, 390 px with the executions scrolling and the tests pinned, Compare with several ticked across an older page.',
+    'Group compare browser flow passed: three ticked in the list, A, B and C side by side in order, what differs and highlights against A, a test out of every total because of C, a figure of C opened in detail as a neutral selection, B made the reference from its menu with every figure kept, a run page back to the same group and picks, a figure by keyboard, another figure for the tests, another pair by its letter, 390 px with the executions scrolling and the tests pinned, one execution added as D, two removed down to the pair page, Compare with several ticked across an older page.',
   )
 
   assert.deepEqual(errors, [])

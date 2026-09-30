@@ -839,6 +839,17 @@ function release(worker: StackWorker, shown = false): string | null {
   return shown ? `${worker.observed} (self-reported)` : worker.observed
 }
 
+/** A worker's build in an execution's stack: its commit when it ran from
+ *  one, else its release; null when the stack does not list it. */
+export function workerRelease(
+  detail: DashboardExecutionDetail,
+  name: string,
+): string | null {
+  const worker = stackOf(detail).find((entry) => entry.name === name)
+  if (!worker) return null
+  return worker.commit ? `@${worker.commit.slice(0, 7)}` : release(worker)
+}
+
 /** What running the execution again would take: parameters when recorded,
  *  else what the report says. A suite and a profile are known only from
  *  parameters. */

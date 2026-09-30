@@ -1,5 +1,11 @@
 import {
+  Button,
   Checkbox,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  SegmentedControl,
   Table,
   TableBody,
   TableCaption,
@@ -10,7 +16,7 @@ import {
   TableRow,
   TableViewport,
 } from '@iii-dev/console-ui'
-import { ClipboardCopy, RotateCcw } from 'lucide-react'
+import { AlertTriangle, ClipboardCopy, RotateCcw } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -43,6 +49,7 @@ import {
   trendsOrigin,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
+import { groupLetter, scoringGroups } from '@/lib/comparison-group'
 import {
   type DashboardDataBridge,
   type DashboardExecutionDetail,
@@ -652,19 +659,272 @@ export function ComparisonPlaceholder({
   )
 }
 
-/** The status line of a group: the reference, how many executions and how
- *  many tests, and how many of them every total counts. */
-function groupLine(comparison: ExecutionComparison, executions: number) {
-  const { scenarios } = comparison
+/** The status line of a group: suite and model when every execution
+ *  shares them, how many executions and tests, and how many of them every
+ *  total counts. */
+function groupLine(pairs: ExecutionComparison[]) {
+  const [first] = pairs
+  const { scenarios } = first
   const counted = scenarios.filter((scenario) => scenario.counted).length
+  const shared = (pick: (pair: ExecutionComparison) => string | null) =>
+    pairs.every((pair) => pick(pair) === pick(first)) ? pick(first) : null
   return [
-    `reference ${comparison.a.title}`,
-    plural(executions, 'execution'),
+    shared((pair) => pair.b.suite) === first.a.suite ? first.a.suite : null,
+    shared((pair) => pair.b.subject) === first.a.subject
+      ? first.a.subject
+      : null,
+    plural(pairs.length + 1, 'execution'),
     plural(scenarios.length, 'test'),
     counted === scenarios.length ? null : `${counted} counted in every one`,
   ]
     .filter(Boolean)
     .join(' · ')
+}
+
+/** Whether two list rows are the same series: suite and model. */
+function sameSeries(one: LedgerRow, two: LedgerRow) {
+  return (
+    one.model === two.model &&
+    (one.execution.parameters?.suite?.id ?? null) ===
+      (two.execution.parameters?.suite?.id ?? null)
+  )
+}
+
+/** How a candidate's test list differs from the reference's, when both are
+ *  recorded and they differ. */
+export function testListNote(
+  candidate: LedgerRow,
+  reference: LedgerRow | null,
+): string | null {
+  const own = candidate.execution.parameters?.scenarios
+  const theirs = reference?.execution.parameters?.scenarios
+  if (!own || !theirs) return null
+  const only = own.filter((id) => !theirs.includes(id)).length
+  const missing = theirs.filter((id) => !own.includes(id)).length
+  if (only === 0 && missing === 0) return null
+  return `different test list: ${[
+    only ? `${plural(only, 'test')} only here` : null,
+    missing ? `${missing} missing` : null,
+  ]
+    .filter(Boolean)
+    .join(', ')}`
+}
+
+/** Add executions to a group (canvas: Add executions · they become G and
+ *  H): the latest executions, the reference's series first, each ticked one
+ *  taking the next letter. */
+function AddExecutionsDialog({
+  open,
+  onClose,
+  ids,
+  reference,
+  onAdd,
+}: {
+  open: boolean
+  onClose: () => void
+  ids: string[]
+  reference: string
+  onAdd: (picked: string[]) => void
+}) {
+  const [candidates, setCandidates] = useState<Candidates | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [more, setMore] = useState<More>({ loading: false, error: null })
+  const [picked, setPicked] = useState<string[]>([])
+  const [scope, setScope] = useState<'series' | 'all'>('series')
+  const beginRequest = useLatestRequest()
+  useEffect(() => {
+    if (!open) return
+    setPicked([])
+    const request = beginRequest()
+    void (async () => {
+      try {
+        const next = await loadCandidates(
+          await getDashboardDataBridge(),
+          reference,
+        )
+        if (!request.isCurrent()) return
+        setCandidates(next)
+        setError(null)
+      } catch (cause) {
+        if (request.isCurrent()) setError(errorText(cause))
+      }
+    })()
+  }, [open, reference, beginRequest])
+  const loadMore = async () => {
+    if (!candidates) return
+    setMore({ loading: true, error: null })
+    try {
+      setCandidates(
+        await loadOlderCandidates(
+          await getDashboardDataBridge(),
+          reference,
+          candidates,
+        ),
+      )
+      setMore({ loading: false, error: null })
+    } catch (cause) {
+      setMore({ loading: false, error: errorText(cause) })
+    }
+  }
+  const rows = (candidates?.rows ?? []).filter((row) => !ids.includes(row.id))
+  const base = candidates?.a ?? null
+  const shown =
+    scope === 'series' && base
+      ? rows.filter((row) => sameSeries(row, base))
+      : rows
+  const letter = (id: string) => groupLetter(ids.length + picked.indexOf(id))
+  const odd = rows.filter(
+    (row) => picked.includes(row.id) && testListNote(row, base),
+  )
+  const toggle = (id: string) =>
+    setPicked((current) =>
+      current.includes(id)
+        ? current.filter((entry) => entry !== id)
+        : [...current, id],
+    )
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+    >
+      <DialogContent
+        className="ex-dialog ep-confirm-wide cmp-add"
+        aria-describedby="cmp-add-body"
+        data-add-dialog
+      >
+        <div>
+          <DialogTitle className="ex-dialog-title">Add executions</DialogTitle>
+          <DialogDescription id="cmp-add-body" className="ex-dialog-body">
+            Each one takes the next letter and is read against{' '}
+            {groupLetter(ids.indexOf(reference))}, like the others.
+          </DialogDescription>
+        </div>
+        {base ? (
+          <SegmentedControl
+            variant="radio"
+            aria-label="Show"
+            value={scope}
+            onChange={setScope}
+            options={[
+              {
+                value: 'series',
+                label: [
+                  base.execution.parameters?.suite?.label ??
+                    base.execution.parameters?.suite?.id ??
+                    'This suite',
+                  base.model,
+                ].join(' · '),
+              },
+              { value: 'all', label: 'All executions' },
+            ]}
+          />
+        ) : null}
+        {error ? (
+          <p className="ex-error" role="alert">
+            The executions could not be listed: {error}
+          </p>
+        ) : !candidates ? (
+          <p className="cmp-faint" role="status">
+            Loading the latest executions…
+          </p>
+        ) : shown.length === 0 ? (
+          <p className="cmp-faint">
+            {scope === 'series'
+              ? 'No other execution of this suite and model. Show all executions to pick from every one.'
+              : 'No other execution to add.'}
+          </p>
+        ) : (
+          <ul className="cmp-add-list" aria-label="Executions to add">
+            {shown.map((row) => {
+              const note = testListNote(row, base)
+              return (
+                <li key={row.id} data-candidate={row.id}>
+                  <Checkbox
+                    className="cmp-add-row"
+                    checked={picked.includes(row.id)}
+                    onChange={() => toggle(row.id)}
+                    aria-label={`Add ${row.title}, ${row.meta}`}
+                    label={
+                      <>
+                        <span className="cmp-add-copy">
+                          <span className="cmp-strong">{row.title}</span>
+                          <span
+                            className="cmp-faint"
+                            data-tone={note ? 'warn' : undefined}
+                          >
+                            {[row.meta, note].filter(Boolean).join(' · ')}
+                          </span>
+                        </span>
+                        <span className="cmp-mono">{row.score}</span>
+                        <span className="cmp-letter" aria-hidden="true">
+                          {picked.includes(row.id) ? letter(row.id) : ''}
+                        </span>
+                      </>
+                    }
+                  />
+                </li>
+              )
+            })}
+          </ul>
+        )}
+        {candidates?.cursor ? (
+          <button
+            type="button"
+            className="cmp-act"
+            onClick={() => void loadMore()}
+            disabled={more.loading}
+            aria-busy={more.loading}
+          >
+            {more.loading ? 'Loading…' : 'Load older executions'}
+          </button>
+        ) : null}
+        {more.error ? (
+          <p className="ex-error" role="alert">
+            Older executions could not be loaded: {more.error}
+          </p>
+        ) : null}
+        {odd.length > 0 ? (
+          <ul className="ex-dialog-facts">
+            <li data-tone="warn">
+              <AlertTriangle size={16} aria-hidden="true" />
+              <span>
+                {odd.map((row) => row.title).join(', ')} ran a different test
+                list. Tests that one execution did not run leave every total;
+                you can remove it again from its column.
+              </span>
+            </li>
+          </ul>
+        ) : null}
+        <div className="ex-dialog-actions">
+          <span className="cmp-faint cmp-add-summary" id="cmp-add-why">
+            {picked.length > 0
+              ? `${plural(picked.length, 'execution')} ticked · ${picked.length === 1 ? 'it becomes' : 'they become'} ${picked.map(letter).join(', ')}`
+              : 'Tick at least one execution to add.'}
+          </span>
+          <Button type="button" variant="pill" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            aria-disabled={picked.length === 0}
+            aria-describedby="cmp-add-why"
+            onClick={() => {
+              if (picked.length > 0) onAdd(picked)
+            }}
+            data-add-confirm
+          >
+            {picked.length > 0
+              ? `Add ${plural(picked.length, 'execution')}`
+              : 'Add executions'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 export function ExecutionComparePage({
@@ -700,6 +960,7 @@ export function ExecutionComparePage({
   // Open apart from the parameters, so Run again keeps its title while the
   // dialog animates closed.
   const [rerunOpen, setRerunOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
   const beginRequest = useLatestRequest()
   // The executions as one value: a new array of the same ids is no change.
   const key = executionIds.join('\n')
@@ -785,6 +1046,10 @@ export function ExecutionComparePage({
     () => (details ? comparisonGroup(details) : null),
     [details],
   )
+  const scoring = useMemo(
+    () => (details ? scoringGroups(details) : new Map<string, number[][]>()),
+    [details],
+  )
   // The reference against every other execution, in the order chosen.
   const pairs = useMemo(() => {
     const base = details?.find((detail) => detail.id === referenceId)
@@ -828,13 +1093,31 @@ export function ExecutionComparePage({
       hashForComparison(...executionIds),
       viewParams(choice, origin(), selectionOf(executionIds, one, two)),
     )
+  // Without some executions: the picks stay where they still can.
+  const withoutHref = (remove: string[]) => {
+    const rest = executionIds.filter((id) => !remove.includes(id))
+    if (rest.length === 0) return hashForWorkspace('executions')
+    const one = rest.includes(referenceId) ? referenceId : rest[0]
+    const two =
+      rest.includes(comparedId) && comparedId !== one
+        ? comparedId
+        : (rest.find((id) => id !== one) ?? one)
+    return hashWithParams(
+      hashForComparison(...rest),
+      viewParams(choice, origin(), selectionOf(rest, one, two)),
+    )
+  }
   const grouped: GroupView = {
     executions: details,
     pairs,
+    group,
+    scoring,
     compareHref: (id) => hashFor(referenceId, id),
     // The one in detail made the reference gives its place to the old one.
     referenceHref: (id) =>
       hashFor(id, id === comparedId ? referenceId : comparedId),
+    withoutHref,
+    onAdd: bridge ? () => setAddOpen(true) : undefined,
   }
   const refreshError =
     Object.entries(stale)
@@ -881,11 +1164,7 @@ export function ExecutionComparePage({
             ? `${comparison.a.title} × ${plural(pairs.length, 'execution')}`
             : `${comparison.a.title} × ${comparison.b.title}`
         }
-        summary={
-          pairs.length > 1
-            ? groupLine(comparison, details.length)
-            : summaryLine(comparison)
-        }
+        summary={pairs.length > 1 ? groupLine(pairs) : summaryLine(comparison)}
         actions={
           <>
             <button
@@ -943,6 +1222,26 @@ export function ExecutionComparePage({
         }
         onRunTest={bridge ? (id) => runAgain([id]) : undefined}
       />
+      {pairs.length > 1 ? (
+        <AddExecutionsDialog
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          ids={executionIds}
+          reference={referenceId}
+          onAdd={(picked) => {
+            setAddOpen(false)
+            const all = [...executionIds, ...picked]
+            window.location.hash = hashWithParams(
+              hashForComparison(...all),
+              viewParams(
+                choice,
+                origin(),
+                selectionOf(all, referenceId, comparedId),
+              ),
+            )
+          }}
+        />
+      ) : null}
       <LocalRunnerDialog
         bridge={bridge}
         open={rerunOpen}

@@ -20,6 +20,13 @@ import {
   useRef,
   useState,
 } from 'react'
+import {
+  GroupHighlights,
+  GroupMatrix,
+  GroupSummary,
+  type GroupView,
+  PairHeading,
+} from '@/components/compare/GroupComparison'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import {
   type Image,
@@ -40,6 +47,12 @@ import {
   hashForExecution,
   hashFrom,
 } from '@/hooks/use-hash-route'
+import {
+  groupMembers,
+  lettersText,
+  memberValues,
+  spreadOf,
+} from '@/lib/comparison-group'
 import type {
   DashboardDataBridge,
   DashboardExecutionDetail,
@@ -78,9 +91,18 @@ import '@/components/execution/execution-page.css'
 import './compare.css'
 
 export type Sides = { a: DashboardExecutionDetail; b: DashboardExecutionDetail }
+export type { GroupView }
+
 type Which = 'a' | 'b'
 
 const ROLE: Record<Which, string> = { a: 'Reference', b: 'Compared' }
+
+/** How the page names the pair's two sides: A and B alone, the group's
+ *  letters and "In detail" when the pair is one of a group. */
+type PairNames = { letter: Record<Which, string>; role: Record<Which, string> }
+const PAIR: PairNames = { letter: { a: 'A', b: 'B' }, role: ROLE }
+const PairNamesContext = createContext<PairNames>(PAIR)
+const usePairNames = () => useContext(PairNamesContext)
 const LIVE = ['running', 'importing', 'cancelling']
 
 /* ------------------------------------------------------------- figures */
@@ -233,19 +255,20 @@ function SideCard({
   side: ComparisonSide
   detail: DashboardExecutionDetail
 }) {
+  const names = usePairNames()
   // The execution's result as the list and its page say it.
   const result = executionResult(buildExecutionPresentation(detail))
   return (
     <article
       className="cmp-side"
-      aria-label={`${which.toUpperCase()} · ${ROLE[which]}`}
+      aria-label={`${names.letter[which]} · ${names.role[which]}`}
       data-comparison-side={which}
     >
       <div className="cmp-side-top">
         <span className="cmp-letter" aria-hidden="true">
-          {which.toUpperCase()}
+          {names.letter[which]}
         </span>
-        <span className="cmp-faint">{ROLE[which]}</span>
+        <span className="cmp-faint">{names.role[which]}</span>
         <StatusLabel
           className="cmp-side-state"
           state={result.state}
@@ -299,12 +322,26 @@ function sameSentence(comparison: ExecutionComparison): string {
 
 /* -------------------------------------------------------------- picker */
 
+/** In a group, a test's score across every execution instead of A → B. */
+type PickerSpread = {
+  /** `52–87`, or `100 in all`; null when some execution has none. */
+  values: (scenarioId: string) => string | null
+  /** `differs in 4 of 5`, against the reference. */
+  note: (scenarioId: string) => string | null
+  /** Tests whose score is not the same in every execution. */
+  varied: string[]
+  /** Why a test is out of every total, by the executions' letters. */
+  out: (scenarioId: string) => string | null
+}
+
 function TestPicker({
   comparison,
   onCount,
+  spread,
 }: {
   comparison: ExecutionComparison
   onCount: (ids: string[] | null) => void
+  spread?: PickerSpread
 }) {
   const { scenarios, exclusions } = comparison
   const [open, setOpen] = useState(
@@ -362,16 +399,18 @@ function TestPicker({
                 type="button"
                 onClick={() =>
                   onCount(
-                    ids(
-                      scenarios.filter((scenario) => {
-                        const delta = scoreDelta(scenario)
-                        return delta !== null && Math.abs(delta) > 1e-9
-                      }),
-                    ),
+                    spread
+                      ? spread.varied
+                      : ids(
+                          scenarios.filter((scenario) => {
+                            const delta = scoreDelta(scenario)
+                            return delta !== null && Math.abs(delta) > 1e-9
+                          }),
+                        ),
                   )
                 }
               >
-                Score changed
+                {spread ? 'Score varies' : 'Score changed'}
               </button>
               <button
                 type="button"
@@ -406,7 +445,7 @@ function TestPicker({
               const note = scenario.leftOut
                 ? 'Left out by you'
                 : scenario.exclusion
-                  ? `${scenario.exclusion.applied ? 'Out by itself' : 'Brought back'} · ${gap}`
+                  ? `${scenario.exclusion.applied ? 'Out by itself' : 'Brought back'} · ${spread?.out(scenario.id) ?? gap}`
                   : null
               return (
                 <li key={scenario.id} data-pick={scenario.id}>
@@ -428,16 +467,29 @@ function TestPicker({
                             <span className="cmp-pick-note">{note}</span>
                           ) : null}
                         </span>
-                        <span className="cmp-pick-values">
-                          {score ? valueText(score, 'baseline') : '—'} →{' '}
-                          {score ? valueText(score, 'candidate') : '—'}
-                        </span>
-                        <span
-                          className="cmp-pick-delta cmp-tone"
-                          data-tone={score ? metricTone(score) : undefined}
-                        >
-                          {score ? deltaText(score) : ''}
-                        </span>
+                        {spread ? (
+                          <>
+                            <span className="cmp-pick-values">
+                              {spread.values(scenario.id) ?? '—'}
+                            </span>
+                            <span className="cmp-pick-delta cmp-faint-num">
+                              {spread.note(scenario.id) ?? ''}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="cmp-pick-values">
+                              {score ? valueText(score, 'baseline') : '—'} →{' '}
+                              {score ? valueText(score, 'candidate') : '—'}
+                            </span>
+                            <span
+                              className="cmp-pick-delta cmp-tone"
+                              data-tone={score ? metricTone(score) : undefined}
+                            >
+                              {score ? deltaText(score) : ''}
+                            </span>
+                          </>
+                        )}
                       </>
                     }
                   />
@@ -448,8 +500,9 @@ function TestPicker({
           <p className="cmp-note">
             <Info size={16} aria-hidden="true" />
             <span>
-              A test missing on one side, technically invalid, undetermined,
-              unscored or redefined leaves the totals by itself.{' '}
+              {spread
+                ? 'A test that any execution cannot measure (missing, technically invalid, undetermined, unscored or redefined) leaves every total, so each execution is read over the same tests.'
+                : 'A test missing on one side, technically invalid, undetermined, unscored or redefined leaves the totals by itself.'}{' '}
               {exclusions.length === 0
                 ? 'None did here.'
                 : `${plural(exclusions.length, 'test')} did here${out < exclusions.length ? `, ${exclusions.length - out} brought back` : ''}.`}
@@ -616,6 +669,7 @@ function MetricTable({
   caption: string
   metrics: ComparedMetric[]
 }) {
+  const names = usePairNames()
   return (
     <table className="cmp-metrics" data-comparison-metrics>
       <caption className="ep-sr">{caption}</caption>
@@ -624,8 +678,8 @@ function MetricTable({
           <th scope="col">
             <span className="ep-sr">Metric</span>
           </th>
-          <th scope="col">A</th>
-          <th scope="col">B</th>
+          <th scope="col">{names.letter.a}</th>
+          <th scope="col">{names.letter.b}</th>
           <th scope="col">Difference</th>
         </tr>
       </thead>
@@ -749,6 +803,7 @@ function Results({
   onToggle: (scenarioId: string) => void
   onRunTest?: (scenarioId: string) => void
 }) {
+  const names = usePairNames()
   return (
     <section
       className="cmp-card cmp-results"
@@ -767,10 +822,12 @@ function Results({
         </div>
         <div className="cmp-legend" aria-hidden="true">
           <span>
-            <span className="cmp-track-a cmp-legend-dot" />A · Reference
+            <span className="cmp-track-a cmp-legend-dot" />
+            {names.letter.a} · {names.role.a}
           </span>
           <span>
-            <span className="cmp-track-b cmp-legend-dot" />B · Compared
+            <span className="cmp-track-b cmp-legend-dot" />
+            {names.letter.b} · {names.role.b}
           </span>
         </div>
       </div>
@@ -940,6 +997,7 @@ export function RowDetail({
   onRunTest?: (scenarioId: string) => void
 }) {
   const runHref = useRunHref(sides)
+  const names = usePairNames()
   const runs = useMemo(
     () =>
       (['a', 'b'] as const).flatMap((which) =>
@@ -953,7 +1011,7 @@ export function RowDetail({
   const bothFull =
     score?.baseline === 100 && score?.candidate === 100
       ? 'No criterion changed. Both sides scored 100.'
-      : 'No criterion changed between A and B.'
+      : `No criterion changed between ${names.letter.a} and ${names.letter.b}.`
   return (
     <div className="cmp-detail" data-scenario-detail={scenario.id}>
       <div className="cmp-detail-bar">
@@ -1017,7 +1075,7 @@ export function RowDetail({
               {(['a', 'b'] as const).flatMap((which) =>
                 criterion.reasons[which].map((reason) => (
                   <div className="cmp-reason" key={`${which}:${reason}`}>
-                    <span className="cmp-letter-sm">{which.toUpperCase()}</span>
+                    <span className="cmp-letter-sm">{names.letter[which]}</span>
                     <code>{reason}</code>
                   </div>
                 )),
@@ -1065,7 +1123,7 @@ export function RowDetail({
                   key={`${which}:${run.runId ?? index}`}
                   data-run-side={which}
                 >
-                  <span className="cmp-letter-sm">{which.toUpperCase()}</span>
+                  <span className="cmp-letter-sm">{names.letter[which]}</span>
                   <StatusLabel
                     state={runResultState({
                       status: run.status ?? 'unavailable',
@@ -1171,7 +1229,8 @@ export function ScreenshotFigure({
   /** The thumbnail's button, for focus to come back to. */
   buttonRef?: (button: HTMLButtonElement | null) => void
 }) {
-  const side = which.toUpperCase()
+  const names = usePairNames()
+  const side = names.letter[which]
   return (
     <figure
       className="cmp-shot"
@@ -1212,7 +1271,7 @@ export function ScreenshotFigure({
       )}
       <figcaption>
         <span className="cmp-letter-sm">{side}</span>
-        {ROLE[which]}
+        {names.role[which]}
         {evidenceHref ? <a href={evidenceHref}>Evidence record</a> : null}
       </figcaption>
     </figure>
@@ -1324,6 +1383,7 @@ function ScreenshotPairs({
 /* --------------------------------------------------------------- stack */
 
 function StackDetail({ stack }: { stack: StackComparison }) {
+  const names = usePairNames()
   const unrecorded = (['a', 'b'] as const).filter(
     (which) => !stack.recorded[which],
   )
@@ -1331,7 +1391,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
     return (
       <p className="cmp-faint cmp-empty-line">
         No stack recorded for{' '}
-        {unrecorded.map((which) => which.toUpperCase()).join(' and ')}: the
+        {unrecorded.map((which) => names.letter[which]).join(' and ')}: the
         workers cannot be compared.
       </p>
     )
@@ -1351,8 +1411,8 @@ function StackDetail({ stack }: { stack: StackComparison }) {
           <thead>
             <tr>
               <th scope="col">Worker</th>
-              <th scope="col">A</th>
-              <th scope="col">B</th>
+              <th scope="col">{names.letter.a}</th>
+              <th scope="col">{names.letter.b}</th>
             </tr>
           </thead>
           <tbody>
@@ -1380,8 +1440,8 @@ function StackDetail({ stack }: { stack: StackComparison }) {
             <thead>
               <tr>
                 <th scope="col">Worker</th>
-                <th scope="col">A</th>
-                <th scope="col">B</th>
+                <th scope="col">{names.letter.a}</th>
+                <th scope="col">{names.letter.b}</th>
                 <th scope="col">Why</th>
               </tr>
             </thead>
@@ -1402,7 +1462,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
         {(['a', 'b'] as const).map((which) =>
           onlyHere(which).length > 0 ? (
             <div key={which} data-stack-only={which}>
-              <dt>Only in {which.toUpperCase()}</dt>
+              <dt>Only in {names.letter[which]}</dt>
               <dd>{onlyHere(which).sort().join(', ')}</dd>
             </div>
           ) : null,
@@ -1461,346 +1521,74 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
   )
 }
 
-/* -------------------------------------------------------------- group */
+/* ---------------------------------------------------------------- view */
 
-/** More than two executions: every one of them, and the links that pick
- *  the reference and the one read against it in detail. */
-export type GroupView = {
-  /** Every execution, in the order chosen. */
-  executions: DashboardExecutionDetail[]
-  /** The reference against each other execution, in that order. */
-  pairs: ExecutionComparison[]
-  /** The hash that reads this execution against the reference in detail. */
-  compareHref: (id: string) => string
-  /** The hash that makes this execution the reference. */
-  referenceHref: (id: string) => string
-}
-
-/** An execution's figure and, but for the reference, its difference from
- *  the reference; a partial side gives none. */
-function MatrixFigure({
-  metric,
-  side,
-  empty,
-}: {
-  metric: ComparedMetric | undefined
-  side: Side
-  /** What stands in for a missing value: the run's state, else a dash. */
-  empty?: string
-}) {
-  if (!metric || metric[side] === null)
-    return <span className="cmp-faint-num">{empty ?? '—'}</span>
-  const note =
-    side === 'baseline'
-      ? metric.partial.baseline
-        ? 'partial'
-        : null
-      : metric.partial.candidate
-        ? 'partial'
-        : metric.partial.baseline
-          ? 'reference partial'
-          : deltaText(metric) || null
-  return (
-    <span className="cmp-matrix-figure">
-      <span>{valueText(metric, side)}</span>
-      {note ? (
-        <span
-          className="cmp-matrix-delta cmp-tone"
-          data-tone={side === 'candidate' ? metricTone(metric) : undefined}
-        >
-          {note}
-        </span>
-      ) : null}
-    </span>
-  )
-}
-
-/** Why a test is out of every total, said for the whole group. */
-function matrixOut(
-  scenario: ScenarioComparison,
-  named: (which: Which) => string,
-): { label: string; title: string } | null {
-  if (scenario.counted) return null
-  if (scenario.leftOut)
-    return { label: 'left out', title: 'Left out of the totals' }
-  const exclusion = scenario.exclusion
-  if (!exclusion) return { label: 'out', title: 'Out of the totals' }
-  const where = [...exclusion.sides.map(named), ...(exclusion.others ?? [])]
+/** The test picker's values in a group: each test's score across every
+ *  execution, and in how many it differs from the reference. */
+function pickerSpread(group: GroupView, referenceId: string) {
+  const members = groupMembers(group.executions, referenceId, group.pairs)
+  const [first] = group.pairs
+  const scores = (id: string) => memberValues(members, first, 'score', id)
+  const others = members.filter((member) => !member.reference)
+  const reference = members.find((member) => member.reference)
+  const rounded = (value: number | null) =>
+    value === null ? null : Number(value.toFixed(1))
   return {
-    label: REASON[exclusion.reason],
-    title:
-      exclusion.reason === 'redefined'
-        ? 'Out of every total: the case inputs differ between the executions'
-        : `Out of every total: ${REASON[exclusion.reason]} in ${listText(where)}`,
+    members,
+    spread: {
+      values: (id: string) => {
+        const range = spreadOf(scores(id))
+        if (!range) return null
+        const [low, high] = [rounded(range.min), rounded(range.max)]
+        return low === high ? `${low} in all` : `${low}–${high}`
+      },
+      note: (id: string) => {
+        const values = scores(id)
+        if (!reference || values[reference.index] === null) return null
+        const differ = others.filter(
+          (member) =>
+            values[member.index] !== null &&
+            rounded(values[member.index]) !== rounded(values[reference.index]),
+        ).length
+        return differ === 0
+          ? 'same in all'
+          : `differs in ${differ} of ${others.length}`
+      },
+      out: (id: string) => {
+        const gap = group.group.exclusions.get(id)
+        if (!gap) return null
+        const where = lettersText(
+          members
+            .filter((member) => gap.executions.includes(member.id))
+            .map((member) => member.index),
+        )
+        return gap.reason === 'redefined'
+          ? 'redefined: the case inputs differ between the executions'
+          : `${gap.reason.replaceAll('_', ' ')} in ${where}`
+      },
+      varied: first.scenarios
+        .filter((scenario) => {
+          const range = spreadOf(scores(scenario.id))
+          return range !== null && rounded(range.max) !== rounded(range.min)
+        })
+        .map((scenario) => scenario.id),
+    },
   }
 }
 
-/** Every execution in a column, each figure against the reference, over
- *  the same tests; a figure opens its test in the detail below. */
-function GroupMatrix({
-  group,
-  compared,
-  onOpen,
-}: {
-  group: GroupView
-  compared: string
-  onOpen: (executionId: string, scenarioId: string) => void
-}) {
-  const [metricId, setMetricId] = useState('score')
-  const [all, setAll] = useState(false)
-  const [first] = group.pairs
-  const reference = first.a.id
-  const byId = useMemo(
-    () =>
-      new Map(
-        group.pairs.map((pair) => [
-          pair.b.id,
-          {
-            pair,
-            scenarios: new Map(pair.scenarios.map((row) => [row.id, row])),
-          },
-        ]),
-      ),
-    [group.pairs],
-  )
-  const results = useMemo(
-    () =>
-      new Map(
-        group.executions.map((detail) => [
-          detail.id,
-          executionResult(buildExecutionPresentation(detail)),
-        ]),
-      ),
-    [group.executions],
-  )
-  const title = (id: string) =>
-    id === reference ? first.a.title : (byId.get(id)?.pair.b.title ?? id)
-  const named = (which: Which) =>
-    which === 'a' ? first.a.title : first.b.title
-  const totals = first.totals.filter((metric, index) =>
-    all
-      ? metric.baseline !== null ||
-        group.pairs.some((pair) => pair.totals[index].candidate !== null)
-      : KPIS.includes(metric.id),
-  )
-  const columns = group.executions.length + 1
-  return (
-    <section
-      className="cmp-card cmp-group"
-      aria-labelledby="cmp-group-title"
-      data-comparison-group
-    >
-      <div className="cmp-results-head">
-        <div className="cmp-results-copy">
-          <h2 id="cmp-group-title" className="cmp-h2">
-            {plural(group.executions.length, 'execution')} side by side
-          </h2>
-          <p className="cmp-faint">
-            Each against the reference, over the same tests. Pick a figure to
-            read that test in detail below.
-          </p>
-        </div>
-      </div>
-      <div className="cmp-matrix-scroll">
-        <table className="cmp-matrix" data-comparison-matrix>
-          <caption className="ep-sr">
-            Every execution against the reference
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col" className="cmp-matrix-corner">
-                <span className="ep-sr">Figure</span>
-              </th>
-              {group.executions.map((detail) => {
-                const id = detail.id
-                const result = results.get(id)
-                const role =
-                  id === reference
-                    ? 'reference'
-                    : id === compared
-                      ? 'compared'
-                      : undefined
-                return (
-                  <th
-                    key={id}
-                    scope="col"
-                    data-matrix-execution={id}
-                    data-role={role}
-                  >
-                    <span className="cmp-matrix-title" title={title(id)}>
-                      {title(id)}
-                    </span>
-                    <span className="cmp-matrix-id" title={id}>
-                      {id}
-                    </span>
-                    {result ? (
-                      <StatusLabel
-                        className="cmp-matrix-state"
-                        state={result.state}
-                        label={result.label}
-                      />
-                    ) : null}
-                    <span className="cmp-matrix-actions">
-                      {role === 'reference' ? (
-                        <span className="cmp-pill">Reference</span>
-                      ) : (
-                        <>
-                          {role === 'compared' ? (
-                            <span className="cmp-pill">In detail</span>
-                          ) : (
-                            <a
-                              className="cmp-act"
-                              href={group.compareHref(id)}
-                              aria-label={`Read ${title(id)} against the reference`}
-                            >
-                              Compare
-                            </a>
-                          )}
-                          <a
-                            className="cmp-act"
-                            href={group.referenceHref(id)}
-                            aria-label={`Make ${title(id)} the reference`}
-                          >
-                            Make reference
-                          </a>
-                        </>
-                      )}
-                    </span>
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
-          <tbody aria-label="Totals">
-            <tr className="cmp-matrix-group">
-              <th scope="colgroup" colSpan={columns}>
-                <span className="cmp-matrix-sticky">
-                  <span className="cmp-eyebrow">Totals</span>
-                  <button
-                    type="button"
-                    className="cmp-act"
-                    aria-pressed={all}
-                    onClick={() => setAll(!all)}
-                  >
-                    All metrics
-                  </button>
-                </span>
-              </th>
-            </tr>
-            {totals.map((metric) => (
-              <tr key={metric.id} data-matrix-metric={metric.id}>
-                <th scope="row">{metric.label}</th>
-                {group.executions.map((detail) =>
-                  detail.id === reference ? (
-                    <td key={detail.id} data-role="reference">
-                      <MatrixFigure metric={metric} side="baseline" />
-                    </td>
-                  ) : (
-                    <td
-                      key={detail.id}
-                      data-role={
-                        detail.id === compared ? 'compared' : undefined
-                      }
-                    >
-                      <MatrixFigure
-                        metric={byId
-                          .get(detail.id)
-                          ?.pair.totals.find((one) => one.id === metric.id)}
-                        side="candidate"
-                      />
-                    </td>
-                  ),
-                )}
-              </tr>
-            ))}
-          </tbody>
-          <tbody aria-label="Results by test">
-            <tr className="cmp-matrix-group">
-              <th scope="colgroup" colSpan={columns}>
-                <span className="cmp-matrix-sticky">
-                  <span className="cmp-eyebrow">Results by test</span>
-                  <label className="cmp-matrix-pick">
-                    <span className="cmp-faint">Figure</span>
-                    <select
-                      value={metricId}
-                      onChange={(event) => setMetricId(event.target.value)}
-                    >
-                      {first.totals.map((metric) => (
-                        <option key={metric.id} value={metric.id}>
-                          {metric.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </span>
-              </th>
-            </tr>
-            {first.scenarios.map((scenario) => {
-              const out = matrixOut(scenario, named)
-              return (
-                <tr
-                  key={scenario.id}
-                  data-matrix-scenario={scenario.id}
-                  data-counted={scenario.counted}
-                >
-                  <th scope="row">
-                    <span className="cmp-matrix-test">{scenario.id}</span>
-                    {out ? (
-                      <span className="cmp-pill" title={out.title}>
-                        {out.label}
-                      </span>
-                    ) : null}
-                  </th>
-                  {group.executions.map((detail) => {
-                    const id = detail.id
-                    if (id === reference)
-                      return (
-                        <td key={id} data-role="reference">
-                          <MatrixFigure
-                            metric={metricOf(scenario, metricId)}
-                            side="baseline"
-                            empty={stateText(scenario.sides.a.state)}
-                          />
-                        </td>
-                      )
-                    const row = byId.get(id)?.scenarios.get(scenario.id)
-                    return (
-                      <td
-                        key={id}
-                        data-role={id === compared ? 'compared' : undefined}
-                      >
-                        <button
-                          type="button"
-                          className="cmp-matrix-cell"
-                          data-matrix-cell={id}
-                          onClick={() => onOpen(id, scenario.id)}
-                        >
-                          <span className="ep-sr">
-                            {scenario.id} in {title(id)}:{' '}
-                          </span>
-                          <MatrixFigure
-                            metric={row && metricOf(row, metricId)}
-                            side="candidate"
-                            empty={stateText(row?.sides.b.state ?? null)}
-                          />
-                        </button>
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  )
+/** `A and E`: the pair in detail, by letter. */
+function pairLetters(
+  members: ReturnType<typeof groupMembers>,
+  comparison: ExecutionComparison,
+) {
+  const letter = (id: string) =>
+    members.find((member) => member.id === id)?.letter ?? id
+  return `${letter(comparison.a.id)} and ${letter(comparison.b.id)}`
 }
 
-/* ---------------------------------------------------------------- view */
-
-/** The comparison itself, from two loaded executions. Every difference is
- *  an observation: no side is labelled better or worse. */
+/** The comparison itself, from two loaded executions, or a group of more
+ *  read against one of them with a pair of it in detail. Every difference
+ *  is an observation: no side is labelled better or worse. */
 export function ComparisonView({
   comparison,
   sides,
@@ -1834,6 +1622,21 @@ export function ComparisonView({
   const warning = runnerWarning(comparison.runner)
   const stack = stackChanges(comparison.stack)
   const same = sameSentence(comparison)
+  const referenceId = comparison.a.id
+  const grouped = useMemo(
+    () =>
+      group && group.pairs.length > 1 ? pickerSpread(group, referenceId) : null,
+    [group, referenceId],
+  )
+  const names: PairNames = useMemo(() => {
+    if (!grouped) return PAIR
+    const letter = (id: string) =>
+      grouped.members.find((member) => member.id === id)?.letter ?? id
+    return {
+      letter: { a: letter(comparison.a.id), b: letter(comparison.b.id) },
+      role: { a: 'Reference', b: 'In detail' },
+    }
+  }, [grouped, comparison.a.id, comparison.b.id])
   const toggle = (id: string) =>
     setOpen((current) => {
       const next = new Set(current)
@@ -1851,6 +1654,15 @@ export function ComparisonView({
         ),
       0,
     )
+  }
+  // A test of another execution of the group: that one comes into detail.
+  const showIn = (executionId: string | null, scenarioId: string) => {
+    if (group && executionId && executionId !== comparison.b.id)
+      window.location.hash =
+        executionId === referenceId
+          ? group.compareHref(comparison.b.id)
+          : group.compareHref(executionId)
+    show(scenarioId)
   }
   const live = (['a', 'b'] as const).filter((which) =>
     LIVE.includes(String(sides[which].status ?? '')),
@@ -1885,33 +1697,8 @@ export function ComparisonView({
         ]
       : []),
   ]
-  return (
-    <ComparisonHash.Provider value={here ?? null}>
-      {refreshError ? (
-        <p className="cmp-warning" role="status" data-comparison-refresh-error>
-          <AlertTriangle size={16} aria-hidden="true" />
-          <span>
-            Refresh failed. Showing the comparison as last loaded; updates will
-            retry. {refreshError}
-          </span>
-        </p>
-      ) : null}
-      {group && group.pairs.length > 1 ? (
-        <>
-          <GroupMatrix
-            group={group}
-            compared={comparison.b.id}
-            onOpen={(id, scenarioId) => {
-              if (id !== comparison.b.id)
-                window.location.hash = group.compareHref(id)
-              show(scenarioId)
-            }}
-          />
-          <h2 className="cmp-h2 cmp-pair-heading" data-comparison-pair>
-            In detail: the reference and {comparison.b.title}
-          </h2>
-        </>
-      ) : null}
+  const pair = (
+    <>
       <section className="cmp-sides" aria-label="Executions compared">
         <SideCard which="a" side={comparison.a} detail={sides.a} />
         <a
@@ -1928,86 +1715,150 @@ export function ComparisonView({
         <p className="cmp-live" role="status" data-comparison-live>
           <StatusLabel state="running" label="Running" />
           <span>
-            {live.map((which) => which.toUpperCase()).join(' and ')}{' '}
+            {live.map((which) => names.letter[which]).join(' and ')}{' '}
             {live.length === 1 ? 'is' : 'are'} still running: figures short of
             their planned runs are partial, and this page follows them.
           </span>
         </p>
       ) : null}
-
-      <section
-        className="cmp-changes"
-        aria-label="What changed"
-        data-comparison-changes
-      >
-        <div className="cmp-changes-row">
-          <span className="cmp-eyebrow">What changed</span>
-          {changes.length > 0 ? <FactList>{changes}</FactList> : null}
-          <span className="cmp-faint">
-            {changes.length === 0 ? `Nothing recorded differs. ${same}` : same}
-          </span>
-          <button
-            type="button"
-            className="cmp-act"
-            aria-controls="comparison-stack"
-            onClick={() => {
-              setStackOpen(true)
-              window.setTimeout(
-                () =>
-                  reach(document.getElementById('comparison-stack'), 'summary'),
-                0,
-              )
-            }}
+    </>
+  )
+  const results = (
+    <Results
+      comparison={comparison}
+      sides={sides}
+      bridge={bridge}
+      open={open}
+      onToggle={toggle}
+      onRunTest={onRunTest}
+    />
+  )
+  return (
+    <ComparisonHash.Provider value={here ?? null}>
+      <PairNamesContext.Provider value={names}>
+        {refreshError ? (
+          <p
+            className="cmp-warning"
+            role="status"
+            data-comparison-refresh-error
           >
-            Stack details
-          </button>
-        </div>
-        {warning ? (
-          <p className="cmp-warning" data-runner-warning>
             <AlertTriangle size={16} aria-hidden="true" />
-            <span>{warning}</span>
+            <span>
+              Refresh failed. Showing the comparison as last loaded; updates
+              will retry. {refreshError}
+            </span>
           </p>
         ) : null}
-      </section>
+        {group && grouped ? (
+          <>
+            <GroupSummary members={grouped.members} view={group} />
+            <TestPicker
+              comparison={comparison}
+              onCount={onCount}
+              spread={grouped.spread}
+            />
+            <GroupHighlights
+              members={grouped.members}
+              onShow={(scenarioId, executionId) =>
+                showIn(executionId, scenarioId)
+              }
+            />
+            <GroupMatrix
+              members={grouped.members}
+              view={group}
+              compared={comparison.b.id}
+              onOpen={(executionId, scenarioId) =>
+                showIn(executionId, scenarioId)
+              }
+            />
+            <section className="cmp-detail-pair" aria-label="In detail">
+              <PairHeading
+                members={grouped.members}
+                compared={comparison.b.id}
+                view={group}
+              />
+              {pair}
+              <Totals comparison={comparison} />
+              {results}
+            </section>
+          </>
+        ) : (
+          <>
+            {pair}
+            <section
+              className="cmp-changes"
+              aria-label="What changed"
+              data-comparison-changes
+            >
+              <div className="cmp-changes-row">
+                <span className="cmp-eyebrow">What changed</span>
+                {changes.length > 0 ? <FactList>{changes}</FactList> : null}
+                <span className="cmp-faint">
+                  {changes.length === 0
+                    ? `Nothing recorded differs. ${same}`
+                    : same}
+                </span>
+                <button
+                  type="button"
+                  className="cmp-act"
+                  aria-controls="comparison-stack"
+                  onClick={() => {
+                    setStackOpen(true)
+                    window.setTimeout(
+                      () =>
+                        reach(
+                          document.getElementById('comparison-stack'),
+                          'summary',
+                        ),
+                      0,
+                    )
+                  }}
+                >
+                  Stack details
+                </button>
+              </div>
+              {warning ? (
+                <p className="cmp-warning" data-runner-warning>
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <span>{warning}</span>
+                </p>
+              ) : null}
+            </section>
+            <TestPicker comparison={comparison} onCount={onCount} />
+            <Highlights comparison={comparison} onShow={show} />
+            <Totals comparison={comparison} />
+            {results}
+          </>
+        )}
 
-      <TestPicker comparison={comparison} onCount={onCount} />
-      <Highlights comparison={comparison} onShow={show} />
-      <Totals comparison={comparison} />
-      <Results
-        comparison={comparison}
-        sides={sides}
-        bridge={bridge}
-        open={open}
-        onToggle={toggle}
-        onRunTest={onRunTest}
-      />
-
-      <section className="cmp-more" aria-label="More about this comparison">
-        <DisclosureLayer
-          id="comparison-stack"
-          label="Stack"
-          scent={[
-            stack ?? 'same stack',
-            comparison.stack.same.length > 0
-              ? `${comparison.stack.same.length} the same`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-          open={stackOpen}
-          onToggle={setStackOpen}
-        >
-          <StackDetail stack={comparison.stack} />
-        </DisclosureLayer>
-        <DisclosureLayer
-          id="comparison-method"
-          label="Test contracts and methodology"
-          scent="Means per side, a test run again by its last attempt, changed definitions flagged"
-          open={false}
-        >
-          <Methodology comparison={comparison} />
-        </DisclosureLayer>
-      </section>
+        <section className="cmp-more" aria-label="More about this comparison">
+          <DisclosureLayer
+            id="comparison-stack"
+            label="Stack"
+            scent={[
+              grouped ? pairLetters(grouped.members, comparison) : null,
+              stack ?? 'same stack',
+              comparison.stack.same.length > 0
+                ? `${comparison.stack.same.length} the same`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            open={stackOpen}
+            onToggle={setStackOpen}
+          >
+            <StackDetail stack={comparison.stack} />
+          </DisclosureLayer>
+          <DisclosureLayer
+            id="comparison-method"
+            label="Test contracts and methodology"
+            scent="Means per side, a test run again by its last attempt, changed definitions flagged"
+            open={false}
+          >
+            <Methodology comparison={comparison} />
+          </DisclosureLayer>
+        </section>
+      </PairNamesContext.Provider>
     </ComparisonHash.Provider>
   )
 }
