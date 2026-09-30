@@ -65,7 +65,12 @@ import {
   buildExecutionPresentation,
   executionResult,
 } from '@/lib/execution-view'
-import { formatDuration, formatTokens, plural } from '@/lib/format'
+import {
+  formatDateTime,
+  formatDuration,
+  formatTokens,
+  plural,
+} from '@/lib/format'
 import { runResultState } from '@/lib/result-status'
 import { type ScreenshotEntry, screenshotsOf } from '@/lib/screenshots'
 import '@/components/execution/execution-page.css'
@@ -259,8 +264,10 @@ function SideCard({
         ].join(' · ')}
       </p>
       <div className="cmp-side-foot">
-        <span className="cmp-side-origin" title={side.origin}>
-          {side.origin}
+        <span className="cmp-side-origin">
+          {[side.source, side.ranAt ? formatDateTime(side.ranAt) : null]
+            .filter(Boolean)
+            .join(' · ')}
         </span>
         <a className="cmp-open" href={hashForExecution(side.id)}>
           Open execution

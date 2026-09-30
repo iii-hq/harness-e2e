@@ -381,11 +381,19 @@ export function executionProgress(
 
 /** A suite as the Console names it: its name, or "unnamed suite", and the
  *  start of the digest of what it materialized, when known. */
-export function suiteText(
+/** The suite's name alone, for where its digest would be noise. */
+export function suiteName(
   suite: ExecutionSuite | null | undefined,
 ): string | null {
   if (!suite) return null
-  const name = suite.id ? suite.label || suite.id : 'unnamed suite'
+  return suite.id ? suite.label || suite.id : 'unnamed suite'
+}
+
+export function suiteText(
+  suite: ExecutionSuite | null | undefined,
+): string | null {
+  const name = suiteName(suite)
+  if (!suite || !name) return null
   const digest = suite.sha256?.replace(/^sha256:/, '').slice(0, 12)
   return digest ? `${name} · ${digest}` : name
 }

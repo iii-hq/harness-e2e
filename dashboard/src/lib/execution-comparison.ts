@@ -9,6 +9,7 @@ import {
   buildExecutionPresentation,
   executionTitle,
   providerModel,
+  suiteName,
   suiteText,
 } from '@/lib/execution-view'
 import {
@@ -194,10 +195,14 @@ export type ComparisonSide = {
   title: string
   /** Where it ran: GitHub run or local, harness version, path workers. */
   origin: string
+  /** Where it ran without the versions: GitHub run, Docker attempt or local. */
+  source: string
+  /** When it started, else when it finished; empty when neither is known. */
+  ranAt: string
   subject: string
   /** Null when the execution recorded no parameters. */
   profile: string | null
-  /** The suite by name and digest; null when not recorded. */
+  /** The suite by name; null when not recorded. */
   suite: string | null
 }
 
@@ -763,6 +768,7 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
   } else if (source.kind === 'docker')
     parts.push(`Docker attempt ${String(source.attempt ?? 1)}`)
   else parts.push('local')
+  const where = parts.join(' · ')
   const stack = stackOf(detail)
   // The application under test and the runner that measured it are different
   // workers; a path checkout of either is described with the others below.
@@ -785,13 +791,18 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
   for (const [state, names] of paths)
     parts.push(`${distinct(names).join(', ')} ${state}`)
   const parameters = parametersOf(detail)
+  const presentation = buildExecutionPresentation(detail)
   return {
     id: detail.id,
-    title: executionTitle(buildExecutionPresentation(detail)).title,
+    title: executionTitle(presentation).title,
     origin: parts.join(' · '),
+    source: where,
+    ranAt: presentation.startedAt || presentation.completedAt,
     subject: providerModel(parameters),
     profile: parameters.profile,
-    suite: parameters.suite,
+    suite: suiteName(
+      (detail.parameters ?? detail.plan_execution?.parameters)?.suite,
+    ),
   }
 }
 

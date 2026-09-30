@@ -186,6 +186,7 @@ describe('execution comparison page', () => {
     const a = imported()
     const b = local()
     a.status = 'failed'
+    a.started_at = '2026-09-29T12:00:00Z'
     const html = view(a, b)
     const card = (which: string) =>
       html.slice(
@@ -198,6 +199,11 @@ describe('execution comparison page', () => {
     expect(card('a')).toContain('data-state="failed"')
     expect(card('a')).toContain('<span>Failed</span>')
     expect(html).not.toContain('Finished')
+    // Where and when it ran; versions belong to the stack section.
+    expect(card('a')).toMatch(
+      /GitHub run 35823421664 · RC 366030b3 · \w{3} \d+/,
+    )
+    expect(card('a')).not.toContain('runner 0.9.3')
     b.status = 'running'
     expect(view(imported(), b)).toContain('<span>Running</span>')
   })
