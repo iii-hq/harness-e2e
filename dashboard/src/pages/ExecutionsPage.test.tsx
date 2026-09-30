@@ -303,7 +303,7 @@ describe('executions list selection', () => {
     expect(toggleSelection(['b'], 'a')).toEqual(['b', 'a'])
   })
 
-  it('compares exactly two, A first, and keeps what runs out of a delete', () => {
+  it('compares two or more, the first ticked the reference, and keeps what runs out of a delete', () => {
     const one = selectionSummary([row('plan-cf6ab5f9')])
     expect(one).toMatchObject({
       text: '1 selected',
@@ -318,6 +318,7 @@ describe('executions list selection', () => {
       row('plan-81960bf0').id,
     ])
     expect(two.deleteLabel).toBe('Delete 2')
+    expect(two.compareLabel).toBe('Compare A and B')
     const three = selectionSummary([
       row('plan-2b7e41c0'),
       row('plan-00ec9877'),
@@ -325,8 +326,13 @@ describe('executions list selection', () => {
     ])
     expect(three).toMatchObject({
       text: '3 selected',
-      hint: '1 running will be kept.',
-      compare: null,
+      hint: 'The first you ticked is the reference. 1 running will be kept.',
+      compare: [
+        row('plan-2b7e41c0').id,
+        row('plan-00ec9877').id,
+        row('plan-3ef1b6a7').id,
+      ],
+      compareLabel: 'Compare 3 executions',
       deleteLabel: 'Delete 2',
     })
     expect(three.deletable).toEqual([

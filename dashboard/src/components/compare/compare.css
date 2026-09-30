@@ -1470,3 +1470,173 @@ button.cmp-highlight:hover {
 .cmp-tag.cmp-tone[data-tone="negative"] {
   background: var(--color-alert-muted);
 }
+
+/* A group: an execution per column, totals and tests in rows. The first
+   column stays in view while the executions scroll sideways. */
+.cmp-matrix-scroll {
+  /* The containing block of what the table hides for screen readers, so
+     none of it widens the page. */
+  position: relative;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.cmp-matrix {
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.cmp-matrix th,
+.cmp-matrix td {
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+  border-bottom: var(--ds-row-divider);
+  background: var(--color-panel-raised);
+  color: var(--color-ink);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-align: right;
+  text-transform: none;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.cmp-matrix td {
+  font-family: var(--font-mono);
+}
+
+.cmp-matrix thead th {
+  min-width: calc(var(--spacing) * 32);
+  max-width: calc(var(--spacing) * 52);
+  text-align: left;
+  white-space: normal;
+}
+
+.cmp-matrix tbody th[scope="row"],
+.cmp-matrix .cmp-matrix-corner {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: calc(var(--spacing) * 28);
+  max-width: calc(var(--spacing) * 44);
+  border-inline-end: 1px solid var(--color-ink-ghost);
+  text-align: left;
+  white-space: normal;
+}
+
+.cmp-matrix [data-role="reference"],
+.cmp-matrix [data-role="compared"] {
+  background: var(--color-surface-selected);
+}
+
+.cmp-matrix-title,
+.cmp-matrix-id {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmp-matrix-title {
+  font-weight: 500;
+}
+
+.cmp-matrix-id {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.cmp-matrix-state {
+  margin-block: calc(var(--spacing) * 1);
+}
+
+.cmp-matrix-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--spacing) * 1);
+  align-items: center;
+}
+
+.cmp-matrix-actions .cmp-pill,
+.cmp-matrix-test + .cmp-pill {
+  margin-inline-start: 0;
+}
+
+.cmp-matrix-test {
+  display: block;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.cmp-matrix-test + .cmp-pill {
+  margin-block-start: calc(var(--spacing) * 1);
+}
+
+.cmp-matrix-figure {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.cmp-matrix-delta {
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.cmp-matrix-cell {
+  display: inline-flex;
+  min-width: 100%;
+  justify-content: flex-end;
+  margin: calc(var(--spacing) * -1);
+  padding: calc(var(--spacing) * 1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.cmp-matrix-cell:hover {
+  background: var(--color-surface-hover);
+}
+
+.cmp-matrix-cell:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.cmp-matrix-group th {
+  padding-block: calc(var(--spacing) * 3) calc(var(--spacing) * 1);
+  text-align: left;
+}
+
+.cmp-matrix-sticky {
+  position: sticky;
+  left: calc(var(--spacing) * 3);
+  display: inline-flex;
+  gap: calc(var(--spacing) * 3);
+  align-items: center;
+}
+
+.cmp-matrix-pick {
+  display: inline-flex;
+  gap: calc(var(--spacing) * 1.5);
+  align-items: center;
+}
+
+.cmp-matrix-pick select {
+  height: calc(var(--spacing) * 7);
+  padding: 0 calc(var(--spacing) * 2);
+  border: 1px solid var(--color-ink-ghost);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+}
+
+.cmp-pair-heading {
+  margin-block: calc(var(--spacing) * 6) calc(var(--spacing) * 2);
+}

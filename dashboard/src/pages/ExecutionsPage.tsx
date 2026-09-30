@@ -452,13 +452,17 @@ export function selectionSummary(selected: LedgerRow[]) {
       ? 'Tick one more to compare.'
       : selected.length === 2
         ? 'A is the first you ticked.'
-        : kept
-          ? ''
-          : 'Compare takes exactly two.'
+        : selected.length > 2
+          ? 'The first you ticked is the reference.'
+          : ''
   return {
     text: `${selected.length} selected`,
     hint: [hint, keptNote].filter(Boolean).join(' '),
-    compare: selected.length === 2 ? [selected[0].id, selected[1].id] : null,
+    compare: selected.length >= 2 ? selected.map((row) => row.id) : null,
+    compareLabel:
+      selected.length > 2
+        ? `Compare ${selected.length} executions`
+        : 'Compare A and B',
     deletable: deletable.map((row) => row.id),
     deleteLabel: deletable.length > 1 ? `Delete ${deletable.length}` : 'Delete',
   }
@@ -1659,9 +1663,9 @@ export function ExecutionsPage() {
             }}
           >
             <GitCompare aria-hidden="true" />
-            Compare A and B
+            {bar.compareLabel}
           </Button>
-          {bar.compare && investigate ? (
+          {bar.compare?.length === 2 && investigate ? (
             <Button
               type="button"
               variant="pill"

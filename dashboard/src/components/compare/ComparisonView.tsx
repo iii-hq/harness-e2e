@@ -52,6 +52,7 @@ import {
   comparisonHighlights,
   type ExecutionComparison,
   exclusionPhrase,
+  exclusionWhere,
   gapPhrase,
   metricFigure,
   rerunPhrase,
@@ -212,7 +213,7 @@ function outLabel(scenario: ScenarioComparison): string | null {
   const exclusion = scenario.exclusion
   if (!exclusion) return 'out'
   return exclusion.reason === 'missing' || exclusion.reason === 'no_score'
-    ? `${REASON[exclusion.reason]} in ${exclusion.sides.map((side) => side.toUpperCase()).join(' and ')}`
+    ? `${REASON[exclusion.reason]} in ${exclusionWhere(exclusion)}`
     : REASON[exclusion.reason]
 }
 
@@ -1460,6 +1461,342 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
   )
 }
 
+/* -------------------------------------------------------------- group */
+
+/** More than two executions: every one of them, and the links that pick
+ *  the reference and the one read against it in detail. */
+export type GroupView = {
+  /** Every execution, in the order chosen. */
+  executions: DashboardExecutionDetail[]
+  /** The reference against each other execution, in that order. */
+  pairs: ExecutionComparison[]
+  /** The hash that reads this execution against the reference in detail. */
+  compareHref: (id: string) => string
+  /** The hash that makes this execution the reference. */
+  referenceHref: (id: string) => string
+}
+
+/** An execution's figure and, but for the reference, its difference from
+ *  the reference; a partial side gives none. */
+function MatrixFigure({
+  metric,
+  side,
+  empty,
+}: {
+  metric: ComparedMetric | undefined
+  side: Side
+  /** What stands in for a missing value: the run's state, else a dash. */
+  empty?: string
+}) {
+  if (!metric || metric[side] === null)
+    return <span className="cmp-faint-num">{empty ?? '—'}</span>
+  const note =
+    side === 'baseline'
+      ? metric.partial.baseline
+        ? 'partial'
+        : null
+      : metric.partial.candidate
+        ? 'partial'
+        : metric.partial.baseline
+          ? 'reference partial'
+          : deltaText(metric) || null
+  return (
+    <span className="cmp-matrix-figure">
+      <span>{valueText(metric, side)}</span>
+      {note ? (
+        <span
+          className="cmp-matrix-delta cmp-tone"
+          data-tone={side === 'candidate' ? metricTone(metric) : undefined}
+        >
+          {note}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+/** Why a test is out of every total, said for the whole group. */
+function matrixOut(
+  scenario: ScenarioComparison,
+  named: (which: Which) => string,
+): { label: string; title: string } | null {
+  if (scenario.counted) return null
+  if (scenario.leftOut)
+    return { label: 'left out', title: 'Left out of the totals' }
+  const exclusion = scenario.exclusion
+  if (!exclusion) return { label: 'out', title: 'Out of the totals' }
+  const where = [...exclusion.sides.map(named), ...(exclusion.others ?? [])]
+  return {
+    label: REASON[exclusion.reason],
+    title:
+      exclusion.reason === 'redefined'
+        ? 'Out of every total: the case inputs differ between the executions'
+        : `Out of every total: ${REASON[exclusion.reason]} in ${listText(where)}`,
+  }
+}
+
+/** Every execution in a column, each figure against the reference, over
+ *  the same tests; a figure opens its test in the detail below. */
+function GroupMatrix({
+  group,
+  compared,
+  onOpen,
+}: {
+  group: GroupView
+  compared: string
+  onOpen: (executionId: string, scenarioId: string) => void
+}) {
+  const [metricId, setMetricId] = useState('score')
+  const [all, setAll] = useState(false)
+  const [first] = group.pairs
+  const reference = first.a.id
+  const byId = useMemo(
+    () =>
+      new Map(
+        group.pairs.map((pair) => [
+          pair.b.id,
+          {
+            pair,
+            scenarios: new Map(pair.scenarios.map((row) => [row.id, row])),
+          },
+        ]),
+      ),
+    [group.pairs],
+  )
+  const results = useMemo(
+    () =>
+      new Map(
+        group.executions.map((detail) => [
+          detail.id,
+          executionResult(buildExecutionPresentation(detail)),
+        ]),
+      ),
+    [group.executions],
+  )
+  const title = (id: string) =>
+    id === reference ? first.a.title : (byId.get(id)?.pair.b.title ?? id)
+  const named = (which: Which) =>
+    which === 'a' ? first.a.title : first.b.title
+  const totals = first.totals.filter((metric, index) =>
+    all
+      ? metric.baseline !== null ||
+        group.pairs.some((pair) => pair.totals[index].candidate !== null)
+      : KPIS.includes(metric.id),
+  )
+  const columns = group.executions.length + 1
+  return (
+    <section
+      className="cmp-card cmp-group"
+      aria-labelledby="cmp-group-title"
+      data-comparison-group
+    >
+      <div className="cmp-results-head">
+        <div className="cmp-results-copy">
+          <h2 id="cmp-group-title" className="cmp-h2">
+            {plural(group.executions.length, 'execution')} side by side
+          </h2>
+          <p className="cmp-faint">
+            Each against the reference, over the same tests. Pick a figure to
+            read that test in detail below.
+          </p>
+        </div>
+      </div>
+      <div className="cmp-matrix-scroll">
+        <table className="cmp-matrix" data-comparison-matrix>
+          <caption className="ep-sr">
+            Every execution against the reference
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col" className="cmp-matrix-corner">
+                <span className="ep-sr">Figure</span>
+              </th>
+              {group.executions.map((detail) => {
+                const id = detail.id
+                const result = results.get(id)
+                const role =
+                  id === reference
+                    ? 'reference'
+                    : id === compared
+                      ? 'compared'
+                      : undefined
+                return (
+                  <th
+                    key={id}
+                    scope="col"
+                    data-matrix-execution={id}
+                    data-role={role}
+                  >
+                    <span className="cmp-matrix-title" title={title(id)}>
+                      {title(id)}
+                    </span>
+                    <span className="cmp-matrix-id" title={id}>
+                      {id}
+                    </span>
+                    {result ? (
+                      <StatusLabel
+                        className="cmp-matrix-state"
+                        state={result.state}
+                        label={result.label}
+                      />
+                    ) : null}
+                    <span className="cmp-matrix-actions">
+                      {role === 'reference' ? (
+                        <span className="cmp-pill">Reference</span>
+                      ) : (
+                        <>
+                          {role === 'compared' ? (
+                            <span className="cmp-pill">In detail</span>
+                          ) : (
+                            <a
+                              className="cmp-act"
+                              href={group.compareHref(id)}
+                              aria-label={`Read ${title(id)} against the reference`}
+                            >
+                              Compare
+                            </a>
+                          )}
+                          <a
+                            className="cmp-act"
+                            href={group.referenceHref(id)}
+                            aria-label={`Make ${title(id)} the reference`}
+                          >
+                            Make reference
+                          </a>
+                        </>
+                      )}
+                    </span>
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody aria-label="Totals">
+            <tr className="cmp-matrix-group">
+              <th scope="colgroup" colSpan={columns}>
+                <span className="cmp-matrix-sticky">
+                  <span className="cmp-eyebrow">Totals</span>
+                  <button
+                    type="button"
+                    className="cmp-act"
+                    aria-pressed={all}
+                    onClick={() => setAll(!all)}
+                  >
+                    All metrics
+                  </button>
+                </span>
+              </th>
+            </tr>
+            {totals.map((metric) => (
+              <tr key={metric.id} data-matrix-metric={metric.id}>
+                <th scope="row">{metric.label}</th>
+                {group.executions.map((detail) =>
+                  detail.id === reference ? (
+                    <td key={detail.id} data-role="reference">
+                      <MatrixFigure metric={metric} side="baseline" />
+                    </td>
+                  ) : (
+                    <td
+                      key={detail.id}
+                      data-role={
+                        detail.id === compared ? 'compared' : undefined
+                      }
+                    >
+                      <MatrixFigure
+                        metric={byId
+                          .get(detail.id)
+                          ?.pair.totals.find((one) => one.id === metric.id)}
+                        side="candidate"
+                      />
+                    </td>
+                  ),
+                )}
+              </tr>
+            ))}
+          </tbody>
+          <tbody aria-label="Results by test">
+            <tr className="cmp-matrix-group">
+              <th scope="colgroup" colSpan={columns}>
+                <span className="cmp-matrix-sticky">
+                  <span className="cmp-eyebrow">Results by test</span>
+                  <label className="cmp-matrix-pick">
+                    <span className="cmp-faint">Figure</span>
+                    <select
+                      value={metricId}
+                      onChange={(event) => setMetricId(event.target.value)}
+                    >
+                      {first.totals.map((metric) => (
+                        <option key={metric.id} value={metric.id}>
+                          {metric.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </span>
+              </th>
+            </tr>
+            {first.scenarios.map((scenario) => {
+              const out = matrixOut(scenario, named)
+              return (
+                <tr
+                  key={scenario.id}
+                  data-matrix-scenario={scenario.id}
+                  data-counted={scenario.counted}
+                >
+                  <th scope="row">
+                    <span className="cmp-matrix-test">{scenario.id}</span>
+                    {out ? (
+                      <span className="cmp-pill" title={out.title}>
+                        {out.label}
+                      </span>
+                    ) : null}
+                  </th>
+                  {group.executions.map((detail) => {
+                    const id = detail.id
+                    if (id === reference)
+                      return (
+                        <td key={id} data-role="reference">
+                          <MatrixFigure
+                            metric={metricOf(scenario, metricId)}
+                            side="baseline"
+                            empty={stateText(scenario.sides.a.state)}
+                          />
+                        </td>
+                      )
+                    const row = byId.get(id)?.scenarios.get(scenario.id)
+                    return (
+                      <td
+                        key={id}
+                        data-role={id === compared ? 'compared' : undefined}
+                      >
+                        <button
+                          type="button"
+                          className="cmp-matrix-cell"
+                          data-matrix-cell={id}
+                          onClick={() => onOpen(id, scenario.id)}
+                        >
+                          <span className="ep-sr">
+                            {scenario.id} in {title(id)}:{' '}
+                          </span>
+                          <MatrixFigure
+                            metric={row && metricOf(row, metricId)}
+                            side="candidate"
+                            empty={stateText(row?.sides.b.state ?? null)}
+                          />
+                        </button>
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 /* ---------------------------------------------------------------- view */
 
 /** The comparison itself, from two loaded executions. Every difference is
@@ -1473,9 +1810,12 @@ export function ComparisonView({
   refreshError = null,
   onCount,
   onRunTest,
+  group,
 }: {
   comparison: ExecutionComparison
   sides: Sides
+  /** The group this pair is one of, when more than two are compared. */
+  group?: GroupView
   bridge?: DashboardDataBridge | null
   /** This comparison's hash, its choice included: where a run's transcript
    *  or evidence record opened from it goes back to. */
@@ -1555,6 +1895,22 @@ export function ComparisonView({
             retry. {refreshError}
           </span>
         </p>
+      ) : null}
+      {group && group.pairs.length > 1 ? (
+        <>
+          <GroupMatrix
+            group={group}
+            compared={comparison.b.id}
+            onOpen={(id, scenarioId) => {
+              if (id !== comparison.b.id)
+                window.location.hash = group.compareHref(id)
+              show(scenarioId)
+            }}
+          />
+          <h2 className="cmp-h2 cmp-pair-heading" data-comparison-pair>
+            In detail: the reference and {comparison.b.title}
+          </h2>
+        </>
       ) : null}
       <section className="cmp-sides" aria-label="Executions compared">
         <SideCard which="a" side={comparison.a} detail={sides.a} />

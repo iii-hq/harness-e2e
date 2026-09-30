@@ -91,6 +91,9 @@ export type TestExclusion = {
   sides: ('a' | 'b')[]
   /** False when the reader brought the test back into the totals. */
   applied: boolean
+  /** Executions of a larger group, other than A and B, whose runs left the
+   *  gap, by name. */
+  others?: string[]
 }
 
 export type ComparisonChoice = {
@@ -98,6 +101,9 @@ export type ComparisonChoice = {
   exclude?: Iterable<string>
   /** Automatic exclusions the reader brings back. */
   include?: Iterable<string>
+  /** The group this pair is one of: its scenarios and its gaps count in
+   *  every pair, so every pair counts the same tests. */
+  group?: ComparisonGroup
 }
 
 /** A figure, and whether a side's value is short of runs (then no difference is given). */
@@ -421,14 +427,18 @@ export function uniqueRuns<T extends { runId: string | null }>(runs: T[]): T[] {
 }
 
 /**
- * The same task on both sides, or not. One definition on each side and equal
- * across them is like-for-like; anything else — a change, several within a
- * side, or a null that cannot vouch for sameness — is a redefinition.
+ * The same task in every execution that ran the slot, or not. One definition
+ * in each and equal across them is like-for-like; anything else — a change,
+ * several within one, or a null that cannot vouch for sameness — is a
+ * redefinition.
  */
-function likeForLike(left: CompareRun[], right: CompareRun[]): boolean {
-  const a = distinct(left.map((run) => run.definition))
-  const b = distinct(right.map((run) => run.definition))
-  return a.length === 1 && b.length === 1 && a[0] === b[0]
+function likeForLike(sides: CompareRun[][]): boolean {
+  const definitions = sides.map((runs) =>
+    distinct(runs.map((run) => run.definition)),
+  )
+  return definitions.every(
+    (one) => one.length === 1 && one[0] === definitions[0][0],
+  )
 }
 
 /**
@@ -443,33 +453,53 @@ export function automaticExclusions(
   a: CompareRun[],
   b: CompareRun[],
 ): Map<string, Omit<TestExclusion, 'applied'>> {
-  const runs = { a: uniqueRuns(a), b: uniqueRuns(b) }
   const exclusions = new Map<string, Omit<TestExclusion, 'applied'>>()
-  for (const scenarioId of new Set(
-    [...runs.a, ...runs.b].map((run) => run.scenarioId),
-  )) {
-    const of = {
-      a: runs.a.filter((run) => run.scenarioId === scenarioId),
-      b: runs.b.filter((run) => run.scenarioId === scenarioId),
-    }
+  for (const [scenarioId, { reason, sides }] of groupExclusions([a, b]))
+    exclusions.set(scenarioId, {
+      scenario_id: scenarioId,
+      reason,
+      sides: sides.map((index) => SIDES[index]),
+    })
+  return exclusions
+}
+
+/** A gap in a group: its reason and the indexes of the executions that left it. */
+type GroupGap = { reason: ExclusionReason; sides: number[] }
+
+/**
+ * The same rule over any number of executions: a test that any of them
+ * cannot measure leaves every total. A changed definition names them all.
+ */
+export function groupExclusions(
+  executions: CompareRun[][],
+): Map<string, GroupGap> {
+  const runs = executions.map((side) => uniqueRuns(side))
+  const every = runs.map((_, index) => index)
+  const exclusions = new Map<string, GroupGap>()
+  for (const scenarioId of new Set(runs.flat().map((run) => run.scenarioId))) {
+    const of = runs.map((side) =>
+      side.filter((run) => run.scenarioId === scenarioId),
+    )
     const causedBy = (pick: (run: CompareRun) => boolean) =>
-      SIDES.filter((which) => of[which].some(pick))
-    const exclude = (reason: ExclusionReason, sides: ('a' | 'b')[]) =>
-      exclusions.set(scenarioId, { scenario_id: scenarioId, reason, sides })
-    const empty = SIDES.filter((which) => of[which].length === 0)
+      every.filter((index) => of[index].some(pick))
+    const exclude = (reason: ExclusionReason, sides: number[]) =>
+      exclusions.set(scenarioId, { reason, sides })
+    const empty = every.filter((index) => of[index].length === 0)
     if (empty.length > 0) {
       exclude('missing', empty)
       continue
     }
-    const redefined = [...new Set(of.a.map((run) => run.slotId))].some(
+    // A slot that two or more executions ran is the same task in each.
+    const redefined = distinct(of.flat().map((run) => run.slotId)).some(
       (slotId) => {
-        const left = of.a.filter((run) => run.slotId === slotId)
-        const right = of.b.filter((run) => run.slotId === slotId)
-        return right.length > 0 && !likeForLike(left, right)
+        const slot = of
+          .map((side) => side.filter((run) => run.slotId === slotId))
+          .filter((side) => side.length > 0)
+        return slot.length > 1 && !likeForLike(slot)
       },
     )
     if (redefined) {
-      exclude('redefined', [...SIDES])
+      exclude('redefined', every)
       continue
     }
     const gaps: [ExclusionReason, (run: CompareRun) => boolean][] = [
@@ -484,6 +514,79 @@ export function automaticExclusions(
         break
       }
     }
+  }
+  return exclusions
+}
+
+/**
+ * What every pair of a group shares, so each counts the same tests: every
+ * scenario of the group, and the tests any of its executions cannot measure,
+ * with the executions (by id) that left each gap.
+ */
+export type ComparisonGroup = {
+  scenarios: string[]
+  exclusions: Map<string, { reason: ExclusionReason; executions: string[] }>
+  /** How an execution is named where a gap is said: its title, with its id
+   *  when another execution of the group has the same title. */
+  names: Map<string, string>
+}
+
+export function comparisonGroup(
+  details: DashboardExecutionDetail[],
+): ComparisonGroup {
+  const runs = details.map((detail) => uniqueRuns(compareRuns(detail)))
+  const ids = details.map((detail) => detail.id)
+  const scenarios = distinct([
+    ...details.flatMap((detail) =>
+      detail.reports.map((record) => record.scenario_id),
+    ),
+    ...runs.flat().map((run) => run.scenarioId),
+  ]).sort()
+  const exclusions: ComparisonGroup['exclusions'] = new Map()
+  for (const [scenarioId, { reason, sides }] of groupExclusions(runs))
+    exclusions.set(scenarioId, {
+      reason,
+      executions: sides.map((index) => ids[index]),
+    })
+  // A scenario no execution observed is missing in every one.
+  for (const scenarioId of scenarios)
+    if (!runs.some((side) => side.some((run) => run.scenarioId === scenarioId)))
+      exclusions.set(scenarioId, { reason: 'missing', executions: ids })
+  const titles = details.map((detail) => sideFacts(detail).title)
+  return {
+    scenarios,
+    exclusions,
+    names: new Map(
+      details.map((detail, index) => [
+        detail.id,
+        titles.filter((title) => title === titles[index]).length > 1
+          ? `${titles[index]} (${detail.id})`
+          : titles[index],
+      ]),
+    ),
+  }
+}
+
+/** The group's gaps as one of its pairs says them: its own sides by letter,
+ *  the rest of the group by name. */
+function pairExclusions(
+  group: ComparisonGroup,
+  a: string,
+  b: string,
+): Map<string, Omit<TestExclusion, 'applied'>> {
+  const exclusions = new Map<string, Omit<TestExclusion, 'applied'>>()
+  for (const [scenarioId, { reason, executions }] of group.exclusions) {
+    const others = executions
+      .filter((id) => id !== a && id !== b)
+      .map((id) => group.names.get(id) ?? id)
+    exclusions.set(scenarioId, {
+      scenario_id: scenarioId,
+      reason,
+      sides: SIDES.filter((which) =>
+        executions.includes(which === 'a' ? a : b),
+      ),
+      ...(others.length > 0 ? { others } : {}),
+    })
   }
   return exclusions
 }
@@ -1160,8 +1263,11 @@ export function compareExecutions(
     ...b.reports.map((record) => record.scenario_id),
     ...runs.a.map((run) => run.scenarioId),
     ...runs.b.map((run) => run.scenarioId),
+    ...(choice.group?.scenarios ?? []),
   ]).sort()
-  const automatic = automaticExclusions(runs.a, runs.b)
+  const automatic = choice.group
+    ? pairExclusions(choice.group, a.id, b.id)
+    : automaticExclusions(runs.a, runs.b)
   for (const id of ids)
     if (!automatic.has(id) && !runs.a.some((run) => run.scenarioId === id))
       if (!runs.b.some((run) => run.scenarioId === id))
@@ -1332,21 +1438,41 @@ function sidesLabel(sides: ('a' | 'b')[]) {
   return sides.map((which) => which.toUpperCase()).join(' and ')
 }
 
+/** Where a gap is: the pair's sides by letter, then the rest of the group by
+ *  name; the first two only when there are more than three. */
+export function exclusionWhere(
+  exclusion: Pick<TestExclusion, 'sides' | 'others'>,
+): string {
+  const places = [
+    ...exclusion.sides.map((which) => which.toUpperCase()),
+    ...(exclusion.others ?? []),
+  ]
+  return places.length > 3
+    ? `${places.slice(0, 2).join(', ')} and ${places.length - 2} more`
+    : places.join(' and ')
+}
+
 /** Why a gap took the scenario out, in the runs' own words. */
 export function gapPhrase(scenario: ScenarioComparison): string | null {
   const exclusion = scenario.exclusion
   if (!exclusion) return null
   if (exclusion.reason === 'missing')
-    return `no run in ${sidesLabel(exclusion.sides)}`
+    return `no run in ${exclusionWhere(exclusion)}`
   if (exclusion.reason === 'redefined')
-    return 'redefined: the case inputs differ between A and B'
+    return exclusion.others?.length
+      ? 'redefined: the case inputs differ between the executions compared'
+      : 'redefined: the case inputs differ between A and B'
   const reason = exclusion.reason === 'no_score' ? 'no score' : exclusion.reason
-  return exclusion.sides
-    .map((which) => {
+  const others = exclusion.others ?? []
+  return [
+    ...exclusion.sides.map((which) => {
       const side = scenario.sides[which]
       return `${reason} in ${which.toUpperCase()}${side.state ? `: ${side.state}` : ''}${side.failure ? ` — ${side.failure}` : ''}`
-    })
-    .join('; ')
+    }),
+    ...(others.length > 2
+      ? [`${reason} in ${others.length} other executions`]
+      : others.map((name) => `${reason} in ${name}`)),
+  ].join('; ')
 }
 
 /** Out of the totals, and why, in one phrase per scenario. */
@@ -1658,5 +1784,63 @@ export function comparisonMarkdown(comparison: ExecutionComparison): string {
           `- ${cell(scenario.id)}: ${cell(gapPhrase(scenario) ?? '')}`,
       ),
     )
+  return `${lines.join('\n')}\n`
+}
+
+/**
+ * The summary of a group: every execution, each total for every one with its
+ * difference from the reference, and the tests out of the totals, the same
+ * for every pair. A single pair is that pair's summary.
+ */
+export function groupMarkdown(pairs: ExecutionComparison[]): string {
+  const [first] = pairs
+  if (pairs.length === 1) return comparisonMarkdown(first)
+  const reference = first.a
+  const named = (side: ComparisonSide) =>
+    cell(`${side.title} · ${side.id} · ${side.subject} · ${side.origin}`)
+  const lines = [
+    `### ${pairs.length + 1} executions against ${cell(reference.title)}`,
+    '',
+    `Reference: ${named(reference)}`,
+    ...pairs.map((pair) => `- ${named(pair.b)}`),
+    '',
+    `| Metric | ${cell(reference.title)} (reference) | ${pairs.map((pair) => cell(pair.b.title)).join(' | ')} |`,
+    `| --- | --- | ${pairs.map(() => '---').join(' | ')} |`,
+  ]
+  first.totals.forEach((metric, index) => {
+    const others = pairs.map((pair) => pair.totals[index])
+    if (
+      metric.baseline === null &&
+      others.every((one) => one.candidate === null)
+    )
+      return
+    lines.push(
+      `| ${metric.label} | ${comparedValue(metric, 'baseline')} | ${others
+        .map((one) => {
+          const delta = markdownDelta(one)
+          return `${comparedValue(one, 'candidate')}${delta === '—' ? '' : ` (${delta})`}`
+        })
+        .join(' | ')} |`,
+    )
+  })
+  const name = (which: 'a' | 'b') =>
+    which === 'a' ? reference.title : first.b.title
+  const out = first.scenarios.flatMap((scenario) => {
+    const exclusion = scenario.exclusion
+    if (scenario.counted) return []
+    if (scenario.leftOut)
+      return [`- ${cell(scenario.id)}: left out by the reader`]
+    if (!exclusion) return []
+    if (exclusion.reason === 'redefined')
+      return [
+        `- ${cell(scenario.id)}: redefined, the case inputs differ between the executions`,
+      ]
+    const where = [...exclusion.sides.map(name), ...(exclusion.others ?? [])]
+    return [
+      `- ${cell(scenario.id)}: ${exclusion.reason} in ${cell(where.join(', '))}`,
+    ]
+  })
+  if (out.length > 0)
+    lines.push('', 'Out of the totals, for every execution:', ...out)
   return `${lines.join('\n')}\n`
 }

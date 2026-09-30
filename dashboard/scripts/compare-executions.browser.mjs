@@ -170,7 +170,30 @@ const b = execution(
     },
   ],
 )
-const details = { [a.id]: a, [b.id]: b }
+// Only the group flow opens it: its invalid minimal_path takes that test out
+// of every total, A × B's too.
+const c = execution(
+  'plan-dddddddddddddddddddddddddddddddd',
+  'smoke third',
+  { kind: 'local' },
+  parameters(1, {
+    label: '',
+    sha256: 'sha256:fedcba9876543210fedcba9876543210',
+  }),
+  {
+    minimal_path: run('c1', {
+      technical: 'technical_invalid',
+      score: null,
+      failure: 'provider timed out',
+    }),
+    persistent_state: run('c2', { score: 90 }),
+    timer_wake: run('c3', { score: 60 }),
+    registry_implementation: run('c4', { score: 70 }),
+    registry_verification: run('c5', { score: 70 }),
+  },
+  [worker('harness-e2e', '0.11.27'), worker('state', '0.22.3')],
+)
+const details = { [a.id]: a, [b.id]: b, [c.id]: c }
 const started = []
 const read = []
 const renamed = []
@@ -222,7 +245,11 @@ const trigger = (name, request = {}) => {
       failB -= 1
       throw new Error('engine unavailable')
     }
-    return { detail: details[request.execution_id] }
+    return {
+      detail:
+        details[request.execution_id] ??
+        older.find((one) => one.id === request.execution_id),
+    }
   }
   if (id === 'evidence-read') {
     read.push(request)
@@ -574,6 +601,172 @@ try {
   await rename.waitFor({ state: 'detached' })
   await page.waitForTimeout(300)
   assert.equal(await page.locator(`[data-execution-id="${last}"]`).count(), 1)
+
+  // A group of three: every execution in a column against the reference,
+  // over the same tests, picked from the list with three ticked.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  for (const name of ['smoke rerun', 'older 0', 'older 1'])
+    await page
+      .getByRole('checkbox', { name: `Select ${name}`, exact: true })
+      .check()
+  const bar = page.getByRole('toolbar', { name: 'Selected executions' })
+  await bar.getByText('The first you ticked is the reference.').waitFor()
+  await bar
+    .getByRole('button', { name: 'Compare 3 executions', exact: true })
+    .click()
+  await page.locator('[data-comparison-matrix]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`/compare/${b.id}/${older[0].id}/${older[1].id}$`),
+  )
+
+  // A, B and C: C's invalid run takes minimal_path out of every total.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}/${c.id}`,
+  )
+  const matrix = page.locator('[data-comparison-matrix]')
+  await matrix.waitFor()
+  await page
+    .getByRole('heading', { name: 'smoke × 2 executions', level: 1 })
+    .waitFor()
+  assert.deepEqual(
+    await matrix
+      .locator('[data-matrix-execution]')
+      .evaluateAll((cells) =>
+        cells.map((cell) => cell.dataset.matrixExecution),
+      ),
+    [a.id, b.id, c.id],
+  )
+  assert.equal(
+    await matrix
+      .locator('[data-matrix-scenario="minimal_path"]')
+      .getAttribute('data-counted'),
+    'false',
+  )
+  await page
+    .locator('[data-comparison-scenarios] [data-scenario="minimal_path"]')
+    .and(page.locator('[data-counted="false"]'))
+    .waitFor()
+  const figures = () =>
+    matrix
+      .locator('[data-matrix-metric="score"] td')
+      .evaluateAll((cells) =>
+        cells.map(
+          (cell) =>
+            cell.querySelector('.cmp-matrix-figure > span')?.textContent ??
+            cell.textContent,
+        ),
+      )
+  const before = await figures()
+  await page.screenshot({ path: '/tmp/multi-compare/compare-3-1280.png' })
+
+  // A figure of C opens that test of C against the reference, below.
+  await matrix
+    .locator(
+      `[data-matrix-scenario="persistent_state"] [data-matrix-cell="${c.id}"]`,
+    )
+    .click()
+  await page.waitForFunction(
+    (id) => location.hash.includes(`compared=${id}`),
+    c.id,
+  )
+  await page
+    .getByRole('heading', { name: 'In detail: the reference and smoke third' })
+    .waitFor()
+  await page.locator('[data-scenario-detail="persistent_state"]').waitFor()
+
+  // B made the reference: every figure stays, only the differences move.
+  await matrix
+    .getByRole('link', { name: 'Make smoke rerun the reference' })
+    .click()
+  await matrix
+    .locator(`[data-matrix-execution="${b.id}"][data-role="reference"]`)
+    .waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`\\?reference=${b.id}&compared=${c.id}$`),
+  )
+  assert.deepEqual(await figures(), before)
+  await page.locator('[data-scenario-detail="persistent_state"]').waitFor()
+
+  // A run's page opened from here comes back to the same group and picks.
+  const runLink = page
+    .locator('[data-scenario-detail="persistent_state"] a[href*="/run/"]')
+    .first()
+  assert.ok(
+    decodeURIComponent(await runLink.getAttribute('href')).includes(
+      `/compare/${a.id}/${b.id}/${c.id}?reference=${b.id}&compared=${c.id}`,
+    ),
+  )
+  await runLink.click()
+  await page.waitForFunction(() => location.hash.includes('/run/'))
+  await page.goBack()
+  await matrix
+    .locator(`[data-matrix-execution="${b.id}"][data-role="reference"]`)
+    .waitFor()
+
+  // By keyboard: A's figure, Enter, and A is the one in detail.
+  await matrix
+    .locator(`[data-matrix-scenario="timer_wake"] [data-matrix-cell="${a.id}"]`)
+    .focus()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => !location.hash.includes('compared='))
+  await page
+    .getByRole('heading', { name: 'In detail: the reference and smoke' })
+    .waitFor()
+  // Another figure for the tests.
+  await matrix.getByLabel('Figure').selectOption('tokens')
+  await page.waitForFunction(
+    () => document.querySelector('.cmp-matrix-pick select')?.value === 'tokens',
+  )
+
+  // Narrow: the executions scroll sideways, the test column stays in view.
+  await page.setViewportSize({ width: 390, height: 844 })
+  const scroll = page.locator('.cmp-matrix-scroll')
+  const widths = await scroll.evaluate((element) => ({
+    scroll: element.scrollWidth,
+    client: element.clientWidth,
+  }))
+  assert.ok(widths.scroll > widths.client, 'the matrix scrolls at 390 px')
+  await scroll.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth
+  })
+  const pinned = await matrix
+    .locator('[data-matrix-scenario="persistent_state"] th')
+    .boundingBox()
+  const frame = await scroll.boundingBox()
+  assert.ok(Math.abs(pinned.x - frame.x) < 2, 'the test column stays pinned')
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    ),
+    'the page itself does not scroll sideways',
+  )
+  await matrix.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '/tmp/multi-compare/compare-3-390.png' })
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  // Compare with…: several ticked, one from an older page, compared together.
+  await page.goto(`${server.url}#/ext/harness-e2e/compare/${b.id}`)
+  await page.getByRole('heading', { name: 'Compare with…', level: 1 }).waitFor()
+  const tick = (name) =>
+    page.getByRole('checkbox', { name: `Select ${name}`, exact: true })
+  await tick('older 0').check()
+  await page.getByRole('button', { name: /^Load older executions/ }).click()
+  await tick('older 49').check()
+  assert.equal(await tick('older 0').isChecked(), true)
+  await page
+    .getByRole('button', { name: 'Compare 3 executions', exact: true })
+    .click()
+  await page.locator('[data-comparison-matrix]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`/compare/${b.id}/${older[0].id}/${older.at(-1).id}$`),
+  )
+  console.log(
+    'Group compare browser flow passed: three ticked in the list, A, B and C side by side in order, a test out of every total because of C, a figure of C opened in detail, B made the reference with every figure kept, a run page back to the same group and picks, a figure by keyboard, another figure for the tests, 390 px with the executions scrolling and the tests pinned, Compare with several ticked across an older page.',
+  )
 
   assert.deepEqual(errors, [])
   console.log(
