@@ -1,4 +1,7 @@
+use std::collections::BTreeSet;
+use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
@@ -6,6 +9,8 @@ use serde_json::{json, Value};
 
 use super::CriterionAward;
 use crate::context::E2eContext;
+use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::IIIClient;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservedFunctionCall {
@@ -440,6 +445,185 @@ pub async fn kill_processes_under(root: &Path) -> Vec<String> {
     pids
 }
 
+/// PNG screenshots above this size are recorded by size only.
+pub const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
+
+pub fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
+    if block.get("type").and_then(Value::as_str) != Some("function_call") {
+        return None;
+    }
+    let function = block.get("function_id")?.as_str()?;
+    let arguments = block.get("arguments")?;
+    if function == "agent_trigger" {
+        return Some((
+            arguments.get("function")?.as_str()?,
+            arguments.get("payload")?,
+        ));
+    }
+    Some((function, arguments))
+}
+pub fn max_parallel_spawns(transcript: &Value) -> usize {
+    transcript
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("message"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .map(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|block| {
+                    normalized_block_call(block)
+                        .is_some_and(|(function, _)| function == "harness::spawn")
+                })
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+pub async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
+    Ok(state_value(
+        context
+            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
+            .await?,
+    ))
+}
+pub fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+pub fn collect_files(root: &Path) -> Result<Vec<String>> {
+    fn visit(root: &Path, directory: &Path, paths: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(directory)
+            .with_context(|| format!("failed reading {}", directory.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                let relative = path.strip_prefix(root)?.to_string_lossy().into_owned();
+                paths.push(format!("{relative}#symlink"));
+            } else if metadata.is_dir() {
+                visit(root, &path, paths)?;
+            } else if metadata.is_file() {
+                paths.push(path.strip_prefix(root)?.to_string_lossy().into_owned());
+            }
+        }
+        Ok(())
+    }
+    let mut paths = Vec::new();
+    visit(root, root, &mut paths)?;
+    paths.sort();
+    Ok(paths)
+}
+pub fn remove_directory(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
+    }
+}
+pub fn is_remote_failure(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<iii_sdk::errors::Error>(),
+        Some(iii_sdk::errors::Error::Remote { .. })
+    )
+}
+pub async fn invoke(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
+    client
+        .trigger(TriggerRequest {
+            function_id: function_id.into(),
+            payload,
+            action: None,
+            timeout_ms: Some(30_000),
+        })
+        .await
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("invoke {function_id}"))
+}
+pub fn bounded_value(value: Value) -> Value {
+    let encoded = value.to_string();
+    if encoded.len() <= 16 * 1024 {
+        value
+    } else {
+        json!({"omitted":"response exceeded 16 KiB","sha256":crate::artifact::sha256_bytes(encoded.as_bytes()),"size_bytes":encoded.len()})
+    }
+}
+pub async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value> {
+    let value = context
+        .trigger_value(
+            "browser::screenshot",
+            json!({"session_id":session,"full_page":true,"format":"png"}),
+        )
+        .await?;
+    if value["details"]["session_id"] != session {
+        bail!("browser screenshot session identity mismatch");
+    }
+    let block = value["content"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["type"] == "image" && item["mime"] == "image/png")
+        })
+        .context("browser screenshot omitted PNG")?;
+    let data = block["data"].as_str().context("browser PNG data missing")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+    if bytes.len() > MAX_SCREENSHOT_BYTES {
+        return Ok(
+            json!({"oversized":true,"size_bytes":bytes.len(),"maximum_bytes":MAX_SCREENSHOT_BYTES,"details":value["details"]}),
+        );
+    }
+    Ok(
+        json!({"data":data,"sha256":crate::artifact::sha256_bytes(&bytes),"details":value["details"]}),
+    )
+}
+pub fn sql_statements(arguments: &Value) -> Vec<&str> {
+    arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .into_iter()
+        .chain(
+            arguments
+                .get("statements")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|statement| {
+                    statement
+                        .as_str()
+                        .or_else(|| statement.get("sql").and_then(Value::as_str))
+                }),
+        )
+        .collect()
+}
+pub async fn available_databases(context: &E2eContext) -> anyhow::Result<BTreeSet<String>> {
+    Ok(context
+        .trigger_value("database::listDatabases", json!({}))
+        .await?
+        .get("databases")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|database| {
+            database
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+pub fn sql_safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
 #[cfg(test)]
 mod tests {
     use super::*;

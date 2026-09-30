@@ -503,7 +503,7 @@ fn timer_audit(transcript: &Value, names: &Names) -> TimerAudit {
             .into_iter()
             .flatten()
         {
-            let Some((function_id, arguments)) = normalized_block_call(block) else {
+            let Some((function_id, arguments)) = common::normalized_block_call(block) else {
                 continue;
             };
             let site = CallSite {
@@ -529,21 +529,6 @@ fn timer_audit(transcript: &Value, names: &Names) -> TimerAudit {
         }
     }
     audit
-}
-
-fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
-    if block.get("type").and_then(Value::as_str) != Some("function_call") {
-        return None;
-    }
-    let function = block.get("function_id")?.as_str()?;
-    let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
-        return Some((
-            arguments.get("function")?.as_str()?,
-            arguments.get("payload")?,
-        ));
-    }
-    Some((function, arguments))
 }
 
 /// The wake result exactly as `capture` read it from the run's state scope

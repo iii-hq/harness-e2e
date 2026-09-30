@@ -181,7 +181,7 @@ impl Scenario for FanoutLadder {
         let mut rows = Vec::new();
         for index in 0..fan_out {
             let key = worker_key(index);
-            let value = get_state(context, &names.scope, &key).await?;
+            let value = common::get_state(context, &names.scope, &key).await?;
             rows.push(json!({ "key": key, "value": value }));
         }
         let active_bindings = common::active_binding_count(context, &names.root_session).await?;
@@ -388,7 +388,7 @@ async fn evaluate_rung(
         .map(|session| session.session_id.clone())
         .collect();
     let single_response_spawns =
-        max_parallel_spawns(&observation.transcript) == usize::from(fan_out);
+        common::max_parallel_spawns(&observation.transcript) == usize::from(fan_out);
     let sessions_direct = observation.metrics.totals.sessions == u64::from(fan_out) + 1
         && worker_sessions.len() == usize::from(fan_out);
     let fanned_out =
@@ -484,7 +484,7 @@ async fn worker_audit(
 ) -> anyhow::Result<WorkerAudit> {
     let mut exact_rows = 0usize;
     for index in 0..fan_out {
-        let observed = get_state(context, &names.scope, &worker_key(index)).await?;
+        let observed = common::get_state(context, &names.scope, &worker_key(index)).await?;
         if observed == expected_row(run_id, index) {
             exact_rows += 1;
         }
@@ -631,14 +631,6 @@ fn deliverable_contract(fan_out: u8) -> DeliverableContract {
     }
 }
 
-async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
-    Ok(common::state_value(
-        context
-            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
-            .await?,
-    ))
-}
-
 fn is_completion_watch(call: &common::ObservedFunctionCall, names: &Names, fan_out: u8) -> bool {
     call.function_id == "engine::register_trigger"
         && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
@@ -682,45 +674,6 @@ fn has_named_barrier(arguments: &Value, names: &Names, fan_out: u8) -> bool {
                     })
                     == Some(expected.clone())
         })
-}
-
-fn max_parallel_spawns(transcript: &Value) -> usize {
-    transcript
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("message"))
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map(|message| {
-            message
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|block| {
-                    normalized_block_call(block)
-                        .is_some_and(|(function, _)| function == "harness::spawn")
-                })
-                .count()
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
-    if block.get("type").and_then(Value::as_str) != Some("function_call") {
-        return None;
-    }
-    let function = block.get("function_id")?.as_str()?;
-    let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
-        return Some((
-            arguments.get("function")?.as_str()?,
-            arguments.get("payload")?,
-        ));
-    }
-    Some((function, arguments))
 }
 
 struct Names {

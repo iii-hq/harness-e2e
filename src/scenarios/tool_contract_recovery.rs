@@ -19,7 +19,7 @@
 //! when invoked more than once.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use iii_sdk::runtime::FunctionRef;
 use iii_sdk::RegisterFunction;
@@ -191,12 +191,6 @@ fn fixture_registry() -> &'static Mutex<HashMap<String, FixtureRuntime>> {
     FIXTURES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn derived_hex(run_id: &str, label: &str) -> u64 {
     super::stable_seed(&format!("{ID}:{run_id}:{label}"))
 }
@@ -345,9 +339,9 @@ fn schedule_response(run_id: &str, request: &ScheduleRequest) -> ScheduleRespons
 }
 
 fn fixture_snapshot(run_id: &str) -> Option<FixtureSnapshot> {
-    let registry = lock_unpoisoned(fixture_registry());
+    let registry = common::lock_unpoisoned(fixture_registry());
     let runtime = registry.get(run_id)?;
-    let state = lock_unpoisoned(&runtime.state);
+    let state = common::lock_unpoisoned(&runtime.state);
     Some(FixtureSnapshot {
         audit: state.audit.clone(),
         scheduled: state.scheduled,
@@ -358,7 +352,7 @@ fn fixture_snapshot(run_id: &str) -> Option<FixtureSnapshot> {
 /// Remove every registration and all mutable fixture state for an attempt.
 /// Removing an absent attempt is deliberately a successful no-op.
 fn release_fixture(run_id: &str) {
-    let runtime = lock_unpoisoned(fixture_registry()).remove(run_id);
+    let runtime = common::lock_unpoisoned(fixture_registry()).remove(run_id);
     if let Some(runtime) = runtime {
         for function in runtime.functions {
             function.unregister();
@@ -485,7 +479,7 @@ report containing the scheduling receipt exactly as returned."#,
                 let audit_function = audit_function.clone();
                 async move {
                     let accepted = request == expected_resolve_request(&owner);
-                    lock_unpoisoned(&audit_state).record(
+                    common::lock_unpoisoned(&audit_state).record(
                         "resolve",
                         &audit_function,
                         serde_json::to_value(&request).unwrap_or(Value::Null),
@@ -513,7 +507,7 @@ report containing the scheduling receipt exactly as returned."#,
                 let audit_function = audit_function.clone();
                 async move {
                     let accepted = request == expected_profile_request();
-                    lock_unpoisoned(&audit_state).record(
+                    common::lock_unpoisoned(&audit_state).record(
                         "profile",
                         &audit_function,
                         serde_json::to_value(&request).unwrap_or(Value::Null),
@@ -549,7 +543,7 @@ report containing the scheduling receipt exactly as returned."#,
                 async move {
                     let accepted = request == expected_schedule_request(&owner);
                     let response = schedule_response(&owner, &request);
-                    let mut state = lock_unpoisoned(&audit_state);
+                    let mut state = common::lock_unpoisoned(&audit_state);
                     state.record(
                         "schedule",
                         &audit_function,
@@ -579,7 +573,7 @@ report containing the scheduling receipt exactly as returned."#,
                 let audit_state = Arc::clone(&audit_state);
                 let audit_function = audit_function.clone();
                 async move {
-                    let mut state = lock_unpoisoned(&audit_state);
+                    let mut state = common::lock_unpoisoned(&audit_state);
                     let accepted = state.scheduled && request.event_id == event_id(&owner);
                     state.record(
                         "delete",
@@ -600,7 +594,7 @@ report containing the scheduling receipt exactly as returned."#,
             ),
         ));
 
-        lock_unpoisoned(fixture_registry())
+        common::lock_unpoisoned(fixture_registry())
             .insert(run_id.to_string(), FixtureRuntime { functions, state });
         Ok(())
     }

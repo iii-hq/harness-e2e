@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
-use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::IIIClient;
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -17,6 +16,7 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 use super::assessment::{self, AssessmentSpec};
+use super::common;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
     CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
@@ -29,7 +29,6 @@ pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with d
 pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with deterministic simulation, live transition editing, and a stateDiagram-v2 projection stored through Canvas.";
 
 const EVIDENCE_LIMIT: u64 = 24 * 1024 * 1024;
-const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
 
 const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
@@ -529,7 +528,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
                         break;
                     }
                 }
-                Err(error) if is_remote_failure(&error) => {
+                Err(error) if common::is_remote_failure(&error) => {
                     status = json!({"error":format!("{error:#}")});
                 }
                 Err(error) => return Err(error.context("query candidate Compose status")),
@@ -573,7 +572,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     } else {
         machine_source()
     };
-    let canvas = invoke(context.client(), &contract.functions["canvas"], json!({})).await;
+    let canvas = common::invoke(context.client(), &contract.functions["canvas"], json!({})).await;
     ensure_remote_or_success(&canvas, "invoke candidate Canvas projection")?;
     let canvas_id = canvas
         .as_ref()
@@ -587,7 +586,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     }
     // A missing canvas_id is the candidate's miss, scored below, not infrastructure.
     let first_get = if let Some(id) = &canvas_id {
-        let get = invoke(context.client(), "canvas::get", json!({"id":id})).await;
+        let get = common::invoke(context.client(), "canvas::get", json!({"id":id})).await;
         ensure_remote_or_success(&get, "read candidate Canvas record")?;
         get
     } else {
@@ -615,7 +614,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     checks.insert("console_delivery".into(), json!({
         "passed":console_delivery,
         "reason":if console_delivery {"Console reports loadable, hashed, warning-free visual Worker assets"} else {"Console asset registration, content, status, or manifest contract failed"},
-        "observed":{"manifest":bounded_value(manifest.clone()),"script":result_value(script),"style":result_value(style)}
+        "observed":{"manifest":common::bounded_value(manifest.clone()),"script":result_value(script),"style":result_value(style)}
     }));
 
     let identity = json!({
@@ -653,7 +652,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         );
     } else {
         let second_get = if let Some(id) = &canvas_id {
-            let get = invoke(context.client(), "canvas::get", json!({"id":id})).await;
+            let get = common::invoke(context.client(), "canvas::get", json!({"id":id})).await;
             ensure_remote_or_success(&get, "read browser-updated Canvas record")?;
             get
         } else {
@@ -722,10 +721,10 @@ async fn form_probes(
     &'static str,
 ) {
     let id = &contract.functions["preview"];
-    let primary = invoke(client, id, json!({"values":{"title":"Login crashes","work_type":"feature","user_story":"As a user I can use passkeys","acceptance_criteria":"Passkey login succeeds"}})).await;
-    let branch = invoke(client, id, json!({"edit":"add_environment","values":{"title":"Login crashes","work_type":"bug","reproduction":"Open login","expected_behavior":"Dashboard opens","environment":"Chrome"}})).await;
-    let invalid = invoke(client, id, json!({"values":{"work_type":"chore"}})).await;
-    let health = invoke(client, id, json!({"values":{"work_type":"bug"}})).await;
+    let primary = common::invoke(client, id, json!({"values":{"title":"Login crashes","work_type":"feature","user_story":"As a user I can use passkeys","acceptance_criteria":"Passkey login succeeds"}})).await;
+    let branch = common::invoke(client, id, json!({"edit":"add_environment","values":{"title":"Login crashes","work_type":"bug","reproduction":"Open login","expected_behavior":"Dashboard opens","environment":"Chrome"}})).await;
+    let invalid = common::invoke(client, id, json!({"values":{"work_type":"chore"}})).await;
+    let health = common::invoke(client, id, json!({"values":{"work_type":"bug"}})).await;
     (primary, branch, invalid, health, form_source())
 }
 
@@ -740,15 +739,15 @@ async fn machine_probes(
     &'static str,
 ) {
     let id = &contract.functions["transition"];
-    let primary = invoke(client, id, json!({"state":"queued","event":"start"})).await;
-    let branch = invoke(
+    let primary = common::invoke(client, id, json!({"state":"queued","event":"start"})).await;
+    let branch = common::invoke(
         client,
         id,
         json!({"state":"running","event":"cancel","edit":"add_cancel"}),
     )
     .await;
-    let invalid = invoke(client, id, json!({"state":"queued","event":"pass"})).await;
-    let health = invoke(client, id, json!({"state":"running","event":"cancel"})).await;
+    let invalid = common::invoke(client, id, json!({"state":"queued","event":"pass"})).await;
+    let health = common::invoke(client, id, json!({"state":"running","event":"cancel"})).await;
     (primary, branch, invalid, health, machine_source())
 }
 
@@ -787,7 +786,10 @@ fn domain_results(
                     &[],
                     true,
                 ),
-                invalid.as_ref().err().is_some_and(is_remote_failure)
+                invalid
+                    .as_ref()
+                    .err()
+                    .is_some_and(common::is_remote_failure)
                     && matches(
                         health,
                         &[
@@ -811,7 +813,10 @@ fn domain_results(
                 .as_ref()
                 .ok()
                 .is_some_and(|value| value["state"] == "cancelled"),
-            invalid.as_ref().err().is_some_and(is_remote_failure)
+            invalid
+                .as_ref()
+                .err()
+                .is_some_and(common::is_remote_failure)
                 && health
                     .as_ref()
                     .ok()
@@ -840,13 +845,13 @@ async fn inspect_console(
     contract: &WorkerContract,
     ready: bool,
 ) -> Result<(bool, Option<u16>, Value, Result<Value>, Result<Value>)> {
-    let script = invoke(
+    let script = common::invoke(
         context.client(),
         &contract.functions["ui-content"],
         json!({"path":contract.script_path()}),
     )
     .await;
-    let style = invoke(
+    let style = common::invoke(
         context.client(),
         &contract.functions["ui-content"],
         json!({"path":contract.style_path()}),
@@ -1014,7 +1019,7 @@ fn tolerate_load_timeout(result: Result<Value>) -> Result<Value> {
 }
 
 fn is_load_timeout(error: &anyhow::Error) -> bool {
-    is_remote_failure(error) && format!("{error:#}").contains("Request timed out")
+    common::is_remote_failure(error) && format!("{error:#}").contains("Request timed out")
 }
 
 async fn capture_browser_session(
@@ -1038,7 +1043,7 @@ async fn capture_browser_session(
     }
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
     let before_state = inspect_ui(context, kind, session, "initial").await?;
-    let before = screenshot_png(context, session).await?;
+    let before = common::screenshot_png(context, session).await?;
     let interaction_code = match kind {
         Kind::Form => {
             r#"return await (async()=>{
@@ -1106,7 +1111,7 @@ return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorde
         )
         .await?;
     let after_state = inspect_ui(context, kind, session, "edited").await?;
-    let after = screenshot_png(context, session).await?;
+    let after = common::screenshot_png(context, session).await?;
     let expected_canvas_id = serde_json::to_string(&identity["canvas_id"])?;
     let open_canvas = context
         .trigger_value(
@@ -1149,7 +1154,7 @@ return {{rendered_graph:false}};
         }
         None => json!({"rendered_graph":false}),
     };
-    let canvas = screenshot_png(context, session).await?;
+    let canvas = common::screenshot_png(context, session).await?;
     route(context, session, url).await?;
     let reload = reload(context, session).await?;
     let reloaded_state = if reload["ok"] == true {
@@ -1191,7 +1196,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
 })();"#}),
         )
         .await?;
-    let narrow_dark = screenshot_png(context, session).await?;
+    let narrow_dark = common::screenshot_png(context, session).await?;
     let page_evidence = before_state["passed"] == true
         && after_state["passed"] == true
         && before["data"].is_string()
@@ -1248,36 +1253,6 @@ return {{passed:routeOk&&domainVisible&&branchOk&&noOverflow&&!errorText,route_o
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(observed)
-}
-
-async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value> {
-    let value = context
-        .trigger_value(
-            "browser::screenshot",
-            json!({"session_id":session,"full_page":true,"format":"png"}),
-        )
-        .await?;
-    if value["details"]["session_id"] != session {
-        bail!("browser screenshot session identity mismatch");
-    }
-    let block = value["content"]
-        .as_array()
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| item["type"] == "image" && item["mime"] == "image/png")
-        })
-        .context("browser screenshot omitted PNG")?;
-    let data = block["data"].as_str().context("browser PNG data missing")?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-    if bytes.len() > MAX_SCREENSHOT_BYTES {
-        return Ok(
-            json!({"oversized":true,"size_bytes":bytes.len(),"maximum_bytes":MAX_SCREENSHOT_BYTES,"details":value["details"]}),
-        );
-    }
-    Ok(
-        json!({"data":data,"sha256":crate::artifact::sha256_bytes(&bytes),"details":value["details"]}),
-    )
 }
 
 fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
@@ -1373,7 +1348,8 @@ async fn cleanup_workspace(context: &E2eContext, kind: Kind, run_id: &str) -> Re
     if let Ok(canvas_id) = fs::read_to_string(root.join(".harness-e2e/canvas-id")) {
         let canvas_id = canvas_id.trim();
         if !canvas_id.is_empty() {
-            let deleted = invoke(context.client(), "canvas::delete", json!({"id":canvas_id})).await;
+            let deleted =
+                common::invoke(context.client(), "canvas::delete", json!({"id":canvas_id})).await;
             ensure_remote_or_success(&deleted, "delete run-owned Canvas record")?;
         }
     }
@@ -1462,48 +1438,19 @@ fn directory_sha256(root: &Path) -> Result<String> {
     Ok(crate::artifact::sha256_bytes(&bytes))
 }
 
-async fn invoke(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
-    client
-        .trigger(TriggerRequest {
-            function_id: function_id.into(),
-            payload,
-            action: None,
-            timeout_ms: Some(30_000),
-        })
-        .await
-        .map_err(anyhow::Error::new)
-        .with_context(|| format!("invoke {function_id}"))
-}
-
 fn ensure_remote_or_success(result: &Result<Value>, action: &str) -> Result<()> {
     if let Err(error) = result {
-        if !is_remote_failure(error) {
+        if !common::is_remote_failure(error) {
             bail!("{action} infrastructure failure: {error:#}");
         }
     }
     Ok(())
 }
 
-fn is_remote_failure(error: &anyhow::Error) -> bool {
-    matches!(
-        error.downcast_ref::<iii_sdk::errors::Error>(),
-        Some(iii_sdk::errors::Error::Remote { .. })
-    )
-}
-
 fn result_value(result: Result<Value>) -> Value {
     match result {
-        Ok(value) => json!({"ok":true,"value":bounded_value(value)}),
+        Ok(value) => json!({"ok":true,"value":common::bounded_value(value)}),
         Err(error) => json!({"ok":false,"error":format!("{error:#}")}),
-    }
-}
-
-fn bounded_value(value: Value) -> Value {
-    let encoded = value.to_string();
-    if encoded.len() <= 16 * 1024 {
-        value
-    } else {
-        json!({"omitted":"response exceeded 16 KiB","sha256":crate::artifact::sha256_bytes(encoded.as_bytes()),"size_bytes":encoded.len()})
     }
 }
 

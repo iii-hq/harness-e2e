@@ -34,6 +34,7 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
+use super::common;
 use super::validation_loop::suffix;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
@@ -517,31 +518,6 @@ fn write_probe(root: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn collect_files(root: &Path) -> Result<Vec<String>> {
-    fn visit(root: &Path, directory: &Path, paths: &mut Vec<String>) -> Result<()> {
-        for entry in fs::read_dir(directory)
-            .with_context(|| format!("failed reading {}", directory.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                let relative = path.strip_prefix(root)?.to_string_lossy().into_owned();
-                paths.push(format!("{relative}#symlink"));
-            } else if metadata.is_dir() {
-                visit(root, &path, paths)?;
-            } else if metadata.is_file() {
-                paths.push(path.strip_prefix(root)?.to_string_lossy().into_owned());
-            }
-        }
-        Ok(())
-    }
-    let mut paths = Vec::new();
-    visit(root, root, &mut paths)?;
-    paths.sort();
-    Ok(paths)
-}
-
 /// Additional source modules under `src/` and the required `README.md` are part
 /// of the deliverable; anything else is a scope violation.
 fn is_allowed_addition(path: &str) -> bool {
@@ -687,7 +663,7 @@ async fn audit(run_id: &str) -> Result<ServiceAudit> {
         .ok()
         .is_some_and(|readme| !readme.trim().is_empty());
     let known = expected_files().keys().copied().collect::<BTreeSet<_>>();
-    let unexpected_paths = collect_files(&root)?
+    let unexpected_paths = common::collect_files(&root)?
         .into_iter()
         .filter(|path| !known.contains(path.as_str()) && !is_allowed_addition(path))
         .collect::<Vec<_>>();

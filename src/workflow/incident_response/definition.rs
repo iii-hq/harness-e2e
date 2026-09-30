@@ -298,22 +298,22 @@ pub(super) fn descriptors() -> Result<Vec<(StepTypeDescriptor, IncidentStepKind)
             "incident_response.preflight_fixture",
             "Verify fixture path, Git state, immutable revisions, contract identity, and exact fixture worker contracts.",
             BTreeMap::new(),
-            ports(&[("workspace_root", PortValueKind::TextUtf8, false, None), ("preflight", PortValueKind::Json, false, None)]),
+            crate::workflow::ports(&[("workspace_root", PortValueKind::TextUtf8, false, None), ("preflight", PortValueKind::Json, false, None)]),
             ReplayPolicy::Idempotent,
             StepOperationalKind::Assessment,
             (&FIXTURE_FUNCTIONS, IncidentStepKind::Preflight),
         )?,
-        pair("incident_response.capture_baseline", "Capture repository, deploy, data, ledger, audit, and telemetry baseline before mutation.", BTreeMap::new(), ports(&[("baseline", PortValueKind::Json, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[BASELINE_FUNCTION], IncidentStepKind::Baseline))?,
-        pair("incident_response.deduplicate_alert", "Submit the same synthetic alert twice and prove one stable incident identity.", BTreeMap::new(), ports(&[("incident", PortValueKind::Json, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Product, (&[ALERT_FUNCTION], IncidentStepKind::Alert))?,
-        pair("incident_response.reproduce_incident", "Execute two isolated seeded reproductions and capture bounded telemetry for independent analysis.", BTreeMap::new(), ports(&[("reproduction", PortValueKind::Json, false, None), ("analysis_bundle", PortValueKind::Json, false, None), ("assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Compensable, StepOperationalKind::Product, (&[REPRODUCE_FUNCTION, TELEMETRY_FUNCTION], IncidentStepKind::Reproduce))?,
-        pair("incident_response.validate_triage", "Validate three structured read-only analyses, evidence references, and deterministic fan-in.", ports(&[("reproduction", PortValueKind::Json, false, None)]), ports(&[("triage", PortValueKind::Json, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[], IncidentStepKind::ValidateTriage))?,
-        pair("incident_response.validate_diagnosis", "Validate synthesis grounding and execute a fixture-owned falsification probe before mutation.", ports(&[("triage", PortValueKind::Json, false, None)]), ports(&[("ready_for_remediation", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)), ("diagnosis", PortValueKind::Json, false, None), ("assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Compensable, StepOperationalKind::Assessment, (&[VALIDATE_FUNCTION], IncidentStepKind::ValidateDiagnosis))?,
-        pair("incident_response.validate_candidate", "Capture the candidate patch and deterministically validate path, test, replay, concurrency, ledger, audit, and canary invariants.", BTreeMap::new(), ports(&[("candidate_valid", PortValueKind::Boolean, false, Some(ControlSource::Deterministic))]), ReplayPolicy::Compensable, StepOperationalKind::Assessment, (&[VALIDATE_FUNCTION], IncidentStepKind::ValidateCandidate))?,
-        pair("incident_response.decide_terminal_action", "Select exactly one deterministic terminal action from attempt-owned diagnosis and validation state.", BTreeMap::new(), ports(&[("should_promote", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)), ("should_rollback", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)), ("remediation_assessment", PortValueKind::Assessment, false, None), ("terminal_assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[], IncidentStepKind::Decide))?,
+        pair("incident_response.capture_baseline", "Capture repository, deploy, data, ledger, audit, and telemetry baseline before mutation.", BTreeMap::new(), crate::workflow::ports(&[("baseline", PortValueKind::Json, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[BASELINE_FUNCTION], IncidentStepKind::Baseline))?,
+        pair("incident_response.deduplicate_alert", "Submit the same synthetic alert twice and prove one stable incident identity.", BTreeMap::new(), crate::workflow::ports(&[("incident", PortValueKind::Json, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Product, (&[ALERT_FUNCTION], IncidentStepKind::Alert))?,
+        pair("incident_response.reproduce_incident", "Execute two isolated seeded reproductions and capture bounded telemetry for independent analysis.", BTreeMap::new(), crate::workflow::ports(&[("reproduction", PortValueKind::Json, false, None), ("analysis_bundle", PortValueKind::Json, false, None), ("assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Compensable, StepOperationalKind::Product, (&[REPRODUCE_FUNCTION, TELEMETRY_FUNCTION], IncidentStepKind::Reproduce))?,
+        pair("incident_response.validate_triage", "Validate three structured read-only analyses, evidence references, and deterministic fan-in.", crate::workflow::ports(&[("reproduction", PortValueKind::Json, false, None)]), crate::workflow::ports(&[("triage", PortValueKind::Json, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[], IncidentStepKind::ValidateTriage))?,
+        pair("incident_response.validate_diagnosis", "Validate synthesis grounding and execute a fixture-owned falsification probe before mutation.", crate::workflow::ports(&[("triage", PortValueKind::Json, false, None)]), crate::workflow::ports(&[("ready_for_remediation", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)), ("diagnosis", PortValueKind::Json, false, None), ("assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Compensable, StepOperationalKind::Assessment, (&[VALIDATE_FUNCTION], IncidentStepKind::ValidateDiagnosis))?,
+        pair("incident_response.validate_candidate", "Capture the candidate patch and deterministically validate path, test, replay, concurrency, ledger, audit, and canary invariants.", BTreeMap::new(), crate::workflow::ports(&[("candidate_valid", PortValueKind::Boolean, false, Some(ControlSource::Deterministic))]), ReplayPolicy::Compensable, StepOperationalKind::Assessment, (&[VALIDATE_FUNCTION], IncidentStepKind::ValidateCandidate))?,
+        pair("incident_response.decide_terminal_action", "Select exactly one deterministic terminal action from attempt-owned diagnosis and validation state.", BTreeMap::new(), crate::workflow::ports(&[("should_promote", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)), ("should_rollback", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)), ("remediation_assessment", PortValueKind::Assessment, false, None), ("terminal_assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[], IncidentStepKind::Decide))?,
         pair("incident_response.promote_candidate", "Promote only the exact candidate revision that passed every deterministic candidate gate.", BTreeMap::new(), BTreeMap::new(), ReplayPolicy::Compensable, StepOperationalKind::Product, (&[DEPLOY_FUNCTION], IncidentStepKind::Promote))?,
         pair("incident_response.rollback_candidate", "Restore the exact known-good revision when diagnosis or candidate validation cannot authorize promotion.", BTreeMap::new(), BTreeMap::new(), ReplayPolicy::Compensable, StepOperationalKind::Product, (&[DEPLOY_FUNCTION], IncidentStepKind::Rollback))?,
-        pair("incident_response.reconcile_final_state", "Reconcile deployed revision, ledger, audit, incident state, and active resources after the exclusive terminal action.", BTreeMap::new(), ports(&[("final_state", PortValueKind::Json, false, None), ("report_bundle", PortValueKind::Json, false, None), ("assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[RECONCILE_FUNCTION], IncidentStepKind::Reconcile))?,
-        pair("incident_response.validate_incident_report", "Validate the bounded report's revision, action, validation, and evidence references without affecting system outcome.", BTreeMap::new(), ports(&[("validated", PortValueKind::Boolean, false, Some(ControlSource::Deterministic))]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[], IncidentStepKind::ValidateReport))?,
+        pair("incident_response.reconcile_final_state", "Reconcile deployed revision, ledger, audit, incident state, and active resources after the exclusive terminal action.", BTreeMap::new(), crate::workflow::ports(&[("final_state", PortValueKind::Json, false, None), ("report_bundle", PortValueKind::Json, false, None), ("assessment", PortValueKind::Assessment, false, None)]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[RECONCILE_FUNCTION], IncidentStepKind::Reconcile))?,
+        pair("incident_response.validate_incident_report", "Validate the bounded report's revision, action, validation, and evidence references without affecting system outcome.", BTreeMap::new(), crate::workflow::ports(&[("validated", PortValueKind::Boolean, false, Some(ControlSource::Deterministic))]), ReplayPolicy::Idempotent, StepOperationalKind::Assessment, (&[], IncidentStepKind::ValidateReport))?,
     ])
 }
 
@@ -344,22 +344,4 @@ fn pair(
         },
         binding.1,
     ))
-}
-
-fn ports(
-    definitions: &[(&str, PortValueKind, bool, Option<ControlSource>)],
-) -> BTreeMap<String, StepPortDescriptor> {
-    definitions
-        .iter()
-        .map(|(id, kind, optional, control_source)| {
-            (
-                (*id).into(),
-                StepPortDescriptor {
-                    kind: *kind,
-                    optional: *optional,
-                    control_source: *control_source,
-                },
-            )
-        })
-        .collect()
 }

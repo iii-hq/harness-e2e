@@ -380,8 +380,8 @@ impl Scenario for ResearchPipeline {
         run_id: &str,
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let names = Names::new(run_id);
-        let evidence = get_state(context, &names.scope, EVIDENCE_KEY).await?;
-        let conflicts = get_state(context, &names.scope, CONFLICTS_KEY).await?;
+        let evidence = common::get_state(context, &names.scope, EVIDENCE_KEY).await?;
+        let conflicts = common::get_state(context, &names.scope, CONFLICTS_KEY).await?;
         let audit = analyst_audit(context, observation, &names, &evidence, &conflicts).await?;
         let grounded = valid_evidence(&evidence) && valid_conflicts(&conflicts);
         let sources_fetched = required_sources_fetched(&audit);
@@ -472,7 +472,7 @@ impl Scenario for ResearchPipeline {
                 .is_some_and(|position| spawns.iter().all(|(spawn, _)| position < *spawn));
         let direct_parallel = audit.direct_sessions == 2
             && observation.metrics.totals.sessions == 3
-            && max_parallel_spawns(&observation.transcript) == 2;
+            && common::max_parallel_spawns(&observation.transcript) == 2;
         let discovery_complete = required_sources_fetched(&audit);
         let analysis_valid = valid_evidence(&evidence) && valid_conflicts(&conflicts);
         let writes_valid = audit.evidence_write_exact && audit.conflicts_write_exact;
@@ -901,14 +901,6 @@ fn deliverable_contract() -> DeliverableContract {
     }
 }
 
-async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
-    Ok(common::state_value(
-        context
-            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
-            .await?,
-    ))
-}
-
 fn is_completion_watch(call: &common::ObservedFunctionCall, names: &Names) -> bool {
     call.function_id == "engine::register_trigger"
         && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
@@ -969,45 +961,6 @@ fn is_deadline_watch(call: &common::ObservedFunctionCall) -> bool {
             .is_some_and(|in_ms| (240_000..=360_000).contains(&in_ms))
         && common::requested_once(&call.arguments)
         && common::is_wake_registration(&call.arguments)
-}
-
-fn max_parallel_spawns(transcript: &Value) -> usize {
-    transcript
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("message"))
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map(|message| {
-            message
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|block| {
-                    normalized_block_call(block)
-                        .is_some_and(|(function, _)| function == "harness::spawn")
-                })
-                .count()
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
-    if block.get("type").and_then(Value::as_str) != Some("function_call") {
-        return None;
-    }
-    let function = block.get("function_id")?.as_str()?;
-    let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
-        return Some((
-            arguments.get("function")?.as_str()?,
-            arguments.get("payload")?,
-        ));
-    }
-    Some((function, arguments))
 }
 
 struct Names {

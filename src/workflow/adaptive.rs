@@ -743,7 +743,7 @@ fn set_config_string(config: &mut Value, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_identifier(value: &str, label: &str) -> Result<()> {
+pub(super) fn validate_identifier(value: &str, label: &str) -> Result<()> {
     let valid = !value.is_empty()
         && value.len() <= 128
         && value

@@ -21,6 +21,7 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
+use super::common;
 use super::validation_loop::suffix;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
@@ -647,35 +648,10 @@ fn is_python_bytecode_cache(path: &str) -> bool {
         || path.ends_with(".pyo")
 }
 
-fn collect_files(root: &Path) -> Result<Vec<String>> {
-    fn visit(root: &Path, directory: &Path, paths: &mut Vec<String>) -> Result<()> {
-        for entry in fs::read_dir(directory)
-            .with_context(|| format!("failed reading {}", directory.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                let relative = path.strip_prefix(root)?.to_string_lossy().into_owned();
-                paths.push(format!("{relative}#symlink"));
-            } else if metadata.is_dir() {
-                visit(root, &path, paths)?;
-            } else if metadata.is_file() {
-                paths.push(path.strip_prefix(root)?.to_string_lossy().into_owned());
-            }
-        }
-        Ok(())
-    }
-    let mut paths = Vec::new();
-    visit(root, root, &mut paths)?;
-    paths.sort();
-    Ok(paths)
-}
-
 async fn audit_fixture(run_id: &str) -> Result<PerformanceAudit> {
     let root = fixture_root(run_id);
     ensure_safe_fixture_root(&root)?;
-    let observed_paths = collect_files(&root)?;
+    let observed_paths = common::collect_files(&root)?;
     let expected_paths = expected_files().keys().copied().collect::<BTreeSet<_>>();
     // Running the public tests leaves CPython bytecode caches behind. They are
     // not part of the patch and never reach a commit, so they must not count

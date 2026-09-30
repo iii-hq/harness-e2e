@@ -171,7 +171,9 @@ impl Scenario for ContentionLedger {
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let names = Names::new(run_id);
         let database_available = context.function_exists("database::query").await?
-            && available_databases(context).await?.contains(DATABASE);
+            && common::available_databases(context)
+                .await?
+                .contains(DATABASE);
         let snapshot = if database_available {
             ledger_snapshot(context, &names).await?
         } else {
@@ -241,7 +243,7 @@ impl Scenario for ContentionLedger {
         if !context.function_exists("database::query").await? {
             return Ok(missing_database());
         }
-        let databases = available_databases(context).await?;
+        let databases = common::available_databases(context).await?;
         if !databases.contains(DATABASE) {
             return Ok(missing_primary(&databases));
         }
@@ -280,7 +282,7 @@ impl Scenario for ContentionLedger {
         let expected_sessions: BTreeSet<&str> =
             names.writer_sessions.iter().map(String::as_str).collect();
         let single_response_spawns =
-            max_parallel_spawns(&observation.transcript) == usize::from(WRITERS);
+            common::max_parallel_spawns(&observation.transcript) == usize::from(WRITERS);
 
         let records = common::trigger_fired_records(&observation.transcript);
         let completion_records: Vec<_> = records
@@ -395,13 +397,16 @@ impl Scenario for ContentionLedger {
         if !context.function_exists("database::query").await? {
             return Ok(());
         }
-        if !available_databases(context).await?.contains(DATABASE) {
+        if !common::available_databases(context)
+            .await?
+            .contains(DATABASE)
+        {
             return Ok(());
         }
         let objects = database_objects(context, &names).await?;
         for kind in ["trigger", "view", "table"] {
             for object in objects.values().filter(|object| object.kind == kind) {
-                if !sql_safe_name(&object.name) {
+                if !common::sql_safe_name(&object.name) {
                     continue;
                 }
                 let _: Value = context
@@ -691,7 +696,7 @@ fn writer_calls_contended(
         if !DATABASE_WRITES.contains(&call.function_id.as_str()) {
             continue;
         }
-        for sql in sql_statements(&call.arguments) {
+        for sql in common::sql_statements(&call.arguments) {
             if is_increment(sql, &names.ledger) {
                 increments += 1;
                 last_database_write = Some(position);
@@ -742,7 +747,7 @@ fn root_avoids_increments(calls: &[common::ObservedFunctionCall], names: &Names)
     calls
         .iter()
         .filter(|call| DATABASE_WRITES.contains(&call.function_id.as_str()))
-        .flat_map(|call| sql_statements(&call.arguments))
+        .flat_map(|call| common::sql_statements(&call.arguments))
         .all(|sql| !is_increment(sql, &names.ledger) && !inserts_into(sql, &names.audit))
 }
 
@@ -838,65 +843,6 @@ fn audit_insert_pairs(sql: &str) -> Option<Vec<(i64, i64)>> {
     (!pairs.is_empty()).then_some(pairs)
 }
 
-fn sql_statements(arguments: &Value) -> Vec<&str> {
-    arguments
-        .get("sql")
-        .and_then(Value::as_str)
-        .into_iter()
-        .chain(
-            arguments
-                .get("statements")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|statement| {
-                    statement
-                        .as_str()
-                        .or_else(|| statement.get("sql").and_then(Value::as_str))
-                }),
-        )
-        .collect()
-}
-
-fn max_parallel_spawns(transcript: &Value) -> usize {
-    transcript
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("message"))
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map(|message| {
-            message
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|block| {
-                    normalized_block_call(block)
-                        .is_some_and(|(function, _)| function == "harness::spawn")
-                })
-                .count()
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
-    if block.get("type").and_then(Value::as_str) != Some("function_call") {
-        return None;
-    }
-    let function = block.get("function_id")?.as_str()?;
-    let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
-        return Some((
-            arguments.get("function")?.as_str()?,
-            arguments.get("payload")?,
-        ));
-    }
-    Some((function, arguments))
-}
-
 #[derive(Debug)]
 struct DatabaseObject {
     name: String,
@@ -939,33 +885,9 @@ async fn query_rows(context: &E2eContext, sql: &str) -> anyhow::Result<Vec<Value
         .with_context(|| format!("database::query returned malformed rows for {sql}"))
 }
 
-async fn available_databases(context: &E2eContext) -> anyhow::Result<BTreeSet<String>> {
-    Ok(context
-        .trigger_value("database::listDatabases", json!({}))
-        .await?
-        .get("databases")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|database| {
-            database
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect())
-}
-
 fn integer_field(row: &Value, field: &str) -> Option<i64> {
     row.get(field)
         .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
-}
-
-fn sql_safe_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 struct Names {

@@ -2,7 +2,7 @@
 //! origins and validate the result from runner-owned backend state.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
 use axum::extract::{Form, State};
@@ -215,12 +215,6 @@ fn registry() -> &'static Mutex<HashMap<String, FixtureRuntime>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn fixture_function_id(run_id: &str) -> String {
     format!("e2e_browser_fixture_{}::info", suffix(run_id))
 }
@@ -244,9 +238,9 @@ fn runtime_snapshot(
     FixtureUrls,
     Vec<RequestEvent>,
 )> {
-    let registry = lock_unpoisoned(registry());
+    let registry = common::lock_unpoisoned(registry());
     let runtime = registry.get(run_id)?;
-    let state = lock_unpoisoned(&runtime.state);
+    let state = common::lock_unpoisoned(&runtime.state);
     Some((
         state.baseline.clone(),
         state.current.clone(),
@@ -256,7 +250,7 @@ fn runtime_snapshot(
 }
 
 fn record_browser_sessions(run_id: &str, session_ids: &[String]) {
-    if let Some(runtime) = lock_unpoisoned(registry()).get_mut(run_id) {
+    if let Some(runtime) = common::lock_unpoisoned(registry()).get_mut(run_id) {
         for session_id in session_ids {
             if !runtime.browser_sessions.contains(session_id) {
                 runtime.browser_sessions.push(session_id.clone());
@@ -267,7 +261,7 @@ fn record_browser_sessions(run_id: &str, session_ids: &[String]) {
 
 async fn support_home(State(state): State<SharedState>) -> Html<String> {
     let (urls, ticket) = {
-        let mut state = lock_unpoisoned(&state);
+        let mut state = common::lock_unpoisoned(&state);
         state.record("support", "GET", "/", true);
         (state.urls.clone(), state.current.ticket.clone())
     };
@@ -283,7 +277,7 @@ async fn support_home(State(state): State<SharedState>) -> Html<String> {
 
 async fn support_ticket(State(state): State<SharedState>) -> Html<String> {
     let ticket = {
-        let mut state = lock_unpoisoned(&state);
+        let mut state = common::lock_unpoisoned(&state);
         state.record("support", "GET", "/ticket/TCK-42", true);
         state.current.ticket.clone()
     };
@@ -306,7 +300,7 @@ async fn close_ticket(
     let receipt_value = form.get("receipt").map(String::as_str).unwrap_or_default();
     let comment = form.get("comment").map(String::as_str).unwrap_or_default();
     let expected = if run_id.is_empty() {
-        lock_unpoisoned(registry())
+        common::lock_unpoisoned(registry())
             .iter()
             .find_map(|(owner, runtime)| {
                 Arc::ptr_eq(&runtime.state, &state).then(|| receipt(owner))
@@ -315,7 +309,7 @@ async fn close_ticket(
     } else {
         receipt(&run_id)
     };
-    let accepted = lock_unpoisoned(&state).close_ticket(receipt_value, comment, &expected);
+    let accepted = common::lock_unpoisoned(&state).close_ticket(receipt_value, comment, &expected);
     Html(format!(
         "<!doctype html><title>Ticket result</title><h1>{}</h1><p>receipt={}</p><p>comment={}</p>",
         if accepted {
@@ -330,7 +324,7 @@ async fn close_ticket(
 
 async fn knowledge_index(State(state): State<SharedState>) -> Html<String> {
     let urls = {
-        let mut state = lock_unpoisoned(&state);
+        let mut state = common::lock_unpoisoned(&state);
         state.record("knowledge_base", "GET", "/", true);
         state.urls.clone()
     };
@@ -343,14 +337,14 @@ async fn knowledge_index(State(state): State<SharedState>) -> Html<String> {
 }
 
 async fn current_policy(State(state): State<SharedState>) -> Html<String> {
-    lock_unpoisoned(&state).record("knowledge_base", "GET", "/policies/current", true);
+    common::lock_unpoisoned(&state).record("knowledge_base", "GET", "/policies/current", true);
     Html(format!(
         "<!doctype html><title>{CURRENT_POLICY}</title><h1>{CURRENT_POLICY}</h1><p>Effective 2026-08-01. For a duplicate-address review, set the order disposition to <strong>{REQUIRED_ACTION}</strong>. Never cancel the order. Cite this policy id in the ticket resolution.</p>"
     ))
 }
 
 async fn superseded_policy(State(state): State<SharedState>) -> Html<String> {
-    lock_unpoisoned(&state).record("knowledge_base", "GET", "/policies/superseded", true);
+    common::lock_unpoisoned(&state).record("knowledge_base", "GET", "/policies/superseded", true);
     Html(format!(
         "<!doctype html><title>{SUPERSEDED_POLICY}</title><h1>{SUPERSEDED_POLICY}</h1><p>Superseded in 2026. Old instruction: cancel the order.</p>"
     ))
@@ -358,7 +352,7 @@ async fn superseded_policy(State(state): State<SharedState>) -> Html<String> {
 
 async fn admin_order(State(state): State<SharedState>) -> Html<String> {
     let order = {
-        let mut state = lock_unpoisoned(&state);
+        let mut state = common::lock_unpoisoned(&state);
         state.record("admin", "GET", "/orders/ORD-42", true);
         state.current.target_order.clone()
     };
@@ -377,8 +371,8 @@ async fn apply_admin_action(
     Form(form): Form<HashMap<String, String>>,
 ) -> Html<String> {
     let action = form.get("action").map(String::as_str).unwrap_or_default();
-    let accepted = lock_unpoisoned(&state).apply_admin_action(action);
-    let run_id = lock_unpoisoned(registry())
+    let accepted = common::lock_unpoisoned(&state).apply_admin_action(action);
+    let run_id = common::lock_unpoisoned(registry())
         .iter()
         .find_map(|(owner, runtime)| Arc::ptr_eq(&runtime.state, &state).then(|| owner.clone()))
         .unwrap_or_default();
@@ -408,7 +402,7 @@ async fn start_servers(state: SharedState) -> Result<(FixtureUrls, Vec<JoinHandl
         knowledge_base: format!("http://{}", knowledge_base.local_addr()?),
         admin: format!("http://{}", admin.local_addr()?),
     };
-    lock_unpoisoned(&state).urls = urls.clone();
+    common::lock_unpoisoned(&state).urls = urls.clone();
 
     let support_router = Router::new()
         .route("/", get(support_home))
@@ -737,7 +731,7 @@ before replying, and include the genuine receipt in the final response."#,
     }
 
     async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
-        if let Some(runtime) = lock_unpoisoned(registry()).remove(run_id) {
+        if let Some(runtime) = common::lock_unpoisoned(registry()).remove(run_id) {
             for server in runtime.servers {
                 server.abort();
             }
@@ -770,7 +764,7 @@ before replying, and include the genuine receipt in the final response."#,
                 "Return the three run-scoped local UI origins and target ids for the browser cross-site E2E fixture. This is discovery only and cannot mutate backend state.",
             ),
         );
-        lock_unpoisoned(registry()).insert(
+        common::lock_unpoisoned(registry()).insert(
             run_id.into(),
             FixtureRuntime {
                 functions: vec![function],
@@ -928,7 +922,7 @@ before replying, and include the genuine receipt in the final response."#,
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
-        let Some(runtime) = lock_unpoisoned(registry()).remove(run_id) else {
+        let Some(runtime) = common::lock_unpoisoned(registry()).remove(run_id) else {
             return Ok(());
         };
         let mut session_ids = runtime.browser_sessions;
