@@ -196,14 +196,14 @@ impl Scenario for QuorumFanIn {
         let mut exact_rows = 0usize;
         for index in QUORUM_INDEXES {
             let key = member_key(index);
-            let value = get_state(context, &names.scope, &key).await?;
+            let value = common::get_state(context, &names.scope, &key).await?;
             if value == expected_row(run_id, index) {
                 exact_rows += 1;
             }
             quorum_rows.push(json!({ "key": key, "value": value }));
         }
         let straggler_value =
-            get_state(context, &names.scope, &member_key(STRAGGLER_INDEX)).await?;
+            common::get_state(context, &names.scope, &member_key(STRAGGLER_INDEX)).await?;
         let straggler_written = !straggler_value.is_null();
         let children = depth_one_children(observation, &names);
         let audit = stop_audit(&observation.transcript, &names.quorum_label);
@@ -418,7 +418,7 @@ async fn evaluate_quorum(
     let reports = response_reports(&observation.response, run_id);
 
     let single_response_spawns =
-        max_parallel_spawns(&observation.transcript) == usize::from(MEMBER_COUNT);
+        common::max_parallel_spawns(&observation.transcript) == usize::from(MEMBER_COUNT);
     let sessions_direct = observation.metrics.totals.sessions == u64::from(MEMBER_COUNT) + 1;
     let no_errors = observation.metrics.totals.function_call_errors == 0;
 
@@ -529,14 +529,6 @@ fn captured_straggler_written(deliverables: &[CapturedDeliverable]) -> bool {
         .and_then(|content| content.get("straggler_written"))
         .and_then(Value::as_bool)
         .unwrap_or(true)
-}
-
-async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
-    Ok(common::state_value(
-        context
-            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
-            .await?,
-    ))
 }
 
 fn response_reports(response: &str, run_id: &str) -> bool {
@@ -653,7 +645,7 @@ fn stop_audit(transcript: &Value, label: &str) -> StopAudit {
             .into_iter()
             .flatten()
         {
-            let Some((function_id, arguments)) = normalized_block_call(block) else {
+            let Some((function_id, arguments)) = common::normalized_block_call(block) else {
                 continue;
             };
             if function_id != STOP_FUNCTION_ID {
@@ -668,45 +660,6 @@ fn stop_audit(transcript: &Value, label: &str) -> StopAudit {
         barrier_retired_at,
         stop_calls,
     }
-}
-
-fn max_parallel_spawns(transcript: &Value) -> usize {
-    transcript
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("message"))
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map(|message| {
-            message
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|block| {
-                    normalized_block_call(block)
-                        .is_some_and(|(function, _)| function == "harness::spawn")
-                })
-                .count()
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
-    if block.get("type").and_then(Value::as_str) != Some("function_call") {
-        return None;
-    }
-    let function = block.get("function_id")?.as_str()?;
-    let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
-        return Some((
-            arguments.get("function")?.as_str()?,
-            arguments.get("payload")?,
-        ));
-    }
-    Some((function, arguments))
 }
 
 struct Names {

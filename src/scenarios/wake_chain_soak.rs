@@ -424,7 +424,7 @@ fn chain_events(transcript: &Value, names: &Names) -> Vec<ChainEvent> {
             .into_iter()
             .flatten()
         {
-            let Some((function_id, arguments)) = normalized_block_call(block) else {
+            let Some((function_id, arguments)) = common::normalized_block_call(block) else {
                 continue;
             };
             if let Some(value) = tick_write(function_id, arguments, names) {
@@ -435,21 +435,6 @@ fn chain_events(transcript: &Value, names: &Names) -> Vec<ChainEvent> {
         }
     }
     events
-}
-
-fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
-    if block.get("type").and_then(Value::as_str) != Some("function_call") {
-        return None;
-    }
-    let function = block.get("function_id")?.as_str()?;
-    let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
-        return Some((
-            arguments.get("function")?.as_str()?,
-            arguments.get("payload")?,
-        ));
-    }
-    Some((function, arguments))
 }
 
 struct ChainAudit {

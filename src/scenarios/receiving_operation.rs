@@ -128,7 +128,9 @@ impl Scenario for ReceivingOperation {
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let names = Names::new(run_id);
         let database_available = context.function_exists("database::query").await?
-            && available_databases(context).await?.contains(DATABASE);
+            && common::available_databases(context)
+                .await?
+                .contains(DATABASE);
         let objects = if database_available {
             database_objects(context, &names).await?
         } else {
@@ -291,7 +293,7 @@ impl Scenario for ReceivingOperation {
         if !context.function_exists("database::query").await? {
             return Ok(missing_database());
         }
-        let databases = available_databases(context).await?;
+        let databases = common::available_databases(context).await?;
         if !databases.contains(DATABASE) {
             return Ok(missing_primary(&databases));
         }
@@ -368,7 +370,7 @@ impl Scenario for ReceivingOperation {
             !calls.iter().any(|call| {
                 call.entry > *notice
                     && DATABASE_WRITES.contains(&call.function_id.as_str())
-                    && sql_statements(&call.arguments)
+                    && common::sql_statements(&call.arguments)
                         .iter()
                         .any(|sql| mutates_relation(sql, &names.ledger))
             })
@@ -402,7 +404,7 @@ impl Scenario for ReceivingOperation {
             !calls.iter().any(|call| {
                 call.entry >= spawn
                     && DATABASE_WRITES.contains(&call.function_id.as_str())
-                    && sql_statements(&call.arguments)
+                    && common::sql_statements(&call.arguments)
                         .iter()
                         .any(|sql| mutates_relation(sql, &names.completion))
             })
@@ -483,14 +485,17 @@ impl Scenario for ReceivingOperation {
         if !context.function_exists("database::query").await? {
             return Ok(());
         }
-        if !available_databases(context).await?.contains(DATABASE) {
+        if !common::available_databases(context)
+            .await?
+            .contains(DATABASE)
+        {
             return Ok(());
         }
         let names = Names::new(run_id);
         let objects = database_objects(context, &names).await?;
         for kind in ["trigger", "view", "table"] {
             for object in objects.values().filter(|object| object.kind == kind) {
-                if !sql_safe_name(&object.name) {
+                if !common::sql_safe_name(&object.name) {
                     continue;
                 }
                 let _: Value = context
@@ -681,7 +686,7 @@ async fn courier_execution(
             .collect::<String>();
         let statements: Vec<_> = calls
             .iter()
-            .flat_map(|call| sql_statements(&call.arguments))
+            .flat_map(|call| common::sql_statements(&call.arguments))
             .map(str::to_ascii_lowercase)
             .collect();
         completed &= !calls.is_empty()
@@ -775,7 +780,7 @@ fn live_ledger_setup_before(
         object.kind == "view" && object.sql.to_ascii_lowercase().contains(&names.shipments)
     }) || calls.iter().any(|call| {
         call.entry < first_spawn
-            && sql_statements(&call.arguments).iter().any(|sql| {
+            && common::sql_statements(&call.arguments).iter().any(|sql| {
                 let sql = sql.to_ascii_lowercase();
                 sql.contains("create view")
                     && sql.contains(&names.ledger)
@@ -784,7 +789,7 @@ fn live_ledger_setup_before(
     });
     let database_trigger = calls.iter().any(|call| {
         call.entry < first_spawn
-            && sql_statements(&call.arguments).iter().any(|sql| {
+            && common::sql_statements(&call.arguments).iter().any(|sql| {
                 let sql = sql.to_ascii_lowercase();
                 sql.contains("create trigger")
                     && sql.contains(&names.ledger)
@@ -939,26 +944,6 @@ fn normalize_call(entry: usize, block: &Value) -> Option<CallAt> {
     })
 }
 
-fn sql_statements(arguments: &Value) -> Vec<&str> {
-    arguments
-        .get("sql")
-        .and_then(Value::as_str)
-        .into_iter()
-        .chain(
-            arguments
-                .get("statements")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|statement| {
-                    statement
-                        .as_str()
-                        .or_else(|| statement.get("sql").and_then(Value::as_str))
-                }),
-        )
-        .collect()
-}
-
 fn mutates_relation(sql: &str, relation: &str) -> bool {
     let sql = sql.to_ascii_lowercase();
     let into =
@@ -1089,23 +1074,6 @@ async fn query_rows(context: &E2eContext, sql: &str) -> anyhow::Result<Vec<Value
         .with_context(|| format!("database::query returned malformed rows for {sql}"))
 }
 
-async fn available_databases(context: &E2eContext) -> anyhow::Result<BTreeSet<String>> {
-    Ok(context
-        .trigger_value("database::listDatabases", json!({}))
-        .await?
-        .get("databases")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|database| {
-            database
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect())
-}
-
 fn string_field(value: &Value, field: &str) -> anyhow::Result<String> {
     value
         .get(field)
@@ -1231,13 +1199,6 @@ fn ledger_matches(
 
 fn approximately(left: f64, right: f64) -> bool {
     (left - right).abs() < 0.000_001
-}
-
-fn sql_safe_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 struct Names {

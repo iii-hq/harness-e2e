@@ -524,6 +524,25 @@ pub struct StepPortDescriptor {
     pub control_source: Option<ControlSource>,
 }
 
+/// Port descriptors from `(id, kind, optional, control source)` rows.
+pub(crate) fn ports(
+    definitions: &[(&str, PortValueKind, bool, Option<ControlSource>)],
+) -> BTreeMap<String, StepPortDescriptor> {
+    definitions
+        .iter()
+        .map(|(id, kind, optional, control_source)| {
+            (
+                (*id).into(),
+                StepPortDescriptor {
+                    kind: *kind,
+                    optional: *optional,
+                    control_source: *control_source,
+                },
+            )
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlSource {

@@ -199,7 +199,7 @@ fn descriptor_kinds() -> Result<Vec<(StepTypeDescriptor, TodoStepKind)>> {
                 PREPARE_STEP,
                 "Create the attempt-owned Todo workspace and immutable task contract.",
                 BTreeMap::new(),
-                ports(&[
+                super::ports(&[
                     ("workspace_root", PortValueKind::TextUtf8, false, None),
                     ("task_contract", PortValueKind::Json, false, None),
                 ]),
@@ -212,11 +212,11 @@ fn descriptor_kinds() -> Result<Vec<(StepTypeDescriptor, TodoStepKind)>> {
             descriptor(
                 COMPILE_STEP,
                 "Compile the planner file against the fixed probe catalog and emit deterministic build authorization.",
-                ports(&[
+                super::ports(&[
                     ("workspace_root", PortValueKind::TextUtf8, false, None),
                     ("task_contract", PortValueKind::Json, false, None),
                 ]),
-                ports(&[
+                super::ports(&[
                     ("compiled_plan", PortValueKind::Json, false, None),
                     ("ready_for_build", PortValueKind::Boolean, false, Some(ControlSource::Deterministic)),
                     ("planning_assessment", PortValueKind::Assessment, false, None),
@@ -230,8 +230,8 @@ fn descriptor_kinds() -> Result<Vec<(StepTypeDescriptor, TodoStepKind)>> {
             descriptor(
                 VALIDATE_STEP,
                 "Install and independently validate every compiled Todo check, emitting immutable evidence and hard gates.",
-                ports(&[("compiled_plan", PortValueKind::Json, false, None)]),
-                ports(&[
+                super::ports(&[("compiled_plan", PortValueKind::Json, false, None)]),
+                super::ports(&[
                     ("construction_assessment", PortValueKind::Assessment, false, None),
                     ("coverage_assessment", PortValueKind::Assessment, false, None),
                     ("functional_assessment", PortValueKind::Assessment, false, None),
@@ -596,24 +596,6 @@ fn descriptor(
     };
     descriptor.validate()?;
     Ok(descriptor)
-}
-
-fn ports(
-    definitions: &[(&str, PortValueKind, bool, Option<ControlSource>)],
-) -> BTreeMap<String, StepPortDescriptor> {
-    definitions
-        .iter()
-        .map(|(id, kind, optional, control_source)| {
-            (
-                (*id).into(),
-                StepPortDescriptor {
-                    kind: *kind,
-                    optional: *optional,
-                    control_source: *control_source,
-                },
-            )
-        })
-        .collect()
 }
 
 fn input_text<'a>(context: &'a StepExecutorContext, id: &str) -> Result<&'a str> {

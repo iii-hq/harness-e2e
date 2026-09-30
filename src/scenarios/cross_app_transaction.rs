@@ -6,7 +6,7 @@
 //! the fixture snapshot and its append-only audit log directly.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use iii_sdk::runtime::FunctionRef;
 use iii_sdk::RegisterFunction;
@@ -482,20 +482,14 @@ fn fixtures() -> &'static Mutex<BTreeMap<String, FixtureRuntime>> {
     FIXTURES.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn fixture(run_id: &str) -> Option<Fixture> {
-    lock_unpoisoned(fixtures())
+    common::lock_unpoisoned(fixtures())
         .get(run_id)
         .map(|runtime| Arc::clone(&runtime.state))
 }
 
 fn release_fixture(run_id: &str) {
-    if let Some(runtime) = lock_unpoisoned(fixtures()).remove(run_id) {
+    if let Some(runtime) = common::lock_unpoisoned(fixtures()).remove(run_id) {
         for function in runtime.functions {
             function.unregister();
         }
@@ -678,7 +672,7 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                     let crm = crm.clone();
                     async move {
                         Ok::<ServiceResponse, iii_sdk::errors::Error>(
-                            lock_unpoisoned(&crm).get_account("crm", &request.account_id),
+                            common::lock_unpoisoned(&crm).get_account("crm", &request.account_id),
                         )
                     }
                 })
@@ -694,7 +688,7 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                     let crm = crm.clone();
                     async move {
                         Ok::<ServiceResponse, iii_sdk::errors::Error>(
-                            lock_unpoisoned(&crm).transfer("crm", request),
+                            common::lock_unpoisoned(&crm).transfer("crm", request),
                         )
                     }
                 })
@@ -712,7 +706,8 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                     let billing = billing.clone();
                     async move {
                         Ok::<ServiceResponse, iii_sdk::errors::Error>(
-                            lock_unpoisoned(&billing).get_account("billing", &request.account_id),
+                            common::lock_unpoisoned(&billing)
+                                .get_account("billing", &request.account_id),
                         )
                     }
                 })
@@ -727,7 +722,7 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                 let billing = billing.clone();
                 async move {
                     Ok::<ServiceResponse, iii_sdk::errors::Error>(
-                        lock_unpoisoned(&billing).transfer("billing", request),
+                        common::lock_unpoisoned(&billing).transfer("billing", request),
                     )
                 }
             })
@@ -744,7 +739,7 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                     let support = support.clone();
                     async move {
                         Ok::<ServiceResponse, iii_sdk::errors::Error>(
-                            lock_unpoisoned(&support).get_ticket(&request.ticket_id),
+                            common::lock_unpoisoned(&support).get_ticket(&request.ticket_id),
                         )
                     }
                 })
@@ -759,7 +754,7 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                 let support = Arc::clone(&support);
                 async move {
                     Ok::<ServiceResponse, iii_sdk::errors::Error>(
-                        lock_unpoisoned(&support).close_ticket(request),
+                        common::lock_unpoisoned(&support).close_ticket(request),
                     )
                 }
             })
@@ -767,7 +762,8 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
                 "Run-scoped support close. It accepts only after CRM and billing have converged.",
             ),
         ));
-        lock_unpoisoned(fixtures()).insert(run_id.to_string(), FixtureRuntime { functions, state });
+        common::lock_unpoisoned(fixtures())
+            .insert(run_id.to_string(), FixtureRuntime { functions, state });
         Ok(())
     }
 
@@ -910,7 +906,7 @@ struct FixtureAudit {
 
 fn fixture_audit(run_id: &str) -> Option<FixtureAudit> {
     let state = fixture(run_id)?;
-    let state = lock_unpoisoned(&state);
+    let state = common::lock_unpoisoned(&state);
     Some(FixtureAudit {
         snapshot: state.snapshot.clone(),
         entries: state.audit.clone(),

@@ -53,9 +53,9 @@ pub struct WorkflowResumeIdentity {
 
 impl WorkflowResumeIdentity {
     pub fn validate(&self) -> Result<()> {
-        validate_identifier(&self.execution_id, "execution id")?;
-        validate_identifier(&self.scenario_id, "scenario id")?;
-        validate_identifier(&self.workflow_id, "workflow id")?;
+        super::adaptive::validate_identifier(&self.execution_id, "execution id")?;
+        super::adaptive::validate_identifier(&self.scenario_id, "scenario id")?;
+        super::adaptive::validate_identifier(&self.workflow_id, "workflow id")?;
         for (label, digest) in [
             ("scenario contract", &self.scenario_contract_sha256),
             ("workflow", &self.workflow_sha256),
@@ -111,8 +111,8 @@ pub struct WorkflowResumeState {
 impl WorkflowResumeState {
     pub fn validate(&self) -> Result<()> {
         self.identity.validate()?;
-        validate_identifier(&self.run_id, "run id")?;
-        validate_identifier(&self.attempt_id, "attempt id")?;
+        super::adaptive::validate_identifier(&self.run_id, "run id")?;
+        super::adaptive::validate_identifier(&self.attempt_id, "attempt id")?;
         if self.sequence == 0 || self.updated_at.trim().is_empty() {
             bail!("workflow resume state requires a positive sequence and timestamp");
         }
@@ -144,7 +144,7 @@ impl WorkflowResumeState {
             }
         }
         for (id, step) in &self.steps {
-            validate_identifier(id, "resume step id")?;
+            super::adaptive::validate_identifier(id, "resume step id")?;
             if &step.report.node_id != id {
                 bail!("resume step key '{id}' does not match its report");
             }
@@ -194,9 +194,9 @@ impl WorkflowResumeStore {
         run_id: &str,
         attempt_id: &str,
     ) -> Result<Self> {
-        validate_identifier(execution_id, "execution id")?;
-        validate_identifier(run_id, "run id")?;
-        validate_identifier(attempt_id, "attempt id")?;
+        super::adaptive::validate_identifier(execution_id, "execution id")?;
+        super::adaptive::validate_identifier(run_id, "run id")?;
+        super::adaptive::validate_identifier(attempt_id, "attempt id")?;
         Ok(Self {
             state_root: state_root.as_ref().to_path_buf(),
             relative_path: PathBuf::from("workflow-resume")
@@ -281,18 +281,6 @@ impl WorkflowResumeStore {
         }
         Ok(Some(envelope.state))
     }
-}
-
-fn validate_identifier(value: &str, label: &str) -> Result<()> {
-    let valid = !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
-    if !valid || value == "." || value == ".." {
-        bail!("{label} '{value}' is invalid");
-    }
-    Ok(())
 }
 
 fn validate_sha256(value: &str) -> Result<()> {

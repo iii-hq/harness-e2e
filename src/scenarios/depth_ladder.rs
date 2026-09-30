@@ -177,7 +177,7 @@ impl Scenario for DepthLadder {
         let mut rows = Vec::new();
         for level in 1..=depth {
             let key = relay_key(level);
-            let value = get_state(context, &names.scope, &key).await?;
+            let value = common::get_state(context, &names.scope, &key).await?;
             rows.push(json!({ "key": key, "value": value }));
         }
         // Location evidence is only attached once the audit establishes that
@@ -432,7 +432,7 @@ async fn relay_audit(
 ) -> anyhow::Result<RelayAudit> {
     let mut exact_rows = 0usize;
     for level in 1..=depth {
-        let observed = get_state(context, &names.scope, &relay_key(level)).await?;
+        let observed = common::get_state(context, &names.scope, &relay_key(level)).await?;
         if observed == expected_row(run_id, level) {
             exact_rows += 1;
         }
@@ -585,14 +585,6 @@ fn deliverable_contract(depth: u8) -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
-    Ok(common::state_value(
-        context
-            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
-            .await?,
-    ))
 }
 
 fn is_completion_watch(call: &common::ObservedFunctionCall, names: &Names, depth: u8) -> bool {

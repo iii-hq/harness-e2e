@@ -8,8 +8,6 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
-use iii_sdk::protocol::TriggerRequest;
-use iii_sdk::IIIClient;
 use serde_json::{json, Value};
 use shakmaty::fen::Fen;
 use shakmaty::{CastlingMode, Chess, EnPassantMode};
@@ -20,6 +18,7 @@ use crate::report::{CompletionState, EvaluationDimension};
 
 use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
+use super::common;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
     CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
@@ -35,7 +34,6 @@ const CHESS_MANIFEST_SHA256: &str =
     "sha256:b2166cc0001a75a2afa0fdc1275d9252ac0e45bec6d4e59e6d04b2d53bd5f9f7";
 const EVIDENCE_ID: &str = "chess_worker_evidence";
 const EVIDENCE_LIMIT: u64 = 12 * 1024 * 1024;
-const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
 const START_FEN: &str = chess_engine::STARTPOS;
 const KIWIPETE_FEN: &str = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
 const EN_PASSANT_FEN: &str = "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3";
@@ -294,7 +292,7 @@ manifest, then drive the page at `#/worker/{worker}/chess` after you finish."#,
                         .await
                         .context("stop run-scoped chess Worker before removing its workspace")?;
                 }
-                Err(error) if is_remote_failure(&error) => {
+                Err(error) if common::is_remote_failure(&error) => {
                     let functions = context
                         .trigger_value(
                             "engine::functions::info",
@@ -471,7 +469,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
                         break;
                     }
                 }
-                Err(error) if is_remote_failure(&error) => {
+                Err(error) if common::is_remote_failure(&error) => {
                     last_status = json!({"error": format!("{error:#}")})
                 }
                 Err(error) => return Err(error.context("query candidate Compose status")),
@@ -553,13 +551,13 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     for (id, fen, depth) in families {
         let expected_moves = chess_engine::legal_moves(fen)?;
         let expected_nodes = chess_engine::perft(fen, depth)?;
-        let legal = invoke(
+        let legal = common::invoke(
             context.client(),
             &contract.functions["legal_moves"],
             json!({"fen":fen}),
         )
         .await;
-        let perft = invoke(
+        let perft = common::invoke(
             context.client(),
             &contract.functions["perft"],
             json!({"fen":fen,"depth":depth}),
@@ -594,13 +592,13 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
 
     let pinned_expected_moves = chess_engine::legal_moves(PINNED_FEN)?;
     let pinned_expected_nodes = chess_engine::perft(PINNED_FEN, 1)?;
-    let pinned_legal = invoke(
+    let pinned_legal = common::invoke(
         context.client(),
         &contract.functions["legal_moves"],
         json!({"fen":PINNED_FEN}),
     )
     .await;
-    let pinned_perft = invoke(
+    let pinned_perft = common::invoke(
         context.client(),
         &contract.functions["perft"],
         json!({"fen":PINNED_FEN,"depth":1}),
@@ -638,13 +636,13 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
 
     let expected_after = chess_engine::apply_move(START_FEN, "e2e4")?.new_fen;
     let expected_final = chess_engine::apply_move(&expected_after, "e7e5")?.new_fen;
-    let legal_play = invoke(
+    let legal_play = common::invoke(
         context.client(),
         &contract.functions["play"],
         json!({"fen":START_FEN,"move":"e2e4"}),
     )
     .await;
-    let illegal_play = invoke(
+    let illegal_play = common::invoke(
         context.client(),
         &contract.functions["play"],
         json!({"fen":START_FEN,"move":"e2e5"}),
@@ -659,7 +657,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         .map(str::to_string);
     let second_play = if let Some(actual_after) = &actual_after {
         Some(
-            invoke(
+            common::invoke(
                 context.client(),
                 &contract.functions["play"],
                 json!({"fen":actual_after,"move":"e7e5"}),
@@ -683,7 +681,10 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         && actual_final
             .as_deref()
             .is_some_and(|actual| fen_equivalent(actual, &expected_final))
-        && illegal_play.as_ref().err().is_some_and(is_remote_failure);
+        && illegal_play
+            .as_ref()
+            .err()
+            .is_some_and(common::is_remote_failure);
     checks.insert("play_contract".into(), json!({
         "passed":play_ok,
         "reason":if play_ok {"both legal moves are position-equivalent to the oracle and the illegal move is rejected"} else {"play contract failed"},
@@ -694,19 +695,19 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         "illegal":result_value(illegal_play)
     }));
 
-    let invalid_fen = invoke(
+    let invalid_fen = common::invoke(
         context.client(),
         &contract.functions["legal_moves"],
         json!({"fen":"not a fen"}),
     )
     .await;
-    let invalid_depth = invoke(
+    let invalid_depth = common::invoke(
         context.client(),
         &contract.functions["perft"],
         json!({"fen":START_FEN,"depth":5}),
     )
     .await;
-    let invalid_move = invoke(
+    let invalid_move = common::invoke(
         context.client(),
         &contract.functions["play"],
         json!({"fen":START_FEN,"move":"wat"}),
@@ -715,7 +716,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     ensure_remote_or_success(&invalid_fen, "invoke malformed FEN probe")?;
     ensure_remote_or_success(&invalid_depth, "invoke invalid depth probe")?;
     ensure_remote_or_success(&invalid_move, "invoke malformed move probe")?;
-    let health_after_rejections = invoke(
+    let health_after_rejections = common::invoke(
         context.client(),
         &contract.functions["legal_moves"],
         json!({"fen":START_FEN}),
@@ -730,19 +731,28 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         .ok()
         .and_then(|value| value["moves"].as_array())
         .is_some_and(|moves| moves.len() == 20);
-    let invalid_ok = invalid_fen.as_ref().err().is_some_and(is_remote_failure)
-        && invalid_depth.as_ref().err().is_some_and(is_remote_failure)
-        && invalid_move.as_ref().err().is_some_and(is_remote_failure)
+    let invalid_ok = invalid_fen
+        .as_ref()
+        .err()
+        .is_some_and(common::is_remote_failure)
+        && invalid_depth
+            .as_ref()
+            .err()
+            .is_some_and(common::is_remote_failure)
+        && invalid_move
+            .as_ref()
+            .err()
+            .is_some_and(common::is_remote_failure)
         && healthy;
     checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid requests were rejected and Worker stayed healthy"} else {"invalid-input rejection or post-rejection health failed"},"observed":[result_value(invalid_fen),result_value(invalid_depth),result_value(invalid_move)],"health_after_rejections":result_value(health_after_rejections)}));
 
-    let script = invoke(
+    let script = common::invoke(
         context.client(),
         &contract.functions["ui-content"],
         json!({"path":contract.script_path()}),
     )
     .await;
-    let style = invoke(
+    let style = common::invoke(
         context.client(),
         &contract.functions["ui-content"],
         json!({"path":contract.style_path()}),
@@ -782,7 +792,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
             "passed":console_delivery,
             "reason":if console_delivery {"Console reports an enabled Worker with loadable, hashed, warning-free script and style assets"} else {"Console asset registration, content, status, or manifest contract failed"},
             "console_status":result_value(console_status),
-            "manifest":bounded_value(manifest.clone()),
+            "manifest":common::bounded_value(manifest.clone()),
             "content":{"script":result_value(script),"style":result_value(style)}
         }),
     );
@@ -858,17 +868,8 @@ fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
 
 fn result_value(result: Result<Value>) -> Value {
     match result {
-        Ok(value) => json!({"ok":true,"value":bounded_value(value)}),
+        Ok(value) => json!({"ok":true,"value":common::bounded_value(value)}),
         Err(error) => json!({"ok":false,"error":format!("{error:#}")}),
-    }
-}
-
-fn bounded_value(value: Value) -> Value {
-    let encoded = value.to_string();
-    if encoded.len() <= 16 * 1024 {
-        value
-    } else {
-        json!({"omitted":"response exceeded 16 KiB","sha256":crate::artifact::sha256_bytes(encoded.as_bytes()),"size_bytes":encoded.len()})
     }
 }
 
@@ -996,31 +997,11 @@ fn ui_content_ok(script: &Result<Value>, style: &Result<Value>, contract: &Worke
 
 fn ensure_remote_or_success(result: &Result<Value>, action: &str) -> Result<()> {
     if let Err(error) = result {
-        if !is_remote_failure(error) {
+        if !common::is_remote_failure(error) {
             bail!("{action} infrastructure failure: {error:#}");
         }
     }
     Ok(())
-}
-
-fn is_remote_failure(error: &anyhow::Error) -> bool {
-    matches!(
-        error.downcast_ref::<iii_sdk::errors::Error>(),
-        Some(iii_sdk::errors::Error::Remote { .. })
-    )
-}
-
-async fn invoke(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
-    client
-        .trigger(TriggerRequest {
-            function_id: function_id.into(),
-            payload,
-            action: None,
-            timeout_ms: Some(30_000),
-        })
-        .await
-        .map_err(anyhow::Error::new)
-        .with_context(|| format!("invoke {function_id}"))
 }
 
 async fn capture_browser(
@@ -1093,7 +1074,7 @@ async fn capture_browser_session(
         )
         .await?;
     let before_state = inspect_ui(context, session, START_FEN, false).await?;
-    let before = screenshot_png(context, session).await?;
+    let before = common::screenshot_png(context, session).await?;
     let interaction_code = format!(
         "const expectedFirst = {}; const expectedFinal = {};\n{}",
         serde_json::to_string(actual_after)?,
@@ -1124,7 +1105,7 @@ async fn capture_browser_session(
         )
         .await?;
     let after_state = inspect_ui(context, session, actual_final, true).await?;
-    let after = screenshot_png(context, session).await?;
+    let after = common::screenshot_png(context, session).await?;
     let passed = before_state["passed"] == true
         && after_state["passed"] == true
         && before["data"].is_string()
@@ -1169,36 +1150,6 @@ async fn inspect_ui(
         )
         .await?;
     Ok(value["result"].clone())
-}
-
-async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value> {
-    let value = context
-        .trigger_value(
-            "browser::screenshot",
-            json!({"session_id":session,"full_page":true,"format":"png"}),
-        )
-        .await?;
-    if value["details"]["session_id"] != session {
-        bail!("browser screenshot session identity mismatch");
-    }
-    let block = value["content"]
-        .as_array()
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| item["type"] == "image" && item["mime"] == "image/png")
-        })
-        .context("browser screenshot omitted PNG")?;
-    let data = block["data"].as_str().context("browser PNG data missing")?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-    if bytes.len() > MAX_SCREENSHOT_BYTES {
-        return Ok(
-            json!({"oversized":true,"size_bytes":bytes.len(),"maximum_bytes":MAX_SCREENSHOT_BYTES,"details":value["details"]}),
-        );
-    }
-    Ok(
-        json!({"data":data,"sha256":crate::artifact::sha256_bytes(&bytes),"details":value["details"]}),
-    )
 }
 
 fn passed(evidence: &Value, id: &str) -> bool {

@@ -468,7 +468,7 @@ clean at the known-bad revision."#,
     }
 
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
-        remove_directory(&workspace_root(run_id))
+        common::remove_directory(&workspace_root(run_id))
     }
 }
 
@@ -488,9 +488,9 @@ async fn prepare_workspace(root: &Path) -> Result<()> {
     make_probe_executable(&root.join(PROBE_RELATIVE_PATH))?;
 
     let preflight = root.join(".fixture-preflight");
-    remove_directory(&preflight)?;
+    common::remove_directory(&preflight)?;
     let validation = validate_fixture(root, &preflight).await;
-    let cleanup = remove_directory(&preflight);
+    let cleanup = common::remove_directory(&preflight);
     match (validation, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
@@ -1626,14 +1626,6 @@ fn make_probe_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn remove_directory(path: &Path) -> Result<()> {
-    match fs::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
-    }
-}
-
 fn workspace_root(run_id: &str) -> PathBuf {
     let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
         .map(PathBuf::from)
@@ -2004,8 +1996,8 @@ mod tests {
         let owned = temporary.path().join("owned");
         fs::create_dir_all(&owned).unwrap();
         fs::write(owned.join("file"), b"data").unwrap();
-        remove_directory(&owned).unwrap();
-        remove_directory(&owned).unwrap();
+        common::remove_directory(&owned).unwrap();
+        common::remove_directory(&owned).unwrap();
         assert!(!owned.exists());
     }
 }

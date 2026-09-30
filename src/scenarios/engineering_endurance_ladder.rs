@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -24,6 +24,7 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
+use super::common;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
     DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
@@ -452,12 +453,6 @@ fn fixture_registry() -> &'static Mutex<HashMap<String, FixtureRuntime>> {
     FIXTURES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -741,7 +736,7 @@ async fn handle_checkpoint(
     request: CheckpointRequest,
 ) -> Result<CheckpointResponse, iii_sdk::errors::Error> {
     let (expected_rung, previous, expected_git_config, terminal) = {
-        let state = lock_unpoisoned(&state);
+        let state = common::lock_unpoisoned(&state);
         (
             state.accepted_rungs + 1,
             state.accepted_head.clone(),
@@ -750,7 +745,7 @@ async fn handle_checkpoint(
         )
     };
     if let Some(status) = terminal {
-        let state = lock_unpoisoned(&state);
+        let state = common::lock_unpoisoned(&state);
         return Ok(CheckpointResponse {
             status,
             accepted_rungs: state.accepted_rungs,
@@ -760,7 +755,7 @@ async fn handle_checkpoint(
         });
     }
     if request.rung != expected_rung || request.rung == 0 || request.rung as usize > TICKETS.len() {
-        let state = lock_unpoisoned(&state);
+        let state = common::lock_unpoisoned(&state);
         return Ok(CheckpointResponse {
             status: "rejected".into(),
             accepted_rungs: state.accepted_rungs,
@@ -815,7 +810,7 @@ async fn handle_checkpoint(
         evidence.feedback()
     };
 
-    let mut state = lock_unpoisoned(&state);
+    let mut state = common::lock_unpoisoned(&state);
     let attempt = {
         let attempts = state.attempts.entry(request.rung).or_default();
         *attempts += 1;
@@ -879,15 +874,15 @@ async fn handle_checkpoint(
 }
 
 fn release_fixture(run_id: &str) {
-    if let Some(runtime) = lock_unpoisoned(fixture_registry()).remove(run_id) {
+    if let Some(runtime) = common::lock_unpoisoned(fixture_registry()).remove(run_id) {
         runtime.function.unregister();
     }
 }
 
 fn snapshot(run_id: &str) -> Option<EnduranceSnapshot> {
-    let registry = lock_unpoisoned(fixture_registry());
+    let registry = common::lock_unpoisoned(fixture_registry());
     let runtime = registry.get(run_id)?;
-    let state = lock_unpoisoned(&runtime.state);
+    let state = common::lock_unpoisoned(&runtime.state);
     Some(EnduranceSnapshot {
         initial_head: state.initial_head.clone(),
         accepted_head: state.accepted_head.clone(),
@@ -1067,7 +1062,7 @@ or stop merely because one checkpoint was rejected."#,
                 "Trusted engineering endurance checkpoint. Audits a committed Git rung, runs public and cumulative hidden probes, and reveals the next ticket only after acceptance.",
             ),
         );
-        lock_unpoisoned(fixture_registry())
+        common::lock_unpoisoned(fixture_registry())
             .insert(run_id.to_string(), FixtureRuntime { function, state });
         Ok(())
     }
@@ -1575,7 +1570,7 @@ class DurableQueue:
         assert_eq!(response.status, "accepted");
         assert_eq!(response.accepted_head, head);
         assert!(response.next_ticket.unwrap().contains("Rung 2/10"));
-        assert_eq!(lock_unpoisoned(&state).accepted_rungs, 1);
+        assert_eq!(common::lock_unpoisoned(&state).accepted_rungs, 1);
         remove_fixture(&root).unwrap();
     }
 
@@ -1609,7 +1604,7 @@ class DurableQueue:
             assert_eq!(response.status, expected_status);
             assert!(response.next_ticket.is_none());
         }
-        let state = lock_unpoisoned(&state);
+        let state = common::lock_unpoisoned(&state);
         assert_eq!(state.accepted_rungs, 0);
         assert_eq!(state.terminal_status.as_deref(), Some("capability_failure"));
         assert_eq!(state.terminal_rung, Some(1));

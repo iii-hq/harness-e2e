@@ -22,6 +22,7 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
+use super::common;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
     DeliverableContract, ExecutionPolicy, ExecutionRealism, HumanHorizon, InvariantSpec,
@@ -350,7 +351,7 @@ and process started from this workspace."#,
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
         let root = workspace_root(run_id);
         let stopped = stop_workspace_workers(context, &root).await;
-        let removed = remove_directory(&root);
+        let removed = common::remove_directory(&root);
         stopped.and(removed)
     }
 }
@@ -447,9 +448,9 @@ async fn prepare_workspace(root: &Path) -> Result<()> {
         PUBLIC_MANIFEST.as_bytes(),
     )?;
     let preflight = root.join(".fixture-preflight");
-    remove_directory(&preflight)?;
+    common::remove_directory(&preflight)?;
     let validation = validate_bundle(&root.join(BUNDLE_RELATIVE_PATH), &preflight).await;
-    let cleanup = remove_directory(&preflight);
+    let cleanup = common::remove_directory(&preflight);
     match (validation, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
@@ -816,7 +817,7 @@ async fn delegation_probe(context: &E2eContext, checkout: &Path) -> (bool, Strin
 async fn delegation_probe_at(url: &str, namespace: &str, checkout: &Path) -> (bool, String) {
     let probe = checkout.with_file_name(".delegation-probe");
     let outcome = run_delegation_probe(url, namespace, checkout, &probe).await;
-    let _ = remove_directory(&probe);
+    let _ = common::remove_directory(&probe);
     match outcome {
         Ok(outcome) => outcome,
         Err(error) => (false, format!("delegation probe failed: {error:#}")),
@@ -829,7 +830,7 @@ async fn run_delegation_probe(
     checkout: &Path,
     probe: &Path,
 ) -> Result<(bool, String)> {
-    remove_directory(probe)?;
+    common::remove_directory(probe)?;
     let copied = Command::new("cp")
         .arg("-a")
         .arg(checkout)
@@ -1072,14 +1073,6 @@ fn write_exact(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))
 }
 
-fn remove_directory(path: &Path) -> Result<()> {
-    match fs::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
-    }
-}
-
 fn workspace_root(run_id: &str) -> PathBuf {
     let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
         .map(PathBuf::from)
@@ -1264,7 +1257,7 @@ mod tests {
             .expect("connect to the local iii engine");
         let run_id = "live-alertmanager-probe";
         let root = workspace_root(run_id);
-        let _ = remove_directory(&root);
+        let _ = common::remove_directory(&root);
         AlertmanagerRouteMatch
             .setup(&context, run_id)
             .await
@@ -1323,7 +1316,7 @@ mod tests {
             )
             .await
             .expect("evaluate");
-        let _ = remove_directory(&root);
+        let _ = common::remove_directory(&root);
         context.shutdown().await;
         assert!(
             snapshot.task_completed(),
