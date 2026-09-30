@@ -399,12 +399,6 @@ impl PlanStore {
         control: Option<ControlPlane>,
         docker: DockerSettings,
     ) -> Result<Arc<Self>> {
-        #[cfg(test)]
-        if control.is_none() {
-            fs::create_dir_all(root.join("plan-store/suites"))?;
-            fs::create_dir_all(root.join("plan-store/stacks"))?;
-            fs::create_dir_all(root.join("plan-store/executions"))?;
-        }
         crate::plans::credentials::sweep(&root);
         let manager = Arc::new(Self {
             root,
@@ -426,56 +420,23 @@ impl PlanStore {
             .as_ref()
             .context("Execution is unavailable in this dashboard.")
     }
-    #[cfg(test)]
-    fn suite_path(&self, id: &str) -> Result<PathBuf> {
-        safe_id(id)?;
-        Ok(self
-            .root
-            .join("plan-store/suites")
-            .join(format!("{id}.json")))
-    }
-    #[cfg(test)]
-    pub(crate) fn execution_path(&self, id: &str) -> Result<PathBuf> {
-        safe_id(id)?;
-        Ok(self
-            .root
-            .join("plan-store/executions")
-            .join(format!("{id}.json")))
+    fn persistence(&self) -> Result<&Persistence> {
+        self.persistence
+            .as_ref()
+            .context("the E2E control-plane persistence is not available")
     }
     async fn read_suite(&self, id: &str) -> Result<LocalSuite> {
         safe_id(id)?;
-        if let Some(persistence) = &self.persistence {
-            return persistence
-                .local_suite(id)
-                .await?
-                .with_context(|| format!("unknown suite {id}"));
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        serde_json::from_slice(
-            &fs::read(self.suite_path(id)?).with_context(|| format!("unknown suite {id}"))?,
-        )
-        .context("decode suite")
+        self.persistence()?
+            .local_suite(id)
+            .await?
+            .with_context(|| format!("unknown suite {id}"))
     }
     async fn write_suite(&self, suite: &LocalSuite) -> Result<()> {
-        if let Some(persistence) = &self.persistence {
-            return persistence.save_local_suite(suite).await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        write_json(&self.suite_path(&suite.id)?, suite)
+        self.persistence()?.save_local_suite(suite).await
     }
     async fn local_suites(&self) -> Result<Vec<LocalSuite>> {
-        let mut suites = if let Some(persistence) = &self.persistence {
-            persistence.local_suites().await?
-        } else {
-            #[cfg(not(test))]
-            anyhow::bail!("the E2E control-plane persistence is not available");
-            #[cfg(test)]
-            read_json_directory(&self.root.join("plan-store/suites"))?
-        };
+        let mut suites = self.persistence()?.local_suites().await?;
         suites.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
@@ -483,48 +444,18 @@ impl PlanStore {
         });
         Ok(suites)
     }
-    #[cfg(test)]
-    fn stack_path(&self, id: &str) -> Result<PathBuf> {
-        safe_id(id)?;
-        Ok(self
-            .root
-            .join("plan-store/stacks")
-            .join(format!("{id}.json")))
-    }
     async fn read_stack(&self, id: &str) -> Result<LocalStack> {
         safe_id(id)?;
-        if let Some(persistence) = &self.persistence {
-            return persistence
-                .local_stack(id)
-                .await?
-                .with_context(|| format!("unknown stack {id}"));
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        serde_json::from_slice(
-            &fs::read(self.stack_path(id)?).with_context(|| format!("unknown stack {id}"))?,
-        )
-        .context("decode stack")
+        self.persistence()?
+            .local_stack(id)
+            .await?
+            .with_context(|| format!("unknown stack {id}"))
     }
     async fn write_stack(&self, stack: &LocalStack) -> Result<()> {
-        if let Some(persistence) = &self.persistence {
-            return persistence.save_local_stack(stack).await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        write_json(&self.stack_path(&stack.id)?, stack)
+        self.persistence()?.save_local_stack(stack).await
     }
     async fn local_stacks(&self) -> Result<Vec<LocalStack>> {
-        let mut stacks = if let Some(persistence) = &self.persistence {
-            persistence.local_stacks().await?
-        } else {
-            #[cfg(not(test))]
-            anyhow::bail!("the E2E control-plane persistence is not available");
-            #[cfg(test)]
-            read_json_directory(&self.root.join("plan-store/stacks"))?
-        };
+        let mut stacks = self.persistence()?.local_stacks().await?;
         stacks.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
@@ -540,21 +471,10 @@ impl PlanStore {
     }
     async fn load_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
-        if let Some(persistence) = &self.persistence {
-            return persistence
-                .saved_execution(id)
-                .await?
-                .context("unknown execution");
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        let execution: PlanExecution =
-            serde_json::from_slice(&fs::read(self.execution_path(id)?)?)?;
-        #[cfg(test)]
-        ensure!(execution.id == id, "Unsupported execution identity");
-        #[cfg(test)]
-        Ok(execution)
+        self.persistence()?
+            .saved_execution(id)
+            .await?
+            .context("unknown execution")
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
@@ -565,13 +485,7 @@ impl PlanStore {
         Ok(())
     }
     async fn save_execution(&self, execution: &PlanExecution) -> Result<()> {
-        if let Some(persistence) = &self.persistence {
-            return persistence.save_execution_receipt(execution).await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        write_json(&self.execution_path(&execution.id)?, execution)
+        self.persistence()?.save_execution_receipt(execution).await
     }
     /// The ids of Docker executions as they change in the background.
     pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
@@ -593,14 +507,7 @@ impl PlanStore {
             .collect())
     }
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
-        let executions = if let Some(persistence) = &self.persistence {
-            persistence.saved_executions().await?
-        } else {
-            #[cfg(not(test))]
-            anyhow::bail!("the E2E control-plane persistence is not available");
-            #[cfg(test)]
-            read_json_directory(&self.root.join("plan-store/executions"))?
-        };
+        let executions = self.persistence()?.saved_executions().await?;
         Ok(executions
             .into_iter()
             .map(ran_where_it_came_from)
@@ -747,13 +654,7 @@ impl PlanStore {
     pub(crate) async fn delete_suite(&self, id: &str) -> Result<()> {
         local_only(id)?;
         self.read_suite(id).await?;
-        if let Some(persistence) = &self.persistence {
-            return persistence.delete_local_suite(id).await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        Ok(fs::remove_file(self.suite_path(id)?)?)
+        self.persistence()?.delete_local_suite(id).await
     }
 
     /// Stored in the canonical order, with whole sequential groups, so the
@@ -846,13 +747,7 @@ impl PlanStore {
     pub(crate) async fn delete_stack(&self, id: &str) -> Result<()> {
         stack_local_only(id)?;
         self.read_stack(id).await?;
-        if let Some(persistence) = &self.persistence {
-            return persistence.delete_local_stack(id).await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        Ok(fs::remove_file(self.stack_path(id)?)?)
+        self.persistence()?.delete_local_stack(id).await
     }
 
     async fn stack_view(&self, id: &str) -> Result<StackView> {
@@ -1101,13 +996,7 @@ impl PlanStore {
         if matches!(execution.source, ExecutionSource::Docker { .. }) {
             self.remove_docker_folder(id).await;
         }
-        if let Some(persistence) = &self.persistence {
-            return persistence.delete_execution_receipt(id).await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        Ok(fs::remove_file(self.execution_path(id)?)?)
+        self.persistence()?.delete_execution_receipt(id).await
     }
 
     /// Name any execution; an empty label restores the default name.
@@ -1540,24 +1429,6 @@ fn parameters_where(execution: &PlanExecution) -> Where {
         .parameters
         .as_ref()
         .map_or(Where::Harness, |parameters| parameters.r#where)
-}
-#[cfg(test)]
-fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    artifact::write_atomic(path, &serde_json::to_vec_pretty(value)?)
-}
-#[cfg(test)]
-fn read_json_directory<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
-    let mut result = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let path = entry?.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            result.push(
-                serde_json::from_slice(&fs::read(&path)?)
-                    .with_context(|| format!("read {}", path.display()))?,
-            );
-        }
-    }
-    Ok(result)
 }
 /// Each scenario once, in one order whatever order they were ticked in, so
 /// the same scenarios always make the same suite.
@@ -2175,6 +2046,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::control::{ExecutionPhase, LaneBudget};
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
+    use crate::persistence::tests::MemoryDatabase;
     use crate::report::E2eManifest;
     use crate::report::{E2eRunReport, E2eScenarioReport, ModelArtifact, RunStatus};
     use std::collections::{BTreeMap, HashMap};
@@ -2363,8 +2235,7 @@ pub(crate) mod tests {
             ensure!(active.is_none(), "busy");
             *active = Some(owner.into());
             if self.fail_receipt.load(Ordering::SeqCst) {
-                fs::remove_dir(self.root.join("plan-store/executions"))?;
-                fs::write(self.root.join("plan-store/executions"), b"unwritable")?;
+                database(&self.root).refuse_writes();
             }
             Ok(())
         }
@@ -2379,12 +2250,12 @@ pub(crate) mod tests {
                 self.owner.lock().await.as_deref() == Some(owner),
                 "missing reservation"
             );
-            // The whole receipt and every deterministic child are already on disk.
-            let receipt: PlanExecution = serde_json::from_slice(&fs::read(
-                self.root
-                    .join("plan-store/executions")
-                    .join(format!("{owner}.json")),
-            )?)?;
+            // The whole receipt and every deterministic child are already stored.
+            let receipt = database(&self.root)
+                .row("saved_plan_executions", owner)
+                .context("no receipt")?;
+            let receipt: PlanExecution =
+                serde_json::from_str(receipt["payload_json"].as_str().unwrap_or_default())?;
             let id = execution_id_for_key(&request.idempotency_key);
             ensure!(
                 receipt.slots.iter().any(|slot| slot.execution_id == id
@@ -2485,7 +2356,27 @@ pub(crate) mod tests {
             stack: None,
         }
     }
-    fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
+    /// The database of a data directory: stores on one directory share it,
+    /// as a restarted worker finds its control plane's rows.
+    pub(crate) fn database(root: &Path) -> MemoryDatabase {
+        static DATABASES: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, MemoryDatabase>>> =
+            std::sync::LazyLock::new(Default::default);
+        DATABASES
+            .lock()
+            .unwrap()
+            .entry(root.into())
+            .or_default()
+            .clone()
+    }
+    /// Keep an execution as another runner stored it.
+    fn store_raw(root: &Path, id: &str, payload: String) {
+        database(root).insert(
+            "saved_plan_executions",
+            json!({"id": id, "started_at": now(),
+                "payload_sha256": artifact::sha256_bytes(payload.as_bytes()), "payload_json": payload}),
+        );
+    }
+    pub(crate) fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
         manager_with_gh(root, runner, github::GithubCli::default())
     }
     pub(crate) fn manager_with_gh(
@@ -2493,12 +2384,11 @@ pub(crate) mod tests {
         runner: Arc<FakeRunner>,
         github: github::GithubCli,
     ) -> Arc<PlanStore> {
-        fs::create_dir_all(root.join("plan-store/suites")).unwrap();
-        fs::create_dir_all(root.join("plan-store/stacks")).unwrap();
-        fs::create_dir_all(root.join("plan-store/executions")).unwrap();
+        // As the dashboard does before it builds the store.
+        fs::create_dir_all(root).unwrap();
         Arc::new(PlanStore {
             root: root.into(),
-            persistence: None,
+            persistence: Some(database(root).persistence()),
             runner: Some(runner),
             github,
             docker: docker::Docker::new(DockerSettings::default()),
@@ -2520,10 +2410,15 @@ pub(crate) mod tests {
             follow_interval: Duration::from_millis(10),
         }
     }
+    /// The execution once finished, read under the store's lock as admission
+    /// reads it: the runner is released by then.
     pub(super) async fn terminal(manager: &PlanStore, id: &str) -> PlanExecution {
         tokio::time::timeout(Duration::from_secs(120), async {
             loop {
-                let execution = manager.read_execution(id).await.unwrap();
+                let execution = {
+                    let _guard = manager.lock.lock().await;
+                    manager.read_execution(id).await.unwrap()
+                };
                 if !execution.active() {
                     return execution;
                 }
@@ -3279,7 +3174,7 @@ pub(crate) mod tests {
             "run_attempt": 1, "url": "", "release_control_execution_id": null});
         stored["parameters"] = json!({"scenarios": ["minimal_path"], "runs": 1,
             "technical_retries": 0, "model": "m", "provider": "p", "agent": null});
-        write_json(&manager.execution_path("plan-stub").unwrap(), &stored).unwrap();
+        store_raw(root.path(), "plan-stub", stored.to_string());
         let read = manager.read_execution("plan-stub").await.unwrap();
         assert_eq!(read.parameters.unwrap().r#where, Where::Github);
         let listed = manager.executions().await.unwrap();
@@ -3304,7 +3199,7 @@ pub(crate) mod tests {
             {"name": "queue", "source": "path", "requested": null,
              "observed": "0.4.1", "commit": null, "dirty": null},
         ]);
-        write_json(&manager.execution_path("plan-stub").unwrap(), &stored).unwrap();
+        store_raw(root.path(), "plan-stub", stored.to_string());
         let read = manager.read_execution("plan-stub").await.unwrap();
         assert_eq!(
             read.stack
@@ -4013,11 +3908,7 @@ pub(crate) mod tests {
             rerun: None,
         };
         manager.write_execution(&execution).await.unwrap();
-        fs::write(
-            root.path().join("plan-store/executions/corrupt.json"),
-            b"not json",
-        )
-        .unwrap();
+        store_raw(root.path(), "corrupt", "not json".into());
 
         let (summaries, children) = manager
             .dashboard_summaries(&[json!({
