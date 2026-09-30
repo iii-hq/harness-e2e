@@ -340,6 +340,12 @@ describe('executions list selection', () => {
       row('plan-3ef1b6a7').id,
     ])
     expect(selectionSummary([row('plan-2b7e41c0')]).deletable).toEqual([])
+    // Many still compare; the bar says each is loaded in full.
+    const many = selectionSummary(
+      Array.from({ length: 13 }, () => row('plan-cf6ab5f9')),
+    )
+    expect(many.compareLabel).toBe('Compare 13 executions')
+    expect(many.hint).toContain('Each of the 13 is loaded in full')
   })
 })
 

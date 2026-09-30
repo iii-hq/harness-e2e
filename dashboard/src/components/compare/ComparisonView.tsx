@@ -94,13 +94,20 @@ export type Sides = { a: DashboardExecutionDetail; b: DashboardExecutionDetail }
 export type { GroupView }
 
 type Which = 'a' | 'b'
+type Letters = Record<Which, string>
+const AB: Letters = { a: 'A', b: 'B' }
 
 const ROLE: Record<Which, string> = { a: 'Reference', b: 'Compared' }
 
 /** How the page names the pair's two sides: A and B alone, the group's
  *  letters and "In detail" when the pair is one of a group. */
-type PairNames = { letter: Record<Which, string>; role: Record<Which, string> }
-const PAIR: PairNames = { letter: { a: 'A', b: 'B' }, role: ROLE }
+type PairNames = {
+  letter: Letters
+  role: Record<Which, string>
+  /** In a group, why a test is out of every total, by the group's letters. */
+  out?: (scenarioId: string) => string | null
+}
+const PAIR: PairNames = { letter: AB, role: ROLE }
 const PairNamesContext = createContext<PairNames>(PAIR)
 const usePairNames = () => useContext(PairNamesContext)
 const LIVE = ['running', 'importing', 'cancelling']
@@ -115,20 +122,23 @@ export function valueText(metric: ComparedMetric, side: Side): string {
   return value === null ? '—' : metricFigure(metric.format, value)
 }
 
-function sidesText(flags: Record<Side, boolean | number>) {
-  return [flags.baseline ? 'A' : null, flags.candidate ? 'B' : null]
+function sidesText(flags: Record<Side, boolean | number>, letter = AB) {
+  return [flags.baseline ? letter.a : null, flags.candidate ? letter.b : null]
     .filter(Boolean)
     .join(' and ')
 }
 
 /** For figures over every run: how many of them are out of the totals. */
-export function outsideText(metric: ComparedMetric): string | null {
+export function outsideText(
+  metric: ComparedMetric,
+  letter = AB,
+): string | null {
   const outside = metric.outside
   if (!outside || (!outside.baseline && !outside.candidate)) return null
   const parts = (['baseline', 'candidate'] as const).flatMap((side) =>
     outside[side]
       ? [
-          `${plural(outside[side], 'run')} in ${side === 'baseline' ? 'A' : 'B'}`,
+          `${plural(outside[side], 'run')} in ${side === 'baseline' ? letter.a : letter.b}`,
         ]
       : [],
   )
@@ -138,11 +148,11 @@ export function outsideText(metric: ComparedMetric): string | null {
 /** B minus A, with the relative change where it means something. Only the
  *  difference: no side is called better. A side short of runs is partial,
  *  and no difference is taken from it. */
-export function deltaText(metric: ComparedMetric): string {
+export function deltaText(metric: ComparedMetric, letter = AB): string {
   const delta = shownDelta(metric)
   if (delta === null)
     return metric.partial.baseline || metric.partial.candidate
-      ? `${sidesText(metric.partial)} partial`
+      ? `${sidesText(metric.partial, letter)} partial`
       : metric.baseline === null && metric.candidate === null
         ? ''
         : 'not comparable'
@@ -229,11 +239,16 @@ const REASON: Record<string, string> = {
 }
 
 /** Why a test is out of the totals, short enough for a pill. */
-function outLabel(scenario: ScenarioComparison): string | null {
+function outLabel(
+  scenario: ScenarioComparison,
+  names: PairNames = PAIR,
+): string | null {
   if (scenario.counted) return null
   if (scenario.leftOut) return 'left out'
   const exclusion = scenario.exclusion
   if (!exclusion) return 'out'
+  const group = names.out?.(scenario.id)
+  if (group) return group
   return exclusion.reason === 'missing' || exclusion.reason === 'no_score'
     ? `${REASON[exclusion.reason]} in ${exclusionWhere(exclusion)}`
     : REASON[exclusion.reason]
@@ -343,6 +358,7 @@ function TestPicker({
   onCount: (ids: string[] | null) => void
   spread?: PickerSpread
 }) {
+  const names = usePairNames()
   const { scenarios, exclusions } = comparison
   const [open, setOpen] = useState(
     () =>
@@ -486,7 +502,7 @@ function TestPicker({
                               className="cmp-pick-delta cmp-tone"
                               data-tone={score ? metricTone(score) : undefined}
                             >
-                              {score ? deltaText(score) : ''}
+                              {score ? deltaText(score, names.letter) : ''}
                             </span>
                           </>
                         )}
@@ -595,6 +611,7 @@ function Highlights({
 const KPIS = ['score', 'completed', 'tokens', 'duration', 'function_calls']
 
 function Totals({ comparison }: { comparison: ExecutionComparison }) {
+  const names = usePairNames()
   const [open, setOpen] = useState(false)
   const counted = comparison.scenarios.filter((scenario) => scenario.counted)
   const runs = (which: Which) =>
@@ -628,7 +645,7 @@ function Totals({ comparison }: { comparison: ExecutionComparison }) {
                 className="cmp-kpi-delta cmp-tone"
                 data-tone={metricTone(metric)}
               >
-                {deltaText(metric) || '—'}
+                {deltaText(metric, names.letter) || '—'}
               </span>
             </div>,
           ]
@@ -688,14 +705,17 @@ function MetricTable({
           <tr key={metric.id} data-metric-id={metric.id}>
             <th scope="row">
               {metric.label}
-              {outsideText(metric) ? (
-                <span className="cmp-faint-num"> · {outsideText(metric)}</span>
+              {outsideText(metric, names.letter) ? (
+                <span className="cmp-faint-num">
+                  {' '}
+                  · {outsideText(metric, names.letter)}
+                </span>
               ) : null}
             </th>
             <td className="cmp-faint-num">{valueText(metric, 'baseline')}</td>
             <td>{valueText(metric, 'candidate')}</td>
             <td className="cmp-delta cmp-tone" data-tone={metricTone(metric)}>
-              {deltaText(metric) || '—'}
+              {deltaText(metric, names.letter) || '—'}
             </td>
           </tr>
         ))}
@@ -763,7 +783,7 @@ function ScoreTrack({ a, b }: { a: number | null; b: number | null }) {
   )
 }
 
-function cellPair(scenario: ScenarioComparison, id: string) {
+function cellPair(scenario: ScenarioComparison, id: string, letter: Letters) {
   const metric = metricOf(scenario, id)
   if (!metric || (metric.baseline === null && metric.candidate === null))
     return <span className="cmp-faint-num">—</span>
@@ -773,7 +793,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
       <Pair
         a={a.runs ? `${metric.baseline ?? 0}/${a.runs}` : '—'}
         b={b.runs ? `${metric.candidate ?? 0}/${b.runs}` : '—'}
-        delta={deltaText(metric)}
+        delta={deltaText(metric, letter)}
         tone={metricTone(metric)}
       />
     )
@@ -782,7 +802,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
     <Pair
       a={valueText(metric, 'baseline')}
       b={valueText(metric, 'candidate')}
-      delta={deltaText(metric)}
+      delta={deltaText(metric, letter)}
       tone={metricTone(metric)}
     />
   )
@@ -849,7 +869,7 @@ function Results({
             const expanded = open.has(scenario.id)
             const score = metricOf(scenario, 'score')
             const delta = scoreDelta(scenario)
-            const out = outLabel(scenario)
+            const out = outLabel(scenario, names)
             const detailId = `cmp-detail-${scenario.id}`
             return (
               <Fragment key={scenario.id}>
@@ -887,7 +907,11 @@ function Results({
                     {out ? (
                       <span
                         className="cmp-pill"
-                        title={exclusionPhrase(scenario) ?? undefined}
+                        title={
+                          names.out?.(scenario.id) ??
+                          exclusionPhrase(scenario) ??
+                          undefined
+                        }
                       >
                         {out}
                       </span>
@@ -910,14 +934,14 @@ function Results({
                             ? valueText(score, 'candidate')
                             : stateText(scenario.sides.b.state)
                         }
-                        delta={score ? deltaText(score) : ''}
+                        delta={score ? deltaText(score, names.letter) : ''}
                         tone={score ? metricTone(score) : undefined}
                       />
                     </span>
                   </td>
                   {CELLS.map(([id]) => (
                     <td key={id} className="cmp-wide" data-cell={id}>
-                      {cellPair(scenario, id)}
+                      {cellPair(scenario, id, names.letter)}
                     </td>
                   ))}
                 </tr>
@@ -955,8 +979,11 @@ const DETAIL_METRICS = [
   'technical_failures',
 ]
 
-function rowSummary(scenario: ScenarioComparison): string {
-  const out = exclusionPhrase(scenario)
+function rowSummary(
+  scenario: ScenarioComparison,
+  names: PairNames = PAIR,
+): string {
+  const out = names.out?.(scenario.id) ?? exclusionPhrase(scenario)
   const reran = rerunPhrase(scenario)
   const delta = scoreDelta(scenario)
   const moved =
@@ -964,7 +991,7 @@ function rowSummary(scenario: ScenarioComparison): string {
       ? 'No score to compare'
       : roundedPoints(delta) === 0
         ? 'Same score on both sides'
-        : `B ${delta < 0 ? 'lost' : 'gained'} ${plural(roundedPoints(delta), 'point')}`
+        : `${names.letter.b} ${delta < 0 ? 'lost' : 'gained'} ${plural(roundedPoints(delta), 'point')}`
   return [
     out ? `Out of the totals: ${out}` : null,
     scenario.criteria.length > 0
@@ -1015,7 +1042,7 @@ export function RowDetail({
   return (
     <div className="cmp-detail" data-scenario-detail={scenario.id}>
       <div className="cmp-detail-bar">
-        <span className="cmp-faint">{rowSummary(scenario)}</span>
+        <span className="cmp-faint">{rowSummary(scenario, names)}</span>
         {onRunTest ? (
           <button
             type="button"
@@ -1479,6 +1506,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
 }
 
 function Methodology({ comparison }: { comparison: ExecutionComparison }) {
+  const { letter } = usePairNames()
   const reran = comparison.scenarios.flatMap((scenario) => {
     const phrase = rerunPhrase(scenario)
     return phrase ? [`${scenario.id}: ${phrase}`] : []
@@ -1487,9 +1515,10 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
   return (
     <div className="cmp-method">
       <p>
-        A is the reference only because it was chosen first; every difference is
-        B minus A, an observation that ranks neither side. Tests pair by
-        scenario, case seed and repetition, as Release Control pairs them.
+        {letter.a} is the reference only by choice; every difference is{' '}
+        {letter.b} minus {letter.a}, an observation that ranks neither side.
+        Tests pair by scenario, case seed and repetition, as Release Control
+        pairs them.
       </p>
       <p>
         A score is the mean of a side’s scored runs, given only when every
@@ -1501,7 +1530,8 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
         <div>
           <dt>Runner</dt>
           <dd>
-            A {runner.a ?? 'not recorded'} · B {runner.b ?? 'not recorded'}
+            {letter.a} {runner.a ?? 'not recorded'} · {letter.b}{' '}
+            {runner.b ?? 'not recorded'}
           </dd>
         </div>
         {runner.definitionsChanged.length > 0 ? (
@@ -1566,10 +1596,17 @@ function pickerSpread(group: GroupView, referenceId: string) {
           ? 'redefined: the case inputs differ between the executions'
           : `${gap.reason.replaceAll('_', ' ')} in ${where}`
       },
+      // Only tests every execution scored: one that any of them did not
+      // run stays out of every total.
       varied: first.scenarios
         .filter((scenario) => {
-          const range = spreadOf(scores(scenario.id))
-          return range !== null && rounded(range.max) !== rounded(range.min)
+          const values = scores(scenario.id)
+          const range = spreadOf(values)
+          return (
+            values.every((value) => value !== null) &&
+            range !== null &&
+            rounded(range.max) !== rounded(range.min)
+          )
         })
         .map((scenario) => scenario.id),
     },
@@ -1635,6 +1672,7 @@ export function ComparisonView({
     return {
       letter: { a: letter(comparison.a.id), b: letter(comparison.b.id) },
       role: { a: 'Reference', b: 'In detail' },
+      out: grouped.spread.out,
     }
   }, [grouped, comparison.a.id, comparison.b.id])
   const toggle = (id: string) =>
@@ -1704,8 +1742,8 @@ export function ComparisonView({
         <a
           className="cmp-swap"
           href={swap}
-          aria-label="Swap A and B"
-          title="Swap A and B"
+          aria-label={`Swap ${names.letter.a} and ${names.letter.b}`}
+          title={`Swap ${names.letter.a} and ${names.letter.b}`}
         >
           <ArrowLeftRight size={16} aria-hidden="true" />
         </a>

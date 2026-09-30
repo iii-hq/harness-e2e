@@ -513,6 +513,9 @@ describe('execution comparison page', () => {
     // C's invalid run takes test_1 out of every total, B's included.
     expect(html).toContain('data-matrix-scenario="test_1" data-counted="false"')
     expect(html).toContain('technically invalid in C')
+    // The pair below says the gap by the group's letters too.
+    expect(html).toContain('technical invalid in C')
+    expect(html).not.toContain('technical_invalid in ')
     expect(html).toContain('data-matrix-cell="c"')
     expect(html).toContain('A against B')
     // The test picker reads the whole group.

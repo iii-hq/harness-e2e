@@ -184,14 +184,23 @@ export function scoringGroups(
   return groups
 }
 
-/** Members that ran another test list than most of the group, and how many
- *  tests leave every total because some member did not run them. Null when
- *  every member ran the same tests. */
+/** How many different test lists the members ran. */
+export function testListCount(details: DashboardExecutionDetail[]): number {
+  return new Set(details.map((detail) => scenarioIds(detail).join('\n'))).size
+}
+
+/** Members that ran another test list than most of the group (the
+ *  reference's list wins a tie, and the reference is never one of them),
+ *  and how many tests leave every total because some member did not run
+ *  them. Null when every member ran the same tests. `removable` is false
+ *  when taking them out would leave fewer than two executions. */
 export function testListGap(
   details: DashboardExecutionDetail[],
   group: ComparisonGroup,
+  referenceIndex = 0,
 ): {
   odd: number[]
+  removable: boolean
   missing: number
   total: number
   counted: number
@@ -199,30 +208,38 @@ export function testListGap(
   const lists = details.map((detail) => scenarioIds(detail).join('\n'))
   const tally = new Map<string, number>()
   for (const list of lists) tally.set(list, (tally.get(list) ?? 0) + 1)
-  const [common] = [...tally].sort((one, two) => two[1] - one[1])[0]
-  const odd = lists.flatMap((list, index) => (list === common ? [] : [index]))
+  const most = Math.max(...tally.values())
+  const own = lists[referenceIndex]
+  const common =
+    tally.get(own) === most
+      ? own
+      : [...tally].find(([, count]) => count === most)?.[0]
+  const odd = lists.flatMap((list, index) =>
+    list === common || index === referenceIndex ? [] : [index],
+  )
   const missing = [...group.exclusions.values()].filter(
     (gap) => gap.reason === 'missing',
   ).length
   if (odd.length === 0 || missing === 0) return null
   return {
     odd,
+    removable: details.length - odd.length >= 2,
     missing,
     total: group.scenarios.length,
     counted: group.scenarios.length - group.exclusions.size,
   }
 }
 
-function versionParts(version: string) {
-  return version.split(/[.+-]/).map((part) => {
+const VERSION = /^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?$/
+
+function parts(text: string) {
+  return text.split('.').map((part) => {
     const number = Number(part)
-    return Number.isFinite(number) ? number : part
+    return Number.isFinite(number) && part !== '' ? number : part
   })
 }
 
-function byVersion(one: string, two: string) {
-  const a = versionParts(one)
-  const b = versionParts(two)
+function byParts(a: Array<number | string>, b: Array<number | string>) {
   for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
     const x = a[index] ?? 0
     const y = b[index] ?? 0
@@ -233,18 +250,41 @@ function byVersion(one: string, two: string) {
   return 0
 }
 
-/** The lowest and the highest version, or the one there is. */
+/** Semver order: numbers first, then a prerelease before its release. */
+function byVersion(one: string, two: string) {
+  const [, baseA, preA] = one.match(VERSION) ?? []
+  const [, baseB, preB] = two.match(VERSION) ?? []
+  return (
+    byParts(parts(baseA), parts(baseB)) ||
+    (preA === preB
+      ? 0
+      : preA === undefined
+        ? 1
+        : preB === undefined
+          ? -1
+          : byParts(parts(preA), parts(preB)))
+  )
+}
+
+/** The lowest and the highest version, or the one there is. Builds that
+ *  are not versions (a commit) keep the order given. */
 export function versionRange(versions: string[]): string {
-  const sorted = [...new Set(versions)].sort(byVersion)
-  if (sorted.length === 0) return ''
-  return sorted.length === 1 ? sorted[0] : `${sorted[0]}–${sorted.at(-1)}`
+  const distinct = [...new Set(versions)]
+  if (distinct.length <= 1) return distinct[0] ?? ''
+  const sorted = distinct.every((version) => VERSION.test(version))
+    ? distinct.sort(byVersion)
+    : distinct
+  return `${sorted[0]}–${sorted.at(-1)}`
 }
 
 export type GroupChange = { label: string; value: string }
 
 /** What differs across the group, once for all of it, and what every
  *  member shares. */
-export function groupChanges(members: GroupMember[]): {
+export function groupChanges(
+  members: GroupMember[],
+  testLists = 1,
+): {
   changes: GroupChange[]
   same: string
 } {
@@ -253,6 +293,8 @@ export function groupChanges(members: GroupMember[]): {
   const fields = new Map<string, Set<string>>()
   for (const member of members)
     for (const change of member.pair?.parameters ?? []) {
+      // Each pair words its test lists against the reference: counted apart.
+      if (change.field === 'scenarios') continue
       const values = fields.get(change.field) ?? new Set<string>()
       values.add(change.a)
       values.add(change.b)
@@ -260,6 +302,8 @@ export function groupChanges(members: GroupMember[]): {
     }
   for (const [field, values] of fields)
     changes.push({ label: field, value: plural(values.size, 'value') })
+  if (testLists > 1)
+    changes.push({ label: 'tests', value: plural(testLists, 'list') })
   const versions = (pick: (member: GroupMember) => string | null) =>
     members.map(pick).filter((value): value is string => value !== null)
   for (const [label, pick] of [
@@ -332,7 +376,8 @@ export type GroupHighlight = {
   /** The measure that moved, for its colour. */
   metric: 'score' | 'tokens' | null
   text: string
-  /** The member to read in detail: the furthest from the reference. */
+  /** The member to read in detail: the highest when every other rose,
+   *  else the lowest. */
   target: string | null
 }
 
@@ -430,9 +475,12 @@ export function groupHighlights(members: GroupMember[]): {
         ? 'An execution has no score or is short of runs: its figures are shown, and no difference is taken from them.'
         : [
             `${reference.letter} scored ${points(referenceScore ?? 0)}; the others ${low === high ? points(low) : `${points(low)} to ${points(high)}`}.`,
-            allDone
+            allDone &&
+            completions.every(({ runs }) => runs === completions[0].runs)
               ? `Every execution completed all ${plural(completions[0].runs, 'counted run')}.`
-              : `Completed runs: ${members.map((member) => `${member.letter} ${completions[member.index].done}/${completions[member.index].runs}`).join(', ')}.`,
+              : allDone
+                ? 'Every execution completed all of its counted runs.'
+                : `Completed runs: ${members.map((member) => `${member.letter} ${completions[member.index].done}/${completions[member.index].runs}`).join(', ')}.`,
             'These are observed differences, not a verdict.',
           ].join(' ')
 
@@ -495,6 +543,8 @@ export function groupHighlights(members: GroupMember[]): {
       : rest.every((value) => round(value) <= round(mine))
         ? 'down'
         : 'mixed'
+    // The one to read: the highest when every other rose, else the lowest,
+    // since a drop is what a reader checks first.
     const [target] = [...others].sort((one, two) =>
       direction === 'up'
         ? own[two.index] - own[one.index]
@@ -521,14 +571,26 @@ export function groupHighlights(members: GroupMember[]): {
     const tokens = memberValues(members, first, 'tokens', scenario.id)
     const base = tokens[reference.index]
     if (!base) continue
+    // A figure short of its runs gives no difference, as in a pair.
+    const whole = (member: GroupMember) => {
+      const { metric } = memberMetric(member, first, 'tokens', scenario.id)
+      if (!metric) return false
+      // The reference is any pair's baseline; the others their candidate.
+      return member.reference
+        ? !metric.partial.baseline
+        : !metric.partial.baseline && !metric.partial.candidate
+    }
     const change = (member: GroupMember) => {
       const value = tokens[member.index]
-      return value === null ? null : ((value - base) / base) * 100
+      return value === null || !whole(member) || !whole(reference)
+        ? null
+        : ((value - base) / base) * 100
     }
-    const far = others.filter(
+    const measured = others.filter((member) => change(member) !== null)
+    const far = measured.filter(
       (member) => Math.abs(change(member) ?? 0) >= OUTLIER_PERCENT,
     )
-    const near = others
+    const near = measured
       .filter((member) => !far.includes(member))
       .map((member) => Math.abs(change(member) ?? 0))
     for (const member of far) {

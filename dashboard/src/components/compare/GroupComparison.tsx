@@ -31,6 +31,7 @@ import {
   memberMetric,
   memberValues,
   spreadOf,
+  testListCount,
   testListGap,
 } from '@/lib/comparison-group'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -91,9 +92,13 @@ export function GroupSummary({
   members: GroupMember[]
   view: GroupView
 }) {
-  const { changes, same } = groupChanges(members)
+  const reference = members.find((member) => member.reference) ?? members[0]
+  const { changes, same } = groupChanges(
+    members,
+    testListCount(view.executions),
+  )
   const runner = groupRunnerNote(members, view.scoring)
-  const gap = testListGap(view.executions, view.group)
+  const gap = testListGap(view.executions, view.group, reference.index)
   const odd = gap ? gap.odd.map((index) => members[index]) : []
   return (
     <section
@@ -127,13 +132,15 @@ export function GroupSummary({
           headline={`${lettersText(gap.odd)} ran ${gap.odd.length === 1 ? 'a different test list' : 'different test lists'}`}
           detail={`${gap.missing} of ${plural(gap.total, 'test')} are missing from at least one execution and leave every total, so every execution is read over the same ${gap.counted}.`}
           action={
-            <a
-              className="cmp-act cmp-act-fill"
-              href={view.withoutHref(odd.map((member) => member.id))}
-              data-remove-odd
-            >
-              Remove {lettersText(gap.odd)}
-            </a>
+            gap.removable ? (
+              <a
+                className="cmp-act cmp-act-fill"
+                href={view.withoutHref(odd.map((member) => member.id))}
+                data-remove-odd
+              >
+                Remove {lettersText(gap.odd)}
+              </a>
+            ) : undefined
           }
         />
       ) : null}
@@ -834,9 +841,11 @@ export function GroupMatrix({
                           type="button"
                           className="cmp-matrix-cell"
                           data-matrix-cell={member.id}
-                          aria-label={`${scenario.id} in ${member.letter}`}
                           onClick={() => onOpen(member.id, scenario.id)}
                         >
+                          <span className="ep-sr">
+                            {scenario.id} in {member.letter}:{' '}
+                          </span>
                           <Figure
                             member={member}
                             first={first}

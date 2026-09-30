@@ -9,6 +9,7 @@ import {
   memberValues,
   scoringGroups,
   spreadOf,
+  testListCount,
   testListGap,
   versionRange,
 } from '@/lib/comparison-group'
@@ -276,6 +277,7 @@ describe('a member with another test list', () => {
     const { group } = read(details)
     expect(testListGap(details, group)).toEqual({
       odd: [6],
+      removable: true,
       missing: 3,
       total: 5,
       counted: 2,
@@ -284,10 +286,80 @@ describe('a member with another test list', () => {
   })
 })
 
+describe('test lists', () => {
+  const list = (id: string, scenarios: string[]) =>
+    execution(
+      id,
+      scenarios.map((scenario) => ({ scenario, score: 80 })),
+    )
+
+  it('keeps the reference in a tie and never offers to remove it', () => {
+    const details = [
+      list('a', ['x', 'y']),
+      list('b', ['x', 'y']),
+      list('c', ['x']),
+      list('d', ['x']),
+    ]
+    const gap = testListGap(details, comparisonGroup(details), 2)
+    expect(gap).toMatchObject({ odd: [0, 1], removable: true, missing: 1 })
+  })
+
+  it('does not offer a removal that would leave fewer than two', () => {
+    const details = [list('a', ['x']), list('b', ['y']), list('c', ['z'])]
+    const gap = testListGap(details, comparisonGroup(details), 0)
+    expect(gap).toMatchObject({ odd: [1, 2], removable: false })
+    expect(testListCount(details)).toBe(3)
+  })
+
+  it('counts the lists, not how each pair words them', () => {
+    const details = [list('a', ['x']), list('b', ['y']), list('c', ['z'])]
+    const { members } = read(details)
+    expect(
+      groupChanges(members, testListCount(details)).changes,
+    ).toContainEqual({ label: 'tests', value: '3 lists' })
+  })
+})
+
+describe('token outliers', () => {
+  it('leaves out an execution without tokens and one short of its runs', () => {
+    const tokens = (id: string, value: number | null) => {
+      const detail = execution(id, [{ tokens: value ?? 100 }])
+      const run = detail.reports[0].report?.scenarios[0].runs[0] as {
+        efficiency?: unknown
+      }
+      if (value === null) delete run.efficiency
+      return detail
+    }
+    const details = [tokens('a', 1000), tokens('b', 3000), tokens('c', null)]
+    const items = groupHighlights(read(details).members).items
+    expect(items.map((item) => item.text)).toContain(
+      'used 200% more tokens in B (1K → 3K).',
+    )
+    const running = [tokens('a', 1000), tokens('b', 300)]
+    running.push(execution('c', [{ tokens: 1000 }]))
+    running[1].status = 'running'
+    running[1].reports[0].report?.scenarios[0].aggregate &&
+      Object.assign(running[1].reports[0].report.scenarios[0].aggregate, {
+        planned_runs: 2,
+      })
+    expect(
+      groupHighlights(read(running).members).items.some(
+        (item) => item.metric === 'tokens',
+      ),
+    ).toBe(false)
+  })
+})
+
 describe('versions', () => {
-  it('orders releases by number, not by text', () => {
+  it('orders releases by number, a prerelease before its release', () => {
     expect(versionRange(['0.9.0', '0.17.1', '0.12.4'])).toBe('0.9.0–0.17.1')
     expect(versionRange(['1.8.36', '1.8.36'])).toBe('1.8.36')
+    expect(versionRange(['1.8.8', '1.8.8-rc.3'])).toBe('1.8.8-rc.3–1.8.8')
+    expect(versionRange(['0.24.3-rc.2', '0.24.3-rc.10'])).toBe(
+      '0.24.3-rc.2–0.24.3-rc.10',
+    )
+    // A commit is not a version: the order given stays.
+    expect(versionRange(['@abc1234', '0.16.0'])).toBe('@abc1234–0.16.0')
     expect(versionRange([])).toBe('')
   })
 })
