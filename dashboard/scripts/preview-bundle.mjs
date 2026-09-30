@@ -16,7 +16,7 @@
 // Routes are what follows #/ext/harness-e2e/ (default: executions). Without
 // --dist the bundle is built first. Options: --base (the Console, default
 // http://127.0.0.1:3113/), --out (default dashboard/.screenshots/preview),
-// --width (default 1440), --narrow (default 640). --dist and --out are read
+// --width (default 1440), --narrow (default 640), --height (default 1000). --dist and --out are read
 // from the current directory. Where /tmp is small, point TMPDIR at a
 // directory on disk or Chromium runs out of room.
 import { spawnSync } from 'node:child_process'
@@ -33,6 +33,8 @@ const outDir = options.out
   : path.join(root, '.screenshots/preview')
 const width = Number(options.width ?? 1440)
 const narrow = Number(options.narrow ?? 640)
+// The Console scrolls inside its pane: a taller window shows more of a page.
+const height = Number(options.height ?? 1000)
 
 let distDir = options.dist ? path.resolve(options.dist) : null
 if (!distDir) {
@@ -101,7 +103,8 @@ try {
     for (const variant of variants) {
       const file = path.join(
         outDir,
-        `${route.replace(/\//g, '_')}-${variant.name}.png`,
+        // A route with many ids stays under the file name limit.
+        `${route.replace(/[/?&=]/g, '_').slice(0, 120)}-${variant.name}.png`,
       )
       const result = await capture(route, variant, file)
       if (!result.ok) failed += 1
@@ -117,7 +120,7 @@ process.exit(failed ? 1 : 0)
 async function capture(route, { theme, width: viewportWidth }, file) {
   // A service worker would answer page.js from its cache, past the routes.
   const context = await browser.newContext({
-    viewport: { width: viewportWidth, height: 1000 },
+    viewport: { width: viewportWidth, height },
     colorScheme: theme,
     serviceWorkers: 'block',
   })

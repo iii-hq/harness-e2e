@@ -13,6 +13,8 @@ export type Row = {
   failure?: string
   /** The case definition, `case.inputs_sha256`. */
   definition?: string
+  /** The runner's behavior digest, which moves with its scoring. */
+  behavior?: string
   seed?: number | string
   round?: number
   /** Input and output tokens; a tenth more is read from cache. */
@@ -109,7 +111,7 @@ export function execution(
           scenarios: [
             {
               scenario_id: scenario,
-              behavior_sha256: `behavior-${scenario}`,
+              behavior_sha256: row.behavior ?? `behavior-${scenario}`,
               case_id: `${scenario}:seed-1`,
               case: {
                 seed: row.seed ?? 1,
