@@ -10,5 +10,5 @@ description: Measure Harness capability, retain reproducible evidence, and expos
 
 dependencies:
   browser: "^0.2.15"
-  database: "^0.5.0"
+  database: "^0.5.20"
   storage: "^0.1.10"

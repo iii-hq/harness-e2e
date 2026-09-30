@@ -690,10 +690,9 @@ runtime-only `configuration::set` writes; unsupported Engines receive a setup
 error.
 
 Explicit `control_namespace` or a different `control_database` selects an
-operator-provisioned destination. The optional `worker-compose.control.yaml`
-illustrates a separate control namespace; adapt its local paths and set
-`control_namespace: harness-e2e-control` on the E2E container when using it.
-The worker exits if the selected database or schema is unavailable, and
+operator-provisioned destination: run a database worker with that pool in the
+chosen namespace and set `control_namespace` on the E2E container. The worker
+exits if the selected database or schema is unavailable, and
 reports the namespace, database and underlying readiness error. Install the
 E2E Console separately from a subject when its control database must be
 inaccessible to that subject.

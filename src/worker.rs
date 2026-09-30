@@ -245,6 +245,7 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
         pool.as_ref(),
     )
     .await?;
+    let built_in_pool = pool.is_some();
     if let Some(pool) = pool {
         pool.keep(&iii)
             .await
@@ -253,6 +254,9 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
     tracing::info!(
         data_dir = %data_dir.display(),
         namespace = %environment.namespace,
+        control_namespace,
+        control_database = %config.control_database,
+        built_in_pool,
         config = ?environment.config,
         "Harness E2E storage directory selected"
     );

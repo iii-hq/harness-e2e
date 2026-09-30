@@ -228,10 +228,7 @@ where
 }
 
 fn subscribed_configuration(worker: &Value, namespace: &str) -> Result<String> {
-    // Older engines omit namespace metadata; their default namespace is the
-    // only destination that can be established without that metadata.
-    let owner_namespace = worker["worker"]["namespace"].as_str().unwrap_or("default");
-    if owner_namespace != namespace {
+    if worker["worker"]["namespace"] != namespace {
         bail!("database worker does not belong to the control namespace {namespace}");
     }
     let ids: std::collections::BTreeSet<&str> = worker["registered_triggers"]
@@ -386,6 +383,9 @@ mod tests {
             "operator-sql-config"
         );
         assert!(subscribed_configuration(&worker, "another-project").is_err());
+        let mut unnamespaced = worker.clone();
+        unnamespaced["worker"] = json!({"name": "sql-service"});
+        assert!(subscribed_configuration(&unnamespaced, "default").is_err());
         worker["registered_triggers"]
             .as_array_mut()
             .unwrap()
