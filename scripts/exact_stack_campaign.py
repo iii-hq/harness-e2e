@@ -551,41 +551,11 @@ def project_roots(compose_path: Path) -> list[str]:
     return [f"{worker}@{selector}" for worker, selector in declared_workers(compose_path).items()]
 
 
-def group_template(contract: dict[str, Any], group_id: str) -> str:
-    group = next(group for group in contract["suite"]["groups"] if group["id"] == group_id)
-    if "linkly_tutorial" not in group.get("scenarios", []):
-        return contract["runtime"].get("template", {}).get("id", "")
-    if (group["scenarios"] != ["linkly_tutorial"] or group["runs"] != 1
-            or group["technical_retries"] != 0):
-        raise ValueError("linkly_tutorial needs a fresh scaffold: one scenario, one run and no retries")
-    return "linkly-agentic"
-
-
 def project_engine_config(project: dict[str, Any], port: int) -> dict[str, Any]:
     workers = [{"name": "iii" + "-worker-manager", "config": {"host": "127.0.0.1", "port": port}}]
     workers.extend({"name": name, "config": config}
                    for name, config in project.get("engine", {}).get("workers", {}).items())
     return {"workers": workers}
-
-
-def with_fixture(template: dict[str, Any], fixture: dict[str, Any]) -> dict[str, Any]:
-    """Keep a scenario's required container names/configuration over the chosen base."""
-    result = copy.deepcopy(template)
-    containers = result.setdefault("containers", {})
-    aliases = {"package://shell": "package://ide", "package://console": "package://ade"}
-    for name, container in fixture.get("containers", {}).items():
-        worker = aliases.get(container.get("worker"), container.get("worker"))
-        for previous in list(containers):
-            source = containers[previous].get("worker")
-            if aliases.get(source, source) == worker:
-                del containers[previous]
-        containers[name] = copy.deepcopy(container)
-    engine = result.setdefault("engine", {})
-    engine_workers = engine.get("workers", {}) | fixture.get("engine", {}).get("workers", {})
-    engine.update(fixture.get("engine", {}))
-    if engine_workers:
-        engine["workers"] = engine_workers
-    return result
 
 
 def merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
@@ -1059,9 +1029,6 @@ def main() -> int:
     materialize.add_argument("--group-id")
     roots = commands.add_parser("roots")
     roots.add_argument("--compose", type=Path, required=True)
-    template = commands.add_parser("group-template")
-    template.add_argument("--contract", type=Path, required=True)
-    template.add_argument("--group-id", required=True)
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
     project.add_argument("--group-id", help="omit to scaffold the stack the whole suite shares")
@@ -1072,7 +1039,6 @@ def main() -> int:
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
-    project.add_argument("--fixture-compose", type=Path)
     project.add_argument("--profile-root", type=Path)
     project.add_argument("--template-package", action="append", default=[])
     project.add_argument("--engine-config", type=Path)
@@ -1146,16 +1112,6 @@ def main() -> int:
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
                 raise ValueError("PyYAML is required to create the iii project scaffold") from error
             template = load_yaml(args.template_compose.read_text()) if args.template_compose else None
-            if args.fixture_compose:
-                if template is None:
-                    raise ValueError("fixture-compose requires template-compose")
-                # Selected local workers still belong to their own scaffold,
-                # while the scenario keeps its canonical task directory.
-                for container in template.get("containers", {}).values():
-                    source = container.get("worker", "")
-                    if source.startswith("path://./"):
-                        container["worker"] = f"path://{(args.template_compose.parent / source.removeprefix('path://')).resolve()}"
-                template = with_fixture(template, load_yaml(args.fixture_compose.read_text()))
             manifest = project_scaffold(
                 contract,
                 args.namespace,
@@ -1194,8 +1150,6 @@ def main() -> int:
                 assignment, evidence = delivered
                 args.evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
                 print(assignment)
-        elif args.command == "group-template":
-            print(group_template(contract, args.group_id))
         elif args.command == "credentials-env":
             values = received_credentials(os.environ)
             write_private(args.output, values)

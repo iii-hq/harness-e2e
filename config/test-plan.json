@@ -186,8 +186,8 @@
       "Implementation delivery from the paired scenario or an explicit standalone directory"
     ],
     "linkly_tutorial": [
-      "Fresh linkly-agentic scaffold running as the Compose project that hosts the Harness (iii compose --up), with one provider enabled and its key in .env",
-      "Node 22+, npm and curl on the executor; one repetition per scaffold"
+      "The linkly stack: a fresh linkly-agentic scaffold as the Compose project that hosts the Harness, with the model's provider and its key",
+      "Node 22+, npm and curl on the executor"
     ]
   },
   "suites": [
@@ -219,7 +219,7 @@
     {
       "id": "software-engineering",
       "label": "Software engineering",
-      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, the Linkly agentic tutorial, Alertmanager route migration, and visual chess, form-flow, and state-machine Workers in the Console.",
+      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, Alertmanager route migration, and visual chess, form-flow, and state-machine Workers in the Console.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -232,7 +232,6 @@
         "registry_implementation",
         "registry_verification",
         "trending_topics_build",
-        "linkly_tutorial",
         "alertmanager_route_match",
         "chess_engine_build",
         "form_flow_build",
@@ -247,6 +246,23 @@
           "registry_verification"
         ]
       ]
+    },
+    {
+      "id": "linkly",
+      "label": "Linkly",
+      "purpose": "Build the Linkly link shortener with the agentic tutorial, chapter by chapter, on the linkly stack's fresh linkly-agentic scaffold.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [],
+      "scenarios": [
+        "linkly_tutorial"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-linkly"
     },
     {
       "id": "pr",

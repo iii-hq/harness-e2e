@@ -16,6 +16,7 @@ pub(crate) const REPOSITORY: &[(&str, &str)] = &[
         "harness-template",
         include_str!("../../stacks/harness-template.yaml"),
     ),
+    ("linkly", include_str!("../../stacks/linkly.yaml")),
 ];
 
 /// Top-level keys something reads: the executor's, then Compose's.

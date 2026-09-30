@@ -1,0 +1,41 @@
+# The stack the `linkly` suite runs on: the iii-hq/templates `linkly-agentic`
+# project, scaffolded fresh for each group, is the Compose project that hosts
+# the Harness, as the Linkly tutorial starts it.
+#
+# The template stays at the commit the tutorial's chapters were written
+# against. Same workers as default.yaml, so the template's workers run the
+# versions that lock resolves; keep the containers in step with it.
+
+iii: latest
+template: linkly-agentic@ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  # Workers the measurement itself needs and that the application does not
+  # bring along. A worker the application already depends on is left out: the
+  # engine resolves it from that dependency, and declaring it here as well is a
+  # second, independent spec for the same worker, which it refuses.
+  # `browser` is one of those, and arrives with `harness`.
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

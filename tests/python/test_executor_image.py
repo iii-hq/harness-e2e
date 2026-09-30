@@ -426,7 +426,7 @@ class ExecutorTests(unittest.TestCase):
         contracts.mkdir(parents=True)
         # Each group once, in order, whatever the matrix repeats.
         groups = ["case-minimal-path", "case-registry-implementation", "case-trending-topics-build",
-                  "case-linkly-tutorial", "case-kanban-board", "case-registry-implementation"]
+                  "case-kanban-board", "case-registry-implementation"]
         (contracts / "resolution.json").write_text(json.dumps({
             "matrix": {"include": [{"group_id": group} for group in groups]},
             "template": {"id": "harness", "revision": "a" * 40}}))
@@ -455,12 +455,8 @@ class ExecutorTests(unittest.TestCase):
         header = "http.https://github.com/.extraheader"
         registry = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
         trending = "3ee24f7ace3c014db35423f14939ad3f6ce0c3d2"
-        linkly = "ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d"
         self.assertEqual(self.log.read_text().splitlines(), [
             "git clone -q --branch main https://github.com/iii-hq/kanban-e2e-fixture.git target/kanban-fixture|",
-            "git init -q target/linkly-templates|",
-            f"git -C target/linkly-templates fetch -q --depth 1 https://github.com/iii-hq/templates.git {linkly}|",
-            "git -C target/linkly-templates checkout -q --detach FETCH_HEAD|",
             "git init -q target/registry-sources/registry|" + header,
             f"git -C target/registry-sources/registry fetch -q --depth 1 https://github.com/iii-hq/registry.git {registry}|{header}",
             "git -C target/registry-sources/registry checkout -q --detach FETCH_HEAD|" + header,
@@ -487,7 +483,8 @@ class ExecutorTests(unittest.TestCase):
         contracts = self.root / "target/harness-e2e-contract/contracts"
         contracts.mkdir(parents=True)
         (contracts / "resolution.json").write_text(json.dumps({
-            "matrix": {"include": [{"group_id": "case-linkly-tutorial"}]}}))
+            "matrix": {"include": [{"group_id": "case-linkly-tutorial"}]},
+            "template": {"id": "linkly-agentic", "revision": "b" * 40}}))
         # The first fetch answers a 5xx; the next one works.
         git = self.directory / "bin/git"
         git.parent.mkdir()

@@ -3,7 +3,7 @@
 Seven native Harness scenarios reproduce the fixture's C1–C7 increments from
 their pinned base commits. The `software-engineering` profile combines them with
 Registry implementation and verification, the trending-topics blog build and
-the Linkly tutorial. The local controller also runs base/reference
+the other application builds. The local controller also runs base/reference
 controls without invoking a model, and supports a standalone DeepSeek smoke.
 See [VALIDATION.md](VALIDATION.md) for observed results and remaining gates.
 

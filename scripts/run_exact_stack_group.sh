@@ -40,13 +40,9 @@ campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
 jq -e --arg group "$campaign_group_id" \
   '.suite.groups | any(.id == $group)' \
   "$contract_path" >/dev/null
-project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
-execution_template=$(jq -r '.runtime.template.id // empty' "$contract_path")
-linkly_fixture=$(jq -r --arg id "$campaign_group_id" '.suite.groups[] | select(.id == $id) | any(.scenarios[]?; . == "linkly_tutorial")' "$contract_path")
+project_template=$(jq -r '.runtime.template.id // empty' "$contract_path")
 if [[ -n "$assemble_only" ]]; then
   project_template=""
-  execution_template=""
-  linkly_fixture=false
 fi
 # A stack the execution already assembled starts from its lock; a template
 # project is assembled here, pinned to the versions that lock resolved.
@@ -54,7 +50,11 @@ frozen=false
 if [[ -z "$project_template" ]] && jq -e '.runtime.lock != null' "$contract_path" >/dev/null; then
   frozen=true
 fi
-profile_assets=$(jq -r '.runtime.template != null or .suite.agent_profile != null' "$contract_path")
+# The Directory serves the project's own agents and skills when the suite
+# names an agent profile or the template ships some (the template scaffold
+# says). Otherwise it runs as the stack declares it and downloads the skills of
+# every worker installed, those the subject adds too (Linkly).
+profile_assets=$(jq -r '.suite.agent_profile != null' "$contract_path")
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
@@ -300,35 +300,21 @@ if [[ "$campaign_group_id" == case-kanban-* ]] && [[ -z "$assemble_only" ]]; the
   export HARNESS_E2E_KANBAN_RUNTIME="$kanban_runtime"
 fi
 
-template_project="$project_dir"
-if [[ -n "$execution_template" ]]; then
+if [[ -n "$project_template" ]]; then
   failure_phase=template_scaffold
   template_root="$repo_root/target/execution-template"
   template_revision=$(jq -er '.runtime.template.revision' "$contract_path")
   [[ "$(git -C "$template_root" rev-parse HEAD)" == "$template_revision" ]] || fail "Execution template revision mismatch"
-  if [[ "$linkly_fixture" == true ]]; then
-    template_project="$run_root/execution-template"
-  fi
-  "$iii_bin" project init --directory "$template_project" --template "$execution_template" \
+  "$iii_bin" project init --directory "$project_dir" --template "$project_template" \
     --template-dir "$template_root/iii" --skip-iii >"$artifact_dir/logs/template-scaffold.log" 2>&1
   jq '.runtime.template' "$contract_path" >"$artifact_dir/stack/template.json"
   mkdir -p "$run_root/template-assets"
   for folder in agents skills; do
-    if [[ -d "$template_project/$folder" ]]; then
-      cp -R "$template_project/$folder" "$run_root/template-assets/$folder"
+    if [[ -d "$project_dir/$folder" ]]; then
+      cp -R "$project_dir/$folder" "$run_root/template-assets/$folder"
+      profile_assets=true
     fi
   done
-fi
-
-if [[ "$linkly_fixture" == true ]]; then
-  failure_phase=template_scaffold
-  template_root="$repo_root/target/linkly-templates"
-  template_revision=ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
-  [[ "$(git -C "$template_root" rev-parse HEAD)" == "$template_revision" ]] || fail "Linkly template revision mismatch"
-  "$iii_bin" project init --directory "$project_dir" --template "$project_template" \
-    --template-dir "$template_root/iii" --skip-iii >"$artifact_dir/logs/fixture-scaffold.log" 2>&1
-  jq -n --arg template "$project_template" --arg revision "$template_revision" \
-    '{repository:"iii-hq/templates",revision:$revision,template:$template}' >"$artifact_dir/stack/fixture-template.json"
 fi
 
 # One env file for the whole project, written after any template scaffold so
@@ -366,11 +352,8 @@ else
   project_args+=(--group-id "$campaign_group_id")
 fi
 if [[ -n "$project_template" ]]; then
-  project_args+=(--template-compose "$template_project/worker-compose.yaml"
+  project_args+=(--template-compose "$project_dir/worker-compose.yaml"
     --template-package shell=ide --template-package console=ade)
-  if [[ "$template_project" != "$project_dir" ]]; then
-    project_args+=(--fixture-compose "$compose_file")
-  fi
 fi
 # The Directory's configuration is per group; the assembled stack has none.
 if [[ "$profile_assets" == true && -z "$assemble_only" ]]; then

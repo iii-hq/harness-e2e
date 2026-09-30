@@ -257,7 +257,7 @@ try {
     .getByText('Sep 8 · older definition')
     .waitFor()
   await detail
-    .getByText('1 of these 15 tests changed definition', { exact: false })
+    .getByText('1 of these 14 tests changed definition', { exact: false })
     .waitFor()
   await detail
     .locator('[data-test-id="registry_verification"]')
@@ -265,7 +265,7 @@ try {
     .waitFor()
   await inRepository
     .locator('[data-suite="software-engineering"]')
-    .getByText('1 of 15 changed since their last run')
+    .getByText('1 of 14 changed since their last run')
     .waitFor()
   const regression = repository.find((suite) => suite.id === 'regression')
 

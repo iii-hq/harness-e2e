@@ -17,9 +17,9 @@
 #       assemble     write one contract per campaign (EXECUTION_KEY), assemble
 #                    and lock the stack once, and lock every contract to it.
 #       fixtures     check out below target/ what the groups start from and
-#                    no package brings: the Kanban fixture, the Linkly
-#                    templates, the stack's template, the Registry sources and
-#                    the trending topics fixture. For the group
+#                    no package brings: the Kanban fixture, the stack's
+#                    template, the Registry sources and the trending topics
+#                    fixture. For the group
 #                    HARNESS_E2E_CAMPAIGN_GROUP_ID names, else for every group
 #                    of the execution. The private ones read GITHUB_TOKEN.
 #       In that order; scripts/run_in_image.sh runs each in a container of
@@ -130,7 +130,6 @@ assemble() {
 # The revisions the scenarios expect of their fixture sources.
 REGISTRY_REVISION=662eb87c1bdbb395f36264d5d26bf823e2ace783
 TRENDING_TOPICS_REVISION=3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
-LINKLY_TEMPLATES_REVISION=ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
 PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "
 
 # checkout REPOSITORY REF DIRECTORY [full]: REF is a commit, a branch, or
@@ -188,7 +187,6 @@ fixtures() {
       case-trending-topics-build)
         checkout iii-hq/e2e-fixture "$TRENDING_TOPICS_REVISION" target/trending-topics-fixture
         ;;
-      case-linkly-tutorial) checkout iii-hq/templates "$LINKLY_TEMPLATES_REVISION" target/linkly-templates ;;
     esac
   done
   template=$(jq -r '.template.revision // empty' "$contracts/resolution.json")
