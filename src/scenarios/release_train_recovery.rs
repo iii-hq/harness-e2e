@@ -127,7 +127,6 @@ impl Scenario for ReleaseTrainRecovery {
             }),
             vec![
                 Capability::E2eAdaptiveFlowV1,
-                Capability::E2eWorkflowResumeV1,
                 Capability::ReleaseTrainSimulatorV1,
                 Capability::ReleaseShadowReadOnlyV1,
             ],
