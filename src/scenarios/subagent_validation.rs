@@ -37,7 +37,10 @@ const CHILD_GOAL: AssessmentSpec = AssessmentSpec::gate_in(
     35,
     "Does the child's table reach the exact expected count with the accepted count stored in the verdict key?",
     EvaluationDimension::Deliverable,
-);
+)
+.at_least(CHILD_GOAL_MET);
+/// Points for a child that met its goal without the exact count: the purpose.
+const CHILD_GOAL_MET: u8 = 20;
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     35,
@@ -377,7 +380,7 @@ fn child_goal_points(goal: bool, rows: u64) -> u8 {
     if goal && rows == EXPECTED_ROWS {
         CHILD_GOAL.weight()
     } else if goal {
-        20
+        CHILD_GOAL_MET
     } else {
         0
     }

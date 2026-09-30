@@ -12,6 +12,7 @@ pub(super) struct AssessmentSpec {
     description: &'static str,
     dimension: EvaluationDimension,
     gate: bool,
+    gate_minimum: Option<u8>,
 }
 
 impl AssessmentSpec {
@@ -22,6 +23,7 @@ impl AssessmentSpec {
             description,
             dimension: EvaluationDimension::StructuralIntegrity,
             gate: false,
+            gate_minimum: None,
         }
     }
 
@@ -37,6 +39,7 @@ impl AssessmentSpec {
             description,
             dimension,
             gate: false,
+            gate_minimum: None,
         }
     }
 
@@ -58,6 +61,15 @@ impl AssessmentSpec {
         Self {
             gate: true,
             ..Self::scored_in(id, weight, description, dimension)
+        }
+    }
+
+    /// A proportional gate whose purpose is met at `points`, below full weight.
+    pub(super) const fn at_least(self, points: u8) -> Self {
+        Self {
+            gate: true,
+            gate_minimum: Some(points),
+            ..self
         }
     }
 
@@ -138,6 +150,7 @@ impl AssessmentSpec {
             policy: declaration.policy,
             dimension: declaration.dimension,
             gate: self.gate,
+            gate_minimum: self.gate_minimum,
         }
     }
 

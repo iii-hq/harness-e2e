@@ -985,6 +985,7 @@ mod tests {
                 awarded: award.awarded,
                 reason: award.reason.clone(),
                 gate: criterion.gate,
+                gate_minimum: criterion.gate_minimum,
             })
             .collect::<Vec<_>>();
         assert_eq!(crate::report::criteria_score(&reports), Some(0));

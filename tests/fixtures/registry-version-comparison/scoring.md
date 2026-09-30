@@ -28,8 +28,8 @@ Screenshots let users inspect actual results. Their appearance is not scored.
 A metric marked `"gate": true` in `metrics.json` names the scenario's primary flow. The scenario is completed only when every gate earns its full points; the score is still the sum of all metrics.
 
 - **Planning:** `planning.plan_delivered` — `plan.md` exists at `/workspace/output/plan.md`, is UTF-8 text, and has a Markdown heading followed by content. The other planning metrics measure plan content only, so this gate was added. Its 5 points come from merging `planning.required_order` and `planning.enum_order` into `planning.schema_sets`, which the requirements state as one rule; the set still has 20 metrics of 5 points.
-- **Implementation:** `implementation.patch_application` and `implementation.function_removal`.
+- **Implementation:** `implementation.same_version` and `implementation.function_removal`: the comparison works. A patch that replays cleanly on the pinned base is delivery format and only moves the score.
 - **Environment:** `environment.build` and `environment.api_readiness`.
-- **Verification:** `verification.recall`; a partial ratio does not complete the task.
+- **Verification:** `verification.recall` with `"gate_minimum": 1`: finding one independently failing check meets the purpose; finding all of them earns the full points.
 
 Delivered source that cannot be started scores zero on every metric, gates included, so it is never completed.

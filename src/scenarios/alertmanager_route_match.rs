@@ -65,7 +65,9 @@ const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
     70,
     "What proportion of route::match test cases match the expected receivers, group-by labels, and group-by-all flags?",
     EvaluationDimension::Deliverable,
-);
+)
+// Four in five oracle cases (56 of 70 points) already delegate route matching.
+.at_least(56);
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,

@@ -73,13 +73,13 @@ const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     10,
     "Does the live edit save the expected updated diagram under the same Canvas ID?",
 );
-const CONSOLE: AssessmentSpec = AssessmentSpec::scored_in(
+const CONSOLE: AssessmentSpec = AssessmentSpec::gate_in(
     "console_delivery",
     10,
     "Does Console expose the enabled Worker and Canvas scripts and styles with content hashes, no warnings, and non-empty Worker files?",
     EvaluationDimension::Deliverable,
 );
-const INTERACTION: AssessmentSpec = AssessmentSpec::gate_in(
+const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
     "browser_interaction",
     10,
     "Does the Console page complete its form or simulator flow, apply the edit with Tab and Enter, persist it after reload, open the updated Canvas graph, fit a narrow pane without horizontal overflow, and apply visibly different light and dark themes with at least 3:1 contrast for the result and main control?",
