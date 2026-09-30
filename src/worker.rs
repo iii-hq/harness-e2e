@@ -13,16 +13,19 @@ use crate::control::ControlPlane;
 use crate::manifest::WORKER_NAME;
 use crate::persistence::Persistence;
 
+mod control_database;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerConfig {
     /// Directory for native evidence bundles, journals, logs and exports.
     pub data_dir: String,
-    /// Database name in the dedicated control-plane namespace.
+    /// Pool name for durable control-plane records.
     #[serde(default = "default_control_database")]
     pub control_database: String,
-    /// Namespace that owns the control-plane database worker.
-    #[serde(default = "default_control_namespace")]
+    /// Namespace that owns the control-plane database worker; omitted uses
+    /// this worker's Compose namespace and provisions its dedicated pool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub control_namespace: String,
     /// GitHub repository whose exact-stack workflow runs can be imported.
     #[serde(default = "default_github_repository")]
@@ -52,9 +55,6 @@ pub struct WorkerConfig {
 fn default_control_database() -> String {
     "harness_e2e".into()
 }
-fn default_control_namespace() -> String {
-    "harness-e2e-control".into()
-}
 fn default_github_repository() -> String {
     "iii-hq/harness-e2e".into()
 }
@@ -67,7 +67,7 @@ impl Default for WorkerConfig {
         Self {
             data_dir: "~/.iii/data/harness-e2e".into(),
             control_database: default_control_database(),
-            control_namespace: default_control_namespace(),
+            control_namespace: String::new(),
             github_repository: default_github_repository(),
             docker_parallel_groups: default_docker_parallel_groups(),
             provider_env_file: None,
@@ -82,8 +82,8 @@ impl WorkerConfig {
         if self.data_dir.trim().is_empty() {
             return Err("data_dir cannot be empty".into());
         }
-        if self.control_database.trim().is_empty() || self.control_namespace.trim().is_empty() {
-            return Err("control database and namespace cannot be empty".into());
+        if self.control_database.trim().is_empty() {
+            return Err("control database cannot be empty".into());
         }
         if self.docker_parallel_groups == 0 {
             return Err("docker_parallel_groups must be at least 1".into());
@@ -105,6 +105,14 @@ impl WorkerConfig {
             }
         }
         Ok(self)
+    }
+
+    fn persistence_namespace<'a>(&'a self, worker_namespace: &'a str) -> &'a str {
+        if self.control_namespace.trim().is_empty() {
+            worker_namespace
+        } else {
+            &self.control_namespace
+        }
     }
 
     /// How Docker executions run, with paths resolved as `data_dir` is.
@@ -213,11 +221,16 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
             std::env::current_dir().context("resolve the working directory")?,
         ),
     };
-    wait_for_persistence(&iii, &config.control_namespace, &config.control_database).await?;
-
     let data_dir = resolve_data_dir(&config.data_dir, &base)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
+    let control_namespace = config.persistence_namespace(&environment.namespace);
+    // Explicit destinations remain operator-owned. Only the built-in pool
+    // in the installation namespace is added automatically.
+    let provision = (config.control_namespace.trim().is_empty()
+        && config.control_database == default_control_database())
+    .then_some(data_dir.as_path());
+    wait_for_persistence(&iii, control_namespace, &config.control_database, provision).await?;
     tracing::info!(
         data_dir = %data_dir.display(),
         namespace = %environment.namespace,
@@ -231,7 +244,7 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
         Persistence::new(
             iii.clone(),
             config.control_database.clone(),
-            config.control_namespace.clone(),
+            control_namespace.to_owned(),
         ),
     )
     .await
@@ -333,10 +346,13 @@ async fn wait_for_persistence(
     iii: &iii_sdk::IIIClient,
     namespace: &str,
     database: &str,
+    provision: Option<&Path>,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut provisioned = false;
+    let mut provisioning_error = None;
     loop {
-        let ready = iii
+        let response = iii
             .trigger(
                 TriggerRequest {
                     function_id: "database::query".into(),
@@ -350,15 +366,35 @@ async fn wait_for_persistence(
                 }
                 .namespace(namespace),
             )
-            .await
-            .is_ok();
-        if ready {
-            return Ok(());
-        }
+            .await;
+        let error = match response {
+            Ok(_) => return Ok(()),
+            Err(error) => error,
+        };
         if tokio::time::Instant::now() >= deadline {
-            bail!("control-plane database was not ready before the startup deadline");
+            bail!(
+                "control-plane database was not ready before the startup deadline \
+                 (namespace {namespace}, database {database}): {error}{}",
+                provisioning_error
+                    .map(|error| format!("; pool setup: {error}"))
+                    .unwrap_or_default()
+            );
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Some(data_dir) = provision.filter(|_| !provisioned) {
+            match control_database::provision(iii, namespace, database, data_dir, deadline).await {
+                Ok(()) => provisioned = true,
+                Err(error) if control_database::retryable(&error) => {
+                    tracing::debug!(%error, "waiting to provision the control database");
+                    provisioning_error = Some(error.to_string());
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("provision control database {database} in namespace {namespace}")
+                    })
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -417,9 +453,21 @@ mod tests {
         assert_eq!(config.control_database, "custom_db");
         assert_eq!(config.control_namespace, "campaign-123");
         assert_eq!(
+            config.persistence_namespace("another-installation"),
+            "campaign-123"
+        );
+        assert_eq!(
             resolve_data_dir(&config.data_dir, &config_file_dir(&path).unwrap()).unwrap(),
             PathBuf::from("/tmp/e2e-evidence")
         );
+    }
+
+    #[test]
+    fn omitted_control_namespace_routes_to_the_worker_installation() {
+        let config = config_from_value(serde_json::json!({"data_dir": "evidence"})).unwrap();
+        assert_eq!(config.persistence_namespace("project-one"), "project-one");
+        assert_eq!(config.persistence_namespace("project-two"), "project-two");
+        assert_eq!(config.control_database, "harness_e2e");
     }
 
     #[test]

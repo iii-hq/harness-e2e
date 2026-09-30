@@ -675,18 +675,34 @@ for the project functions it starts.
 Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and the
 configuration: `III_CONFIG`, a file, before iii 0.24.3; `III_CONFIG_NAME`, the
 configuration-service entry read with `configuration::get`, from 0.24.3 on.
-The first three and one of those two are mandatory. The configuration holds the
-execution-specific evidence directory and the separate control-plane database
-namespace. Start `worker-compose.control.yaml` before `worker-compose.yaml`.
-The control file provisions the single-connection `harness_e2e` SQLite pool
-and disables SQL history. The Harness exits when that database or its schema
-is unavailable. The subject namespace never receives the database client or
-its filesystem path.
+The first three and one of those two are mandatory. By default the E2E worker
+uses its own Compose namespace. It discovers the dependency's database worker
+and configuration entry, then adds a single-connection `harness_e2e` SQLite
+pool at `<data_dir>/control.sqlite` to that entry's active value. Existing pools,
+settings and environment placeholders are retained; the saved database
+configuration is not changed. A full restart provisions the pool again over
+the same SQLite file. This requires Engine support for runtime-only
+`configuration::set` writes; unsupported Engines receive a setup error.
+
+Explicit `control_namespace` or a different `control_database` selects an
+operator-provisioned destination. The optional `worker-compose.control.yaml`
+illustrates a separate control namespace; adapt its local paths and set
+`control_namespace: harness-e2e-control` on the E2E container when using it.
+The worker exits if the selected database or schema is unavailable, and
+reports the namespace, database and underlying readiness error. Install the
+E2E Console separately from a subject when its control database must be
+inaccessible to that subject.
 
 Publication validates the locally built binary through a `path://` Compose
 container before upload. Published campaigns use only exact Registry package
 versions. Provider secrets go to temporary permission-restricted `env_file`
 files and never appear in contract, Compose, evidence, or archive artifacts.
+
+CI also exercises the packaged binary's published defaults with real Registry
+dependencies via `scripts/smoke_registry_install.py`. It checks a non-default
+namespace, a renamed database container/configuration entry, an unchanged
+saved configuration, a separate SQLite file, and persistence after restarting
+the entire Engine/Compose stack.
 
 The worker exposes:
 

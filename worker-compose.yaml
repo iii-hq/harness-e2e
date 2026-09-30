@@ -6,6 +6,9 @@ containers:
     config_override:
       data_dir: ~/.iii/data/harness-e2e
       control_database: harness_e2e
-      control_namespace: harness-e2e-control
+    start_after: [database]
     scripts:
       run: cargo run --locked --bin harness-e2e
+  database:
+    worker: package://api.workers.iii.dev/database
+    version: "^0.5.20"

@@ -1,8 +1,8 @@
 //! Durable, queryable control-plane state.
 //!
-//! The database worker owns SQL access.  The runner deliberately owns neither
-//! a driver nor a connection string: it only sends parameterised statements to
-//! the dedicated control-plane database namespace.
+//! The database worker owns SQL access. The runner sends parameterised
+//! statements to its control pool in the selected namespace. Worker startup
+//! provisions the default dedicated SQLite pool through runtime configuration.
 //!
 //! Storage carries no version number and needs no migration step.  Every
 //! table records the fingerprint of the statements that create it; at start
