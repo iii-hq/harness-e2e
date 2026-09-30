@@ -15,10 +15,9 @@ use crate::workflow::{
     AdaptivePlanNode, AdaptiveTrustedAnchor, AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy,
     BooleanCondition, ControlSource, DependencyPolicy, PortValueKind, ReplayPolicy, StepCatalog,
     StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, StepOperationalKind,
-    StepPortDescriptor, StepReconcileOutcome, StepReconcileState, StepTypeDescriptor,
-    TypedPortValue, WorkflowCleanupContext, WorkflowCleanupHook, WorkflowCriterionDeclaration,
-    WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult, WorkflowLimits,
-    WorkflowNode,
+    StepPortDescriptor, StepTypeDescriptor, TypedPortValue, WorkflowCleanupContext,
+    WorkflowCleanupHook, WorkflowCriterionDeclaration, WorkflowEvaluationOutcome,
+    WorkflowEvaluationResult, WorkflowGateResult, WorkflowLimits, WorkflowNode,
 };
 
 const PREFLIGHT: &str = "release_train.preflight";
@@ -496,30 +495,6 @@ impl StepExecutor for ReleaseStep {
             Ok(output(evidence, None))
         }
     }
-
-    async fn reconcile(
-        &self,
-        _context: &StepExecutorContext,
-        _previous: &StepReconcileState,
-    ) -> Result<StepReconcileOutcome> {
-        let state = lock_state(&self.state)?;
-        let completed = match self.operation {
-            ReleaseOperation::Rerun => {
-                state.simulator.state.run.attempt == 2
-                    && state.simulator.state.run.status == RunStatus::Succeeded
-            }
-            ReleaseOperation::CreateFresh => state.simulator.state.fresh_operation.is_some(),
-            _ => false,
-        };
-        if completed {
-            Ok(StepReconcileOutcome::Completed(output(
-                json!({"reconciled": true}),
-                None,
-            )))
-        } else {
-            Ok(StepReconcileOutcome::RetrySafe)
-        }
-    }
 }
 
 fn execute_operation(
@@ -738,7 +713,6 @@ mod tests {
                     run_id: "release-runtime-test".into(),
                     attempt_id: "attempt-1".into(),
                     node: node.clone(),
-                    replay_policy: registered.descriptor.replay_policy,
                     inputs: BTreeMap::new(),
                     output_dir: tempfile::tempdir()?.path().to_path_buf(),
                     cancellation: tokio::sync::watch::channel(false).1,

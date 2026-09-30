@@ -145,8 +145,6 @@ pub struct AdaptivePlanRevisionEvidence {
 #[derive(Debug, Clone)]
 pub struct AdaptiveMaterializedWorkflow {
     pub definition: WorkflowDefinition,
-    pub policy_sha256: String,
-    pub latest_plan_sha256: String,
     pub revisions: Vec<AdaptivePlanRevisionEvidence>,
 }
 
@@ -240,12 +238,9 @@ impl AdaptiveWorkflowPolicy {
         }
 
         let latest = plans.last().expect("non-empty plans");
-        let latest_plan_sha256 = previous.expect("validated plan").1;
         let definition = self.materialize_plan(latest, catalog)?;
         Ok(AdaptiveMaterializedWorkflow {
             definition,
-            policy_sha256,
-            latest_plan_sha256,
             revisions: evidence,
         })
     }

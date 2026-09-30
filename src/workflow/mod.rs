@@ -5,7 +5,6 @@ mod catalog;
 pub mod cross_repo_contract_migration;
 pub mod incident_response;
 pub mod release_train_recovery;
-mod resume;
 mod run;
 mod scheduler;
 pub mod todo_worker;
@@ -29,22 +28,17 @@ pub use builtin::{
 };
 pub use catalog::{
     CapturedWorkflowAsset, NoopWorkflowCleanupHook, RegisteredStepType, StepCatalog,
-    StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, StepReconcileOutcome,
-    StepReconcileState, TypedPortValue, WorkflowAssetContent, WorkflowCleanupContext,
-    WorkflowCleanupHook, WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult,
-    WorkflowProvenance, WorkflowTermination, WorkflowTerminationReason,
-};
-pub use resume::{
-    ResumeDisposition, StepResumePhase, WorkflowResumeEnvelope, WorkflowResumeIdentity,
-    WorkflowResumeState, WorkflowResumeStep, WorkflowResumeStore,
+    StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, TypedPortValue,
+    WorkflowAssetContent, WorkflowCleanupContext, WorkflowCleanupHook, WorkflowEvaluationOutcome,
+    WorkflowEvaluationResult, WorkflowGateResult, WorkflowProvenance, WorkflowTermination,
+    WorkflowTerminationReason,
 };
 pub(crate) use run::observe_worker_contracts;
 pub use scheduler::{
-    execute_adaptive_workflow, execute_resumable_workflow, execute_workflow, CheckpointStore,
-    ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome, WorkflowAssetReport,
+    execute_adaptive_workflow, execute_workflow, CheckpointStore, WorkflowAssetReport,
     WorkflowAttemptReport, WorkflowCheckpoint, WorkflowCleanupReport, WorkflowCleanupStatus,
-    WorkflowCriterionResult, WorkflowExecutionRequest, WorkflowFailurePhase,
-    WorkflowNeedsReconciliation, WorkflowStepFailure, WorkflowStepReport, WorkflowStepStatus,
+    WorkflowCriterionResult, WorkflowExecutionRequest, WorkflowFailurePhase, WorkflowStepFailure,
+    WorkflowStepReport, WorkflowStepStatus,
 };
 
 use crate::context::E2eContext;

@@ -36,9 +36,8 @@ use crate::workflow::{
     adaptive_runtime, composite_definition, composite_descriptor_catalog, composite_runtime,
     execute_adaptive_workflow, execute_workflow, observe_worker_contracts, plan_adaptive_workflow,
     AdaptivePlannerInvalidation, AdaptivePlannerMetadata, AdaptivePlannerReferenceCheck,
-    AgentPlannerRequest, ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome,
-    WorkflowCleanupContext, WorkflowCleanupStatus, WorkflowExecutionRequest, WorkflowFailurePhase,
-    WorkflowResumeIdentity, WorkflowResumeStore,
+    AgentPlannerRequest, WorkflowCleanupContext, WorkflowCleanupStatus, WorkflowExecutionRequest,
+    WorkflowFailurePhase,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -169,11 +168,6 @@ pub enum SuiteEvent {
         run_id: String,
         attempt_id: String,
         session_id: String,
-        resume_state_path: Option<String>,
-    },
-    AdaptiveResumeState {
-        attempt_id: String,
-        state_sha256: String,
     },
     AttemptFinished {
         attempt_id: String,
@@ -247,7 +241,6 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
-    let system_identity_sha256 = artifact::sha256_value(&system_under_test)?;
     let agent = match config.subject.agent.as_deref() {
         Some(id) => Some(
             resolve_agent_profile(&context, id)
@@ -425,7 +418,6 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         progress_interval: config.progress_interval,
                         control: config.control.as_ref(),
                         output: &config.output,
-                        system_identity_sha256: &system_identity_sha256,
                     },
                 )
                 .await
@@ -1209,7 +1201,6 @@ struct AttemptRequest<'a> {
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
-    system_identity_sha256: &'a str,
 }
 
 async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2eRunReport {
@@ -1222,7 +1213,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         progress_interval,
         control,
         output,
-        system_identity_sha256,
     } = request;
     let started = Instant::now();
     let attempt_id = Uuid::new_v4().simple().to_string();
@@ -1241,7 +1231,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
                 output,
                 attempt_id,
                 started,
-                system_identity_sha256,
             },
         )
         .await;
@@ -1302,7 +1291,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id: session_id.clone(),
-            resume_state_path: None,
         },
     )
     .await
@@ -1485,7 +1473,6 @@ struct AdaptiveAttemptRequest<'a> {
     output: &'a std::path::Path,
     attempt_id: String,
     started: Instant,
-    system_identity_sha256: &'a str,
 }
 
 async fn run_adaptive_once(
@@ -1502,7 +1489,6 @@ async fn run_adaptive_once(
         output,
         attempt_id,
         started,
-        system_identity_sha256,
     } = request;
     let session_id = format!("adaptive_{attempt_id}");
     let materialized = match scenario_id.materialize(&attempt_id, seed) {
@@ -1538,12 +1524,6 @@ async fn run_adaptive_once(
     let execution_id = control
         .map(|control| control.execution_id.clone())
         .unwrap_or_else(|| run_id.to_string());
-    let state_root = output.parent().unwrap_or(output).join(".workflow-state");
-    let resume_store = WorkflowResumeStore::new(&state_root, &execution_id, run_id, &attempt_id);
-    let resume_state_path = resume_store
-        .as_ref()
-        .ok()
-        .map(|store| store.path().to_string_lossy().into_owned());
     if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptStarted {
@@ -1551,7 +1531,6 @@ async fn run_adaptive_once(
             run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id,
-            resume_state_path,
         },
     )
     .await
@@ -1599,8 +1578,6 @@ async fn run_adaptive_once(
                             execution_id: &execution_id,
                             run_id,
                             attempt_id: &attempt_id,
-                            state_root: &state_root,
-                            restored_attempt: false,
                             cancellation: Some(&cancellation),
                         })
                         .await
@@ -1690,62 +1667,22 @@ async fn run_adaptive_once(
                                     format!("bind adaptive Harness observation: {error:#}"),
                                 );
                             } else {
-                                let scenario_contract_sha256 =
-                                    crate::scenarios::scenario_contract_sha256(
-                                        &case,
-                                        spec.execution,
-                                    );
-                                let catalog_sha256 = runtime.catalog.canonical_sha256();
-                                let workflow_sha256 =
-                                    runtime.materialized.definition.canonical_sha256();
-                                let identity =
-                                    scenario_contract_sha256.and_then(|scenario_contract_sha256| {
-                                        Ok(WorkflowResumeIdentity {
-                                            execution_id: execution_id.clone(),
-                                            scenario_id: scenario_id.as_str().into(),
-                                            scenario_contract_sha256,
-                                            workflow_id: runtime.materialized.definition.id.clone(),
-                                            workflow_sha256: workflow_sha256?,
-                                            catalog_sha256: catalog_sha256?,
-                                            policy_sha256: runtime
-                                                .materialized
-                                                .policy_sha256
-                                                .clone(),
-                                            plan_sha256: runtime
-                                                .materialized
-                                                .latest_plan_sha256
-                                                .clone(),
-                                            system_identity_sha256: system_identity_sha256.into(),
-                                            model: subject.model.clone(),
-                                            provider: subject.provider.clone(),
-                                        })
-                                    });
-                                let outcome = match (identity, resume_store) {
-                                    (Ok(identity), Ok(_)) => {
-                                        execute_adaptive_workflow(
-                                            &runtime.policy,
-                                            &runtime.plans,
-                                            &runtime.completed_node_ids,
-                                            runtime.catalog,
-                                            WorkflowExecutionRequest {
-                                                output_dir: output.to_path_buf(),
-                                                run_id: run_id.to_string(),
-                                                attempt_id: Some(attempt_id.clone()),
-                                                attempt_number,
-                                                cancellation,
-                                                cleanup_hook: runtime.cleanup_hook,
-                                            },
-                                            ResumableWorkflowExecutionRequest {
-                                                state_root,
-                                                identity,
-                                                plan_revisions: Vec::new(),
-                                                resume_existing: false,
-                                            },
-                                        )
-                                        .await
-                                    }
-                                    (Err(error), _) | (_, Err(error)) => Err(error),
-                                };
+                                let cancelled = cancellation.clone();
+                                let outcome = execute_adaptive_workflow(
+                                    &runtime.policy,
+                                    &runtime.plans,
+                                    &runtime.completed_node_ids,
+                                    runtime.catalog,
+                                    WorkflowExecutionRequest {
+                                        output_dir: output.to_path_buf(),
+                                        run_id: run_id.to_string(),
+                                        attempt_id: Some(attempt_id.clone()),
+                                        attempt_number,
+                                        cancellation,
+                                        cleanup_hook: runtime.cleanup_hook,
+                                    },
+                                )
+                                .await;
                                 if uses_harness {
                                     if let Err(error) = context.unbind_turn_completed().await {
                                         report.push_failure(
@@ -1758,33 +1695,15 @@ async fn run_adaptive_once(
                                     }
                                 }
                                 match outcome {
-                                    Ok(ResumableWorkflowOutcome::Completed(workflow)) => {
-                                        populate_composite_report(&mut report, *workflow, &spec)
-                                    }
-                                    Ok(ResumableWorkflowOutcome::ExplicitlyCancelled) => {
+                                    Ok(_) if *cancelled.borrow() => {
                                         report.push_failure(
                                             RunStatus::InfrastructureError,
                                             FailurePhase::Execute,
                                             "adaptive workflow was cancelled",
                                         );
                                     }
-                                    Ok(ResumableWorkflowOutcome::NeedsReconciliation(needs)) => {
-                                        let _ = emit_event(
-                                            control,
-                                            SuiteEvent::AdaptiveResumeState {
-                                                attempt_id: attempt_id.clone(),
-                                                state_sha256: needs.resume_state_sha256.clone(),
-                                            },
-                                        )
-                                        .await;
-                                        report.push_failure(
-                                            RunStatus::InfrastructureError,
-                                            FailurePhase::Execute,
-                                            format!(
-                                                "needs_reconciliation:{}:{}",
-                                                needs.node_id, needs.reason
-                                            ),
-                                        );
+                                    Ok(workflow) => {
+                                        populate_composite_report(&mut report, workflow, &spec)
                                     }
                                     Err(error) => report.push_failure(
                                         RunStatus::InfrastructureError,
@@ -1973,7 +1892,6 @@ async fn run_composite_once(
             run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id,
-            resume_state_path: None,
         },
     )
     .await
@@ -2210,7 +2128,6 @@ struct RetryRequest<'a> {
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
-    system_identity_sha256: &'a str,
 }
 
 async fn run_with_technical_retries(
@@ -2225,7 +2142,6 @@ async fn run_with_technical_retries(
         progress_interval,
         control,
         output,
-        system_identity_sha256,
     } = request;
     let run_id = Uuid::new_v4().simple().to_string();
     let mut retry_attempts = Vec::with_capacity(technical_retries as usize);
@@ -2242,7 +2158,6 @@ async fn run_with_technical_retries(
                 progress_interval,
                 control,
                 output,
-                system_identity_sha256,
             },
         )
         .await;
