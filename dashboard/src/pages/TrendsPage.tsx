@@ -25,6 +25,7 @@ import {
   replaceRouteParams,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
+import { useRunChanges } from '@/hooks/use-run-changes'
 import {
   type DashboardDataBridge,
   type ExecutionParameters,
@@ -660,27 +661,7 @@ export function TrendsPage({
   }, [load, query])
 
   // The trend follows new executions quietly, as the executions list does.
-  useEffect(() => {
-    if (!bridge) return
-    let cancelled = false
-    let dispose: (() => void) | undefined
-    let timer: number | undefined
-    bridge
-      .subscribeRunChanges(() => {
-        if (timer) window.clearTimeout(timer)
-        timer = window.setTimeout(() => void load(), 400)
-      })
-      .then((off) => {
-        if (cancelled) off()
-        else dispose = off
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-      if (timer) window.clearTimeout(timer)
-      dispose?.()
-    }
-  }, [bridge, load])
+  useRunChanges(bridge, load)
 
   // The hash names what is on screen, once the worker said what that is.
   const viewParams = withBase(

@@ -71,6 +71,7 @@ import {
   routeParams,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
+import { useRunChanges } from '@/hooks/use-run-changes'
 import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
@@ -1305,27 +1306,7 @@ export function ExecutionsPage() {
   }, [load])
 
   // Audit E-12: the list follows run changes instead of waiting for F5.
-  useEffect(() => {
-    if (!bridge) return
-    let cancelled = false
-    let dispose: (() => void) | undefined
-    let timer: number | undefined
-    bridge
-      .subscribeRunChanges(() => {
-        if (timer) window.clearTimeout(timer)
-        timer = window.setTimeout(() => void load(), 400)
-      })
-      .then((off) => {
-        if (cancelled) off()
-        else dispose = off
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-      if (timer) window.clearTimeout(timer)
-      dispose?.()
-    }
-  }, [bridge, load])
+  useRunChanges(bridge, load)
 
   useEffect(() => {
     replaceRouteParams(ledgerFiltersToParams(filters))
