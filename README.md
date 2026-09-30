@@ -128,11 +128,12 @@ Featured suites:
   `registry_planning`, `registry_implementation`, `registry_environment`, and
   `registry_verification`. Each has its own
   [atomic validations](tests/fixtures/registry-version-comparison/scoring.md).
-- [Linkly tutorial](tests/fixtures/linkly-tutorial/README.md):
-  `linkly_tutorial` runs the seven tutorial chapters plus a project-restart
-  guard as one scripted dialogue on one Harness session, against the
-  `linkly-agentic` scaffold's Compose stack, and scores twenty-two
-  deterministic checks. `scripts/linkly_stack.py` prepares that stack.
+- [Linkly tutorial](tests/fixtures/linkly-tutorial/README.md): the `linkly`
+  suite. `linkly_tutorial` runs the seven tutorial chapters plus a
+  project-restart guard as one scripted dialogue on one Harness session,
+  against the `linkly-agentic` scaffold's Compose stack, and scores
+  twenty-two deterministic checks. The `linkly` stack starts every group from
+  a fresh scaffold; `scripts/linkly_stack.py` prepares one by hand.
 - [Trending topics](docs/blog-build-contract.md): an isolated per-attempt Git
   remote and an independent Playwright acceptance check against the delivered
   SHA. Design is free. Screenshots are evidence, not an aesthetic score.
@@ -151,7 +152,8 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Suite | Purpose |
 | --- | --- |
 | `regression` | Daily runtime, recovery, context and safety checks; one technical retry where safe. |
-| `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Linkly, Alertmanager route migration and a playable chess Worker. |
+| `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
+| `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | `pr` | Four essential checks of a candidate stack before merging a change. |
 | `after-release` | Five essential checks of the published stack. |
 
@@ -167,16 +169,20 @@ cargo run --locked -- test-plan materialize --suite software-engineering
 
 The `software-engineering` suite runs each selected case once, with no
 technical retries: the seven Kanban cases, Registry implementation and verification,
-the trending-topics build, the Linkly tutorial, Alertmanager route migration,
-and the playable chess Worker in the Console. That is 13 cases and 13 planned runs,
-in 12 execution groups. Registry
+the trending-topics build, Alertmanager route migration, and the chess,
+form-flow and state-machine Workers in the Console. That is 14 cases and 14
+planned runs, in 13 execution groups. Registry
 implementation and verification share a group, in that order, so verification
 receives the implementation delivery. Trending topics runs in
-`case-trending-topics-build`. Linkly runs its eight exchanges in
-`case-linkly-tutorial`, using a fresh pinned `linkly-agentic` scaffold as its
-Compose project. Baseline worker versions come from the resolved stack contract.
-Alertmanager runs in its own group, needs Go 1.25+, and has no turn or token
-ceiling.
+`case-trending-topics-build`. Baseline worker versions come from the resolved
+stack contract. Alertmanager runs in its own group, needs Go 1.25+, and has no
+turn or token ceiling.
+
+The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
+`case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
+stack, whose template starts every group from a fresh pinned `linkly-agentic`
+scaffold as the Compose project that hosts the Harness; on another stack the
+scenario's setup refuses the project it finds.
 
 ## Release Control
 
@@ -336,9 +342,9 @@ checkout at the same path, runs as the caller's uid with
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
 resolve|build|materialize|assemble|fixtures`, `group`, `package` or `finalize
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
-start from and no package brings (the Kanban fixture, the Linkly templates,
-the stack's template, the Registry sources and the trending topics fixture)
-below `target/`, three tries each, and `group` routes the fixture repositories
+start from and no package brings (the Kanban fixture, the stack's template,
+the Registry sources and the trending topics fixture) below `target/`, three
+tries each, and `group` routes the fixture repositories
 a scenario clones to those checkouts; `finalize` lays each campaign's groups
 out from the group bundles the execution selected (linked, not copied) before
 aggregating them. Only `prepare resolve` and `prepare fixtures` get a
@@ -415,15 +421,15 @@ execution's stack lock resolved override its package selectors, extra packages
 enter the lock, and local workers stay local.
 Template skills replace whole downloaded namespaces, and its agent files take
 precedence over downloaded profiles. Machine-global profiles and skills are
-unused when a template or agent override is selected. The runner also enables
-the campaign's provider when the project does not already have it.
+unused when an agent profile is selected or the template ships agents or
+skills; a template that ships neither (`linkly-agentic`) keeps the Directory
+it declares. The runner also enables the campaign's provider when the project
+does not already have it.
 
 Scenarios, prompts, permissions, fixtures, seeds, and repetitions stay the
 same. The evaluated agent applies to ordinary sessions and to workflow or
-adaptive steps. Evaluators stay the same. Linkly keeps its pinned task
-scaffold and container roles; the selected template's base and agent assets
-are applied separately. With no template, the run keeps the existing generated
-stack (or the required fixture).
+adaptive steps. Evaluators stay the same. With no template, the run keeps the
+existing generated stack.
 
 To measure a profile, compare the same suite, template commit, model, and stack
 with and without `profile`. Changing the template as well measures the

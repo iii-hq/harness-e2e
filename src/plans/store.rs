@@ -2909,7 +2909,8 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("default", "repository"),
-                ("harness-template", "repository")
+                ("harness-template", "repository"),
+                ("linkly", "repository")
             ]
         );
         assert!(listed.iter().all(|stack| stack.warnings.is_empty()));
@@ -2965,7 +2966,7 @@ pub(crate) mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains(reason), "{error}");
         }
-        assert_eq!(manager.stacks().await.unwrap()[2].yaml, yaml);
+        assert_eq!(manager.stacks().await.unwrap().last().unwrap().yaml, yaml);
         let again = manager
             .create_stack(StackCreateRequest {
                 from: Some(copy.id.clone()),
@@ -3022,7 +3023,12 @@ pub(crate) mod tests {
                 .into_iter()
                 .map(|stack| stack.id)
                 .collect::<Vec<_>>(),
-            vec!["default".to_owned(), "harness-template".into(), again.id]
+            vec![
+                "default".to_owned(),
+                "harness-template".into(),
+                "linkly".into(),
+                again.id
+            ]
         );
     }
 
@@ -3106,7 +3112,7 @@ pub(crate) mod tests {
             let error = manager.create_stack(request).await.unwrap_err();
             assert!(error.to_string().contains(reason), "{error}");
         }
-        assert_eq!(manager.stacks().await.unwrap().len(), 3);
+        assert_eq!(manager.stacks().await.unwrap().len(), 4);
     }
 
     #[tokio::test]
@@ -3935,7 +3941,8 @@ pub(crate) mod tests {
     async fn native_coordination_covers_every_suite_of_the_master_plan() {
         for (suite, expected_slots, expected_submissions) in [
             ("regression", 9, 9),
-            ("software-engineering", 15, 14),
+            ("software-engineering", 14, 13),
+            ("linkly", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {
@@ -4086,7 +4093,7 @@ pub(crate) mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id, &[]).await.unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 15);
+            assert_eq!(reports.len(), 14);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);

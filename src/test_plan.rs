@@ -483,10 +483,11 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 4);
+        assert_eq!(plan.suites.len(), 5);
         for (id, cases, runs) in [
             ("regression", 9, 9),
-            ("software-engineering", 15, 15),
+            ("software-engineering", 14, 14),
+            ("linkly", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {
@@ -519,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn software_engineering_profile_includes_trending_topics_and_linkly_independently() {
+    fn software_engineering_profile_includes_trending_topics_independently() {
         let snapshot = embedded()
             .unwrap()
             .materialize("software-engineering")
@@ -530,7 +531,6 @@ mod tests {
                 "registry_implementation",
                 "registry_verification",
                 "trending_topics_build",
-                "linkly_tutorial",
                 "alertmanager_route_match",
                 "chess_engine_build",
                 "form_flow_build",
@@ -539,15 +539,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(snapshot.scenario_ids, expected);
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 14);
-        let linkly = groups
-            .iter()
-            .find(|g| g["id"] == "case-linkly-tutorial")
-            .unwrap();
-        assert_eq!(linkly["scenarios"], json!(["linkly_tutorial"]));
-        assert_eq!(linkly["execution_kind"], "scripted_dialogue");
-        assert_eq!(linkly["runs"], 1);
-        assert_eq!(linkly["technical_retries"], 0);
+        assert_eq!(groups.len(), 13);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")
@@ -598,11 +590,24 @@ mod tests {
     }
 
     #[test]
+    fn linkly_runs_alone_in_its_own_suite() {
+        let snapshot = embedded().unwrap().materialize("linkly").unwrap();
+        assert_eq!(snapshot.scenario_ids, ["linkly_tutorial"]);
+        assert_eq!(
+            snapshot.campaigns[0]["groups"],
+            json!([{
+                "id": "case-linkly-tutorial", "execution_kind": "scripted_dialogue",
+                "runs": 1, "technical_retries": 0, "scenarios": ["linkly_tutorial"],
+            }])
+        );
+    }
+
+    #[test]
     fn software_engineering_orders_registry_delivery_and_verification_in_one_group() {
         let plan = embedded().unwrap();
         let snapshot = plan.materialize("software-engineering").unwrap();
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 14);
+        assert_eq!(groups.len(), 13);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")
@@ -616,8 +621,8 @@ mod tests {
             delivery["scenarios"],
             json!(["registry_implementation", "registry_verification"])
         );
-        assert_eq!(snapshot.cases.len(), 15);
-        assert_eq!(snapshot.budget["planned_runs"], 15);
+        assert_eq!(snapshot.cases.len(), 14);
+        assert_eq!(snapshot.budget["planned_runs"], 14);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());

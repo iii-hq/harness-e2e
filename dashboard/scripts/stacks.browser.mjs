@@ -398,11 +398,11 @@ try {
   const mine = page.locator('[data-stack-group="local"]')
   await repo.waitFor()
   await page
-    .getByText(/^2 in the repository, read-only · none in this Console\. /)
+    .getByText(/^3 in the repository, read-only · none in this Console\. /)
     .waitFor()
   assert.deepEqual(
     repository.map((stack) => stack.id),
-    ['default', 'harness-template'],
+    ['default', 'harness-template', 'linkly'],
   )
   for (const stack of repository) {
     const row = repo.locator(`[data-stack="${stack.id}"]`)
@@ -665,7 +665,7 @@ try {
   for (const warning of warnings)
     await copy.getByText(warning, { exact: true }).waitFor()
   await page
-    .getByText(/^2 in the repository, read-only · 1 in this Console\. /)
+    .getByText(/^3 in the repository, read-only · 1 in this Console\. /)
     .waitFor()
 
   // Edit opens it again, as saved, on the tab last used.

@@ -137,15 +137,11 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "id": "harness", "repository": "iii-hq/templates", "ref": "main", "revision": "c" * 40,
         }
         MODULE.validate_contract(contract)
-        self.assertEqual(MODULE.group_template(contract, "daily-core"), "harness")
         selected = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
         self.assertEqual(selected["scenarios"], baseline["scenarios"])
         self.assertNotIn("agent", selected)
         contract["suite"]["agent_profile"] = "tech-lead"
         self.assertEqual(MODULE.materialize_request(contract, catalog(), group_id="daily-core")["agent"], "tech-lead")
-        group = contract["suite"]["groups"][0]
-        group.update(scenarios=["linkly_tutorial"], execution_kind="scripted_dialogue", technical_retries=0)
-        self.assertEqual(MODULE.group_template(contract, group["id"]), "linkly-agentic")
         # Where a template comes from is the stack's choice, not a rule here.
         for field, value in [("revision", "0123abc"), ("repository", "other/repo"), ("ref", "feature")]:
             chosen = json.loads(json.dumps(contract))
@@ -170,19 +166,6 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         template["containers"]["link"]["worker"] = "path://../elsewhere"
         with self.assertRaisesRegex(ValueError, "inside its project"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
-
-    def test_fixture_retains_its_roles_while_execution_template_supplies_the_base(self):
-        template = {"engine": {"workers": {"base": {}}}, "containers": {
-            "ide": {"worker": "package://ide"}, "kanban": {"worker": "package://kanban"},
-        }}
-        fixture = {"engine": {"workers": {"iii-stream": {}}}, "containers": {
-            "shell": {"worker": "package://shell", "working_dir": "."},
-        }}
-        merged = MODULE.with_fixture(template, fixture)
-        self.assertEqual(set(merged["containers"]), {"shell", "kanban"})
-        self.assertEqual(merged["containers"]["shell"], fixture["containers"]["shell"])
-        self.assertEqual(set(merged["engine"]["workers"]), {"base", "iii-stream"})
-        self.assertIn("ide", template["containers"])
 
     def test_one_env_file_reaches_every_container_including_those_born_later(self):
         contract = campaign_contract({
@@ -454,6 +437,30 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertEqual(project["containers"]["other-db"]["config_override"]["databases"],
                          {"primary": {"url": "sqlite:./data/iii.db"}})
 
+    def test_only_a_template_that_ships_agents_or_skills_brings_profile_assets(self):
+        """linkly-agentic ships neither: its Directory keeps downloading the
+        skills of every worker the subject adds."""
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index('if [[ -n "$project_template" ]]; then\n  failure_phase=template_scaffold')
+        block = source[start:source.index("# One env file for the whole project", start)]
+        shell = '''set -Eeuo pipefail
+repo_root=$1 run_root=$1 artifact_dir=$1 project_dir=$1/project contract_path=$1/contract.json
+project_template=linkly-agentic iii_bin=scaffold profile_assets=false
+fail() { printf '%s\\n' "$1" >&2; return 1; }
+git() { echo abc; }
+scaffold() { mkdir -p "$4"; for folder in $SHIPPED; do mkdir -p "$4/$folder"; done; }
+'''
+        for shipped, expected in (("", "false"), ("agents", "true"), ("skills", "true")):
+            with self.subTest(shipped=shipped), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "logs").mkdir()
+                (root / "stack").mkdir()
+                (root / "contract.json").write_text(json.dumps({"runtime": {"template": {"revision": "abc"}}}))
+                result = subprocess.run(["bash", "-c", shell + block + 'echo "$profile_assets"', "runner", str(root)],
+                    env={**os.environ, "SHIPPED": shipped}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
         start = source.index('if [[ "$profile_assets" == true ]]; then', source.index('failure_phase=project_start'))
@@ -543,18 +550,6 @@ project_trigger() {
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(json.loads((root / "stack/agent-profile.json").read_text()), {"id": "console-ui"})
-
-    def test_linkly_requires_a_fresh_group_for_its_whole_dialogue(self):
-        contract = campaign_contract()
-        group = contract['suite']['groups'][0]
-        group.update(scenarios=['linkly_tutorial'], execution_kind='scripted_dialogue', technical_retries=0)
-        self.assertEqual(MODULE.group_template(contract, group['id']), 'linkly-agentic')
-        for overrides in ({'runs': 2}, {'technical_retries': 1}, {'scenarios': ['linkly_tutorial', 'direct_answer']}):
-            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, 'fresh'):
-                changed = json.loads(json.dumps(contract))
-                changed['suite']['groups'][0].update(overrides)
-                MODULE.group_template(changed, group['id'])
-        self.assertEqual(MODULE.group_template(campaign_contract(), 'daily-core'), '')
 
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -1538,7 +1533,7 @@ compose_trigger() {
                     "suite": {"subject": {"provider": "deepseek"}},
                 }))
                 variables = (f"assemble_only={assemble_only!r}\nproject_template={template!r}\n"
-                             f"execution_template=''\nlinkly_fixture=false\nprofile_assets={str(profile).lower()}\n")
+                             f"profile_assets={str(profile).lower()}\n")
                 result = subprocess.run(
                     ["bash", "-c", stubs + variables + decide + 'printf "%s\\n" "$frozen" >"$artifact_dir/frozen"\n' + assembly,
                      "runner", str(root), str(SCRIPT), project],

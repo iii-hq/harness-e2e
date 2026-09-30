@@ -285,10 +285,10 @@ jobs:
             "$(sha256sum target/harness-e2e-contract/worker-compose.lock | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
 
       # What the group starts from and no package brings (the Kanban fixture,
-      # the Linkly templates, the stack's template, the Registry sources and
-      # the trending topics fixture), checked out below target/ in the
-      # executor image, where the group then clones them from; see
-      # scripts/executor.sh. Only this step holds the fixture token.
+      # the stack's template, the Registry sources and the trending topics
+      # fixture), checked out below target/ in the executor image, where the
+      # group then clones them from; see scripts/executor.sh. Only this step
+      # holds the fixture token.
       - name: Check out the group's fixtures
         env:
           GITHUB_TOKEN: ${{ steps.fixture_token.outputs.token }}
