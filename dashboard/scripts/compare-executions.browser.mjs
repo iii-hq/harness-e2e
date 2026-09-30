@@ -282,7 +282,7 @@ try {
     .waitFor()
   await page
     .getByRole('article', { name: 'A · Reference' })
-    .getByText('deepseek/flash · profile tech-lead · Smoke · 0123456789ab')
+    .getByText('deepseek/flash · profile tech-lead · Smoke', { exact: true })
     .waitFor()
   // Why a test is out, in the run's words; its state where a score would be.
   const picker = page.getByRole('region', { name: 'Tests in this comparison' })
