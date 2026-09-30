@@ -130,15 +130,6 @@ pub struct SuiteRunConfig {
     pub observation_contract: Option<ObservationRunContract>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdaptiveResumeAttempt {
-    pub scenario_id: ScenarioId,
-    pub run_id: String,
-    pub attempt_id: String,
-    pub resume_existing: bool,
-    pub restore_planner: bool,
-}
-
 pub struct SuiteRunOutcome {
     pub report: E2eReport,
     pub manifest: E2eManifest,
@@ -222,7 +213,6 @@ pub struct SuiteControl {
     pub lane: String,
     pub events: mpsc::Sender<SuiteEventEnvelope>,
     pub cancellation: watch::Receiver<bool>,
-    pub adaptive_resume: Option<AdaptiveResumeAttempt>,
 }
 
 pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
@@ -436,11 +426,6 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         control: config.control.as_ref(),
                         output: &config.output,
                         system_identity_sha256: &system_identity_sha256,
-                        adaptive_resume: config
-                            .control
-                            .as_ref()
-                            .and_then(|control| control.adaptive_resume.as_ref())
-                            .filter(|resume| resume.scenario_id == scenario_id),
                     },
                 )
                 .await
@@ -987,19 +972,6 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
         bail!("at least one scenario is required");
     }
     validate_registry_handoff_order(&config.scenarios)?;
-    if let Some(resume) = config
-        .control
-        .as_ref()
-        .and_then(|control| control.adaptive_resume.as_ref())
-    {
-        if config.scenarios.as_slice() != [resume.scenario_id]
-            || config.runs != 1
-            || config.technical_retries != 0
-            || !config.rotating_seeds.is_empty()
-        {
-            bail!("adaptive resume requires one isolated scenario, one run, and no replay");
-        }
-    }
     // Scenario materialization is slot-scoped. Keeping it out of request
     // validation lets one broken definition become an explicit deferred slot
     // instead of erasing the whole execution.
@@ -1238,9 +1210,6 @@ struct AttemptRequest<'a> {
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
     system_identity_sha256: &'a str,
-    existing_attempt_id: Option<&'a str>,
-    resume_existing: bool,
-    restore_planner: bool,
 }
 
 async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2eRunReport {
@@ -1254,14 +1223,9 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         control,
         output,
         system_identity_sha256,
-        existing_attempt_id,
-        resume_existing,
-        restore_planner,
     } = request;
     let started = Instant::now();
-    let attempt_id = existing_attempt_id
-        .map(str::to_string)
-        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+    let attempt_id = Uuid::new_v4().simple().to_string();
     context.begin_execution_output_attempt(scenario_id.as_str());
     let session_id = format!("e2e_{attempt_id}");
     if scenario_id.execution_kind() == ScenarioExecutionKind::AdaptiveFlow {
@@ -1278,8 +1242,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
                 attempt_id,
                 started,
                 system_identity_sha256,
-                resume_existing,
-                restore_planner,
             },
         )
         .await;
@@ -1524,8 +1486,6 @@ struct AdaptiveAttemptRequest<'a> {
     attempt_id: String,
     started: Instant,
     system_identity_sha256: &'a str,
-    resume_existing: bool,
-    restore_planner: bool,
 }
 
 async fn run_adaptive_once(
@@ -1543,8 +1503,6 @@ async fn run_adaptive_once(
         attempt_id,
         started,
         system_identity_sha256,
-        resume_existing,
-        restore_planner,
     } = request;
     let session_id = format!("adaptive_{attempt_id}");
     let materialized = match scenario_id.materialize(&attempt_id, seed) {
@@ -1642,7 +1600,7 @@ async fn run_adaptive_once(
                             run_id,
                             attempt_id: &attempt_id,
                             state_root: &state_root,
-                            restored_attempt: restore_planner,
+                            restored_attempt: false,
                             cancellation: Some(&cancellation),
                         })
                         .await
@@ -1781,7 +1739,7 @@ async fn run_adaptive_once(
                                                 state_root,
                                                 identity,
                                                 plan_revisions: Vec::new(),
-                                                resume_existing,
+                                                resume_existing: false,
                                             },
                                         )
                                         .await
@@ -2253,7 +2211,6 @@ struct RetryRequest<'a> {
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
     system_identity_sha256: &'a str,
-    adaptive_resume: Option<&'a AdaptiveResumeAttempt>,
 }
 
 async fn run_with_technical_retries(
@@ -2269,11 +2226,8 @@ async fn run_with_technical_retries(
         control,
         output,
         system_identity_sha256,
-        adaptive_resume,
     } = request;
-    let run_id = adaptive_resume
-        .map(|resume| resume.run_id.clone())
-        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+    let run_id = Uuid::new_v4().simple().to_string();
     let mut retry_attempts = Vec::with_capacity(technical_retries as usize);
     loop {
         let attempt_number = retry_attempts.len() as u32 + 1;
@@ -2289,9 +2243,6 @@ async fn run_with_technical_retries(
                 control,
                 output,
                 system_identity_sha256,
-                existing_attempt_id: adaptive_resume.map(|resume| resume.attempt_id.as_str()),
-                resume_existing: adaptive_resume.is_some_and(|resume| resume.resume_existing),
-                restore_planner: adaptive_resume.is_some_and(|resume| resume.restore_planner),
             },
         )
         .await;
@@ -3955,7 +3906,6 @@ mod tests {
                 lane: "local".into(),
                 events,
                 cancellation: watch::channel(false).1,
-                adaptive_resume: None,
             },
             receiver,
         )
