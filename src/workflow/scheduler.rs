@@ -836,7 +836,7 @@ async fn recover_resume_state(
                     }
                 };
                 match outcome {
-                    StepReconcileOutcome::RetrySafe | StepReconcileOutcome::Compensated => {
+                    StepReconcileOutcome::RetrySafe => {
                         let report = WorkflowStepReport::pending(node);
                         coordinator
                             .persist_step(

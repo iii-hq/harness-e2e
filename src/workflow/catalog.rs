@@ -153,7 +153,6 @@ pub struct StepReconcileState {
 pub enum StepReconcileOutcome {
     Completed(StepExecutorOutput),
     RetrySafe,
-    Compensated,
     NeedsReconciliation { reason: String },
 }
 
