@@ -1,5 +1,4 @@
 import type {
-  DashboardExecutionDetail,
   DashboardExecutionSummary,
   DashboardSubjectSummary,
   DockerGroup,
@@ -290,20 +289,6 @@ export function categoryMessage(
 ): string {
   const label = categoryLabel(category).toLowerCase()
   return `${count} ${label} ${count === 1 ? 'event' : 'events'}`
-}
-
-export function isExecutionAttention(
-  presentation: ExecutionPresentation,
-): boolean {
-  return (
-    presentation.attention === 'needs_attention' ||
-    presentation.attention === 'incomplete' ||
-    presentation.attention === 'unavailable'
-  )
-}
-
-export function detailHasAttention(detail: DashboardExecutionDetail): boolean {
-  return isExecutionAttention(buildExecutionPresentation(detail))
 }
 
 /** An execution's result as a dot and a label; `live` while it moves. A

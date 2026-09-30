@@ -895,21 +895,6 @@
   margin-left: auto;
 }
 
-/* A first column that stays put while the wrapper scrolls sideways
-   (audit T-03), and the two-second highlight of a row just created or
-   returned to (audit NT-08 / TH-06). */
-.ds-table .ds-table-sticky-col {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  background: var(--surface);
-}
-
-.ds-table tr.is-highlighted td {
-  background: var(--surface-selected);
-  transition: background var(--duration-slow, 400ms) var(--ds-ease-standard);
-}
-
 /* Narrow containers: a collapsing table becomes one card per row, each cell
    labelled by its data-label (audit RD-03 / PD-16 / P-17). */
 @container harness (max-width: 720px) {
@@ -969,13 +954,6 @@
     display: inline-flex;
     gap: var(--ds-space-1);
     align-items: baseline;
-  }
-
-  .ds-table-collapse-inline td.ds-table-sticky-col {
-    position: static;
-    flex-basis: 100%;
-    display: block;
-    background: transparent;
   }
 
   .ds-table-collapse-inline td[data-label]::before {

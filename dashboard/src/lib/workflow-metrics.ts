@@ -126,16 +126,6 @@ export const emptyWorkflowMetrics = (): WorkflowMetricsSummary => ({
   numericMetrics: {},
 })
 
-export function semanticTestsFromDetail(
-  detail: DashboardExecutionDetail,
-): SemanticTestReport[] {
-  return (detail.reports ?? []).flatMap((record) =>
-    (record.report?.scenarios ?? []).flatMap((scenario) =>
-      (scenario.runs ?? []).flatMap((run) => run.semantic_tests ?? []),
-    ),
-  )
-}
-
 export function aggregateWorkflowMetrics(
   tests: readonly SemanticTestReport[],
 ): WorkflowMetricsSummary {
@@ -184,12 +174,6 @@ export function aggregateWorkflowMetrics(
   }
 
   return summary
-}
-
-export function workflowMetricsFromDetail(
-  detail: DashboardExecutionDetail,
-): WorkflowMetricsSummary {
-  return aggregateWorkflowMetrics(semanticTestsFromDetail(detail))
 }
 
 export function workflowMetricEntries(
