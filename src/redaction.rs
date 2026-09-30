@@ -422,12 +422,8 @@ mod tests {
         let policy = RedactionPolicy::default();
         // Screenshots whose base64 holds `eyJ` and a long run after it.
         for png in [
-            &include_bytes!(
-                "../docs/design/restructure-stage4-2026-09-11/comparison-by-test-dark.png"
-            )[..],
-            &include_bytes!(
-                "../docs/design/restructure-stage5-2026-09-11/comparison-grouped-light.png"
-            )[..],
+            &include_bytes!("../tests/fixtures/redaction/comparison-by-test-dark.png")[..],
+            &include_bytes!("../tests/fixtures/redaction/comparison-grouped-light.png")[..],
         ] {
             let encoded = base64::engine::general_purpose::STANDARD.encode(png);
             assert!(encoded.contains("eyJ"));
