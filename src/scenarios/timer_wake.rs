@@ -25,7 +25,7 @@ const TIMER_ARMED: AssessmentSpec = AssessmentSpec::scored(
     20,
     "One wake-only relative timer is armed before any result write.",
 );
-const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::gate(
+const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
     "The timer retires after waking the original session exactly once.",

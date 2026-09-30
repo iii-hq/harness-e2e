@@ -62,13 +62,13 @@ const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     10,
     "The live editor updates the same Canvas id to the expected Mermaid projection.",
 );
-const CONSOLE: AssessmentSpec = AssessmentSpec::scored_in(
+const CONSOLE: AssessmentSpec = AssessmentSpec::gate_in(
     "console_delivery",
     10,
     "The Console reports fresh, warning-free script and style assets for the Worker.",
     EvaluationDimension::Deliverable,
 );
-const INTERACTION: AssessmentSpec = AssessmentSpec::gate_in(
+const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
     "browser_interaction",
     10,
     "The real Console page completes the required live-preview interaction.",

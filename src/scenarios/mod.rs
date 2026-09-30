@@ -178,6 +178,9 @@ pub struct CriterionSpec {
     /// the others only move the score. Reported so a reader can say which
     /// criterion left a task incomplete.
     pub gate: bool,
+    /// Points that already meet the task's purpose on a proportional gate;
+    /// `None` means full points.
+    pub gate_minimum: Option<u8>,
 }
 
 impl CriterionSpec {
@@ -195,11 +198,21 @@ impl CriterionSpec {
             policy: AssessmentPolicy::Advisory,
             dimension,
             gate: false,
+            gate_minimum: None,
         }
     }
 
     pub const fn with_gate(self, gate: bool) -> Self {
         Self { gate, ..self }
+    }
+
+    /// A gate that already passes at `points`, below the criterion's weight.
+    pub const fn with_gate_minimum(self, points: u8) -> Self {
+        Self {
+            gate: true,
+            gate_minimum: Some(points),
+            ..self
+        }
     }
 }
 

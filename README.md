@@ -39,11 +39,15 @@ model to judge the first.
 
 ## Completion
 
-Completed means the subject delivered the task's primary flow. Every scenario
-marks the criteria that are that flow, usually one or two, as gates.
+Completed means the subject met the task's purpose. Every scenario marks the
+criteria that are that purpose, usually one or two, as gates. Exactness,
+discipline, efficiency, and polish never gate: they only move the score, so two
+runs can both complete and still differ in points.
 
-- Every gate at full points: completed, whatever the other criteria scored.
-- A gate below full points: incomplete.
+- Every gate passed: completed, whatever the other criteria scored. A gate
+  passes at full points, or at its `gate_minimum` when fewer points already
+  meet the purpose (a proportional check).
+- A gate that did not pass: incomplete.
 - A gate nobody evaluated: incomplete when another criterion already fell
   short, undetermined otherwise.
 

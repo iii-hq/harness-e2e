@@ -219,7 +219,8 @@
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
           ],
-          "weight": 4
+          "weight": 4,
+          "gate": true
         },
         {
           "id": "implementation.function_removal",
@@ -360,8 +361,7 @@
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
           ],
-          "weight": 4,
-          "gate": true
+          "weight": 4
         },
         {
           "id": "implementation.invalid_version",
@@ -624,6 +624,7 @@
           "measurement": "ratio",
           "weight": 35,
           "gate": true,
+          "gate_minimum": 1,
           "numerator": "Required check IDs reported as failing and independently reproduced.",
           "denominator": "Required check IDs independently observed to fail.",
           "evidence": [

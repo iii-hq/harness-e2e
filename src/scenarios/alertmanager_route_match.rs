@@ -68,7 +68,9 @@ const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
     70,
     "Each live call to route::match returns the frozen receivers and group-by labels.",
     EvaluationDimension::Deliverable,
-);
+)
+// Four in five oracle cases (56 of 70 points) already delegate route matching.
+.at_least(56);
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,

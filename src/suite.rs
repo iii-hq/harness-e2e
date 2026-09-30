@@ -2184,6 +2184,7 @@ fn populate_composite_report(
                 }),
                 reason: criterion.summary.clone(),
                 gate: declared.map(|criterion| criterion.gate).unwrap_or(false),
+                gate_minimum: declared.and_then(|criterion| criterion.gate_minimum),
             }
         })
         .collect();
@@ -3284,6 +3285,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
                     .map(|(_, reason)| reason)
                     .unwrap_or_else(|| "not evaluated".into()),
                 gate: criterion.gate,
+                gate_minimum: criterion.gate_minimum,
             }
         })
         .collect()
@@ -4370,6 +4372,7 @@ mod tests {
                 awarded: Some(35),
                 reason: "required behavior was incomplete".into(),
                 gate: false,
+                gate_minimum: None,
             },
             CriterionReport {
                 id: "signal".into(),
@@ -4378,6 +4381,7 @@ mod tests {
                 awarded: Some(12),
                 reason: "partial efficiency evidence".into(),
                 gate: false,
+                gate_minimum: None,
             },
         ];
         let results = materialize_assessment_results(&spec, &criteria);

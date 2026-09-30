@@ -152,6 +152,10 @@ pub struct CriterionReport {
     /// from a report older than the field.
     #[serde(default)]
     pub gate: bool,
+    /// The points a gate needs to count as passed when fewer than `possible`
+    /// already mean the task's purpose was met. Absent: full points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_minimum: Option<u8>,
 }
 
 /// The run score is the plain sum of the points the evaluated criteria
@@ -168,9 +172,9 @@ pub fn criteria_score(criteria: &[CriterionReport]) -> Option<u8> {
     evaluated.then(|| total.min(100) as u8)
 }
 
-/// Completed means the subject delivered the task's primary flow: every gate
-/// criterion earned its full points. A gate that fell short leaves the task
-/// incomplete. A gate nobody evaluated leaves it incomplete when another
+/// Completed means the subject met the task's purpose: every gate criterion
+/// earned its passing points (`gate_minimum`, else full points). A gate that
+/// fell short leaves the task incomplete. A gate nobody evaluated leaves it incomplete when another
 /// criterion already fell short, and undetermined otherwise, as does a rubric
 /// without gates.
 pub fn gate_completion(criteria: &[CriterionReport]) -> CompletionState {
@@ -184,7 +188,9 @@ pub fn gate_completion(criteria: &[CriterionReport]) -> CompletionState {
     let mut unreached = false;
     for gate in gates {
         match gate.awarded {
-            Some(awarded) if awarded < gate.possible => return CompletionState::TaskIncomplete,
+            Some(awarded) if awarded < gate.gate_minimum.unwrap_or(gate.possible) => {
+                return CompletionState::TaskIncomplete
+            }
             Some(_) => {}
             None => unreached = true,
         }
@@ -3754,6 +3760,7 @@ mod tests {
             awarded: Some(50),
             reason: "only half of the expected result was present".into(),
             gate: false,
+            gate_minimum: None,
         });
         let report = report(vec![aggregate(vec![failed])]);
 
@@ -3940,6 +3947,7 @@ mod tests {
             awarded,
             reason: "observed".into(),
             gate: false,
+            gate_minimum: None,
         };
         // An unevaluated criterion adds nothing and does not null the score.
         assert_eq!(
@@ -3974,7 +3982,20 @@ mod tests {
             awarded,
             reason: "observed".into(),
             gate,
+            gate_minimum: None,
         };
+        // A proportional gate passes at its minimum: the purpose was met.
+        let mut goal_met = criterion(true, Some(20), 35);
+        goal_met.gate_minimum = Some(20);
+        assert_eq!(
+            gate_completion(&[goal_met.clone()]),
+            CompletionState::Completed
+        );
+        goal_met.awarded = Some(19);
+        assert_eq!(
+            gate_completion(&[goal_met]),
+            CompletionState::TaskIncomplete
+        );
         // Every gate at full points completes, whatever the other criteria scored.
         assert_eq!(
             gate_completion(&[criterion(true, Some(60), 60), criterion(false, Some(0), 40)]),

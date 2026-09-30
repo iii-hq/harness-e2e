@@ -23,7 +23,7 @@ const DELIVERABLE_ID: &str = "minimal_result_record";
 const EXACT_RESULT: AssessmentSpec = AssessmentSpec::gate(
     "exact_result",
     40,
-    "The final value is exactly the requested object and exactly one successful state::set wrote it.",
+    "The final value is exactly the requested object.",
 );
 const SINGLE_TASK_CALL: AssessmentSpec = AssessmentSpec::scored(
     "single_task_call",
@@ -219,7 +219,7 @@ impl Scenario for MinimalPath {
         Ok(assessment::build_evaluation(
             [
                 EXACT_RESULT.full_or_zero(
-                    state_matches && exact_writes == 1,
+                    state_matches,
                     format!("state_matches={state_matches}, successful_exact_writes={exact_writes}"),
                 ),
                 SINGLE_TASK_CALL.full_or_zero(
