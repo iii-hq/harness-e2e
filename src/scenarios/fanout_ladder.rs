@@ -41,23 +41,23 @@ const RUNG: Rung = Rung { fan_out: 16 };
 const PARALLEL_FAN_OUT: AssessmentSpec = AssessmentSpec::scored(
     "parallel_fan_out",
     30,
-    "All N workers are spawned directly, in one coordinator response, as N distinct leaf sessions.",
+    "Are all N workers spawned directly as N distinct leaf sessions in one coordinator response?",
 );
 const WORKER_DELIVERABLES: AssessmentSpec = AssessmentSpec::scored_in(
     "worker_deliverables",
     30,
-    "Every worker row is exact and was written by its own direct leaf session with a single state write.",
+    "Does every worker row exactly match its assignment and come from its own direct leaf session through one state write?",
     EvaluationDimension::Deliverable,
 );
 const BARRIER_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "barrier_fan_in",
     25,
-    "One named-set barrier wake is armed before any spawn, expects exactly the N worker keys, and retires on the N-th row.",
+    "Is one named-set barrier wake armed before any spawn, configured for exactly the N worker keys, and retired on the N-th row?",
 );
 const AGGREGATED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "aggregated_report",
     15,
-    "The barrier-woken report carries the rung marker and every worker token verbatim, with no binding left armed.",
+    "Does the barrier-woken report carry the rung marker and every worker token verbatim with no binding left armed?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     PARALLEL_FAN_OUT,
@@ -101,6 +101,14 @@ pub struct FanoutLadder;
 impl Scenario for FanoutLadder {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Parallel Fan-Out Ladder")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Spawns sixteen direct workers in parallel and aggregates their exact outputs through one barrier wake.")
     }
 
     fn canonical_seed(&self) -> u64 {

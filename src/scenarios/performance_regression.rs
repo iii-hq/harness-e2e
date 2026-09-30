@@ -50,25 +50,25 @@ const TASK_MANIFEST: &str = include_str!("../../tests/fixtures/performance-regre
 const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored_in(
     "functional_correctness",
     40,
-    "The complete public suite and runner-owned hidden semantic probes accept the optimized implementation.",
+    "Do the complete public suite and runner-owned hidden semantic probes accept the optimized implementation?",
     EvaluationDimension::Deliverable,
 );
 const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::scored_in(
     "deterministic_improvement",
     35,
-    "Instrumented equality/hash work is bounded, scales near-linearly, and improves by at least the declared factor.",
+    "Is instrumented equality and hash work bounded, near-linear, and improved by at least the declared factor?",
     EvaluationDimension::StructuralIntegrity,
 );
 const PATCH_SCOPE: AssessmentSpec = AssessmentSpec::scored_in(
     "patch_scope",
     15,
-    "Only the allowed production file changed; public tests, task manifest, and fixture topology remain exact.",
+    "Is the allowed production file the only change while public tests, the task manifest, and fixture topology remain exact?",
     EvaluationDimension::StructuralIntegrity,
 );
 const WALL_CLOCK_SIGNAL: AssessmentSpec = AssessmentSpec::scored(
     "wall_clock_signal",
     10,
-    "The candidate median wall-clock measurement improves over the run-local baseline; this host-dependent signal is advisory.",
+    "Does the candidate's median wall-clock measurement improve over the run-local baseline?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     FUNCTIONAL_CORRECTNESS,
@@ -231,6 +231,14 @@ pub struct PerformanceRegression;
 impl Scenario for PerformanceRegression {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Remove a Performance Regression")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Optimize a correct but quadratic Python implementation while preserving behavior and proving deterministic work reduction.")
     }
 
     fn canonical_seed(&self) -> u64 {

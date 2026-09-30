@@ -375,10 +375,10 @@ try {
   await page
     .getByText('timer_wake running again since', { exact: false })
     .waitFor()
-  const running = page.locator('[aria-label="Timer Wake scenario result"]')
+  const running = page.locator('[data-scenario-row*=":timer_wake:"]')
   await running.getByText('Running', { exact: true }).waitFor()
   await page
-    .locator('[aria-label="Minimal Path scenario result"] [data-label="Score"]')
+    .locator('[data-scenario-row*=":minimal_path:"] [data-label="Score"]')
     .getByText('90', { exact: true })
     .waitFor()
   assert.equal(await page.locator('[data-rerun-scenario]').count(), 0)
@@ -391,7 +391,7 @@ try {
       exact: false,
     })
     .waitFor()
-  const row = page.locator('[aria-label="Timer Wake scenario result"]')
+  const row = page.locator('[data-scenario-row*=":timer_wake:"]')
   await row.getByText('rerun ×1', { exact: true }).waitFor()
   await row
     .getByRole('button', { name: /timer_wake/ })

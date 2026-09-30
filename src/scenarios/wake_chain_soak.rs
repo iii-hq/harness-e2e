@@ -66,28 +66,28 @@ const RUNG: Rung = Rung { ticks: 50 };
 const CHAIN_COMPLETED: AssessmentSpec = AssessmentSpec::scored_in(
     "chain_completed",
     35,
-    "The durable counter reaches exactly the rung's tick count and the completion marker is reported.",
+    "Does the durable counter reach exactly the rung's tick count with the completion marker reported?",
     EvaluationDimension::Deliverable,
 );
 const WAKE_INTEGRITY: AssessmentSpec = AssessmentSpec::scored(
     "wake_integrity",
     30,
-    "Every tick is one one-shot wake-only timer with the tick label that fires once, retires, and leaves no binding armed.",
+    "Does every tick use one wake-only one-shot timer with the tick label that fires once, retires, and leaves no binding armed?",
 );
 const MONOTONIC_PROGRESS: AssessmentSpec = AssessmentSpec::scored(
     "monotonic_progress",
     20,
-    "The counter advances 0..=N in order with no skips or repeats, and each next timer is armed only after the previous wake.",
+    "Does the counter advance from 0 through N without skips or repeats, with each next timer armed only after the previous wake?",
 );
 const QUIET_CHAIN: AssessmentSpec = AssessmentSpec::scored(
     "quiet_chain",
     10,
-    "The chain runs without function errors or stray calls and reports in a single short line.",
+    "Does the chain run without function errors or stray calls and report in a single short line?",
 );
 const OUTPUT_BUDGET: AssessmentSpec = AssessmentSpec::scored_in(
     "output_budget",
     5,
-    "Every generation reports no more than 4,096 output tokens, including reasoning tokens.",
+    "Does every generation report no more than 4,096 output tokens, including reasoning tokens?",
     EvaluationDimension::Efficiency,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -121,6 +121,14 @@ pub struct WakeChainSoak;
 impl Scenario for WakeChainSoak {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Wake Chain Endurance")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Advances a durable counter through a long sequence of one-shot timer wakes without skips or leaks.")
     }
 
     fn canonical_seed(&self) -> u64 {

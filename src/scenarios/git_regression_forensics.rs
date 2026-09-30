@@ -60,25 +60,28 @@ const BUNDLE_BYTES: &[u8] =
 const REPOSITORY_ACQUIRED: AssessmentSpec = AssessmentSpec::scored(
     "repository_acquired",
     20,
-    "Was the supplied repository acquired as required?",
+    "Do the bundle, manifest, probe, cloned history, origin, and checkout match the supplied repository evidence?",
 );
 const ENDPOINTS_REPRODUCED: AssessmentSpec = AssessmentSpec::scored(
     "endpoints_reproduced",
     20,
-    "Were the known-good and known-bad revisions reproduced as required?",
+    "Does an invalid-line-free trace whose first two direct probe records cover the known-good and known-bad revisions agree with independent runner checks that the former passes and the latter fails?",
 );
 const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::scored(
     "first_bad_identified",
     40,
-    "Was the first bad commit correctly identified?",
+    "Do the report, matching probe trace, and independent runner checks identify the oracle's first bad commit as failing and its parent as passing?",
 );
 const EVIDENCE_GROUNDED: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded",
     10,
-    "Is the report supported by repository evidence?",
+    "Does the parseable report include a nonempty summary, resolvable commit and path evidence, get_pi.py as the exact changed path, and a nonempty observation of the culprit?",
 );
-const SEARCH_EFFICIENCY: AssessmentSpec =
-    AssessmentSpec::scored("search_efficiency", 10, "Was the search efficient?");
+const SEARCH_EFFICIENCY: AssessmentSpec = AssessmentSpec::scored(
+    "search_efficiency",
+    10,
+    "Does the investigation identify the first bad commit within the allowed number of distinct probe executions?",
+);
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REPOSITORY_ACQUIRED,
     ENDPOINTS_REPRODUCED,
@@ -238,6 +241,14 @@ pub struct GitRegressionForensics;
 impl Scenario for GitRegressionForensics {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Trace a Git Regression")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Investigate an offline Git history, reproduce the regression endpoints, and identify the first bad commit with verifiable evidence.")
     }
 
     fn characterization(&self) -> Result<ScenarioCharacterization> {

@@ -40,27 +40,23 @@ const RUNG: Rung = Rung { depth: 6 };
 const RELAY_DELIVERED: AssessmentSpec = AssessmentSpec::scored_in(
     "relay_delivered",
     35,
-    "Every relay level row is exact in state and the woken report carries the completion marker \
-     and the terminal token.",
+    "Does every relay level row exactly match state, with the completion marker and terminal token present in the woken report?",
     EvaluationDimension::Deliverable,
 );
 const DEPTH_PROVENANCE: AssessmentSpec = AssessmentSpec::scored(
     "depth_provenance",
     30,
-    "Exactly one session sits at each depth in one unbroken parent chain, each writing its own \
-     row with a single state write; non-terminal levels spawn exactly once and the terminal \
-     level spawns nothing.",
+    "Is there exactly one session at each depth in one unbroken parent chain, with one row write per session, one spawn per non-terminal level, and no terminal spawn?",
 );
 const SINGLE_LANE: AssessmentSpec = AssessmentSpec::scored(
     "single_lane",
     20,
-    "The run stays one lane wide: N+1 sessions in total, exactly one root spawn armed after the \
-     single wake registration, and zero function-call errors.",
+    "Does the run stay one lane wide with N+1 sessions, exactly one root spawn after the single wake registration, and zero function-call errors?",
 );
 const DISPATCH_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "dispatch_report",
     15,
-    "The final report stays a single compact line of at most 300 characters.",
+    "Is the final report a single compact line of at most 300 characters?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     RELAY_DELIVERED,
@@ -104,6 +100,14 @@ pub struct DepthLadder;
 impl Scenario for DepthLadder {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Delegation Depth Ladder")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Relays work through a six-level parent-child chain and returns the terminal result to the root.")
     }
 
     fn canonical_seed(&self) -> u64 {

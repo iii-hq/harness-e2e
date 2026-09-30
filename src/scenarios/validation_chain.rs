@@ -35,17 +35,17 @@ const HOOK_TYPE: &str = "harness::hook::post-turn";
 const BROKEN_VALIDATOR_SKIPPED: AssessmentSpec = AssessmentSpec::scored(
     "broken_validator_skipped",
     30,
-    "The fail_open validator errored invisibly: registered, never a nudge of its own, never blocking.",
+    "Did the registered fail_open validator error without producing its own nudge or blocking the turn?",
 );
 const CHAIN_ORDER: AssessmentSpec = AssessmentSpec::scored(
     "chain_order",
     40,
-    "Exactly two denials, CHAIN-A then CHAIN-B — ascending priority, first deny wins each attempt.",
+    "Were exactly two denials delivered as CHAIN-A then CHAIN-B in ascending priority, with the first denial winning each attempt?",
 );
 const ALL_GATES_SATISFIED: AssessmentSpec = AssessmentSpec::scored(
     "all_gates_satisfied",
     30,
-    "Rows AND marker both end satisfied — one passing validator never completes the turn alone.",
+    "Do both the rows and marker end satisfied, with no single passing validator completing the turn alone?",
 );
 const ASSESSMENTS: &[AssessmentSpec] =
     &[CHAIN_ORDER, ALL_GATES_SATISFIED, BROKEN_VALIDATOR_SKIPPED];
@@ -68,6 +68,14 @@ pub struct ValidationChain;
 impl Scenario for ValidationChain {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Ordered Validation Chain")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Runs prioritized validators in order, skips a fail-open error, and requires every active gate to pass.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

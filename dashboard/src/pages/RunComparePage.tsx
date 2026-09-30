@@ -32,7 +32,6 @@ import {
   plural,
 } from '@/lib/format'
 import type { Investigation } from '@/lib/investigation'
-import type { TestSpec } from '@/lib/test-catalog'
 import {
   ALL_DEFINITIONS,
   copiedText,
@@ -240,6 +239,7 @@ export type CriterionChange = {
   possible: number
   a: number
   b: number
+  descriptions: Record<Which, string | null>
   reasons: Record<Which, string | null>
 }
 
@@ -272,6 +272,10 @@ export function criteriaChanges(a: Side, b: Side) {
       possible: Math.max(one.possible, two.possible),
       a: pointsA,
       b: pointsB,
+      descriptions: {
+        a: one.description ?? null,
+        b: two.description ?? null,
+      },
       reasons: { a: one.reason || null, b: two.reason || null },
     })
   }
@@ -381,19 +385,15 @@ function SideCard({ which, value }: { which: Which; value: Side }) {
 export function RunComparison({
   a,
   b,
-  spec,
   onSwap,
 }: {
   a: Side
   b: Side
-  spec: TestSpec | null
   onSwap: () => void
 }) {
   const shared = comparability(a.observation, b.observation)
   const criteria = criteriaChanges(a, b)
   const calls = workerCalls(a, b)
-  const description = (id: string) =>
-    spec?.criteria.find((item) => item.id === id)?.description ?? null
   const unread = (['a', 'b'] as const).filter(
     (which) => !(which === 'a' ? a : b).run?.details,
   )
@@ -525,22 +525,22 @@ export function RunComparison({
                     {Math.abs(change.b - change.a)}
                   </span>
                 </div>
-                {description(change.id) ? (
-                  <p className="cmp-faint cmp-criterion-label">
-                    {description(change.id)}
+                {(['a', 'b'] as const).map((which) => (
+                  <p className="cmp-faint cmp-criterion-label" key={which}>
+                    <span className="cmp-letter-sm">{which.toUpperCase()}</span>{' '}
+                    {change.descriptions[which] ??
+                      'Description not recorded in this result.'}
                   </p>
-                ) : null}
-                {(['a', 'b'] as const).flatMap((which) =>
-                  change.reasons[which]
-                    ? [
-                        <div className="cmp-reason" key={which}>
-                          <span className="cmp-letter-sm">
-                            {which.toUpperCase()}
-                          </span>
-                          <code>{change.reasons[which]}</code>
-                        </div>,
-                      ]
-                    : [],
+                ))}
+                {(['a', 'b'] as const).map((which) =>
+                  change.reasons[which] ? (
+                    <div className="cmp-reason" key={which}>
+                      <span className="cmp-letter-sm">
+                        {which.toUpperCase()}
+                      </span>
+                      <code>{change.reasons[which]}</code>
+                    </div>
+                  ) : null,
                 )}
               </div>
             ))}
@@ -643,7 +643,6 @@ export function RunComparePage({ testId }: { testId: string }) {
     wanted: string
     history: HistoryResponse
   } | null>(null)
-  const [spec, setSpec] = useState<TestSpec | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const beginRequest = useLatestRequest()
@@ -658,21 +657,15 @@ export function RunComparePage({ testId }: { testId: string }) {
     setError(null)
     void getDashboardDataBridge()
       .then(async (bridge) => {
-        const [data, tests] = await Promise.all([
-          // Exactly the two runs, wherever they sit in the history.
-          bridge.getTestHistory({
-            test_id: testId,
-            test_version: ALL_DEFINITIONS,
-            executions: wanted.split(','),
-            limit: 100,
-          }),
-          bridge.listTests({ limit: 100 }).catch(() => null),
-        ])
+        // Exactly the two runs, wherever they sit in the history.
+        const data = await bridge.getTestHistory({
+          test_id: testId,
+          test_version: ALL_DEFINITIONS,
+          executions: wanted.split(','),
+          limit: 100,
+        })
         if (!request.isCurrent()) return
         setLoaded({ wanted, history: data as HistoryResponse })
-        setSpec(
-          tests?.rows.find((item) => item.test_id === testId)?.spec ?? null,
-        )
       })
       .catch((cause) => {
         if (request.isCurrent())
@@ -788,7 +781,6 @@ export function RunComparePage({ testId }: { testId: string }) {
       <RunComparison
         a={sides.a}
         b={sides.b}
-        spec={spec}
         onSwap={() => {
           window.location.hash = hashForRunComparison(testId, pair[1], pair[0])
         }}

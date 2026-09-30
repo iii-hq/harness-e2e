@@ -180,37 +180,37 @@ if __name__ == "__main__":
 const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
     "worker_setup",
     5,
-    "The assembled project exposes the required shell and coder surfaces.",
+    "Does the assembled project expose the required shell and coder surfaces?",
 );
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
-    "Source and tests are inspected and the public failure is reproduced before the first production edit.",
+    "Are the source and tests inspected and is the public failure reproduced before the first production edit?",
 );
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded_diagnosis",
     5,
-    "A durable diagnosis is created and retained as the only additional workspace artifact.",
+    "Is a durable diagnosis retained as the only additional workspace artifact?",
 );
 const PUBLIC_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
     "public_correctness",
     25,
-    "The subject reruns the public suite after editing and the runner independently observes it green.",
+    "Does the subject rerun the public suite after editing and does the runner independently observe it passing?",
 );
 const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
     "hidden_correctness",
     30,
-    "Runner-owned probes accept generators, out-of-order revisions, account migration, conflicts, validation, idempotency, and input immutability.",
+    "Do runner-owned probes accept generators, out-of-order revisions, account migration, conflicts, validation, idempotency, and input immutability?",
 );
 const HOST_EXECUTION: AssessmentSpec = AssessmentSpec::scored(
     "host_execution",
     10,
-    "The repaired CLI runs in the host workspace and emits the exact compact JSON contract.",
+    "Does the repaired CLI run in the host workspace and emit the exact compact JSON contract?",
 );
 const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::scored(
     "scope_and_lifecycle",
     5,
-    "Protected files remain exact and only the source and retained diagnosis differ.",
+    "Do protected files remain exact with only the production source and retained diagnosis changed?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     WORKER_SETUP,
@@ -228,6 +228,14 @@ pub struct ShellCoderSandbox;
 impl Scenario for ShellCoderSandbox {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Repair Code in a Shell Sandbox")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Investigate and repair a Python reconciliation CLI through constrained shell and coding tools, then verify its behavior and scope.")
     }
 
     fn canonical_seed(&self) -> u64 {

@@ -73,6 +73,12 @@ pub(super) struct WorkerCalls {
 pub(super) struct RunCriterion {
     pub id: String,
     pub possible: f64,
+    /// The criterion as it was worded for this run; absent in older reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether this criterion blocked completion; absent in older reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<bool>,
     /// Absent when nobody evaluated the criterion.
     pub awarded: Option<f64>,
     pub reason: String,
@@ -119,6 +125,10 @@ struct NativeCriterion {
     id: String,
     #[serde(default)]
     possible: f64,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    gate: Option<bool>,
     #[serde(default)]
     awarded: Option<f64>,
     #[serde(default)]
@@ -311,6 +321,8 @@ fn details(run: NativeRun, transcript: Option<&Value>) -> RunDetails {
             .map(|criterion| RunCriterion {
                 id: criterion.id,
                 possible: criterion.possible,
+                description: criterion.description,
+                gate: criterion.gate,
                 awarded: criterion.awarded,
                 reason: criterion.reason,
             })

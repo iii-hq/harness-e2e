@@ -51,22 +51,22 @@ const QUARANTINED_LEGACY_ID: i64 = 103;
 const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::scored(
     "exact_migration_result",
     40,
-    "Five target rows with exact cents, one quarantine row for legacy id 103, and six compatibility rows with only 103 quarantined.",
+    "Are there five target rows with exact cents, one quarantine row for legacy ID 103, and six compatibility rows with only 103 quarantined?",
 );
 const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::scored(
     "idempotent_replay",
     20,
-    "The journal shows one complete order-money-v2 entry with replay_count=2, no duplicates, and exactly two successful database::transaction calls.",
+    "Does the journal show one complete order-money-v2 entry with replay_count=2, no duplicates, and exactly two successful database::transaction calls?",
 );
 const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
     "source_and_sentinel_preserved",
     25,
-    "The six legacy rows and the sentinel row are unchanged.",
+    "Do the six legacy rows and the sentinel row remain unchanged?",
 );
 const TRANSACTION_SCOPE_AND_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "transaction_scope_and_report",
     15,
-    "All subject writes were two database::transaction calls on prefixed relations only, and the final response is exactly the success report.",
+    "Were all subject writes limited to two database::transaction calls on prefixed relations, with the exact success report returned?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     EXACT_MIGRATION_RESULT,
@@ -167,6 +167,14 @@ pub struct DatabaseMigrationRecovery;
 impl Scenario for DatabaseMigrationRecovery {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Database Migration Recovery")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Resumes and replays an interrupted database migration without changing protected source data.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

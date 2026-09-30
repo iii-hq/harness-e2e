@@ -662,6 +662,8 @@ export type DashboardReportProjection = JsonObject & {
   scenarios: Array<
     JsonObject & {
       scenario_id: string
+      title?: string | null
+      summary?: string | null
       /** Digest of the definition the case was materialized from; absent only
        *  when no case could be materialized for the slot. */
       behavior_sha256?: string

@@ -36,6 +36,24 @@ pub const IDS: [&str; 7] = [
     "kanban_c6_discussion",
     "kanban_c7_live",
 ];
+const TITLES: [&str; 7] = [
+    "Kanban C1: Application Foundation",
+    "Kanban C2: Ticket Persistence",
+    "Kanban C3: Board Experience",
+    "Kanban C4: Ticket Creation and Deletion",
+    "Kanban C5: Ticket Editing and Movement",
+    "Kanban C6: Ticket Discussion",
+    "Kanban C7: Live Multi-Session Updates",
+];
+const SUMMARIES: [&str; 7] = [
+    "Establishes the standalone Kanban application, configuration lifecycle, responsive settings, and hot reload.",
+    "Implements durable ticket storage with valid identities, isolated stores, restart persistence, and corruption safety.",
+    "Builds an accessible and responsive board that handles loading, empty, error, refresh, and safe text states.",
+    "Implements accessible ticket creation, detail navigation, lookup, validation, and durable soft deletion.",
+    "Implements resilient ticket editing and movement across pointer, mobile, navigation, failure, and restart paths.",
+    "Implements persistent, safely rendered comments and replies while preserving drafts across failures and navigation.",
+    "Synchronizes board activity across sessions while preserving local interaction state and handling stale responses.",
+];
 
 #[derive(Deserialize)]
 struct Catalog {
@@ -89,6 +107,14 @@ pub struct Kanban(pub usize);
 impl Scenario for Kanban {
     fn id(&self) -> &'static str {
         IDS[self.0]
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some(TITLES[self.0])
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some(SUMMARIES[self.0])
     }
 
     fn canonical_seed_only(&self) -> bool {

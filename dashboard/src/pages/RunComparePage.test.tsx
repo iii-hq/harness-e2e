@@ -12,7 +12,7 @@ import {
   sideScore,
   workerCalls,
 } from '@/pages/RunComparePage'
-import { formFlowRow, run } from '@/test-fixtures/test-history'
+import { run } from '@/test-fixtures/test-history'
 
 // The canvas's pair: 9:13 with a Tech Lead (90) against 10:01 solo (100).
 const a = side(run('9:13'))
@@ -83,12 +83,7 @@ describe('two runs of a test', () => {
     expect(rows['Criteria met'].text).toEqual({ a: '8/9', b: '9/9' })
     expect(rows.Sessions).toMatchObject({ a: 4, b: 1 })
     const html = renderToStaticMarkup(
-      <RunComparison
-        a={a}
-        b={b}
-        spec={formFlowRow.spec ?? null}
-        onSwap={() => undefined}
-      />,
+      <RunComparison a={a} b={b} onSwap={() => undefined} />,
     )
     expect(html).toContain('+10 pts')
     // Criteria met reads 8/9 → 9/9 and differs by a count.
@@ -135,6 +130,7 @@ describe('two runs of a test', () => {
         possible: 10,
         a: 0,
         b: 10,
+        descriptions: { a: null, b: null },
         reasons: {
           a: 'compose_valid=true, worker_ready=true, function_surface=false',
           b: 'function_surface=true',
@@ -152,7 +148,7 @@ describe('two runs of a test', () => {
       { worker: 'form_flow', a: 7, b: 17 },
     ])
     const html = renderToStaticMarkup(
-      <RunComparison a={a} b={b} spec={null} onSwap={() => undefined} />,
+      <RunComparison a={a} b={b} onSwap={() => undefined} />,
     )
     expect(html).toContain('root session only; A also ran 3 child sessions')
     expect(html).toContain('A · Sub-agents')

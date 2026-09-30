@@ -51,23 +51,23 @@ const STOP_FUNCTION_ID: &str = "harness::stop";
 const QUORUM_REPORT: AssessmentSpec = AssessmentSpec::scored_in(
     "quorum_report",
     30,
-    "The barrier-woken reply starts with the quorum marker and carries both quorum tokens verbatim while omitting the straggler token.",
+    "Does the barrier-woken reply start with the quorum marker, carry both quorum tokens verbatim, and omit the straggler token?",
     EvaluationDimension::Deliverable,
 );
 const QUORUM_WAKE: AssessmentSpec = AssessmentSpec::scored(
     "quorum_wake",
     25,
-    "Exactly one named-set barrier wake is armed before any spawn, expects exactly the two quorum keys, and retires on the second row.",
+    "Is exactly one named-set barrier wake armed before any spawn, configured for the two quorum keys, and retired on the second row?",
 );
 const STRAGGLER_STOPPED: AssessmentSpec = AssessmentSpec::scored(
     "straggler_stopped",
     30,
-    "After the barrier retires the coordinator stops a direct child session, and the straggler key is never written.",
+    "After the barrier retires, does the coordinator stop a direct child session while the straggler key remains unwritten?",
 );
 const FAN_OUT_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "fan_out_discipline",
     15,
-    "All three members are spawned in one coordinator response as direct children, with no function-call errors.",
+    "Are all three members spawned as direct children in one coordinator response with no function-call errors?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     QUORUM_REPORT,
@@ -116,6 +116,14 @@ pub struct QuorumFanIn;
 impl Scenario for QuorumFanIn {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Quorum Fan-In")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Continues after two of three workers complete and stops the remaining straggler.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

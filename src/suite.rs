@@ -1810,7 +1810,7 @@ async fn run_adaptive_once(
                                 }
                                 match outcome {
                                     Ok(ResumableWorkflowOutcome::Completed(workflow)) => {
-                                        populate_composite_report(&mut report, *workflow)
+                                        populate_composite_report(&mut report, *workflow, &spec)
                                     }
                                     Ok(ResumableWorkflowOutcome::ExplicitlyCancelled) => {
                                         report.push_failure(
@@ -2107,7 +2107,7 @@ async fn run_composite_once(
                         }
                     }
                     match outcome {
-                        Ok(workflow) => populate_composite_report(&mut report, workflow),
+                        Ok(workflow) => populate_composite_report(&mut report, workflow, &spec),
                         Err(error) => report.push_failure(
                             RunStatus::InfrastructureError,
                             FailurePhase::Execute,
@@ -2157,6 +2157,7 @@ async fn run_composite_once(
 fn populate_composite_report(
     report: &mut E2eRunReport,
     workflow: crate::workflow::WorkflowAttemptReport,
+    spec: &ScenarioSpec,
 ) {
     report.session_id = workflow
         .steps
@@ -2167,17 +2168,23 @@ fn populate_composite_report(
     report.criteria = workflow
         .criteria
         .iter()
-        .map(|criterion| CriterionReport {
-            id: criterion.id.clone(),
-            description: None,
-            possible: criterion.weight,
-            awarded: criterion.score.and_then(|score| {
-                score
-                    .is_finite()
-                    .then(|| (score.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8)
-            }),
-            reason: criterion.summary.clone(),
-            gate: false,
+        .map(|criterion| {
+            let declared = spec
+                .criteria
+                .iter()
+                .find(|declared| declared.id == criterion.id.as_str());
+            CriterionReport {
+                id: criterion.id.clone(),
+                description: declared.map(|criterion| criterion.description.to_owned()),
+                possible: criterion.weight,
+                awarded: criterion.score.and_then(|score| {
+                    score.is_finite().then(|| {
+                        (score.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8
+                    })
+                }),
+                reason: criterion.summary.clone(),
+                gate: declared.map(|criterion| criterion.gate).unwrap_or(false),
+            }
         })
         .collect();
     report.score = crate::report::criteria_score(&report.criteria);

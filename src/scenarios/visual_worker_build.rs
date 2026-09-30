@@ -34,50 +34,50 @@ const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
 const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
     10,
-    "The run-scoped Worker is ready and exposes its described domain, Canvas, and UI functions.",
+    "Is the run-scoped Worker ready with its described domain, Canvas, and UI functions exposed?",
     EvaluationDimension::Deliverable,
 );
 const DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
     "domain_primary",
     20,
-    "The primary deterministic domain path matches the independent Harness oracle.",
+    "Does the primary deterministic domain path match the independent Harness oracle?",
 );
 const DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
     "domain_branch",
     15,
-    "The alternate deterministic domain path matches the independent Harness oracle.",
+    "Does the alternate deterministic domain path match the independent Harness oracle?",
 );
 const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     "invalid_inputs",
     10,
-    "Invalid domain input is rejected and the Worker remains healthy.",
+    "Does the Worker reject invalid domain input and remain healthy?",
 );
 const CANVAS_INITIAL: AssessmentSpec = AssessmentSpec::scored(
     "canvas_initial",
     10,
-    "The Worker creates and reads the exact initial Mermaid projection through Canvas.",
+    "Does the Worker create and read the exact initial Mermaid projection through Canvas?",
 );
 const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     "canvas_update",
     10,
-    "The live editor updates the same Canvas id to the expected Mermaid projection.",
+    "Does the live editor update the same Canvas ID to the expected Mermaid projection?",
 );
 const CONSOLE: AssessmentSpec = AssessmentSpec::scored_in(
     "console_delivery",
     10,
-    "The Console reports fresh, warning-free script and style assets for the Worker.",
+    "Does the Console report fresh, warning-free script and style assets for the Worker?",
     EvaluationDimension::Deliverable,
 );
 const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
     "browser_interaction",
     10,
-    "The real Console page completes the required live-preview interaction.",
+    "Does the real Console page complete the required live-preview interaction?",
     EvaluationDimension::Deliverable,
 );
 const EVIDENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     5,
-    "Portable screenshots show the Worker page and the Canvas graph it opens in the Console.",
+    "Do portable screenshots show both the Worker page and the Canvas graph it opens in the Console?",
     EvaluationDimension::StructuralIntegrity,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -103,6 +103,13 @@ impl Kind {
         match self {
             Self::Form => FORM_FLOW_ID,
             Self::Machine => STATE_MACHINE_ID,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Form => "Build a Visual Issue Form Worker",
+            Self::Machine => "Build a Visual State Machine Worker",
         }
     }
 
@@ -144,6 +151,10 @@ macro_rules! scenario_impl {
         impl Scenario for $type {
             fn id(&self) -> &'static str {
                 $kind.id()
+            }
+
+            fn title(&self) -> Option<&'static str> {
+                Some($kind.title())
             }
 
             fn summary(&self) -> Option<&'static str> {

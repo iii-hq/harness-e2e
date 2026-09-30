@@ -44,7 +44,7 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
-import { providerModel } from '@/lib/execution-view'
+import { providerModel, titleCase } from '@/lib/execution-view'
 import type { Investigation } from '@/lib/investigation'
 import { requestQuickExecution } from '@/lib/quick-execution'
 import type {
@@ -300,6 +300,15 @@ export function sortCompareRows(rows: TestCatalogRow[]) {
       STATE_ORDER.indexOf(rowState(left)) -
         STATE_ORDER.indexOf(rowState(right)) ||
       left.test_id.localeCompare(right.test_id),
+  )
+}
+
+function matchesQuery(row: TestCatalogRow, query: string) {
+  return (
+    !query ||
+    [row.test_id, row.spec?.title ?? '', row.spec?.summary ?? ''].some(
+      (value) => value.toLowerCase().includes(query),
+    )
   )
 }
 
@@ -693,8 +702,11 @@ function CompareRow({
               className="font-mono text-xs font-medium text-ink no-underline hover:underline"
               href={hashForTestHistory(row.test_id)}
             >
-              {row.test_id}
+              {row.spec?.title ?? titleCase(row.test_id)}
             </a>
+            <span className="font-mono text-label text-ink-muted">
+              {row.test_id}
+            </span>
             <TestDefinitionSelect
               row={row}
               disabled={loading}
@@ -1259,8 +1271,7 @@ export function TestsPage({
       sortCompareRows(
         rows.filter(
           (row) =>
-            (!normalizedQuery ||
-              row.test_id.toLowerCase().includes(normalizedQuery)) &&
+            matchesQuery(row, normalizedQuery) &&
             matchesCompareFilter(states.get(row.test_id) ?? 'none', filter),
         ),
       ),
@@ -1269,7 +1280,7 @@ export function TestsPage({
   const hiddenRows = rows.filter(
     (row) =>
       (states.get(row.test_id) ?? 'none') === 'none' &&
-      (!normalizedQuery || row.test_id.toLowerCase().includes(normalizedQuery)),
+      matchesQuery(row, normalizedQuery),
   )
 
   const updateCohort = (nextCohort: string) => {

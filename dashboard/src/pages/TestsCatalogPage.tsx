@@ -310,9 +310,10 @@ export function CatalogTable({
                     ) : null}
                   </td>
                   <td className="tc-stack">
-                    <a className="tc-id" href={history}>
-                      {view.id}
+                    <a className="tc-name" href={history}>
+                      {view.title}
                     </a>
+                    <span className="tc-id">{view.id}</span>
                     {view.sub ? (
                       <span className="tc-sub" title={view.sub}>
                         {view.sub}

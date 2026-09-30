@@ -51,6 +51,8 @@ export type WorkerCalls = { worker: string; calls: number }
 export type RunCriterion = {
   id: string
   possible: number
+  description?: string | null
+  gate?: boolean | null
   awarded: number | null
   reason: string
 }

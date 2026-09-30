@@ -61,29 +61,29 @@ const SOURCE_RELATIVE: &str = "sources/feed.json";
 const FACTUAL_ANCHORING: AssessmentSpec = AssessmentSpec::scored_in(
     "factual_anchoring",
     30,
-    "Every post quotes its source verbatim and links only URLs present in the feed.",
+    "Does every post quote its source verbatim and link only to URLs present in the feed?",
     EvaluationDimension::Deliverable,
 );
 const NO_FABRICATION: AssessmentSpec = AssessmentSpec::scored_in(
     "no_fabrication",
     25,
-    "No editorial summary introduces a currency amount or calendar year the sources never state (the planted-gap anti-hallucination gate).",
+    "Do all editorial summaries avoid currency amounts and calendar years that their sources do not state?",
     EvaluationDimension::Deliverable,
 );
 const SITE_STRUCTURE: AssessmentSpec = AssessmentSpec::scored(
     "site_structure",
     20,
-    "The site is well-formed: an HTML index, an RSS feed with one item per post, and a parseable manifest.",
+    "Does the site contain a valid HTML index, one RSS item per post, and a parseable manifest?",
 );
 const EDITORIAL_COVERAGE: AssessmentSpec = AssessmentSpec::scored(
     "editorial_coverage",
     15,
-    "Exactly the top-ranked topics are covered, once each, with no duplicates or off-brief picks.",
+    "Are exactly the top-ranked topics covered once each with no duplicates or off-brief selections?",
 );
 const PRESENTATION_QUALITY: AssessmentSpec = AssessmentSpec::scored(
     "presentation_quality",
     10,
-    "Each post renders its quote, summary, and source link in the HTML index.",
+    "Does each post render its quote, summary, and source link in the HTML index?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     FACTUAL_ANCHORING,
@@ -229,6 +229,14 @@ pub struct TrendBlog;
 impl Scenario for TrendBlog {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Publish a Source-Grounded Trend Blog")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Build a static trend blog from a frozen feed while preserving source quotes, links, topic coverage, and factual boundaries.")
     }
 
     fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {

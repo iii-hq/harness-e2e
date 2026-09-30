@@ -27,7 +27,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-pub const SUMMARY: &str = "Build a run-scoped iii Worker that implements correct chess rules and registers a playable page in the iii Console. The runner independently checks its Compose lifecycle, function and injectable-UI contracts, compares chess behavior with the shared shakmaty oracle, drives e2-e4 and e7-e5 in the real Console, and captures before/after screenshots bound to the candidate source and verified FENs.";
+pub const SUMMARY: &str = "Build a run-scoped chess Worker with correct rules and a playable iii Console page, then verify its runtime, behavior, UI, and evidence independently.";
 
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
 const CHESS_SUBTREE: &str = "chess";
@@ -46,60 +46,60 @@ const PINNED_FEN: &str = "4r1k1/8/8/8/8/8/4R3/4K3 w - - 0 1";
 const RUNTIME_CONTRACT: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
     10,
-    "worker-compose.yaml declares the run-scoped Worker, Compose reports its container ready, and all four described iii functions are registered.",
+    "Does worker-compose.yaml declare the run-scoped Worker, does Compose report it ready, and are all four described iii functions registered?",
     EvaluationDimension::Deliverable,
 );
 const START_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_start",
     7,
-    "Starting-position legal moves and perft match the independent oracle.",
+    "Do the starting-position legal moves and perft results match the independent oracle?",
 );
 const CASTLING_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_castling",
     7,
-    "The castling position legal moves and perft match the independent oracle.",
+    "Do the castling-position legal moves and perft results match the independent oracle?",
 );
 const EN_PASSANT_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_en_passant",
     7,
-    "The en-passant position legal moves and perft match the independent oracle.",
+    "Do the en-passant-position legal moves and perft results match the independent oracle?",
 );
 const PROMOTION_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_promotion",
     7,
-    "The promotion position legal moves and perft match the independent oracle.",
+    "Do the promotion-position legal moves and perft results match the independent oracle?",
 );
 const CHECK_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_check_evasion",
     7,
-    "The check-evasion position legal moves and perft match the independent oracle.",
+    "Do the check-evasion-position legal moves and perft results match the independent oracle?",
 );
 const PLAY_RULES: AssessmentSpec = AssessmentSpec::scored(
     "play_contract",
     10,
-    "The Worker applies a legal move to the exact oracle FEN and rejects an illegal move.",
+    "Does the Worker apply a legal move to the exact oracle FEN and reject an illegal move?",
 );
 const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     "invalid_inputs",
     10,
-    "Malformed FEN, invalid depth, and malformed move requests are rejected.",
+    "Does the Worker reject malformed FEN, invalid depth, and malformed move requests?",
 );
 const CONSOLE_DELIVERY: AssessmentSpec = AssessmentSpec::scored_in(
     "console_delivery",
     15,
-    "The Worker registers loadable script and style assets; the Console manifest reports fresh hashes, no warnings, and an enabled worker.",
+    "Does the Worker register loadable script and style assets with fresh Console hashes, no warnings, and an enabled worker?",
     EvaluationDimension::Deliverable,
 );
 const PLAYABLE_UI: AssessmentSpec = AssessmentSpec::scored_in(
     "playable_ui",
     10,
-    "The real iii Console renders the Worker's 64-square page and plays e2-e4 and e7-e5 through Worker functions to both oracle FENs.",
+    "Does the real iii Console render the 64-square page and play e2-e4 and e7-e5 through Worker functions to both oracle FENs?",
     EvaluationDimension::Deliverable,
 );
 const EVIDENCE_COMPLETE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     10,
-    "Portable before/after screenshots and capture metadata are bound to candidate, Compose, and checked-FEN hashes.",
+    "Are portable before-and-after screenshots and capture metadata bound to the candidate, Compose, and checked-FEN hashes?",
     EvaluationDimension::StructuralIntegrity,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -122,6 +122,10 @@ pub struct ChessEngineBuild;
 impl Scenario for ChessEngineBuild {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Build a Playable Chess Worker")
     }
 
     fn summary(&self) -> Option<&'static str> {

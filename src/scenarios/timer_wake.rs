@@ -23,27 +23,27 @@ const READY_AFTER_SECONDS: u64 = 4;
 const TIMER_ARMED: AssessmentSpec = AssessmentSpec::scored(
     "timer_armed",
     20,
-    "One wake-only relative timer is armed before any result write.",
+    "Is exactly one wake-only relative timer armed before any result write?",
 );
 const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
-    "The timer retires after waking the original session exactly once.",
+    "Does the timer retire after waking the original session exactly once?",
 );
 const WAKE_ACTION: AssessmentSpec = AssessmentSpec::scored(
     "wake_action",
     25,
-    "The timer-woken turn persists the requested result.",
+    "Does the timer-woken turn persist the requested result?",
 );
 const NO_POLLING: AssessmentSpec = AssessmentSpec::scored(
     "no_polling",
     20,
-    "The gated status function is called exactly once after the timer wake, never before it.",
+    "Is the gated status function called exactly once after the timer wake and never before it?",
 );
 const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::scored(
     "clean_completion",
     15,
-    "The root completes without children, errors, or surviving bindings.",
+    "Does the root complete without children, errors, or surviving bindings?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     TIMER_ARMED,
@@ -90,6 +90,14 @@ pub struct TimerWake;
 impl Scenario for TimerWake {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Timer Wake and Resume")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Arms a one-shot timer, resumes the original session, and writes the requested result after the wake.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

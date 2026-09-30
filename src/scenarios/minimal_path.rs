@@ -24,32 +24,32 @@ const DELIVERABLE_ID: &str = "minimal_result_record";
 const EXACT_RESULT: AssessmentSpec = AssessmentSpec::scored(
     "exact_result",
     40,
-    "The final value is exactly the requested object and exactly one successful state::set wrote it.",
+    "Does the final value exactly match the requested object, with exactly one successful state::set write?",
 );
 const SINGLE_TASK_CALL: AssessmentSpec = AssessmentSpec::scored(
     "single_task_call",
     13,
-    "The session made exactly one non-discovery function call: the required state::set.",
+    "Did the session make exactly one non-discovery function call, the required state::set?",
 );
 const AT_MOST_TWO_TASK_CALLS: AssessmentSpec = AssessmentSpec::scored(
     "at_most_two_task_calls",
     12,
-    "No more than two non-discovery calls, all on the owned scope and key, including the required write.",
+    "Did the session make at most two non-discovery calls, all on the owned scope and key, including the required write?",
 );
 const SINGLE_TURN: AssessmentSpec = AssessmentSpec::scored(
     "single_turn",
     10,
-    "The session completed in exactly one turn.",
+    "Did the session complete in exactly one turn?",
 );
 const AT_MOST_TWO_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "at_most_two_turns",
     10,
-    "The session completed in no more than two turns.",
+    "Did the session complete in no more than two turns?",
 );
 const ZERO_FRICTION: AssessmentSpec = AssessmentSpec::scored(
     "zero_friction",
     15,
-    "No function-call errors, no call besides the single write, and one concise confirmation line containing MIN-DONE.",
+    "Did the session finish without function-call errors or extra calls and return one concise confirmation line containing MIN-DONE?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     EXACT_RESULT,
@@ -78,6 +78,14 @@ pub struct MinimalPath;
 impl Scenario for MinimalPath {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Minimal State Write")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Writes one exact state value while minimizing turns, calls, and errors.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

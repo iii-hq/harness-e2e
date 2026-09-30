@@ -18,31 +18,31 @@ pub const CANONICAL_SEED: u64 = 0x6372_6f73_7372_0001;
 const VISIBLE_MIGRATION: CriterionSpec = CriterionSpec::scored(
     "visible_contract_migration",
     20,
-    "The producer and initially visible consumer migrate without breaking the old contract.",
+    "Do the producer and initially visible consumer migrate without breaking the old contract?",
     EvaluationDimension::Deliverable,
 );
 const CANARY_INVALIDATION: CriterionSpec = CriterionSpec::scored(
     "hidden_consumer_invalidation",
     20,
-    "The trusted canary reveals consumer B only after plan one and produces evidence that requires plan two.",
+    "Does the trusted canary reveal consumer B only after the first plan and provide evidence that requires a second plan?",
     EvaluationDimension::StructuralIntegrity,
 );
 const COMPATIBILITY_MATRIX: CriterionSpec = CriterionSpec::scored(
     "three_repo_compatibility",
     30,
-    "Old and new clients pass against the final producer contract across all three repositories.",
+    "Do old and new clients pass against the final producer contract across all three repositories?",
     EvaluationDimension::Deliverable,
 );
 const WORKSPACE_BOUNDARIES: CriterionSpec = CriterionSpec::scored(
     "workspace_boundaries",
     20,
-    "Only allowed paths change; Git provenance is deterministic and no network or outside-root write occurs.",
+    "Do changes stay within allowed paths with deterministic Git provenance and no network or outside-root writes?",
     EvaluationDimension::StructuralIntegrity,
 );
 const MIGRATION_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "migration_reconciliation",
     10,
-    "One terminal rollout, a complete migration manifest, and cleanup reconcile the dedicated fixture repositories.",
+    "Do one terminal rollout, a complete migration manifest, and cleanup reconcile all dedicated fixture repositories?",
     EvaluationDimension::StructuralIntegrity,
 );
 
@@ -60,6 +60,14 @@ pub struct CrossRepoContractMigration;
 impl Scenario for CrossRepoContractMigration {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Migrate a Contract Across Repositories")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Migrate a versioned producer contract across three repositories and replan when a hidden consumer is revealed.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {

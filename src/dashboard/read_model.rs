@@ -376,6 +376,9 @@ fn run_facts(entry: &TestEntry) -> (Option<LastRun>, Vec<Option<f64>>, usize, us
 /// describes the contract the dashboard is showing.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TestSpecProjection {
+    /// Human-readable test name; absent on responses from older runners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Editorial description; absent until the scenario defines a `SUMMARY`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -392,6 +395,7 @@ pub(super) struct TestCriterionProjection {
     pub id: String,
     pub weight: u8,
     pub description: String,
+    pub gate: bool,
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: EvaluationDimension,
@@ -1281,6 +1285,7 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
 /// and cleanup hooks stay behind: they are runner wiring, not contract.
 fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
     TestSpecProjection {
+        title: id.title().map(str::to_string),
         summary: id.summary().map(str::to_string),
         prompt: spec.prompt.clone(),
         criteria: spec
@@ -1290,6 +1295,7 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
                 id: criterion.id.to_string(),
                 weight: criterion.weight,
                 description: criterion.description.to_string(),
+                gate: criterion.gate,
                 kind: criterion.kind,
                 policy: criterion.policy,
                 dimension: criterion.dimension,
@@ -2396,10 +2402,11 @@ mod tests {
         assert!(spec.prompt.contains("legal_moves"));
         assert!(spec.prompt.contains("console:script"));
         assert!(spec.prompt.contains("#/worker/"));
-        assert!(spec
-            .summary
-            .as_deref()
-            .is_some_and(|summary| summary.contains("run-scoped iii Worker")));
+        assert_eq!(spec.title.as_deref(), ScenarioId::ChessEngineBuild.title());
+        assert_eq!(
+            spec.summary.as_deref(),
+            ScenarioId::ChessEngineBuild.summary()
+        );
 
         // Weights, policy and the description of every criterion travel with it.
         let weights: Vec<_> = spec
@@ -2438,27 +2445,6 @@ mod tests {
         assert_eq!(spec.execution.max_total_tokens, Some(6_000_000));
         assert_eq!(spec.execution.stuck_timeout_seconds, 1_800);
         assert!(spec.denied_functions.is_empty());
-    }
-
-    #[test]
-    fn a_scenario_without_an_editorial_summary_still_projects_its_contract() {
-        let root = tempfile::tempdir().expect("temporary dashboard store should exist");
-        let model = DashboardReadModel::load(root.path())
-            .expect("current scenarios should materialize into the read model");
-        let row = model
-            .tests_list(TestsListRequest {
-                query: Some(ScenarioId::ContextPressure.as_str().into()),
-                ..TestsListRequest::default()
-            })
-            .expect("context pressure should be readable")
-            .rows
-            .into_iter()
-            .next()
-            .expect("context pressure should be registered");
-        let spec = row.spec.expect("the scoring contract should be projected");
-        assert!(spec.summary.is_none());
-        assert!(!spec.prompt.is_empty());
-        assert!(!spec.criteria.is_empty());
     }
 
     #[test]

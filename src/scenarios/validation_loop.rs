@@ -33,17 +33,17 @@ const EXPECTED_ROWS: u64 = 8;
 const GOAL_REACHED: AssessmentSpec = AssessmentSpec::scored(
     "goal_reached",
     40,
-    "The goal table ends with more rows than the validator threshold.",
+    "Does the goal table end with more rows than the validator threshold?",
 );
 const VALIDATOR_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "validator_discipline",
     30,
-    "Exactly one post-turn validator registration carries the custom retry_prompt without function-call errors.",
+    "Does exactly one post-turn validator registration carry the custom retry_prompt without function-call errors?",
 );
 const LOOP_EVIDENCE: AssessmentSpec = AssessmentSpec::scored(
     "loop_evidence",
     30,
-    "At least one harness validation nudge was delivered and the loop converged at exactly the expected row count.",
+    "Was at least one harness validation nudge delivered before the loop converged at exactly the expected row count?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[GOAL_REACHED, VALIDATOR_DISCIPLINE, LOOP_EVIDENCE];
 
@@ -53,6 +53,14 @@ pub struct ValidationLoop;
 impl Scenario for ValidationLoop {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Validation Retry Loop")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Registers a post-turn validator and converges after a bounded correction retry.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

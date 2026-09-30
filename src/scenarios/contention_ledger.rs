@@ -43,23 +43,23 @@ const DATABASE_WRITES: [&str; 3] = [
 const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::scored_in(
     "balanced_ledger",
     35,
-    "The accumulator reads exactly 15 and the audit holds exactly the fifteen per-writer sequence rows.",
+    "Does the accumulator read exactly 15 with exactly fifteen per-writer sequence rows in the audit?",
     EvaluationDimension::Deliverable,
 );
 const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::scored(
     "contended_writes",
     25,
-    "Three direct writer children each perform their own five atomic increments and done-key write; the root increments nothing.",
+    "Do three direct writer children each perform five atomic increments and a done-key write while the root performs no increment?",
 );
 const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "quorum_free_fan_in",
     20,
-    "One barrier-gated wake over the three done keys is armed before the writers are spawned in a single response, and it retires on the third key.",
+    "Is one barrier-gated wake over the three done keys armed before the writers are spawned in one response, and does it retire on the third key?",
 );
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
-    "The final answer is one short LEDGER-BALANCED 15/15 line backed by an error-free run.",
+    "Is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     BALANCED_LEDGER,
@@ -108,6 +108,14 @@ pub struct ContentionLedger;
 impl Scenario for ContentionLedger {
     fn id(&self) -> &'static str {
         ID
+    }
+
+    fn title(&self) -> Option<&'static str> {
+        Some("Contended Atomic Ledger")
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some("Coordinates parallel writers that atomically update one ledger and verifies the result after a barrier wake.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
