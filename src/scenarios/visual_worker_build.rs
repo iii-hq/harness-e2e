@@ -25,64 +25,85 @@ use super::{
 
 pub const FORM_FLOW_ID: &str = "form_flow_build";
 pub const STATE_MACHINE_ID: &str = "state_machine_canvas_build";
-pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with deterministic bug and feature fields, live editing and preview, and a flowchart projection stored through Canvas.";
-pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with deterministic simulation, live transition editing, and a stateDiagram-v2 projection stored through Canvas.";
+pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with feature and bug fields, live editing and preview, keyboard and theme support, and a flowchart saved in Canvas.";
+pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with an interactive simulator, live transition editing, keyboard and theme support, and a state diagram saved in Canvas.";
 
 const EVIDENCE_LIMIT: u64 = 24 * 1024 * 1024;
 
 const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
     10,
-    "Is the run-scoped Worker ready with its described domain, Canvas, and UI functions exposed?",
+    "Is the scenario Worker configuration valid and ready, with every required function registered with descriptions and object schemas?",
     EvaluationDimension::Deliverable,
 );
-const DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
+const FORM_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
     "domain_primary",
     20,
-    "Does the primary deterministic domain path match the independent Harness oracle?",
+    "Does the feature preview list exactly Title, Work type, User story, and Acceptance criteria as visible fields, report no missing required fields, and allow submission?",
 );
-const DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
+const FORM_DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
     "domain_branch",
     15,
-    "Does the alternate deterministic domain path match the independent Harness oracle?",
+    "After adding Environment, does the bug preview list exactly Title, Work type, Reproduction, Expected behavior, and Environment as visible fields, report no missing required fields, and allow submission?",
+);
+const MACHINE_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
+    "domain_primary",
+    20,
+    "Does a start event in the queued state return the running state?",
+);
+const MACHINE_DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
+    "domain_branch",
+    15,
+    "After adding the cancel transition, does a cancel event in the running state return the cancelled state?",
 );
 const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     "invalid_inputs",
     10,
-    "Does the Worker reject invalid domain input and remain healthy?",
+    "Does the Worker reject invalid input and preserve the applied edit on the next valid request?",
 );
 const CANVAS_INITIAL: AssessmentSpec = AssessmentSpec::scored(
     "canvas_initial",
     10,
-    "Does the Worker create and read the exact initial Mermaid projection through Canvas?",
+    "Does Canvas store and return the expected initial form flowchart or job state diagram?",
 );
 const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     "canvas_update",
     10,
-    "Does the live editor update the same Canvas ID to the expected Mermaid projection?",
+    "Does the live edit save the expected updated diagram under the same Canvas ID?",
 );
 const CONSOLE: AssessmentSpec = AssessmentSpec::scored_in(
     "console_delivery",
     10,
-    "Does the Console report fresh, warning-free script and style assets for the Worker?",
+    "Does Console expose the enabled Worker and Canvas scripts and styles with content hashes, no warnings, and non-empty Worker files?",
     EvaluationDimension::Deliverable,
 );
 const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
     "browser_interaction",
     10,
-    "Does the real Console page complete the required live-preview interaction?",
+    "Does the Console page complete its form or simulator flow, apply the edit with Tab and Enter, persist it after reload, open the updated Canvas graph, fit a narrow pane without horizontal overflow, and apply visibly different light and dark themes with at least 3:1 contrast for the result and main control?",
     EvaluationDimension::Deliverable,
 );
 const EVIDENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     5,
-    "Do portable screenshots show both the Worker page and the Canvas graph it opens in the Console?",
+    "After the page passes its edit, keyboard, theme, reload, layout, and Canvas checks, are screenshots saved before and after editing, of the graph, and in a narrow dark view, with Worker source and Compose hashes?",
     EvaluationDimension::StructuralIntegrity,
 );
-const ASSESSMENTS: &[AssessmentSpec] = &[
+const FORM_ASSESSMENTS: &[AssessmentSpec] = &[
     RUNTIME,
-    DOMAIN_PRIMARY,
-    DOMAIN_BRANCH,
+    FORM_DOMAIN_PRIMARY,
+    FORM_DOMAIN_BRANCH,
+    INVALID_INPUTS,
+    CANVAS_INITIAL,
+    CANVAS_UPDATE,
+    CONSOLE,
+    INTERACTION,
+    EVIDENCE,
+];
+const MACHINE_ASSESSMENTS: &[AssessmentSpec] = &[
+    RUNTIME,
+    MACHINE_DOMAIN_PRIMARY,
+    MACHINE_DOMAIN_BRANCH,
     INVALID_INPUTS,
     CANVAS_INITIAL,
     CANVAS_UPDATE,
@@ -137,6 +158,13 @@ impl Kind {
         match self {
             Self::Form => "preview",
             Self::Machine => "transition",
+        }
+    }
+
+    fn assessments(self) -> &'static [AssessmentSpec] {
+        match self {
+            Self::Form => FORM_ASSESSMENTS,
+            Self::Machine => MACHINE_ASSESSMENTS,
         }
     }
 }
@@ -219,7 +247,11 @@ macro_rules! scenario_impl {
                     .find(|item| item.id == evidence_id($kind))
                     .and_then(|item| item.content.as_json())
                     .context("visual Worker evidence deliverable is missing")?;
-                Ok(evaluate_evidence(evidence, observation.metrics.complete))
+                Ok(evaluate_evidence(
+                    $kind,
+                    evidence,
+                    observation.metrics.complete,
+                ))
             }
 
             async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -415,7 +447,7 @@ Add focused local tests for domain behavior and verify the UI build before repor
             max_validation_retries: None,
         },
         denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
+        criteria: assessment::criteria(kind.assessments()),
     }
 }
 
@@ -1352,14 +1384,14 @@ return {{passed:routeOk&&domainVisible&&branchOk&&noOverflow&&!errorText,route_o
     Ok(observed)
 }
 
-fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
+fn evaluate_evidence(kind: Kind, evidence: &Value, complete: bool) -> ObjectiveEvaluation {
     assessment::build_evaluation(
         if complete {
             CompletionState::Completed
         } else {
             CompletionState::TaskIncomplete
         },
-        ASSESSMENTS.iter().copied().map(|spec| {
+        kind.assessments().iter().copied().map(|spec| {
             if evidence["checks"][spec.id()]["status"] == "blocked" {
                 spec.unverified(reason(evidence, spec.id()))
             } else {
@@ -1683,11 +1715,11 @@ mod tests {
 
     #[test]
     fn blocked_browser_preserves_domain_and_canvas_scores() {
-        let checks=ASSESSMENTS.iter().map(|spec| {
+        let checks=Kind::Form.assessments().iter().map(|spec| {
             let blocked=matches!(spec.id(),"canvas_update"|"browser_interaction"|"evidence_complete");
             (spec.id().to_string(),json!({"passed":!blocked,"status":if blocked{"blocked"}else{"evaluated"},"reason":"probe"}))
         }).collect::<serde_json::Map<_,_>>();
-        let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
+        let evaluation = evaluate_evidence(Kind::Form, &json!({"checks":checks}), true);
         assert_eq!(
             evaluation
                 .awards

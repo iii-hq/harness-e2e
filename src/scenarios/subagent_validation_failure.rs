@@ -40,17 +40,17 @@ const EXPIRY_DELAY_MS: u64 = 150_000;
 const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::scored(
     "bounded_failure",
     40,
-    "Does the child fail after exactly the budgeted denials while the verdict key remains unwritten?",
+    "Does the child fail after exactly two validation retry requests, without writing a verdict?",
 );
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     30,
-    "Is the validator scoped to the child with the deadline wake armed before spawn?",
+    "Are calls to set a post-turn trigger and a state wake deadline made before the call that starts the expected child?",
 );
 const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "expiry_report",
     30,
-    "Is the parent woken by the expiry notice and does it report the give-up with the exact line?",
+    "Does the parent's final response contain both required markers: CHILD GAVE UP and PARENT DONE?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[BOUNDED_FAILURE, ORCHESTRATION_DISCIPLINE, EXPIRY_REPORT];
 
@@ -317,7 +317,10 @@ impl Scenario for SubagentValidationFailure {
                      spawn@{spawn_index:?} — both must precede the spawn"
                     ),
                 ),
-                EXPIRY_REPORT.full_or_zero(reported, "expected the exact give-up report line"),
+                EXPIRY_REPORT.full_or_zero(
+                    reported,
+                    "expected both CHILD GAVE UP and PARENT DONE in the final response",
+                ),
             ],
         ))
     }
