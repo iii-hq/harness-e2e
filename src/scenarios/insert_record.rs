@@ -24,12 +24,12 @@ const DELIVERABLE_ID: &str = "inserted_rows";
 const RECORD_CREATED: AssessmentSpec = AssessmentSpec::scored(
     "record_created",
     80,
-    "Does the table contain exactly one row whose value field matches the requested text?",
+    "Does the prepared database table contain exactly one row with the requested text in its value field?",
 );
 const FEWER_THAN_TEN_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "fewer_than_ten_turns",
     20,
-    "Did the evaluated session use fewer than ten turns?",
+    "Did the session use fewer than 10 turns?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[RECORD_CREATED, FEWER_THAN_TEN_TURNS];
 

@@ -128,7 +128,10 @@ function RunDetail({
               {run.details.criteria.map((criterion) => (
                 <li key={criterion.id}>
                   <div className="th-criterion-history-head">
-                    <span className="th-mono">{criterion.id}</span>
+                    <span>
+                      {criterion.description ??
+                        'Description not recorded in this result.'}
+                    </span>
                     <span className="th-points">
                       {criterion.awarded === null
                         ? `—/${criterion.possible}`
@@ -141,9 +144,8 @@ function RunDetail({
                       <span className="th-faint">Gate status not recorded</span>
                     ) : null}
                   </div>
-                  <p className="th-criterion-history-description">
-                    {criterion.description ??
-                      'Description not recorded in this result.'}
+                  <p className="th-mono th-faint th-criterion-history-id">
+                    {criterion.id}
                   </p>
                   <p className="th-criterion-history-reason">
                     {criterion.reason}

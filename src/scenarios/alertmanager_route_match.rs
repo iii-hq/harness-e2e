@@ -59,23 +59,23 @@ const BUNDLE_BYTES: &[u8] =
 const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     "revision_pinned",
     10,
-    "Is the checkout at the pinned bundle revision or one of its descendants?",
+    "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
 );
 const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
     "match_equivalent",
     70,
-    "Does every live route::match call return the receivers and group-by labels in the frozen oracle?",
+    "What proportion of route::match test cases match the expected receivers, group-by labels, and group-by-all flags?",
     EvaluationDimension::Deliverable,
 );
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
     "delegation_wired",
     10,
-    "Does upstream TestRouteMatch call route::match and fail when the engine is unavailable?",
+    "Does Alertmanager's TestRouteMatch pass using route::match on the live engine and fail when that engine is unavailable?",
 );
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
     10,
-    "Do notify/, api/, and config/testdata/ remain identical to the pinned tree?",
+    "Are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REVISION_PINNED,

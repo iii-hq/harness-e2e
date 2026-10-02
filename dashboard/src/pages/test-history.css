@@ -859,6 +859,7 @@
 
 .th-criterion-history {
   display: grid;
+  white-space: normal;
   gap: 0.75rem;
   margin: 0;
   padding: 0;
@@ -867,6 +868,7 @@
 
 .th-criterion-history > li {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .th-criterion-history-head {
@@ -877,7 +879,7 @@
   justify-content: space-between;
 }
 
-.th-criterion-history-description,
+.th-criterion-history-id,
 .th-criterion-history-reason {
   margin: 0.35rem 0 0;
   color: var(--color-ink-soft);
@@ -885,6 +887,7 @@
   line-height: 1.45;
 }
 
+.th-criterion-history-id,
 .th-criterion-history-reason {
   color: var(--color-ink-faint);
 }
@@ -975,10 +978,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-}
-
-.th-criterion .th-mono {
-  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 /* A × B of two runs */
