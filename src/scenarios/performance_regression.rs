@@ -836,7 +836,7 @@ mod tests {
 
     #[tokio::test]
     async fn wall_clock_does_not_change_score_and_remains_in_evidence() {
-        let run_id = format!("performance-score-test-{}", std::process::id());
+        let run_id = format!("score-test-{}", std::process::id());
         let root = fixture_root(&run_id);
         reset_fixture(&root).unwrap();
         fs::write(
