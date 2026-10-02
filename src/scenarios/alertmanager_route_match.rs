@@ -32,7 +32,7 @@ use super::{
 
 pub const ID: &str = "alertmanager_route_match";
 pub const CANONICAL_SEED: u64 = 0x616c_7274_0001;
-pub const SUMMARY: &str = "Refactor Alertmanager route matching into an iii function and verify its receivers and group-by labels against a frozen upstream oracle.";
+pub const SUMMARY: &str = "Move Alertmanager route matching into an iii function while preserving receivers and grouping. Verify that matching succeeds with the Engine running and fails when it is unavailable.";
 
 const UPSTREAM_REPOSITORY: &str = "prometheus/alertmanager";
 const UPSTREAM_URL: &str = "https://github.com/prometheus/alertmanager";
@@ -167,7 +167,7 @@ impl Scenario for AlertmanagerRouteMatch {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Refactor Alertmanager Route Matching")
+        Some("Refactor Alertmanager routing without changing results")
     }
 
     fn summary(&self) -> Option<&'static str> {

@@ -46,11 +46,11 @@ impl Scenario for InsertRecord {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Insert Database Record")
+        Some("Insert exactly one database row")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Inserts one requested row into a prepared database table within a small turn budget.")
+        Some("Insert one specified value into a prepared table and leave it as the table's only row.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

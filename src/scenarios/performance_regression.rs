@@ -229,11 +229,11 @@ impl Scenario for PerformanceRegression {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Remove a Performance Regression")
+        Some("Optimize Python deduplication without changing results")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Optimize a correct but quadratic Python implementation while preserving behavior and proving deterministic work reduction.")
+        Some("Optimize a quadratic Python deduplication function while preserving exact outputs and reducing measured work.")
     }
 
     fn canonical_seed(&self) -> u64 {

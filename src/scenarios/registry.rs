@@ -26,16 +26,16 @@ const IDS: [&str; 4] = [
     VERIFICATION_ID,
 ];
 const TITLES: [&str; 4] = [
-    "Registry Change Planning",
-    "Registry Change Implementation",
-    "Registry Environment Reproduction",
-    "Registry Independent Verification",
+    "Registry: Plan version comparison",
+    "Registry: Implement version comparison",
+    "Registry: Reproduce the test environment",
+    "Registry: Verify the version comparison delivery",
 ];
 const SUMMARIES: [&str; 4] = [
-    "Produces an implementation plan for a version comparison feature against a pinned Registry codebase.",
-    "Implements and demonstrates a version comparison feature against a pinned Registry codebase.",
-    "Builds, starts, isolates, restarts, and cleans up a reproducible Registry environment.",
-    "Independently verifies a Registry implementation and supports every reported result with execution evidence.",
+    "Create an evidence-based plan for adding version comparison to a pinned Registry codebase.",
+    "Implement version comparison and demonstrate its behavior in a pinned Registry codebase.",
+    "Reproduce the Registry test environment, including build, startup, isolation, restart, and cleanup.",
+    "Verify the version comparison delivery and support each result with execution evidence.",
 ];
 const REQUIREMENTS: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/requirements.md");

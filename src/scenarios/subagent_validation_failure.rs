@@ -63,11 +63,11 @@ impl Scenario for SubagentValidationFailure {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Bounded Subagent Validation Failure")
+        Some("Handle a subagent that exhausts validation retries")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Bounds an impossible child validation loop and wakes the parent through an expiry fallback.")
+        Some("Limit an impossible child validation loop to two retry requests, then report that the child failed and the parent finished.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

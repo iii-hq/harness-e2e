@@ -39,20 +39,20 @@ pub const IDS: [&str; 7] = [
 const TITLES: [&str; 7] = [
     "Kanban C1: Application Foundation",
     "Kanban C2: Ticket Persistence",
-    "Kanban C3: Board Experience",
+    "Kanban: Load and refresh the ticket board",
     "Kanban C4: Ticket Creation and Deletion",
     "Kanban C5: Ticket Editing and Movement",
     "Kanban C6: Ticket Discussion",
-    "Kanban C7: Live Multi-Session Updates",
+    "Kanban: Synchronize tickets across sessions",
 ];
 const SUMMARIES: [&str; 7] = [
     "Establishes the standalone Kanban application, configuration lifecycle, responsive settings, and hot reload.",
     "Implements durable ticket storage with valid identities, isolated stores, restart persistence, and corruption safety.",
-    "Builds an accessible and responsive board that handles loading, empty, error, refresh, and safe text states.",
+    "Loads tickets into an accessible, responsive board and handles empty, error, refresh, and safe-text states.",
     "Implements accessible ticket creation, detail navigation, lookup, validation, and durable soft deletion.",
     "Implements resilient ticket editing and movement across pointer, mobile, navigation, failure, and restart paths.",
     "Implements persistent, safely rendered comments and replies while preserving drafts across failures and navigation.",
-    "Synchronizes board activity across sessions while preserving local interaction state and handling stale responses.",
+    "Keeps ticket changes synchronized across sessions without losing local interaction state or accepting stale responses.",
 ];
 
 #[derive(Deserialize)]
