@@ -301,6 +301,7 @@ pub async fn active_binding_count(context: &E2eContext, session_id: &str) -> any
 /// is the catalog (`id`, `weight`, `measurement`); `validation.observations`
 /// holds one `measured` item per metric with `value` (binary) or
 /// `numerator`/`denominator` (ratio, `value` deciding a zero denominator).
+/// Empty ratios explicitly marked `not_applicable` remain unassessed.
 /// Points are `round(weight × value)`. A missing, duplicate, unavailable or
 /// malformed observation fails the whole evaluation: a validator problem is
 /// unavailability, never a silent zero.
@@ -322,6 +323,18 @@ pub fn atomic_awards(metrics: &[Value], validation: &Value) -> Result<Vec<Criter
                 bail!("missing or duplicate metric {}", metric["id"]);
             }
             let item = matches[0];
+            if item["status"] == "not_applicable"
+                && metric["measurement"] == "ratio"
+                && item["numerator"] == 0
+                && item["denominator"] == 0
+                && item.get("value").is_none()
+            {
+                return Ok(CriterionAward {
+                    id: metric["id"].as_str().unwrap().into(),
+                    awarded: None,
+                    reason: item.to_string(),
+                });
+            }
             if item["status"] != "measured" {
                 bail!("{} is {}: {}", metric["id"], item["status"], item["reason"]);
             }

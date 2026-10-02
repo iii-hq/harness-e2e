@@ -1022,6 +1022,96 @@ fn is_load_timeout(error: &anyhow::Error) -> bool {
     common::is_remote_failure(error) && format!("{error:#}").contains("Request timed out")
 }
 
+async fn exercise_keyboard_edit(context: &E2eContext, kind: Kind, session: &str) -> Result<Value> {
+    let (edit_selector, effect_text) = match kind {
+        Kind::Form => ("[data-edit=\"add_environment\"]", "Environment"),
+        Kind::Machine => ("[data-edit=\"add_cancel\"]", "cancelled"),
+    };
+    let edit_selector = serde_json::to_string(edit_selector)?;
+    let prepared = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!(r#"const selector={edit_selector};
+const target=document.querySelector(selector);
+const focusSelector='button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])';
+const control=target?.matches(focusSelector)?target:target?.querySelector(focusSelector);
+const visible=e=>{{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'}};
+const focusable=[...document.querySelectorAll(focusSelector)].filter(e=>visible(e)&&!e.disabled&&e.tabIndex>=0);
+const index=focusable.indexOf(control);
+if(index<0)return {{prepared:false,reason:'edit control is not in the keyboard tab order'}};
+if(index>0)focusable[index-1].focus();
+else{{document.body.dataset.harnessTemporaryTabindex=`value:${{document.body.getAttribute('tabindex')??'missing'}}`;document.body.tabIndex=-1;document.body.focus()}}
+return {{prepared:index===0?document.activeElement===document.body:document.activeElement===focusable[index-1],target_tag:control.tagName.toLowerCase(),tab_index:control.tabIndex}};"#)}),
+        )
+        .await?;
+    if prepared["result"]["prepared"] != true {
+        return Ok(json!({"passed":false,"preparation":prepared["result"]}));
+    }
+    let tab = context
+        .trigger_value(
+            "browser::act",
+            json!({"session_id":session,"action":"press","key":"Tab"}),
+        )
+        .await?;
+    let focused = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!(r#"const target=document.querySelector({edit_selector});
+const focused=!!target&&(document.activeElement===target||target.contains(document.activeElement));
+const restore=document.body.dataset.harnessTemporaryTabindex;
+if(restore){{const value=restore.slice(6);if(value==='missing')document.body.removeAttribute('tabindex');else document.body.setAttribute('tabindex',value);delete document.body.dataset.harnessTemporaryTabindex}}
+return {{focused,active_tag:document.activeElement?.tagName?.toLowerCase()??null}};"#)}),
+        )
+        .await?;
+    if focused["result"]["focused"] != true {
+        return Ok(
+            json!({"passed":false,"preparation":prepared["result"],"tab":tab,"focus":focused["result"]}),
+        );
+    }
+    let effect_text = serde_json::to_string(effect_text)?;
+    let effect_before = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!(r#"return document.querySelector('[data-testid="canvas-source"]')?.textContent?.includes({effect_text}) === true"#)}),
+        )
+        .await?;
+    if effect_before["result"] == true {
+        return Ok(
+            json!({"passed":false,"reason":"keyboard edit effect was already present before Enter","preparation":prepared["result"],"tab":tab,"focus":focused["result"],"effect_before":true}),
+        );
+    }
+    let enter = context
+        .trigger_value(
+            "browser::act",
+            json!({"session_id":session,"action":"press","key":"Enter"}),
+        )
+        .await?;
+    let effect = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"timeout_ms":10000,"code":format!(r#"return await (async()=>{{
+const expected={effect_text};
+for(let i=0;i<100;i++){{const e=document.querySelector('[data-testid="canvas-source"]');if(e?.textContent?.includes(expected))return true;await new Promise(r=>setTimeout(r,50))}}
+return false;
+}})();"#)}),
+        )
+        .await?;
+    Ok(
+        json!({"passed":effect["result"] == true,"preparation":prepared["result"],"tab":tab,"focus":focused["result"],"enter":enter,"effect_before":effect_before["result"],"effect_observed":effect["result"]}),
+    )
+}
+
+fn keyboard_and_theme_passed(keyboard: &Value, appearance: &Value) -> bool {
+    keyboard["passed"] == true
+        && keyboard["focus"]["focused"] == true
+        && keyboard["effect_before"] == false
+        && keyboard["effect_observed"] == true
+        && appearance["passed"] == true
+        && appearance["theme_changed"] == true
+        && appearance["light"]["usable"] == true
+        && appearance["dark"]["usable"] == true
+}
+
 async fn capture_browser_session(
     context: &E2eContext,
     kind: Kind,
@@ -1044,6 +1134,7 @@ async fn capture_browser_session(
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
     let before_state = inspect_ui(context, kind, session, "initial").await?;
     let before = common::screenshot_png(context, session).await?;
+    let keyboard = exercise_keyboard_edit(context, kind, session).await?;
     let interaction_code = match kind {
         Kind::Form => {
             r#"return await (async()=>{
@@ -1072,7 +1163,7 @@ const choose=async value=>{
 const feature=await choose('feature')&&!visible(document.querySelector('[data-testid="reproduction"]'))&&visible(document.querySelector('[data-testid="acceptance-criteria"]'));
 const partial=!!await wait(()=>ready(false)&&visible(document.querySelector('[data-testid="validation-message"]'))&&document.querySelector('[data-testid="validation-message"]')?.textContent?.trim());
 const bug=await choose('bug')&&!visible(document.querySelector('[data-testid="user-story"]'))&&visible(document.querySelector('[data-testid="expected-behavior"]'));
-document.querySelector('[data-edit="add_environment"]')?.click();
+if(!visible(document.querySelector('[data-testid="environment"]')))document.querySelector('[data-edit="add_environment"]')?.click();
 const environment=await wait(()=>visible(document.querySelector('[data-testid="environment"]')));
 const fields=[['title','Login crashes'],['reproduction','Open login'],['expected-behavior','Dashboard opens'],['environment','Chrome']];
 for(const [id,value] of fields){const field=document.querySelector(`[data-testid="${id}"]`);if(!field||!set(field,value))return {error:`missing editable ${id}`}}
@@ -1095,7 +1186,7 @@ const guarded=!!invalid&&(invalid.disabled||invalid.getAttribute('aria-disabled'
 const pass=await click('start','running')&&await click('pass','passed')&&history()!==before;
 document.querySelector('[data-testid="reset"]')?.click();await wait('queued');
 const retry=await click('start','running')&&await click('fail','failed')&&await click('retry','queued');
-document.querySelector('[data-edit="add_cancel"]')?.click();
+if(!document.querySelector('[data-event="cancel"]'))document.querySelector('[data-edit="add_cancel"]')?.click();
 const edited=!!await (async()=>{for(let i=0;i<100;i++){if(document.querySelector('[data-event="cancel"]'))return true;await new Promise(r=>setTimeout(r,50))}return false})();
 const started=edited&&await click('start','running');
 const cancel=started&&await click('cancel','cancelled');
@@ -1175,24 +1266,30 @@ return {{rendered_graph:false}};
             json!({"session_id":session,"width":480,"height":900}),
         )
         .await?;
-    context
-        .trigger_value(
-            "browser::execute",
-            json!({"session_id":session,"code":"document.documentElement.dataset.theme='dark';document.documentElement.style.colorScheme='dark';return document.documentElement.dataset.theme"}),
-        )
-        .await?;
     let mobile = context
         .trigger_value(
             "browser::execute",
             json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{
 const domain=document.querySelector('[data-testid="domain-result"]');
-const control=document.querySelector('[data-testid="work-type"],[data-event="start"]');
+const control=document.querySelector('[data-testid="work-type"],[data-testid="reset"]');
 const pane=domain?.closest('[data-workspace-pane-id]')??document.documentElement;
 pane?.scrollIntoView({block:'nearest',inline:'nearest'});
-await new Promise(requestAnimationFrame);
+const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+const context=canvas.getContext('2d',{willReadFrequently:true});
+const rgba=value=>{context.clearRect(0,0,1,1);context.fillStyle='rgba(0,0,0,0)';context.fillStyle=value;context.fillRect(0,0,1,1);return [...context.getImageData(0,0,1,1).data].map((v,i)=>i===3?v/255:v)};
+const composite=(front,back)=>{const alpha=front[3]+back[3]*(1-front[3]);return alpha?[0,1,2].map(i=>(front[i]*front[3]+back[i]*back[3]*(1-front[3]))/alpha).concat(alpha):[0,0,0,0]};
+const background=element=>{const layers=[];for(let node=element;node instanceof Element;node=node.parentElement)layers.push(rgba(getComputedStyle(node).backgroundColor));const scheme=getComputedStyle(document.documentElement).colorScheme;let color=scheme==='dark'?[0,0,0,1]:[255,255,255,1];for(const layer of layers.reverse())color=composite(layer,color);return color};
+const luminance=color=>{const channels=color.slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*channels[0]+.7152*channels[1]+.0722*channels[2]};
+const contrast=(foreground,background)=>{const a=luminance(foreground),b=luminance(background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
+const visible=e=>{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};
+const style=e=>{const computed=getComputedStyle(e),bg=background(e),fg=composite(rgba(computed.color),bg);return {visible:visible(e),contrast:Number(contrast(fg,bg).toFixed(2)),signature:[computed.color,computed.backgroundColor,computed.borderTopColor,computed.boxShadow,bg.slice(0,3).map(Math.round).join(',')].join('|')}};
+const apply=async theme=>{document.documentElement.dataset.theme=theme;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);const samples=[domain,control].map(style);return {theme,usable:samples.every(sample=>sample.visible&&sample.contrast>=3),samples}};
+const light=await apply('light');
+const dark=await apply('dark');
 const bounds=pane?.getBoundingClientRect();
 const fits=e=>{if(!e||!bounds)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.left>=bounds.left-1&&r.right<=bounds.right+1&&s.display!=='none'&&s.visibility!=='hidden'};
-return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentElement.scrollWidth<=document.documentElement.clientWidth+1&&[domain,control].every(fits)&&document.documentElement.dataset.theme==='dark',viewport_width:innerWidth,pane_width:pane?.clientWidth,pane_scroll_width:pane?.scrollWidth,theme:document.documentElement.dataset.theme};
+const themeChanged=light.samples.some((sample,index)=>sample.signature!==dark.samples[index].signature);
+return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentElement.scrollWidth<=document.documentElement.clientWidth+1&&[domain,control].every(fits)&&light.usable&&dark.usable&&themeChanged&&document.documentElement.dataset.theme==='dark',viewport_width:innerWidth,pane_width:pane?.clientWidth,pane_scroll_width:pane?.scrollWidth,theme:document.documentElement.dataset.theme,theme_changed:themeChanged,light,dark};
 })();"#}),
         )
         .await?;
@@ -1209,7 +1306,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         && graph["rendered_graph"] == true
         && reloaded_state["passed"] == true
         && persisted_canvas_id["result"] == true
-        && mobile["result"]["passed"] == true;
+        && keyboard_and_theme_passed(&keyboard, &mobile["result"]);
     let passed = page_evidence && interaction["result"].get("error").is_none();
     let captures = json!([
         {"id":"before","caption":format!("{} alone in the Console before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
@@ -1218,7 +1315,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page, persisted edit, and the Canvas graph it opened rendered in the Console"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page, persisted edit, keyboard action, both themes, and the Canvas graph it opened rendered in the Console"} else {"Console layout, Worker interaction, keyboard action, reload persistence, Canvas graph, or narrow theme check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"keyboard":keyboard,"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
     )
 }
 
@@ -1549,6 +1646,38 @@ mod tests {
         assert!(!is_load_timeout(
             &anyhow::Error::new(iii_sdk::errors::Error::Timeout)
                 .context("invoke browser::navigate")
+        ));
+    }
+
+    #[test]
+    fn browser_evidence_requires_keyboard_activation_and_two_usable_themes() {
+        let keyboard = json!({
+            "passed": true,
+            "focus": {"focused": true},
+            "effect_before": false,
+            "effect_observed": true
+        });
+        let appearance = json!({
+            "passed": true,
+            "theme_changed": true,
+            "light": {"usable": true},
+            "dark": {"usable": true}
+        });
+        assert!(keyboard_and_theme_passed(&keyboard, &appearance));
+
+        let mut mouse_only = keyboard.clone();
+        mouse_only["focus"]["focused"] = false.into();
+        assert!(!keyboard_and_theme_passed(&mouse_only, &appearance));
+
+        let mut fixed_light = appearance.clone();
+        fixed_light["theme_changed"] = false.into();
+        assert!(!keyboard_and_theme_passed(&keyboard, &fixed_light));
+
+        let mut effect_already_present = keyboard.clone();
+        effect_already_present["effect_before"] = true.into();
+        assert!(!keyboard_and_theme_passed(
+            &effect_already_present,
+            &appearance
         ));
     }
 

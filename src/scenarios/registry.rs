@@ -878,8 +878,10 @@ mod tests {
         let observations: Vec<_> = metrics(4)
             .iter()
             .map(|metric| match metric["id"].as_str().unwrap() {
-                "verification.recall" | "verification.precision" =>
+                "verification.recall" =>
                     json!({"id":metric["id"],"status":"measured","numerator":0,"denominator":0,"value":1}),
+                "verification.precision" =>
+                    json!({"id":metric["id"],"status":"not_applicable","numerator":0,"denominator":0}),
                 "verification.evidence_coverage" =>
                     json!({"id":metric["id"],"status":"measured","numerator":0,"denominator":0,"value":0}),
                 "verification.source_preservation" =>
@@ -887,13 +889,21 @@ mod tests {
                 _ => json!({"id":metric["id"],"status":"measured","numerator":1,"denominator":1}),
             })
             .collect();
+        let awards = awards(4, &json!({"observations":observations})).unwrap();
         assert_eq!(
-            awards(4, &json!({"observations":observations}))
-                .unwrap()
+            awards
                 .iter()
-                .map(|award| u16::from(award.awarded.unwrap()))
+                .find(|award| award.id == "verification.precision")
+                .unwrap()
+                .awarded,
+            None
+        );
+        assert_eq!(
+            awards
+                .iter()
+                .filter_map(|award| award.awarded.map(u16::from))
                 .sum::<u16>(),
-            80
+            60
         );
     }
     #[test]

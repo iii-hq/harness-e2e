@@ -2,7 +2,7 @@
 //! function surface. The smallest database task; the evaluator reads the
 //! table back and counts turns.
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -118,10 +118,7 @@ impl Scenario for InsertRecord {
         run_id: &str,
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let table = table(run_id);
-        let rows = match table_rows(context, &table).await {
-            Ok(rows) => json!(rows),
-            Err(error) => json!({ "error": error }),
-        };
+        let rows = table_rows(context, &table).await?;
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "database_record".to_string(),
@@ -158,12 +155,9 @@ impl Scenario for InsertRecord {
         let table = table(run_id);
         // The capture stored the rows of this same table before cleanup; reuse
         // them instead of querying the database a second time.
-        let (rows, query_error) = match captured_rows(observation) {
+        let rows = match captured_rows(observation) {
             Some(captured) => captured,
-            None => match table_rows(context, &table).await {
-                Ok(rows) => (rows, None),
-                Err(error) => (Vec::new(), Some(error)),
-            },
+            None => table_rows(context, &table).await?,
         };
         let values: Vec<Option<&str>> = rows
             .iter()
@@ -179,13 +173,7 @@ impl Scenario for InsertRecord {
                 CompletionState::TaskIncomplete
             },
             [
-                RECORD_CREATED.full_or_zero(
-                    record_created,
-                    match query_error {
-                        Some(error) => format!("rows unavailable: {error}"),
-                        None => format!("rows={values:?}"),
-                    },
-                ),
+                RECORD_CREATED.full_or_zero(record_created, format!("rows={values:?}")),
                 FEWER_THAN_TEN_TURNS
                     .full_or_zero(turns < MAX_TURNS_FOR_CREDIT, format!("turns={turns}")),
             ],
@@ -210,22 +198,56 @@ fn deliverable_contract() -> DeliverableContract {
     )
 }
 
-/// Rows of the owned table, or the function error when it is unreadable.
-async fn table_rows(context: &E2eContext, table: &str) -> Result<Vec<Value>, String> {
-    context
+async fn table_rows(context: &E2eContext, table: &str) -> anyhow::Result<Vec<Value>> {
+    let queried = context
         .trigger_value(
             "database::query",
             json!({ "db": DATABASE, "sql": format!("SELECT id, value FROM {table} ORDER BY id") }),
         )
-        .await
-        .map(|response| {
-            response
-                .get("rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
+        .await;
+    let result = match queried {
+        Err(error)
+            if matches!(
+                error.downcast_ref::<iii_sdk::errors::Error>(),
+                Some(iii_sdk::errors::Error::Handler(_) | iii_sdk::errors::Error::Remote { .. })
+            ) =>
+        {
+            let absent = match context
+                .trigger_value("database::listTables", json!({ "db": DATABASE }))
+                .await
+                .and_then(|catalog| table_absent(&catalog, table))
+            {
+                Ok(absent) => absent,
+                Err(catalog_error) => {
+                    return Err(error.context(format!("confirm table presence: {catalog_error:#}")))
+                }
+            };
+            if !absent {
+                return Err(error);
+            }
+            return Ok(Vec::new());
+        }
+        other => other?,
+    };
+    result
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .context("insert_record query did not return rows")
+}
+
+fn table_absent(catalog: &Value, table: &str) -> anyhow::Result<bool> {
+    let names = catalog["tables"]
+        .as_array()
+        .context("database catalog did not return tables")?
+        .iter()
+        .map(|entry| {
+            entry["name"]
+                .as_str()
+                .context("database catalog table name is missing")
         })
-        .map_err(|error| format!("{error:#}"))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(!names.contains(&table))
 }
 
 async fn execute(context: &E2eContext, sql: String) -> anyhow::Result<Value> {
@@ -234,29 +256,16 @@ async fn execute(context: &E2eContext, sql: String) -> anyhow::Result<Value> {
         .await
 }
 
-/// The rows the capture stored for this run, as `(rows, query_error)`.
-fn captured_rows(observation: &ScenarioObservation) -> Option<(Vec<Value>, Option<String>)> {
-    let content = observation
+fn captured_rows(observation: &ScenarioObservation) -> Option<Vec<Value>> {
+    observation
         .deliverables
         .iter()
         .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
         .content
         .as_json()?
         .get("rows")?
-        .clone();
-    match content {
-        Value::Array(rows) => Some((rows, None)),
-        other => Some((
-            Vec::new(),
-            Some(
-                other
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("rows unavailable")
-                    .to_string(),
-            ),
-        )),
-    }
+        .as_array()
+        .cloned()
 }
 
 #[cfg(test)]
@@ -272,5 +281,29 @@ mod tests {
         crate::scenarios::ScenarioId::InsertRecord
             .materialize("case", 5)
             .unwrap();
+    }
+
+    #[test]
+    fn only_a_valid_catalog_proves_table_absence() {
+        let table = "e2e_insert_record_test";
+        assert!(!table_absent(&json!({"tables":[{"name":table}]}), table).unwrap());
+        assert!(table_absent(&json!({"tables":[{"name":"other"}]}), table).unwrap());
+        assert!(table_absent(&json!({"tables":[]}), table).unwrap());
+        for catalog in [json!({}), json!({"tables":{}}), json!({"tables":[{}]})] {
+            assert!(table_absent(&catalog, table).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn query_transport_failure_remains_unavailable() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let error = table_rows(&context, "e2e_insert_record_test")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::context::transport_failure_code(&error),
+            Some("transport_not_connected")
+        );
+        context.shutdown().await;
     }
 }

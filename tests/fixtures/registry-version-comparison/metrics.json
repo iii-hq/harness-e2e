@@ -628,7 +628,7 @@
         {
           "id": "verification.precision",
           "question": "What proportion of reported failing checks fail independently?",
-          "expected": "Execute the contract probes independently and match each reported failure by check ID. If no failures are reported, retain 0/0 and score the empty set as value 1.",
+          "expected": "Execute the contract probes independently and match each reported failure by check ID. If no failures are reported, retain 0/0 as not applicable.",
           "measurement": "ratio",
           "weight": 20,
           "numerator": "Reported failing check IDs independently reproduced.",

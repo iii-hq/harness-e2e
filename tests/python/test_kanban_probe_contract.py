@@ -307,7 +307,7 @@ console.log(JSON.stringify(observed))
             self.skipTest("dashboard Playwright is not installed")
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
-import {{ boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
+import {{ boardLaneCount, boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
 const browser = await chromium.launch({{ headless: true }})
 try {{
   const page = await browser.newPage()
@@ -334,8 +334,13 @@ try {{
   await page.locator('#sibling span').evaluate((element) => {{ element.textContent = '2'; element.setAttribute('aria-label', '2 tickets') }})
   let wrongLaneCountRejected = false
   try {{ await boardLaneWithCount(page, 'To do', 1) }} catch {{ wrongLaneCountRejected = true }}
-  await page.setContent('<p role="status">Loading tickets…</p><p>…</p><button>Reload</button>')
-  const loading = {{ zero: await boardTicketTotal(page, 0).count(), refresh: await boardRefreshButton(page).count() }}
+  await page.setContent('<main><section><h2>Backlog</h2></section><p role="status">Loading tickets…</p><aside>0</aside><button>Reload</button></main>')
+  const loading = {{
+    zero: await boardTicketTotal(page, 0).count(),
+    laneZero: await boardLaneCount(page, 'Backlog', 0).count(),
+    unrelatedZero: await page.getByText(/^0$/).filter({{ visible: true }}).count(),
+    refresh: await boardRefreshButton(page).count(),
+  }}
   await page.setContent('<p role="status">Loading tickets…</p><p>0 tickets</p>')
   const fabricatedZero = await boardTicketTotal(page, 0).count()
   await page.setContent('<main></main>')
@@ -362,7 +367,7 @@ try {{
             "valid": {"combined": 1, "sibling": 1, "total": 1, "refreshed": True,
                       "accessibleCount": 1, "paragraphTitle": 1, "boardLink": 1},
             "wrongLaneCountRejected": True,
-            "loading": {"zero": 0, "refresh": 0},
+            "loading": {"zero": 0, "laneZero": 0, "unrelatedZero": 1, "refresh": 0},
             "fabricatedZero": 1,
             "safeText": {"heading": 1, "images": 0},
         })
@@ -786,11 +791,11 @@ setInterval(() => {}, 1000)
             self.assertIsNotNone(websocket_url, "Node did not publish an inspector URL")
             port = int(child.stdout.readline())
 
-            def count():
+            def count(token=None):
                 script = (
                     f"import {{inspectorClient,countSseServerResponses}} from {json.dumps(PROBE.as_uri())};"
                     f"const client=await inspectorClient({json.dumps(websocket_url)});"
-                    "try{console.log(await countSseServerResponses(client))}finally{client.close()}"
+                    f"try{{console.log(await countSseServerResponses(client,{json.dumps(token)}))}}finally{{client.close()}}"
                     "setTimeout(()=>process.exit(0),20)"
                 )
                 completed = subprocess.run(
@@ -800,38 +805,42 @@ setInterval(() => {}, 1000)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 return int(completed.stdout)
 
-            def connect(path):
+            def connect(path, token=None):
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-                connection.request("GET", path)
+                headers = {"x-harness-e2e-sse-probe": token} if token else {}
+                connection.request("GET", path, headers=headers)
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
                 connections.append((connection, response))
 
-            baseline = count()
+            connect("/clean")
+            token = "isolated-probe"
+            self.assertEqual(count(token), 0)
             for _ in range(6):
-                connect("/clean")
-            self.assertGreaterEqual(count(), baseline + 6)
-            while connections:
+                connect("/clean", token)
+            self.assertGreaterEqual(count(token), 6)
+            for _ in range(6):
                 connection, response = connections.pop()
                 response.close()
                 connection.close()
             for _ in range(30):
-                if count() == baseline:
+                if count(token) == 0:
                     break
                 time.sleep(.05)
             else:
-                self.fail("closed SSE responses were not collectible")
+                self.fail("closed probe SSE responses were not collectible")
+            self.assertGreaterEqual(count(), 1)
 
-            connect("/leak")
+            connect("/leak", token)
             connection, response = connections.pop()
             response.close()
             connection.close()
             for _ in range(30):
-                if count() >= baseline + 1:
+                if count(token) >= 1:
                     break
                 time.sleep(.05)
             else:
-                self.fail("deliberately retained SSE response was not detected")
+                self.fail("deliberately retained probe SSE response was not detected")
         finally:
             for connection, response in connections:
                 response.close()
