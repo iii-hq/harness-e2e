@@ -2490,7 +2490,7 @@ pub(crate) mod tests {
         db.initialize(root.path()).await.unwrap();
         assert_eq!(
             db.local_suite(&suite.id).await.unwrap().unwrap().label,
-            "PR copy"
+            "Essential checks before merge copy"
         );
         assert_eq!(
             db.saved_execution(&id).await.unwrap().unwrap().slots.len(),
@@ -2578,7 +2578,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(
             (created.label.as_str(), created.source.as_str()),
-            ("PR copy", "local")
+            ("Essential checks before merge copy", "local")
         );
         let suite = manager
             .update_suite(SuiteUpdateRequest {
@@ -3136,7 +3136,7 @@ pub(crate) mod tests {
             parameters.suite,
             Some(ExecutionSuite {
                 id: Some("pr".into()),
-                label: "PR".into(),
+                label: "Essential checks before merge".into(),
                 sha256: reviewed.profile_sha256.clone(),
             })
         );

@@ -35,9 +35,9 @@
       "reference_commit": "6f22064f99ac36da4fd8174bdc7b468473e72595",
       "prompt": "Make the home page a read-only Kanban board with five columns: Backlog, To do, In progress, In review and Done. Show per-column counts, total count and cards with readable key, title, priority and assignee. GET /api/tickets must invoke the existing iii list function and return {tickets:[...]}. Include a refresh action, loading, empty and recoverable error states. Preserve settings navigation; returning from settings reloads the selected store. Keep the board usable on desktop and mobile, with horizontal scrolling confined to the board. Render user text safely. Do not add ticket creation, detail views, editing or live synchronization yet.",
       "criteria": [
-        "Tickets created through iii appear in the correct five columns with accurate counts and metadata.",
-        "Empty stores, loading and failed reads are distinguished; retry recovers without fabricated zero counts.",
-        "Refresh and returning from settings load the selected store.",
+        "Tickets created through iii appear in the correct five columns with accurate total and column counts plus metadata.",
+        "Empty, loading, and failed-read states are distinct; retry recovers without showing zero totals or column counts before data loads.",
+        "Refresh and returning from settings load tickets from the selected store.",
         "Markup in titles is literal text; desktop and mobile have no document-wide horizontal overflow."
       ]
     },
@@ -86,11 +86,11 @@
       "reference_commit": "f24040d2046b2f745f3b0f771d3c5b0b02d51516",
       "prompt": "Synchronize open browser sessions automatically after ticket creation, edits, moves, deletion, comments and replies, including mutations made directly through iii functions. Implement GET /api/events using SSE with named change events carrying {store: resolved data directory}, an initial notification on each connection and notifications only after successful persistence or effective store changes. Reconnect and refresh current state after missed events. Preserve focus, edit/comment drafts and active dragging during ordinary live updates. Saving an edit must not overwrite remote changes to fields the user did not edit; simultaneous writes to the same field may use last successful write. Clear old-store drafts when storage changes; remote deletion must make stale actions unavailable. Avoid stale responses overwriting newer state. Clean up disconnected SSE clients and allow process shutdown/restart with connections open. No external file watching or shared-store multi-process support is required.",
       "criteria": [
-        "Three real browser sessions see all mutations without page reload, including direct iii updates.",
-        "Focus, comment/reply drafts and dirty edit fields survive updates; saving preserves untouched remote fields.",
-        "Offline/reconnect and Compose restart recover current state without losing same-store drafts.",
+        "Three real browser sessions receive the tested browser and direct iii updates without a page reload.",
+        "Focus, comment and reply drafts, and dirty edit fields survive updates; saving preserves untouched remote fields.",
+        "Reconnect and Compose restart recover current state without losing drafts in the same store.",
         "Remote deletion disables stale actions; store switches clear old drafts, including during dragging.",
-        "Late GET/mutation responses do not replace newer state; SSE disconnects release listeners and shutdown finishes."
+        "Late GET and mutation responses do not replace newer state; disconnected SSE clients release retained responses, and shutdown completes."
       ]
     }
   ]

@@ -981,16 +981,7 @@ export function RowDetail({
               data-criterion={criterion.key}
             >
               <div className="cmp-criterion-head">
-                <span
-                  className="cmp-criterion-id"
-                  title={
-                    criterion.label === criterion.id
-                      ? undefined
-                      : criterion.label
-                  }
-                >
-                  {criterion.id}
-                </span>
+                <span className="cmp-criterion-label">{criterion.label}</span>
                 <span className="cmp-mono">
                   <span className="cmp-faint-num">
                     {points(criterion.a)}/{criterion.possible} →{' '}
@@ -1009,8 +1000,8 @@ export function RowDetail({
                 </span>
               </div>
               {criterion.label !== criterion.id ? (
-                <p className="cmp-faint cmp-criterion-label">
-                  {criterion.label}
+                <p className="cmp-faint cmp-mono cmp-criterion-id">
+                  {criterion.id}
                 </p>
               ) : null}
               {(['a', 'b'] as const).flatMap((which) =>
@@ -1028,8 +1019,15 @@ export function RowDetail({
               <h4 className="cmp-h4">Lost points on both sides</h4>
               <ul className="cmp-both">
                 {scenario.lostOnBoth.map((criterion) => (
-                  <li key={criterion.key} title={criterion.label}>
-                    <span className="cmp-mono">{criterion.id}</span>
+                  <li key={criterion.key}>
+                    <span className="cmp-criterion-label">
+                      {criterion.label}
+                      {criterion.label !== criterion.id ? (
+                        <span className="cmp-faint cmp-mono cmp-criterion-id">
+                          {criterion.id}
+                        </span>
+                      ) : null}
+                    </span>
                     <span className="cmp-faint-num">
                       A {points(criterion.a)}/{criterion.possible} · B{' '}
                       {points(criterion.b)}/{criterion.possible}

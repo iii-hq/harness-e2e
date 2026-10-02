@@ -431,8 +431,8 @@ export function EvidenceRecordPage({
                             />
                           )}
                           <div className="er-criterion-copy">
-                            <span className="ep-mono ep-strong">
-                              {c.id}
+                            <span className="ep-strong">
+                              {c.description || c.id}
                               {c.gate ? (
                                 <span className={ok ? 'ep-faint' : 'ep-gate'}>
                                   {' '}
@@ -440,7 +440,9 @@ export function EvidenceRecordPage({
                                 </span>
                               ) : null}
                             </span>
-                            <span>{c.description}</span>
+                            {c.description ? (
+                              <span className="ep-mono ep-faint">{c.id}</span>
+                            ) : null}
                             {reasonOnly(c) ? (
                               <span className="ep-faint">{reasonOnly(c)}</span>
                             ) : null}
