@@ -341,6 +341,15 @@ jobs:
           echo "executor containers left: ${containers:-none}"
           [[ -z "$containers" ]] || docker rm -fv $containers
 
+      - name: Render group diagnostics
+        id: group_diagnostics
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 scripts/render_e2e_report.py \
+            --artifacts target/harness-e2e-exact-stack \
+            --output target/harness-e2e-exact-stack
+
       - name: Package factual group evidence
         id: group_package
         if: always()
@@ -397,6 +406,7 @@ jobs:
             --runner-sha "$RUNNER_REVISION"
 
       - name: Upload group observation bundle
+        id: group_upload
         if: always() && (steps.group_package.outcome == 'success' || steps.group_package_failure.outcome == 'success')
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -405,6 +415,15 @@ jobs:
           include-hidden-files: true
           retention-days: 90
           if-no-files-found: error
+
+      - name: Publish group diagnostics
+        if: always() && steps.group_diagnostics.outcome == 'success' && steps.group_package.outcome == 'success' && steps.group_upload.outcome == 'success'
+        continue-on-error: true
+        env:
+          ARTIFACT_URL: ${{ steps.group_upload.outputs.artifact-url }}
+        run: |
+          cat target/harness-e2e-exact-stack/summary.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n[Download reports and evidence](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve factual group conclusion
         if: always() && (steps.common.outcome == 'failure' || steps.group_package.outcome == 'failure')
@@ -550,6 +569,27 @@ jobs:
             --resolution target/harness-e2e-contract/contracts/resolution.json \
             --runner-sha "$RUNNER_REVISION"
 
+      # Render from each restored group into a separate campaign-owned tree:
+      # downloaded group bundles are already hashed and stay byte-for-byte intact.
+      - name: Render finalized campaign diagnostics
+        id: campaign_diagnostics
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          status=0
+          for campaign in target/harness-e2e-campaign/*/; do
+            for group in "${campaign}groups"/*/; do
+              output="${campaign}diagnostics/$(basename "$group")"
+              python3 scripts/render_e2e_report.py \
+                --artifacts "$group" \
+                --output "$output" \
+                || status=1
+            done
+          done
+          exit "$status"
+
       - name: Package factual root evidence
         id: root_package
         if: always()
@@ -583,6 +623,28 @@ jobs:
           include-hidden-files: true
           retention-days: 90
           if-no-files-found: error
+
+      - name: Publish finalized campaign diagnostics
+        if: always() && steps.root_package.outcome == 'success' && steps.root_upload.outcome == 'success'
+        continue-on-error: true
+        env:
+          ARTIFACT_URL: ${{ steps.root_upload.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          touch "$GITHUB_STEP_SUMMARY"
+          for summary in target/harness-e2e-campaign/*/diagnostics/*/summary.md; do
+            if (( $(wc -c < "$GITHUB_STEP_SUMMARY") + $(wc -c < "$summary") > 900000 )); then
+              printf 'Additional campaign diagnostics omitted here; download the artifact for every report.\n\n' >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            group=$(basename "$(dirname "$summary")")
+            campaign=$(basename "$(dirname "$(dirname "$(dirname "$summary")")")")
+            printf '## %s · %s\n\n' "$campaign" "$group" >> "$GITHUB_STEP_SUMMARY"
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+          printf '[Download finalized reports and evidence](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve factual finalizer conclusion
         if: always() && (steps.aggregate.outcome == 'failure' || steps.root_package.outcome == 'failure' || steps.root_upload.outcome == 'failure')

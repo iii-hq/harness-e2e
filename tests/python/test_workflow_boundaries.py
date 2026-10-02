@@ -105,6 +105,115 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 else:
                     self.assertEqual(values["download_path"], "target/downloaded-groups")
 
+    def test_group_markdown_is_packaged_before_publishing_and_links_the_uploaded_bundle(self):
+        steps = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())["jobs"]["groups"]["steps"]
+        render = next(step for step in steps if step.get("id") == "group_diagnostics")
+        package = next(step for step in steps if step.get("id") == "group_package")
+        upload = next(step for step in steps if step.get("id") == "group_upload")
+        publish = next(step for step in steps if step.get("name") == "Publish group diagnostics")
+        self.assertLess(steps.index(render), steps.index(package))
+        self.assertLess(steps.index(package), steps.index(upload))
+        self.assertLess(steps.index(upload), steps.index(publish))
+        self.assertTrue(render["continue-on-error"])
+        self.assertTrue(publish["continue-on-error"])
+        for dependency in ("group_diagnostics", "group_package", "group_upload"):
+            self.assertIn(f"steps.{dependency}.outcome == 'success'", publish["if"])
+        self.assertEqual(publish["env"]["ARTIFACT_URL"], "${{ steps.group_upload.outputs.artifact-url }}")
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
+            artifacts = root / "target/harness-e2e-exact-stack"
+            artifacts.mkdir(parents=True)
+            original = json.dumps({"phase": "setup", "outcome": "infra_failed", "error": "engine unavailable"})
+            (artifacts / "failure.json").write_text(original)
+            result = subprocess.run(["bash", "-e", "-c", render["run"]], cwd=root,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((artifacts / "failure.json").read_text(), original)
+            self.assertIn("engine unavailable", (artifacts / "summary.md").read_text())
+            summary = root / "github-summary.md"
+            result = subprocess.run(["bash", "-e", "-c", publish["run"]], cwd=root, env={
+                **os.environ, "GITHUB_STEP_SUMMARY": str(summary),
+                "ARTIFACT_URL": "https://github.com/iii-hq/harness-e2e/actions/runs/77/artifacts/88",
+            }, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("engine unavailable", summary.read_text())
+            self.assertIn("/artifacts/88)", summary.read_text())
+
+    def test_finalized_group_diagnostics_are_separate_packaged_and_published_after_upload(self):
+        steps = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())["jobs"]["finalize"]["steps"]
+        render = next(step for step in steps if step.get("id") == "campaign_diagnostics")
+        package = next(step for step in steps if step.get("id") == "root_package")
+        upload = next(step for step in steps if step.get("id") == "root_upload")
+        publish = next(step for step in steps if step.get("name") == "Publish finalized campaign diagnostics")
+        self.assertLess(steps.index(render), steps.index(package))
+        self.assertLess(steps.index(package), steps.index(upload))
+        self.assertLess(steps.index(upload), steps.index(publish))
+        self.assertTrue(render["continue-on-error"])
+        self.assertTrue(publish["continue-on-error"])
+        self.assertNotIn("campaign_diagnostics", publish["if"])
+        for dependency in ("root_package", "root_upload"):
+            self.assertIn(f"steps.{dependency}.outcome == 'success'", publish["if"])
+        self.assertEqual(publish["env"]["ARTIFACT_URL"], "${{ steps.root_upload.outputs.artifact-url }}")
+        self.assertIn("900000", publish["run"])
+        self.assertIn("download the artifact for every report", publish["run"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
+            group = root / "target/harness-e2e-campaign/smoke-r01/groups/case-partial"
+            checkpoint = group / "journal/runs/slot-1/attempt-1.json"
+            checkpoint.parent.mkdir(parents=True)
+            events = group / "journal/events"
+            events.mkdir(parents=True)
+            (events / "0001-slot-inventory-committed.json").write_text(json.dumps({
+                "slots": [{
+                    "slot_id": "slot-1",
+                    "scenario_id": "minimal_path",
+                    "case_id": "minimal_path:seed-1",
+                    "seed": 1,
+                    "repetition": 1,
+                }],
+            }))
+            checkpoint.write_text(json.dumps({
+                "slot_id": "slot-1",
+                "run": {
+                    "run_id": "run-1",
+                    "attempt_id": "attempt-1",
+                    "attempt_number": 1,
+                    "technical": "technical_invalid",
+                    "completion": "undetermined",
+                    "score": None,
+                    "status": "failed",
+                    "failures": [{"phase": "observe", "message": "partial checkpoint"}],
+                },
+            }))
+            before = checkpoint.read_bytes()
+            result = subprocess.run(["bash", "-c", render["run"]], cwd=root,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(checkpoint.read_bytes(), before)
+            diagnostics = root / "target/harness-e2e-campaign/smoke-r01/diagnostics/case-partial"
+            self.assertIn("minimal\\_path", (diagnostics / "summary.md").read_text())
+            document = json.loads((diagnostics / "diagnostics.json").read_text())
+            self.assertEqual(document["schema"], "harness-e2e-diagnostics-v1")
+            self.assertEqual(document["source"], "journal")
+            detail = next((diagnostics / "failures").iterdir())
+            self.assertIn("partial checkpoint", detail.read_text())
+            self.assertFalse((group / "summary.md").exists())
+
+            github_summary = root / "github-summary.md"
+            result = subprocess.run(["bash", "-c", publish["run"]], cwd=root, env={
+                **os.environ,
+                "GITHUB_STEP_SUMMARY": str(github_summary),
+                "ARTIFACT_URL": "https://github.com/iii-hq/harness-e2e/actions/runs/77/artifacts/99",
+            }, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rendered = github_summary.read_text()
+            self.assertIn("smoke-r01 · case-partial", rendered)
+            self.assertIn("minimal\\_path", rendered)
+            self.assertIn("/artifacts/99)", rendered)
+
     def test_external_actions_are_pinned_to_immutable_commits(self):
         action_ref = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
         immutable = re.compile(r"^[^\s]+@[0-9a-f]{40}$")
