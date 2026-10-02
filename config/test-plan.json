@@ -193,8 +193,8 @@
   "suites": [
     {
       "id": "regression",
-      "label": "Regression",
-      "purpose": "Detect regressions in core runtime behavior, recovery, context and safety.",
+      "label": "Core runtime regression",
+      "purpose": "Check core execution and recovery through state persistence, tool contracts, timer wake-ups, database migrations, coordination, and validation. Also test context handling, Python code repair, and prompt injection protection.",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -218,8 +218,8 @@
     },
     {
       "id": "software-engineering",
-      "label": "Software engineering",
-      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, Alertmanager route migration, and visual chess, form-flow, and state-machine Workers in the Console.",
+      "label": "Application builds and changes",
+      "purpose": "Build and verify Kanban, Registry version comparison, a trending-topics blog, and interactive chess, issue-form, and CI state-machine applications. Refactor Alertmanager routing while preserving its results.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -249,8 +249,8 @@
     },
     {
       "id": "linkly",
-      "label": "Linkly",
-      "purpose": "Build the Linkly link shortener with the agentic tutorial, chapter by chapter, on the linkly stack's fresh linkly-agentic scaffold.",
+      "label": "Build Linkly from the tutorial",
+      "purpose": "Build the Linkly link shortener chapter by chapter, starting from a fresh project on the Linkly stack.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -266,8 +266,8 @@
     },
     {
       "id": "pr",
-      "label": "PR",
-      "purpose": "Check essential behavior on a candidate stack before merging a change.",
+      "label": "Essential checks before merge",
+      "purpose": "Run four checks before merging a change: one precise state write, state persistence, adapting to a changed tool contract, and repairing Python code.",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -286,8 +286,8 @@
     },
     {
       "id": "after-release",
-      "label": "After release",
-      "purpose": "Check essential behavior in the published stack after a release.",
+      "label": "Published stack checks",
+      "purpose": "Run five checks on the published stack: one precise state write, state persistence, adapting to a changed tool contract, repairing Python code, and timer wake-ups.",
       "metrics": [
         "execution_reliability",
         "completion_rate",

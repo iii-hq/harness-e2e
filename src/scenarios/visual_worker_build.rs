@@ -128,8 +128,8 @@ impl Kind {
 
     fn title(self) -> &'static str {
         match self {
-            Self::Form => "Build a Visual Issue Form Worker",
-            Self::Machine => "Build a Visual State Machine Worker",
+            Self::Form => "Build an issue form with live preview",
+            Self::Machine => "Build an interactive CI state machine",
         }
     }
 

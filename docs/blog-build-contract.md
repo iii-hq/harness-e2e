@@ -340,7 +340,7 @@ Evolution profile: three repetitions, no technical retries. Evolution now has
 private fixture using a read-only GitHub App token without persisting credentials,
 then routes the controller fetch to that local checkout.
 
-The Software engineering profile also selects the same build case as an
+The Application builds and changes suite also selects the same build case as an
 independent group, with one repetition and no technical retries. It contains
 14 cases and 14 planned runs across 13 groups, preserving the ordered Registry
 implementation/verification pair. The fixture and evaluation contract are shared

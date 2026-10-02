@@ -149,13 +149,13 @@ plus a diagnostic set that suites can opt into.
 materializes its suites and execution rules from that source and from the
 native scenario contracts. There is no generated catalog to keep in sync.
 
-| Suite | Purpose |
-| --- | --- |
-| `regression` | Daily runtime, recovery, context and safety checks; one technical retry where safe. |
-| `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
-| `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
-| `pr` | Four essential checks of a candidate stack before merging a change. |
-| `after-release` | Five essential checks of the published stack. |
+| Suite | ID | Purpose |
+| --- | --- | --- |
+| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks; one technical retry where safe. |
+| Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
+| Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
+| Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
+| Published stack checks | `after-release` | Five essential checks of the published stack. |
 
 A suite is only what to test: scenarios, runs of each and technical retries.
 In the Console these suites are read-only; **Suites** copies any of them into
