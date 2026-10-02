@@ -251,7 +251,7 @@ impl Scenario for DatabaseMigrationRecovery {
             filesystem_root: None,
             execution: ExecutionPolicy {
                 max_turns: Some(24),
-                max_output_tokens: Some(8_192),
+                max_output_tokens: Some(16_384),
                 max_total_tokens: Some(200_000),
                 stuck_timeout_seconds: 300,
                 max_validation_retries: None,
@@ -744,9 +744,10 @@ mod tests {
             .spec("run")
             .validate()
             .unwrap();
-        crate::scenarios::ScenarioId::DatabaseMigrationRecovery
+        let materialized = crate::scenarios::ScenarioId::DatabaseMigrationRecovery
             .materialize("case", 9)
             .unwrap();
+        assert_eq!(materialized.spec.execution.max_output_tokens, Some(16_384));
     }
 
     #[test]
