@@ -136,16 +136,8 @@ impl Snapshot {
             && self.match_cases.iter().all(|(_, passed, _)| *passed)
     }
 
-    /// The task is done once `route::match` answers with a match payload and
-    /// the Go router calls it. Exact agreement with the oracle stays in the
-    /// score.
     fn task_completed(&self) -> bool {
-        self.delegation_wired
-            && self.function_registered
-            && self
-                .match_cases
-                .iter()
-                .any(|(_, passed, reason)| call_answered(*passed, reason))
+        self.delegation_wired && self.match_equivalent()
     }
 
     fn match_awarded(&self) -> u8 {
@@ -740,10 +732,6 @@ fn revision_reason(snapshot: &Snapshot) -> String {
     }
 }
 
-fn call_answered(passed: bool, reason: &str) -> bool {
-    passed || reason.starts_with("receivers ")
-}
-
 fn match_reason(snapshot: &Snapshot) -> String {
     let passed = snapshot
         .match_cases
@@ -1213,6 +1201,7 @@ mod tests {
     fn live_calls_score_partially_and_scope_stays_separate() {
         let mut snapshot = valid_snapshot();
         assert!(snapshot.match_equivalent());
+        assert!(snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), MATCH_EQUIVALENT.weight());
         assert!(snapshot.scope_exact());
         snapshot.match_cases.push((
@@ -1221,7 +1210,7 @@ mod tests {
             "receivers [\"team-X-pager\"]".into(),
         ));
         assert!(!snapshot.match_equivalent());
-        assert!(snapshot.task_completed());
+        assert!(!snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), 35);
         assert!(match_reason(&snapshot).contains("1 of 2 live calls"));
         snapshot.match_cases = vec![(
@@ -1229,7 +1218,7 @@ mod tests {
             false,
             "receivers [\"team-X-pager\"]".into(),
         )];
-        assert!(snapshot.task_completed());
+        assert!(!snapshot.task_completed());
         snapshot.delegation_wired = false;
         assert!(!snapshot.task_completed());
         snapshot.delegation_wired = true;
