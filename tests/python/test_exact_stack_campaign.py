@@ -1471,6 +1471,7 @@ compose_file=$1/$3/worker-compose.yaml
 contract_tool=$2
 log() { :; }
 await_compose_add() { :; }
+export_compose() { :; }
 compose_trigger() {
   printf '%s\\n' "$*" >>"$artifact_dir/calls"
   # Harness's graph brings the Directory when the case says so.

@@ -789,16 +789,12 @@ fn validate_history_record(record: &HistoryRecord) -> Result<()> {
     {
         bail!("history identity differs from its archive reference");
     }
-    for (name, value) in [(
-        "result_contract_sha256",
-        record.result_contract_sha256.as_str(),
-    )] {
-        if value.len() != 71
-            || !value.starts_with("sha256:")
-            || !value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            bail!("history {name} is not a SHA-256 fingerprint");
-        }
+    let value = record.result_contract_sha256.as_str();
+    if value.len() != 71
+        || !value.starts_with("sha256:")
+        || !value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("history result_contract_sha256 is not a SHA-256 fingerprint");
     }
     DateTime::parse_from_rfc3339(&record.occurred_at)
         .context("history occurred_at must be RFC 3339")?;
@@ -1061,6 +1057,160 @@ mod tests {
                 subject_provider: "provider".into(),
                 system_under_test: None,
             },
+        }
+    }
+
+    fn history_record_fixture() -> HistoryRecord {
+        let basis = archive_basis(None, Some(&terminal_observation())).unwrap();
+        let archive = DurableArchiveReference {
+            archive_id: archive_id(&basis, RetentionClass::Canonical).unwrap(),
+            execution_id: basis.execution_id.clone(),
+            identity_sha256: basis.identity_sha256.clone(),
+            retention_class: RetentionClass::Canonical,
+            created_at: basis.completed_at.clone(),
+            expires_at: None,
+            manifest: object("canonical", "manifest", 'c'),
+            manifest_backup: object("backup", "manifest", 'c'),
+        };
+        history_record(&basis, archive).unwrap()
+    }
+
+    #[test]
+    fn history_record_accepts_valid_result_contract_fingerprints() {
+        for digest in ["0".repeat(64), "ABCDEF01".repeat(8), "aB09".repeat(16)] {
+            let mut record = history_record_fixture();
+            record.result_contract_sha256 = format!("sha256:{digest}");
+            assert!(validate_history_record(&record).is_ok(), "{digest}");
+        }
+    }
+
+    #[test]
+    fn history_record_rejects_wrong_fingerprint_lengths_and_prefixes() {
+        for value in [
+            String::new(),
+            "a".repeat(64),
+            format!("sha256:{}", "a".repeat(63)),
+            format!("sha256:{}", "a".repeat(65)),
+            format!("SHA256:{}", "a".repeat(64)),
+            format!("sha512:{}", "a".repeat(64)),
+            format!("sha256;{}", "a".repeat(64)),
+        ] {
+            let mut record = history_record_fixture();
+            record.result_contract_sha256 = value;
+            assert_eq!(
+                validate_history_record(&record).unwrap_err().to_string(),
+                "history result_contract_sha256 is not a SHA-256 fingerprint",
+                "{:?}",
+                record.result_contract_sha256,
+            );
+        }
+    }
+
+    #[test]
+    fn history_record_rejects_nonhex_fingerprint_bytes() {
+        for (index, byte) in [(7, b'g'), (38, b'G'), (70, b'z'), (70, b'\n'), (38, 0)] {
+            let mut record = history_record_fixture();
+            let mut bytes = format!("sha256:{}", "a".repeat(64)).into_bytes();
+            bytes[index] = byte;
+            record.result_contract_sha256 = String::from_utf8(bytes).unwrap();
+            assert_eq!(
+                validate_history_record(&record).unwrap_err().to_string(),
+                "history result_contract_sha256 is not a SHA-256 fingerprint",
+                "byte {byte} at {index}",
+            );
+        }
+    }
+
+    #[test]
+    fn history_record_rejects_unicode_fingerprints_without_panicking() {
+        for value in [
+            "💥".into(),
+            format!("sha256é{}", "a".repeat(63)),
+            format!("sha25💥{}", "a".repeat(62)),
+            format!("sha256:é{}", "a".repeat(62)),
+            format!("sha256:Ａ{}", "a".repeat(61)),
+            format!("sha256:💥{}", "a".repeat(60)),
+            format!("sha256:{}é", "a".repeat(62)),
+        ] {
+            // The 71-byte malformed prefixes put byte 7 inside a UTF-8 character.
+            let mut record = history_record_fixture();
+            record.result_contract_sha256 = value;
+            assert_eq!(
+                validate_history_record(&record).unwrap_err().to_string(),
+                "history result_contract_sha256 is not a SHA-256 fingerprint",
+                "{:?}",
+                record.result_contract_sha256,
+            );
+        }
+    }
+
+    #[test]
+    fn history_record_checks_all_identities_before_the_fingerprint() {
+        let record = history_record_fixture();
+        let mut ingestion = record.clone();
+        ingestion.ingestion_id.push('0');
+        let mut execution = record.clone();
+        execution.execution_id.push('0');
+        let mut identity = record;
+        identity.identity_sha256.push('0');
+        for mut record in [ingestion, execution, identity] {
+            record.result_contract_sha256 = "invalid".into();
+            assert_eq!(
+                validate_history_record(&record).unwrap_err().to_string(),
+                "history identity differs from its archive reference",
+            );
+        }
+    }
+
+    #[test]
+    fn history_record_preserves_fingerprint_timestamp_and_archive_validation_order() {
+        let mut record = history_record_fixture();
+        let fingerprint = record.result_contract_sha256.clone();
+        let occurred_at = record.occurred_at.clone();
+        record.result_contract_sha256 = "invalid".into();
+        record.occurred_at = "invalid".into();
+        record.archive.archive_id = "g".repeat(32);
+        record.ingestion_id = record.archive.archive_id.clone();
+        assert_eq!(
+            validate_history_record(&record).unwrap_err().to_string(),
+            "history result_contract_sha256 is not a SHA-256 fingerprint",
+        );
+        record.result_contract_sha256 = fingerprint;
+        assert_eq!(
+            validate_history_record(&record).unwrap_err().to_string(),
+            "history occurred_at must be RFC 3339",
+        );
+        record.occurred_at = occurred_at;
+        assert_eq!(
+            validate_history_record(&record).unwrap_err().to_string(),
+            "invalid durable archive reference",
+        );
+    }
+
+    #[test]
+    fn history_record_still_validates_archive_storage_timestamps_and_retention() {
+        let record = history_record_fixture();
+        let mut manifest = record.clone();
+        manifest.archive.manifest.uri.push('x');
+        let mut backup = record.clone();
+        backup.archive.manifest_backup.sha256 = "invalid".into();
+        let mut created = record.clone();
+        created.archive.created_at = "invalid".into();
+        let mut expires = record.clone();
+        expires.archive.expires_at = Some("invalid".into());
+        let mut retention = record;
+        retention.archive.retention_class = RetentionClass::Temporary;
+        for (record, error) in [
+            (manifest, "invalid immutable storage reference"),
+            (backup, "invalid immutable storage reference"),
+            (created, "archive created_at must be RFC 3339"),
+            (expires, "archive expires_at must be RFC 3339"),
+            (retention, "non-canonical archive must declare expires_at"),
+        ] {
+            assert_eq!(
+                validate_history_record(&record).unwrap_err().to_string(),
+                error
+            );
         }
     }
 
