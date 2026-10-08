@@ -814,6 +814,44 @@ def project_scaffold(
     return manifest
 
 
+def stage_relative_workers(manifest: dict[str, Any], source_root: Path, project_root: Path) -> None:
+    """Keep non-template path://./ workers' source/build layout after relocation.
+
+    Only explicitly declared local source directories are staged, never an
+    entire Compose runtime. Absolute commit build URIs/scripts are unchanged;
+    templates already scaffold their local sources inside the private project.
+    """
+    import shutil
+
+    source_base = source_root.resolve(strict=True)
+    project_base = project_root.resolve(strict=True)
+    for name, container in manifest["containers"].items():
+        uri = str(container.get("worker", ""))
+        if not uri.startswith("path://./"):
+            continue
+        relative = Path(uri.removeprefix("path://"))
+        if relative == Path(".") or ".." in relative.parts:
+            raise ValueError(f"local worker {name} must name a source directory inside its project")
+        source = source_root / relative
+        destination = project_root / relative
+        if not source.resolve(strict=True).is_relative_to(source_base):
+            raise ValueError(f"local worker {name} source escapes its project")
+        if not destination.resolve().is_relative_to(project_base):
+            raise ValueError(f"local worker {name} destination escapes private runtime")
+        for path in (source, *source.parents, *source.rglob("*")):
+            if path.is_symlink():
+                raise ValueError(f"local worker {name} source contains a symlink")
+        if not source.is_dir():
+            raise ValueError(f"local worker {name} source must be a directory")
+        working = container.get("working_dir")
+        if working and not Path(working).is_absolute() and Path(working) != Path("."):
+            # A separate relative cwd needs its own source ownership, not an
+            # implicit copy of unrelated runtime folders from the old project.
+            if not (source_root / working).resolve().is_relative_to(source.resolve()):
+                raise ValueError(f"local worker {name} working_dir must stay inside its source directory")
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
 def jwt_claims(token: str) -> dict[str, Any]:
     """The claims of a JWT, unverified; empty for anything else."""
     try:
@@ -940,7 +978,9 @@ def compose_evidence(
     }
 
 
-def validate_runtime_layout(artifact_root: Path, runtime_root: Path, allowed_root: Path) -> None:
+def validate_runtime_layout(
+    artifact_root: Path, runtime_root: Path, allowed_root: Path, compose_path: Path | None = None,
+) -> None:
     """Runtime state and provider secrets must never enter the uploaded tree."""
     artifact = artifact_root.resolve(strict=True)
     runtime = runtime_root.resolve(strict=True)
@@ -949,6 +989,51 @@ def validate_runtime_layout(artifact_root: Path, runtime_root: Path, allowed_roo
         raise ValueError("artifact root must remain below the canonical target directory")
     if artifact.is_relative_to(runtime) or runtime.is_relative_to(artifact):
         raise ValueError("runtime and artifact roots must not overlap")
+    if compose_path is not None:
+        # The manifest may not exist yet; resolve its existing parents too.
+        for path in (compose_path, compose_path.with_suffix(".lock")):
+            if path.is_symlink() or not path.resolve().is_relative_to(runtime):
+                raise ValueError("Compose manifest and lock must remain inside the private runtime root")
+
+
+def export_compose_files(
+    compose_path: Path, runtime_root: Path, artifact_root: Path, allowed_root: Path, final: bool = False,
+) -> None:
+    """Export only owned manifest/lock bytes, never env, login, data or state.
+
+    The pre-up manifest is the evidence input; cleanup retains it and writes a
+    separate final manifest. Locks always reflect Compose's last factual file.
+    Packaging still rejects credentials in either export, without rewriting it.
+    """
+    import shutil
+    import stat
+
+    validate_runtime_layout(artifact_root, runtime_root, allowed_root, compose_path)
+    stack = artifact_root / "stack"
+    sources = [(compose_path, "worker-compose.yaml"), (compose_path.with_suffix(".lock"), "worker-compose.lock")]
+    exports = []
+    for source, name in sources:
+        # Reject symlink components even when they point within the runtime.
+        for part in (source, *source.parents):
+            if part.is_symlink():
+                raise ValueError("Compose export source must not contain symlinks")
+        if not source.exists():
+            continue  # Early failures may have no project or lock yet.
+        if not stat.S_ISREG(source.stat().st_mode):
+            raise ValueError("Compose export source must be a regular file")
+        destination = stack / name
+        if final and name.endswith(".yaml") and destination.exists():
+            destination = stack / "worker-compose-final.yaml"
+        exports.append((source, destination))
+    for _, destination in exports:
+        for part in (destination, *destination.parents):
+            if part.is_symlink():
+                raise ValueError("Compose export destination must not contain symlinks")
+        if not destination.resolve().is_relative_to(artifact_root.resolve(strict=True)):
+            raise ValueError("Compose export destination escapes artifacts")
+    stack.mkdir(exist_ok=True)
+    for source, destination in exports:
+        shutil.copyfile(source, destination)
 
 
 def _package_files(root: Path) -> list[dict[str, Any]]:
@@ -1039,6 +1124,8 @@ def main() -> int:
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
+    project.add_argument("--local-source-root", type=Path,
+                         help="original non-template manifest directory, for explicit relative local worker sources")
     project.add_argument("--profile-root", type=Path)
     project.add_argument("--template-package", action="append", default=[])
     project.add_argument("--engine-config", type=Path)
@@ -1071,11 +1158,21 @@ def main() -> int:
     layout.add_argument("--artifact-root", type=Path, required=True)
     layout.add_argument("--runtime-root", type=Path, required=True)
     layout.add_argument("--allowed-root", type=Path, required=True)
+    layout.add_argument("--compose", type=Path)
+    export = commands.add_parser("export-compose")
+    export.add_argument("--compose", type=Path, required=True)
+    export.add_argument("--runtime-root", type=Path, required=True)
+    export.add_argument("--artifact-root", type=Path, required=True)
+    export.add_argument("--allowed-root", type=Path, required=True)
+    export.add_argument("--final", action="store_true")
     args = parser.parse_args()
 
     try:
+        if args.command == "export-compose":
+            export_compose_files(args.compose, args.runtime_root, args.artifact_root, args.allowed_root, args.final)
+            return 0
         if args.command == "validate-layout":
-            validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root)
+            validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root, args.compose)
             return 0
         if args.command == "roots":
             # The declaration answers this one; there is no contract to read.
@@ -1124,6 +1221,8 @@ def main() -> int:
                 args.group_id,
                 args.assemble,
             )
+            if args.local_source_root and template is None:
+                stage_relative_workers(manifest, args.local_source_root, args.output.parent)
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"
             args.output.write_text(yaml.safe_dump(manifest, sort_keys=False))
