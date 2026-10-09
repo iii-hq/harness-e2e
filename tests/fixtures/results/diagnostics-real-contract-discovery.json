@@ -1,0 +1,589 @@
+{
+  "description": "Native report fields and discovery/registry-notice transcript fields extracted from the live DeepSeek tool_contract_recovery proof on 2026-10-02. Function-call blocks, function-result text and notice data retain their original values. Omitted task prose, runtime context, domain tools, duplicated result details and unrelated metrics. Two repetitions per variant; diagnostic regression evidence, not a benchmark.",
+  "baseline": {
+    "source_results_sha256": "a393f8534886df6bc3387ffef546135ae2299972e33fe035b7355eb9197f0c53",
+    "report": {
+      "result_contract_sha256": "sha256:a3751ea52337df90ea32e9b0c0f249d2035df53a0472359e0a9bb618b22d201b",
+      "execution": {
+        "execution_id": "a359bd411ce14bb9a539ddaa0c4d20bc",
+        "lane": "local",
+        "started_at": "2026-10-02T17:53:38.144Z",
+        "completed_at": "2026-10-02T17:54:09.577Z"
+      },
+      "system_under_test": {
+        "stack": {
+          "mode": "source",
+          "workers_repository": "iii-hq/harness-e2e",
+          "workers_revision": "f42b9008af2da184ca83dfec49062d029be70130"
+        },
+        "engine_version": "0.24.4-rc.1",
+        "harness_version": "1.8.42",
+        "e2e_repository": "iii-hq/harness-e2e",
+        "e2e_revision": "f42b9008af2da184ca83dfec49062d029be70130",
+        "contract_hashes": {
+          "harness::metrics": "sha256:864495dfa5d1668abb4dc416176de015b94b2a43b079505ada092035162b3db3",
+          "harness::send": "sha256:85398f4226db2583eaa3197b196938ffc563dad51357da2e4d42fa7a1fe097c8",
+          "harness::session-tree": "sha256:77884bc22cc224141f0f8528bf54118e4b751586fb3b709db051f0df0fcdf4ad",
+          "harness::status": "sha256:9ca23719fee26bdfe1d53eeae056d2380eee3898ee79fee47a07e202d2a2b0fa",
+          "harness::stop": "sha256:03c429c369abcc12ccf55910b9f729ce426864604a7da3cc1428c1102a6e498a",
+          "harness::teardown": "sha256:e880d37a08650b67cc491246d99ab01dd322882eae13ea48240a77311ffbaaff"
+        }
+      },
+      "subject": {
+        "model": "deepseek-flash",
+        "provider": "deepseek",
+        "context_window": 1000000,
+        "max_output_tokens": 384000,
+        "supports_tools": true,
+        "supports_vision": false
+      },
+      "scenarios": [
+        {
+          "scenario_id": "tool_contract_recovery",
+          "case_id": "tool_contract_recovery:seed-746f6f6c00000001",
+          "behavior_sha256": "sha256:5cfc3feb2ec4c7bf3c868975c42666b740891b992c1ebcf23b9813a45e11b1d4",
+          "case": {
+            "seed": 8390047140461674497,
+            "inputs_sha256": "sha256:45962aba56ce4f173fa009716628a8316a2141e9de9d5355169ba9a031e25972"
+          },
+          "runs": [
+            {
+              "run_id": "edf34250fe0a4e579144b6eb2f7bb7d9",
+              "attempt_id": "af5889266736461082733b1960489dbf",
+              "attempt_number": 1,
+              "session_id": "e2e_af5889266736461082733b1960489dbf",
+              "wall_time_ms": 16653,
+              "score": 100,
+              "status": "passed",
+              "completion": "completed",
+              "technical": "valid",
+              "efficiency": {
+                "function_calls": 5,
+                "total_tokens": 4374
+              },
+              "cost": {
+                "subject_usd": 0.0032261999999999994,
+                "total_usd": 0.0032261999999999994
+              },
+              "evidence": [
+                {
+                  "id": "transcript",
+                  "kind": "transcript",
+                  "path": "evidence/edf34250fe0a4e579144b6eb2f7bb7d9/af5889266736461082733b1960489dbf/transcript.json",
+                  "sha256": "sha256:1cd85930a83af7066e3a37ceac7cbe1058379473f035409214396fa286157043",
+                  "size_bytes": 35058,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "metrics",
+                  "kind": "metrics",
+                  "path": "evidence/edf34250fe0a4e579144b6eb2f7bb7d9/af5889266736461082733b1960489dbf/metrics.json",
+                  "sha256": "sha256:28720a64a5815130016ce08d76a740bbbd15283338e2c4b495748353cf714cf5",
+                  "size_bytes": 2220,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "asset_reconciliation",
+                  "kind": "asset_capture_manifest",
+                  "path": "evidence/edf34250fe0a4e579144b6eb2f7bb7d9/af5889266736461082733b1960489dbf/asset-reconciliation.json",
+                  "sha256": "sha256:977adffd7db4212e5590330fdc8dbb3868e169bc914e7749fb282d5e5e29ee3e",
+                  "size_bytes": 3944,
+                  "media_type": "application/json"
+                }
+              ],
+              "transcript": {
+                "messages": [
+                  {
+                    "entry_id": "e_t_90bf5a573e684f2f922b1feb04ed7b0a_0_assistant",
+                    "message": {
+                      "content": [
+                        {
+                          "arguments": {
+                            "description": "Reading live schemas for the three run-scoped operations",
+                            "function": "engine::functions::info",
+                            "payload": {
+                              "function_ids": [
+                                "e2etest::contract_resolver_af58",
+                                "e2etest::profile_v2_af58",
+                                "e2etest::calendar_schedule_v2_af58"
+                              ]
+                            }
+                          },
+                          "function_id": "agent_trigger",
+                          "id": "call_00_iSedD6cuQ3EosnTHseqR6780",
+                          "type": "function_call"
+                        }
+                      ],
+                      "role": "assistant",
+                      "timestamp": 1790963618683
+                    }
+                  },
+                  {
+                    "entry_id": "e_t_90bf5a573e684f2f922b1feb04ed7b0a_call_00_iSedD6cuQ3EosnTHseqR6780",
+                    "message": {
+                      "content": [
+                        {
+                          "text": "{\"functions\":[{\"description\":\"E2E run-scoped migration directory. Resolve an exact stale function id before selecting its replacement; returns current function ids and an opaque migration token.\",\"function_id\":\"e2etest::contract_resolver_af58\",\"request_schema\":{\"properties\":{\"legacy_function\":{\"type\":\"string\"}},\"required\":[\"legacy_function\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped profile v2 lookup. Input profile_key; output opaque profile_id, revision, and timezone required by the current scheduler contract.\",\"function_id\":\"e2etest::profile_v2_af58\",\"request_schema\":{\"properties\":{\"profile_key\":{\"type\":\"string\"}},\"required\":[\"profile_key\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped current calendar scheduler. Requires the profile id and revision, timezone, event fields, and idempotency_key equal to the migration_token returned by the resolver.\",\"function_id\":\"e2etest::calendar_schedule_v2_af58\",\"request_schema\":{\"properties\":{\"event\":{\"properties\":{\"duration_minutes\":{\"format\":\"uint32\",\"minimum\":0.0,\"type\":\"integer\"},\"starts_at_local\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"}},\"required\":[\"duration_minutes\",\"starts_at_local\",\"title\"],\"type\":\"object\"},\"idempotency_key\":{\"description\":\"Must exactly equal the `migration_token` returned by the resolver.\",\"type\":\"string\"},\"profile\":{\"properties\":{\"id\":{\"type\":\"string\"},\"revision\":{\"type\":\"string\"}},\"required\":[\"id\",\"revision\"],\"type\":\"object\"},\"timezone\":{\"type\":\"string\"}},\"required\":[\"event\",\"idempotency_key\",\"profile\",\"timezone\"],\"type\":\"object\"}}]}",
+                          "type": "text"
+                        }
+                      ],
+                      "function_call_id": "call_00_iSedD6cuQ3EosnTHseqR6780",
+                      "function_id": "engine::functions::info",
+                      "is_error": false,
+                      "role": "function_result",
+                      "timestamp": 1790963622927
+                    }
+                  },
+                  {
+                    "custom": {
+                      "custom_type": "model_notice",
+                      "data": {
+                        "kind": "registry-changed",
+                        "message": {
+                          "content": [
+                            {
+                              "text": "NOTE: the function registry changed during this conversation. Function contracts fetched earlier may be stale. Re-fetch the contracts you rely on with engine::functions::info before calling them.",
+                              "type": "text"
+                            }
+                          ],
+                          "role": "user",
+                          "timestamp": 1790963623018
+                        },
+                        "text": "NOTE: the function registry changed during this conversation. Function contracts fetched earlier may be stale. Re-fetch the contracts you rely on with engine::functions::info before calling them."
+                      }
+                    },
+                    "entry_id": "e_t_90bf5a573e684f2f922b1feb04ed7b0a_1_notice_0"
+                  },
+                  {
+                    "entry_id": "e_t_90bf5a573e684f2f922b1feb04ed7b0a_1_assistant",
+                    "message": {
+                      "content": [
+                        {
+                          "arguments": {
+                            "description": "Re-fetching live schemas after registry change",
+                            "function": "engine::functions::info",
+                            "payload": {
+                              "function_ids": [
+                                "e2etest::contract_resolver_af58",
+                                "e2etest::profile_v2_af58",
+                                "e2etest::calendar_schedule_v2_af58"
+                              ]
+                            }
+                          },
+                          "function_id": "agent_trigger",
+                          "id": "call_00_nTa3u2x2ctb64Jae7IZc1515",
+                          "type": "function_call"
+                        }
+                      ],
+                      "role": "assistant",
+                      "timestamp": 1790963623049
+                    }
+                  },
+                  {
+                    "entry_id": "e_t_90bf5a573e684f2f922b1feb04ed7b0a_call_00_nTa3u2x2ctb64Jae7IZc1515",
+                    "message": {
+                      "content": [
+                        {
+                          "text": "{\"functions\":[{\"contract_status\":\"unchanged_in_context\",\"function_id\":\"e2etest::contract_resolver_af58\",\"source_function_call_id\":\"call_00_iSedD6cuQ3EosnTHseqR6780\"},{\"contract_status\":\"unchanged_in_context\",\"function_id\":\"e2etest::profile_v2_af58\",\"source_function_call_id\":\"call_00_iSedD6cuQ3EosnTHseqR6780\"},{\"contract_status\":\"unchanged_in_context\",\"function_id\":\"e2etest::calendar_schedule_v2_af58\",\"source_function_call_id\":\"call_00_iSedD6cuQ3EosnTHseqR6780\"}]}",
+                          "type": "text"
+                        }
+                      ],
+                      "function_call_id": "call_00_nTa3u2x2ctb64Jae7IZc1515",
+                      "function_id": "engine::functions::info",
+                      "is_error": false,
+                      "role": "function_result",
+                      "timestamp": 1790963625137
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "run_id": "73c13b6f67c345289a6c943b8a4b7bfa",
+              "attempt_id": "70da1992b5004feda6cddf5f73bc6214",
+              "attempt_number": 1,
+              "session_id": "e2e_70da1992b5004feda6cddf5f73bc6214",
+              "wall_time_ms": 14485,
+              "score": 100,
+              "status": "passed",
+              "completion": "completed",
+              "technical": "valid",
+              "efficiency": {
+                "function_calls": 5,
+                "total_tokens": 4506
+              },
+              "cost": {
+                "subject_usd": 0.003188556,
+                "total_usd": 0.003188556
+              },
+              "evidence": [
+                {
+                  "id": "transcript",
+                  "kind": "transcript",
+                  "path": "evidence/73c13b6f67c345289a6c943b8a4b7bfa/70da1992b5004feda6cddf5f73bc6214/transcript.json",
+                  "sha256": "sha256:6b6e039f9e9006916e0b7a6d070c9562924cc5ab0f725a8b925cbe3ad17dbb7c",
+                  "size_bytes": 34500,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "metrics",
+                  "kind": "metrics",
+                  "path": "evidence/73c13b6f67c345289a6c943b8a4b7bfa/70da1992b5004feda6cddf5f73bc6214/metrics.json",
+                  "sha256": "sha256:d5368a108d70828d7d34495e7f0c4e0629e0e8d57c2a80d62f534667b3d7dfa3",
+                  "size_bytes": 2200,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "asset_reconciliation",
+                  "kind": "asset_capture_manifest",
+                  "path": "evidence/73c13b6f67c345289a6c943b8a4b7bfa/70da1992b5004feda6cddf5f73bc6214/asset-reconciliation.json",
+                  "sha256": "sha256:9ed3d748a08c72b09ba63d2d4ac688816007c74c0550b19df68ca175eae8654d",
+                  "size_bytes": 3944,
+                  "media_type": "application/json"
+                }
+              ],
+              "transcript": {
+                "messages": [
+                  {
+                    "entry_id": "e_t_1824ceac3e704b98a6532d73f4562698_0_assistant",
+                    "message": {
+                      "content": [
+                        {
+                          "arguments": {
+                            "description": "Fetching contracts for run-scoped functions",
+                            "function": "engine::functions::info",
+                            "payload": {
+                              "function_ids": [
+                                "e2etest::contract_resolver_70da",
+                                "e2etest::profile_v2_70da",
+                                "e2etest::calendar_schedule_v2_70da"
+                              ]
+                            }
+                          },
+                          "function_id": "agent_trigger",
+                          "id": "call_00_cpmEC2htj6qPPHBG4EOW7711",
+                          "type": "function_call"
+                        }
+                      ],
+                      "role": "assistant",
+                      "timestamp": 1790963635269
+                    }
+                  },
+                  {
+                    "entry_id": "e_t_1824ceac3e704b98a6532d73f4562698_call_00_cpmEC2htj6qPPHBG4EOW7711",
+                    "message": {
+                      "content": [
+                        {
+                          "text": "{\"functions\":[{\"description\":\"E2E run-scoped migration directory. Resolve an exact stale function id before selecting its replacement; returns current function ids and an opaque migration token.\",\"function_id\":\"e2etest::contract_resolver_70da\",\"request_schema\":{\"properties\":{\"legacy_function\":{\"type\":\"string\"}},\"required\":[\"legacy_function\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped profile v2 lookup. Input profile_key; output opaque profile_id, revision, and timezone required by the current scheduler contract.\",\"function_id\":\"e2etest::profile_v2_70da\",\"request_schema\":{\"properties\":{\"profile_key\":{\"type\":\"string\"}},\"required\":[\"profile_key\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped current calendar scheduler. Requires the profile id and revision, timezone, event fields, and idempotency_key equal to the migration_token returned by the resolver.\",\"function_id\":\"e2etest::calendar_schedule_v2_70da\",\"request_schema\":{\"properties\":{\"event\":{\"properties\":{\"duration_minutes\":{\"format\":\"uint32\",\"minimum\":0.0,\"type\":\"integer\"},\"starts_at_local\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"}},\"required\":[\"duration_minutes\",\"starts_at_local\",\"title\"],\"type\":\"object\"},\"idempotency_key\":{\"description\":\"Must exactly equal the `migration_token` returned by the resolver.\",\"type\":\"string\"},\"profile\":{\"properties\":{\"id\":{\"type\":\"string\"},\"revision\":{\"type\":\"string\"}},\"required\":[\"id\",\"revision\"],\"type\":\"object\"},\"timezone\":{\"type\":\"string\"}},\"required\":[\"event\",\"idempotency_key\",\"profile\",\"timezone\"],\"type\":\"object\"}}]}",
+                          "type": "text"
+                        }
+                      ],
+                      "function_call_id": "call_00_cpmEC2htj6qPPHBG4EOW7711",
+                      "function_id": "engine::functions::info",
+                      "is_error": false,
+                      "role": "function_result",
+                      "timestamp": 1790963637845
+                    }
+                  },
+                  {
+                    "custom": {
+                      "custom_type": "model_notice",
+                      "data": {
+                        "kind": "registry-changed",
+                        "message": {
+                          "content": [
+                            {
+                              "text": "NOTE: the function registry changed during this conversation. Function contracts fetched earlier may be stale. Re-fetch the contracts you rely on with engine::functions::info before calling them.",
+                              "type": "text"
+                            }
+                          ],
+                          "role": "user",
+                          "timestamp": 1790963637983
+                        },
+                        "text": "NOTE: the function registry changed during this conversation. Function contracts fetched earlier may be stale. Re-fetch the contracts you rely on with engine::functions::info before calling them."
+                      }
+                    },
+                    "entry_id": "e_t_1824ceac3e704b98a6532d73f4562698_1_notice_0"
+                  },
+                  {
+                    "entry_id": "e_t_1824ceac3e704b98a6532d73f4562698_1_assistant",
+                    "message": {
+                      "content": [
+                        {
+                          "arguments": {
+                            "description": "Re-fetching live contracts after registry change",
+                            "function": "engine::functions::info",
+                            "payload": {
+                              "function_ids": [
+                                "e2etest::contract_resolver_70da",
+                                "e2etest::profile_v2_70da",
+                                "e2etest::calendar_schedule_v2_70da"
+                              ]
+                            }
+                          },
+                          "function_id": "agent_trigger",
+                          "id": "call_00_Cd4aKYjOAaqBBflClnQ72716",
+                          "type": "function_call"
+                        }
+                      ],
+                      "role": "assistant",
+                      "timestamp": 1790963638015
+                    }
+                  },
+                  {
+                    "entry_id": "e_t_1824ceac3e704b98a6532d73f4562698_call_00_Cd4aKYjOAaqBBflClnQ72716",
+                    "message": {
+                      "content": [
+                        {
+                          "text": "{\"functions\":[{\"contract_status\":\"unchanged_in_context\",\"function_id\":\"e2etest::contract_resolver_70da\",\"source_function_call_id\":\"call_00_cpmEC2htj6qPPHBG4EOW7711\"},{\"contract_status\":\"unchanged_in_context\",\"function_id\":\"e2etest::profile_v2_70da\",\"source_function_call_id\":\"call_00_cpmEC2htj6qPPHBG4EOW7711\"},{\"contract_status\":\"unchanged_in_context\",\"function_id\":\"e2etest::calendar_schedule_v2_70da\",\"source_function_call_id\":\"call_00_cpmEC2htj6qPPHBG4EOW7711\"}]}",
+                          "type": "text"
+                        }
+                      ],
+                      "function_call_id": "call_00_Cd4aKYjOAaqBBflClnQ72716",
+                      "function_id": "engine::functions::info",
+                      "is_error": false,
+                      "role": "function_result",
+                      "timestamp": 1790963639826
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "candidate": {
+    "source_results_sha256": "d98d53671ef28daf5fe50d31460a0f827ab475e3ca124ea2a542f5f94c09c3fd",
+    "report": {
+      "result_contract_sha256": "sha256:a3751ea52337df90ea32e9b0c0f249d2035df53a0472359e0a9bb618b22d201b",
+      "execution": {
+        "execution_id": "933669fb27844033a08ca8149e5017f9",
+        "lane": "local",
+        "started_at": "2026-10-02T17:55:59.878Z",
+        "completed_at": "2026-10-02T17:56:26.141Z"
+      },
+      "system_under_test": {
+        "stack": {
+          "mode": "source",
+          "workers_repository": "iii-hq/harness-e2e",
+          "workers_revision": "f42b9008af2da184ca83dfec49062d029be70130"
+        },
+        "engine_version": "0.24.4-rc.1",
+        "harness_version": "1.8.42",
+        "e2e_repository": "iii-hq/harness-e2e",
+        "e2e_revision": "f42b9008af2da184ca83dfec49062d029be70130",
+        "contract_hashes": {
+          "harness::metrics": "sha256:864495dfa5d1668abb4dc416176de015b94b2a43b079505ada092035162b3db3",
+          "harness::send": "sha256:85398f4226db2583eaa3197b196938ffc563dad51357da2e4d42fa7a1fe097c8",
+          "harness::session-tree": "sha256:77884bc22cc224141f0f8528bf54118e4b751586fb3b709db051f0df0fcdf4ad",
+          "harness::status": "sha256:9ca23719fee26bdfe1d53eeae056d2380eee3898ee79fee47a07e202d2a2b0fa",
+          "harness::stop": "sha256:03c429c369abcc12ccf55910b9f729ce426864604a7da3cc1428c1102a6e498a",
+          "harness::teardown": "sha256:e880d37a08650b67cc491246d99ab01dd322882eae13ea48240a77311ffbaaff"
+        }
+      },
+      "subject": {
+        "model": "deepseek-flash",
+        "provider": "deepseek",
+        "context_window": 1000000,
+        "max_output_tokens": 384000,
+        "supports_tools": true,
+        "supports_vision": false
+      },
+      "scenarios": [
+        {
+          "scenario_id": "tool_contract_recovery",
+          "case_id": "tool_contract_recovery:seed-746f6f6c00000001",
+          "behavior_sha256": "sha256:5cfc3feb2ec4c7bf3c868975c42666b740891b992c1ebcf23b9813a45e11b1d4",
+          "case": {
+            "seed": 8390047140461674497,
+            "inputs_sha256": "sha256:45962aba56ce4f173fa009716628a8316a2141e9de9d5355169ba9a031e25972"
+          },
+          "runs": [
+            {
+              "run_id": "c92f36b8fb08468a9deb7420a1a67fc3",
+              "attempt_id": "b399098a47394ac3b84ca4c643bae95a",
+              "attempt_number": 1,
+              "session_id": "e2e_b399098a47394ac3b84ca4c643bae95a",
+              "wall_time_ms": 12645,
+              "score": 100,
+              "status": "passed",
+              "completion": "completed",
+              "technical": "valid",
+              "efficiency": {
+                "function_calls": 4,
+                "total_tokens": 3843
+              },
+              "cost": {
+                "subject_usd": 0.002859432,
+                "total_usd": 0.002859432
+              },
+              "evidence": [
+                {
+                  "id": "transcript",
+                  "kind": "transcript",
+                  "path": "evidence/c92f36b8fb08468a9deb7420a1a67fc3/b399098a47394ac3b84ca4c643bae95a/transcript.json",
+                  "sha256": "sha256:8e14feb3e34de7df678c0d10c9a6b99275ec5795b49bfa9119184715804b0ab5",
+                  "size_bytes": 24391,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "metrics",
+                  "kind": "metrics",
+                  "path": "evidence/c92f36b8fb08468a9deb7420a1a67fc3/b399098a47394ac3b84ca4c643bae95a/metrics.json",
+                  "sha256": "sha256:f0ced7a6cf156107008e10e07d5661ccd9bc82c978c251c84b368f8824f2fa9a",
+                  "size_bytes": 2199,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "asset_reconciliation",
+                  "kind": "asset_capture_manifest",
+                  "path": "evidence/c92f36b8fb08468a9deb7420a1a67fc3/b399098a47394ac3b84ca4c643bae95a/asset-reconciliation.json",
+                  "sha256": "sha256:443b79df0c5f47c2660c4920b6886329c4b2e6fe519df5558185505d9e0bb78b",
+                  "size_bytes": 3944,
+                  "media_type": "application/json"
+                }
+              ],
+              "transcript": {
+                "messages": [
+                  {
+                    "entry_id": "e_t_ad32e6f044a54d238cbda2935b96f631_0_assistant",
+                    "message": {
+                      "content": [
+                        {
+                          "arguments": {
+                            "description": "Fetching contracts for resolver, profile, and schedule functions",
+                            "function": "engine::functions::info",
+                            "payload": {
+                              "function_ids": [
+                                "e2etest::contract_resolver_b399",
+                                "e2etest::profile_v2_b399",
+                                "e2etest::calendar_schedule_v2_b399"
+                              ]
+                            }
+                          },
+                          "function_id": "agent_trigger",
+                          "id": "call_00_hb2QibZUBBDWPat5gRWb4290",
+                          "type": "function_call"
+                        }
+                      ],
+                      "role": "assistant",
+                      "timestamp": 1790963760361
+                    }
+                  },
+                  {
+                    "entry_id": "e_t_ad32e6f044a54d238cbda2935b96f631_call_00_hb2QibZUBBDWPat5gRWb4290",
+                    "message": {
+                      "content": [
+                        {
+                          "text": "{\"functions\":[{\"description\":\"E2E run-scoped migration directory. Resolve an exact stale function id before selecting its replacement; returns current function ids and an opaque migration token.\",\"function_id\":\"e2etest::contract_resolver_b399\",\"request_schema\":{\"properties\":{\"legacy_function\":{\"type\":\"string\"}},\"required\":[\"legacy_function\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped profile v2 lookup. Input profile_key; output opaque profile_id, revision, and timezone required by the current scheduler contract.\",\"function_id\":\"e2etest::profile_v2_b399\",\"request_schema\":{\"properties\":{\"profile_key\":{\"type\":\"string\"}},\"required\":[\"profile_key\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped current calendar scheduler. Requires the profile id and revision, timezone, event fields, and idempotency_key equal to the migration_token returned by the resolver.\",\"function_id\":\"e2etest::calendar_schedule_v2_b399\",\"request_schema\":{\"properties\":{\"event\":{\"properties\":{\"duration_minutes\":{\"format\":\"uint32\",\"minimum\":0.0,\"type\":\"integer\"},\"starts_at_local\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"}},\"required\":[\"duration_minutes\",\"starts_at_local\",\"title\"],\"type\":\"object\"},\"idempotency_key\":{\"description\":\"Must exactly equal the `migration_token` returned by the resolver.\",\"type\":\"string\"},\"profile\":{\"properties\":{\"id\":{\"type\":\"string\"},\"revision\":{\"type\":\"string\"}},\"required\":[\"id\",\"revision\"],\"type\":\"object\"},\"timezone\":{\"type\":\"string\"}},\"required\":[\"event\",\"idempotency_key\",\"profile\",\"timezone\"],\"type\":\"object\"}}]}",
+                          "type": "text"
+                        }
+                      ],
+                      "function_call_id": "call_00_hb2QibZUBBDWPat5gRWb4290",
+                      "function_id": "engine::functions::info",
+                      "is_error": false,
+                      "role": "function_result",
+                      "timestamp": 1790963764900
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "run_id": "2e03bff25fe04fdeb13b749b6d8295a3",
+              "attempt_id": "60196ec6e924490e9faedea01ec22262",
+              "attempt_number": 1,
+              "session_id": "e2e_60196ec6e924490e9faedea01ec22262",
+              "wall_time_ms": 13325,
+              "score": 100,
+              "status": "passed",
+              "completion": "completed",
+              "technical": "valid",
+              "efficiency": {
+                "function_calls": 4,
+                "total_tokens": 3837
+              },
+              "cost": {
+                "subject_usd": 0.002859876,
+                "total_usd": 0.002859876
+              },
+              "evidence": [
+                {
+                  "id": "transcript",
+                  "kind": "transcript",
+                  "path": "evidence/2e03bff25fe04fdeb13b749b6d8295a3/60196ec6e924490e9faedea01ec22262/transcript.json",
+                  "sha256": "sha256:2b1a64c185b518b30aca5eef83999dcfa00c038a2aa7a2bd6fe053e47e08fa5c",
+                  "size_bytes": 24676,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "metrics",
+                  "kind": "metrics",
+                  "path": "evidence/2e03bff25fe04fdeb13b749b6d8295a3/60196ec6e924490e9faedea01ec22262/metrics.json",
+                  "sha256": "sha256:103fba5c96fbcfe3918d36def0411d5d6f88078de85aad6a0c76955f04c3e61d",
+                  "size_bytes": 2199,
+                  "media_type": "application/json"
+                },
+                {
+                  "id": "asset_reconciliation",
+                  "kind": "asset_capture_manifest",
+                  "path": "evidence/2e03bff25fe04fdeb13b749b6d8295a3/60196ec6e924490e9faedea01ec22262/asset-reconciliation.json",
+                  "sha256": "sha256:b21bf9a5e3f3f647d812f8a47a6f6d88c7193e14755a0cd3d387e27c06423ed8",
+                  "size_bytes": 3944,
+                  "media_type": "application/json"
+                }
+              ],
+              "transcript": {
+                "messages": [
+                  {
+                    "entry_id": "e_t_16c32610e22041d29fadc662d1cd279b_0_assistant",
+                    "message": {
+                      "content": [
+                        {
+                          "arguments": {
+                            "description": "Fetching contracts for resolver, profile, and scheduling functions",
+                            "function": "engine::functions::info",
+                            "payload": {
+                              "function_ids": [
+                                "e2etest::contract_resolver_6019",
+                                "e2etest::profile_v2_6019",
+                                "e2etest::calendar_schedule_v2_6019"
+                              ]
+                            }
+                          },
+                          "function_id": "agent_trigger",
+                          "id": "call_00_wsB5S5EyfOA9BlR2BIN17574",
+                          "type": "function_call"
+                        }
+                      ],
+                      "role": "assistant",
+                      "timestamp": 1790963773000
+                    }
+                  },
+                  {
+                    "entry_id": "e_t_16c32610e22041d29fadc662d1cd279b_call_00_wsB5S5EyfOA9BlR2BIN17574",
+                    "message": {
+                      "content": [
+                        {
+                          "text": "{\"functions\":[{\"description\":\"E2E run-scoped migration directory. Resolve an exact stale function id before selecting its replacement; returns current function ids and an opaque migration token.\",\"function_id\":\"e2etest::contract_resolver_6019\",\"request_schema\":{\"properties\":{\"legacy_function\":{\"type\":\"string\"}},\"required\":[\"legacy_function\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped profile v2 lookup. Input profile_key; output opaque profile_id, revision, and timezone required by the current scheduler contract.\",\"function_id\":\"e2etest::profile_v2_6019\",\"request_schema\":{\"properties\":{\"profile_key\":{\"type\":\"string\"}},\"required\":[\"profile_key\"],\"type\":\"object\"}},{\"description\":\"E2E run-scoped current calendar scheduler. Requires the profile id and revision, timezone, event fields, and idempotency_key equal to the migration_token returned by the resolver.\",\"function_id\":\"e2etest::calendar_schedule_v2_6019\",\"request_schema\":{\"properties\":{\"event\":{\"properties\":{\"duration_minutes\":{\"format\":\"uint32\",\"minimum\":0.0,\"type\":\"integer\"},\"starts_at_local\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"}},\"required\":[\"duration_minutes\",\"starts_at_local\",\"title\"],\"type\":\"object\"},\"idempotency_key\":{\"description\":\"Must exactly equal the `migration_token` returned by the resolver.\",\"type\":\"string\"},\"profile\":{\"properties\":{\"id\":{\"type\":\"string\"},\"revision\":{\"type\":\"string\"}},\"required\":[\"id\",\"revision\"],\"type\":\"object\"},\"timezone\":{\"type\":\"string\"}},\"required\":[\"event\",\"idempotency_key\",\"profile\",\"timezone\"],\"type\":\"object\"}}]}",
+                          "type": "text"
+                        }
+                      ],
+                      "function_call_id": "call_00_wsB5S5EyfOA9BlR2BIN17574",
+                      "function_id": "engine::functions::info",
+                      "is_error": false,
+                      "role": "function_result",
+                      "timestamp": 1790963775361
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

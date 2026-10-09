@@ -130,6 +130,10 @@ def collect_runs(artifacts: Path) -> tuple[list[dict[str, Any]], str]:
     if results.get("scenarios"):
         return runs_from_results(results), "results"
     runs = runs_from_journal(artifacts)
+    if not runs:
+        for execution in sorted((artifacts / "native" / "executions").glob("*")):
+            if execution.is_dir():
+                runs.extend(runs_from_journal(execution))
     return runs, "journal" if runs else "none"
 
 

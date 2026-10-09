@@ -115,6 +115,37 @@ cargo run --locked --bin harness-e2e -- run \
   --scenario todo_worker_simple
 ```
 
+Render a saved run as Markdown without executing a model:
+
+```bash
+python3 scripts/render_e2e_report.py \
+  --artifacts /path/to/execution/results --output /path/to/report
+```
+
+`--artifacts` is the directory that directly contains `results.json`. It may
+also be an exact-stack group root containing retained `journal/` checkpoints.
+
+`summary.md` lists runs requiring attention; `diagnostics.json` keeps the
+machine-readable diagnostic cohorts and their run and attempt evidence; and
+`failures/` keeps criteria, failures, retries, and evidence references.
+Successful runs also get a page when discovery returns only contracts marked
+`unchanged_in_context`, linked to the earlier result retained in the transcript.
+Recurrence is counted only within the same scenario, case, seed, behavior, and
+definition context. Registry-notice correlation is `unknown` when no notice
+evidence was observed between those results. These observed signals do not assign
+cause, change scoring, or constitute a benchmark. Technical validity,
+completion, score, and unknown cost remain separate. An interrupted run uses
+its retained journal checkpoints; `failure.json` preserves startup failures.
+`repeated_tool_error` marks adjacent calls to the same target and payload that
+return the same explicit error code as an advisory investigation signal with
+unknown cause, not a scoring failure.
+A zero occurrence count with missing transcript evidence is unknown, not
+evidence that no recurrence happened.
+The exact-stack workflow includes these pages in the validated group bundle.
+The finalizer renders restored groups again into a separate campaign diagnostics
+tree, leaving the hashed group bundles unchanged, then publishes those summaries
+with a link to the validated root artifact.
+
 ## Scenarios
 
 Every scenario is a built-in module under `src/scenarios/`. The module owns

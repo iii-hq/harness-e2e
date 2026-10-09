@@ -222,13 +222,61 @@ class ReportPayloadTests(unittest.TestCase):
             json.dumps({"schema": "harness-e2e-run-checkpoint", "slot_id": "slot-2420557511cf4c76c9a21421",
                         "run_id": "run-a", "run": {"run_id": "run-a", "status": "failed"}})
         )
+        nested = artifacts / "native" / "executions" / "run-2" / "journal" / "runs" / "nested-slot"
+        nested.mkdir(parents=True)
+        (nested / "run-b.json").write_text(json.dumps({
+            "slot_id": "nested-slot", "run": {"run_id": "run-b", "scenario_id": "must-not-merge"}
+        }))
 
         runs, source = report_execution.collect_runs(artifacts)
         self.assertEqual(source, "journal")
+        self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["slot_id"], "slot-2420557511cf4c76c9a21421")
         self.assertEqual(runs[0]["scenario_id"], "tool_contract_recovery")
         self.assertEqual(runs[0]["seed"], "4404")
         self.assertEqual(runs[0]["run"]["status"], "failed")
+
+    def test_group_root_finds_every_native_execution_journal(self):
+        artifacts = self.tmp / "native-artifacts"
+        for index in (1, 2):
+            execution = artifacts / "native" / "executions" / f"execution-{index}"
+            events = execution / "journal" / "events"
+            checkpoint = execution / "journal" / "runs" / f"slot-{index}"
+            events.mkdir(parents=True)
+            checkpoint.mkdir(parents=True)
+            (events / "00000002-slot-inventory-committed.json").write_text(json.dumps({
+                "slots": [{
+                    "slot_id": f"slot-{index}",
+                    "scenario_id": f"scenario-{index}",
+                    "repetition": index - 1,
+                }]
+            }))
+            (checkpoint / f"run-{index}.json").write_text(json.dumps({
+                "slot_id": f"slot-{index}",
+                "run": {"run_id": f"run-{index}", "attempt_id": f"attempt-{index}"},
+            }))
+        (artifacts / "failure.json").write_text(json.dumps({
+            "phase": "results", "outcome": "infra_failed"
+        }))
+
+        payload = report_execution.shard_payload(Args(
+            artifacts=artifacts,
+            campaign_id="regression-r01",
+            group_id="case-minimal-path",
+            outcome="failure",
+            plan=self.plan,
+            profile_snapshot=self.snapshot,
+        ))
+
+        self.assertEqual(payload["group"]["evidence"], "journal")
+        self.assertEqual(payload["group"]["failure"]["phase"], "results")
+        self.assertEqual([
+            (item["scenario_id"], item["repetition"], item["run"]["run_id"], item["run"]["attempt_id"])
+            for item in payload["runs"]
+        ], [
+            ("scenario-1", 0, "run-1", "attempt-1"),
+            ("scenario-2", 1, "run-2", "attempt-2"),
+        ])
 
     def test_a_group_that_produced_nothing_still_reports_a_shard(self):
         artifacts = self.tmp / "empty"
