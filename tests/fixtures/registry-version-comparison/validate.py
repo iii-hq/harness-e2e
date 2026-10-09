@@ -278,7 +278,7 @@ def verification_observations(task_root, assets, state):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
     elif not report_fail:
         observations.append(ratio("verification.precision", 0, 0, evidence,
-                                  "no_reported_failures", empty_value=1))
+                                  "no_reported_failures"))
     else:
         observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence))
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
@@ -297,7 +297,7 @@ def empty_verification(task_root, state, run_root, truth_complete, known_failed,
     else:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
     observations.append(ratio("verification.precision", 0, 0, evidence,
-                              "no_reported_failures", empty_value=1))
+                              "no_reported_failures"))
     observations.append(ratio("verification.execution_coverage", 0,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
@@ -405,15 +405,35 @@ def environment_observations(task_root, assets, state):
     persistence_query = f"docker compose -f {compose_arg} exec -T {db_service} {psql} -Atc \"select count(*) from validator_restart_sentinel\""
     persisted, persisted_evidence = checked("environment-persistence", scoped(persistence_query), 90)
     alternate_project = f"{project}-replay"
-    alternate_web_port, alternate_api_port = 41000, 41001
-    replay, replay_evidence = checked("environment-clean-replay", scoped(startup, alternate_project, alternate_web_port, alternate_api_port), 600)
-    replay_health, replay_health_evidence = checked("environment-clean-replay-health", f"curl -fsS http://127.0.0.1:{alternate_api_port}/health | python3 -c {shlex.quote(health_assertion)}", 60)
+    port_allocation, port_evidence = checked(
+        "environment-replay-ports",
+        "python3 -c 'import socket; s=[socket.socket(),socket.socket()]; "
+        "[x.bind((\"127.0.0.1\",0)) for x in s]; print(*(x.getsockname()[1] for x in s))'",
+        30,
+    )
+    try:
+        alternate_web_port, alternate_api_port = map(int, port_allocation.get("stdout", "").split())
+        if (port_allocation.get("exit_code") != 0 or alternate_web_port == alternate_api_port
+                or not all(0 < port < 65536 for port in (alternate_web_port, alternate_api_port))):
+            raise ValueError
+    except (TypeError, ValueError):
+        alternate_web_port = alternate_api_port = None
+    skipped_replay = {"exit_code": None, "stdout": "", "stderr": "replay ports unavailable"}
+    if alternate_web_port is None:
+        replay = replay_health = skipped_replay
+        replay_evidence = replay_health_evidence = port_evidence
+    else:
+        replay, replay_evidence = checked("environment-clean-replay", scoped(startup, alternate_project, alternate_web_port, alternate_api_port), 600)
+        replay_health, replay_health_evidence = checked("environment-clean-replay-health", f"curl -fsS http://127.0.0.1:{alternate_api_port}/health | python3 -c {shlex.quote(health_assertion)}", 60)
     sentinel_create = (f"docker compose -f {compose_arg} exec -T {db_service} {psql} -v ON_ERROR_STOP=1 -Atc "
                        "\"create table validator_isolation_sentinel(id integer); insert into validator_isolation_sentinel values (1);\"")
     sentinel_absent = (f"docker compose -f {compose_arg} exec -T {db_service} {psql} -Atc "
                        "\"select to_regclass('validator_isolation_sentinel') is null\"")
-    isolation_command = scoped(sentinel_create) + " >/dev/null && " + scoped(sentinel_absent, alternate_project, alternate_web_port, alternate_api_port)
-    isolation, isolation_evidence = checked("environment-isolation", isolation_command, 180)
+    if alternate_web_port is None:
+        isolation, isolation_evidence = skipped_replay, port_evidence
+    else:
+        isolation_command = scoped(sentinel_create) + " >/dev/null && " + scoped(sentinel_absent, alternate_project, alternate_web_port, alternate_api_port)
+        isolation, isolation_evidence = checked("environment-isolation", isolation_command, 180)
     resources, resources_evidence = checked("environment-resources", f"docker ps -a --filter label=com.docker.compose.project={project} --format '{{{{.ID}}}}'; docker volume ls --filter label=com.docker.compose.project={project} --format '{{{{.Name}}}}'; docker network ls --filter label=com.docker.compose.project={project} --format '{{{{.ID}}}}'", 90)
     runtime_command = scoped(f"docker compose -f {compose_arg} images --format json && docker compose -f {compose_arg} exec -T web sh -lc 'set -eu; node --version; pnpm --version; sha256sum $(command -v node) $(command -v pnpm)' && docker compose -f {compose_arg} exec -T api sh -lc 'set -eu; iii --version; sha256sum $(command -v iii)'")
     runtime, runtime_evidence = checked("environment-runtime-identity", runtime_command, 120)
@@ -421,10 +441,16 @@ def environment_observations(task_root, assets, state):
     # continued presence proves cleanup did not remove another attempt's state.
     primary_absent = f"test -z \"$(docker ps -aq --filter label=com.docker.compose.project={project})\" && test -z \"$(docker volume ls -q --filter label=com.docker.compose.project={project})\" && test -z \"$(docker network ls -q --filter label=com.docker.compose.project={project})\""
     alternate_inventory = f"docker ps -aq --filter label=com.docker.compose.project={alternate_project}; docker volume ls -q --filter label=com.docker.compose.project={alternate_project}; docker network ls -q --filter label=com.docker.compose.project={alternate_project}"
-    scope_before, scope_before_evidence = checked("environment-scope-before", alternate_inventory, 60)
+    if alternate_web_port is None:
+        scope_before, scope_before_evidence = skipped_replay, port_evidence
+    else:
+        scope_before, scope_before_evidence = checked("environment-scope-before", alternate_inventory, 60)
     cleanup, cleanup_evidence = checked("environment-cleanup", scoped(teardown) + " && " + primary_absent, 180)
-    scope_after, scope_after_evidence = checked("environment-scope-after", alternate_inventory, 60)
-    alternate_cleanup, alternate_cleanup_evidence = checked("environment-clean-replay-teardown", scoped(teardown, alternate_project, alternate_web_port, alternate_api_port), 180)
+    if alternate_web_port is None:
+        scope_after, scope_after_evidence = skipped_replay, port_evidence
+    else:
+        scope_after, scope_after_evidence = checked("environment-scope-after", alternate_inventory, 60)
+        checked("environment-clean-replay-teardown", scoped(teardown, alternate_project, alternate_web_port, alternate_api_port), 180)
     base, base_evidence = checked("environment-registry-base", "git -C /workspace/registry rev-parse HEAD", 30)
 
     values = {
@@ -453,6 +479,10 @@ def environment_observations(task_root, assets, state):
     observations = []
     for metric in metric_ids:
         value, evidence = values[metric]
+        if alternate_web_port is None and metric in (
+                "environment.clean_reproduction", "environment.parallel_isolation", "environment.cleanup_scope"):
+            observations.append(unavailable(metric, "validator_port_allocation_unavailable"))
+            continue
         if metric == "environment.frontend_reachability" and web_error:
             observations.append(unavailable(metric, web_error))
             continue

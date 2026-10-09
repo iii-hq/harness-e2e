@@ -801,7 +801,9 @@ function ScenarioResult({
                       data-lost-criterion={c.id}
                     >
                       <div className="ep-lost-head">
-                        <span className="ep-lost-id">{c.id}</span>
+                        <span className="ep-lost-label">
+                          {c.description || c.id}
+                        </span>
                         {c.gate ? (
                           <span className="ep-gate">hard gate</span>
                         ) : null}
@@ -809,9 +811,12 @@ function ScenarioResult({
                           −{Math.round((c.possible - c.awarded) * 10) / 10}
                         </span>
                       </div>
-                      <code className="ep-lost-reason">
-                        {c.reason || c.description}
-                      </code>
+                      {c.description ? (
+                        <span className="ep-mono ep-faint">{c.id}</span>
+                      ) : null}
+                      {c.reason ? (
+                        <code className="ep-lost-reason">{c.reason}</code>
+                      ) : null}
                     </div>
                   ))}
                   {item.reason && item.objective.status !== 'passed' ? (

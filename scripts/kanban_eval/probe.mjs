@@ -134,7 +134,7 @@ export async function inspectorClient(websocketUrl) {
   }
 }
 
-export async function countSseServerResponses(inspector) {
+export async function countSseServerResponses(inspector, probeToken = null) {
   const group = `kanban-sse-${randomUUID()}`
   try {
     await inspector.command('HeapProfiler.collectGarbage')
@@ -148,7 +148,8 @@ export async function countSseServerResponses(inspector) {
     const queried = await inspector.command('Runtime.queryObjects', { prototypeObjectId, objectGroup: group })
     const count = await inspector.command('Runtime.callFunctionOn', {
       objectId: queried.objects.objectId,
-      functionDeclaration: "function () { return this.filter((response) => { try { return String(response.getHeader?.('content-type') ?? response._header).includes('text/event-stream') } catch { return false } }).length }",
+      functionDeclaration: "function (probeToken) { return this.filter((response) => { try { return String(response.getHeader?.('content-type') ?? response._header).includes('text/event-stream') && (!probeToken || response.req?.headers?.['x-harness-e2e-sse-probe'] === probeToken) } catch { return false } }).length }",
+      arguments: [{ value: probeToken }],
       returnByValue: true,
     })
     if (!Number.isInteger(count.result?.value)) throw new Error('SSE response count is not an integer')
@@ -328,10 +329,14 @@ export function boardLane(page, label) {
   return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+(?:\\s+tickets?)?)?$`, 'i') }).locator('xpath=ancestor::*[self::section or self::li or @role="region" or @role="listitem"][1]')
 }
 
+export function boardLaneCount(page, label, count) {
+  return boardLane(page, label).getByText(new RegExp(`^${count}$`)).filter({ visible: true })
+}
+
 export async function boardLaneWithCount(page, label, count) {
   const lane = boardLane(page, label)
   await eventually(async () => await lane.count() === 1
-    && await lane.getByText(new RegExp(`^${count}$`)).filter({ visible: true }).count() === 1,
+    && await boardLaneCount(page, label, count).count() === 1,
   `${label} lane count did not become ${count}`)
   return lane
 }
@@ -704,11 +709,11 @@ export const PROBES = {
           if (state === 'loading') {
             await expectText(page.getByRole('status').filter({ hasText: /load/i }), /load/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
-            expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'loading fabricated zero lane counts')
+            for (const [, label] of statuses) expect(await boardLaneCount(page, label, 0).count() === 0, 'loading fabricated zero lane counts')
           } else if (state === 'error') {
             await expectText(page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: /unable|error|fail/i }), /unable|error|fail/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'failed first read fabricated a zero total')
-            expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'failed first read fabricated zero lane counts')
+            for (const [, label] of statuses) expect(await boardLaneCount(page, label, 0).count() === 0, 'failed first read fabricated zero lane counts')
           } else {
             if (state === 'retry') {
               await page.getByRole('button', { name: /retry|try again/i }).waitFor({ state: 'visible' })
@@ -1541,18 +1546,20 @@ export const PROBES = {
       expect(typeof inspected?.websocket_url === 'string', 'runtime inspector URL is missing')
       const inspector = await inspectorClient(inspected.websocket_url)
       try {
-        const baseline = await countSseServerResponses(inspector)
-        const transient = await Promise.all(Array.from({ length: 6 }, () => pageFor(browser, baseUrl)))
-        const active = await eventually(async () => {
-          const count = await countSseServerResponses(inspector)
-          return count >= baseline + transient.length ? count : false
-        }, 'inspector did not observe all active SSE responses')
-        expect(active >= baseline + transient.length, `inspector did not observe active SSE responses: baseline=${baseline}, active=${active}`)
+        const probeToken = randomUUID()
+        const transient = await Promise.all(Array.from({ length: 6 }, async () => {
+          const session = await newPage(browser)
+          await session.context.setExtraHTTPHeaders({ 'x-harness-e2e-sse-probe': probeToken })
+          await session.page.goto(baseUrl)
+          return session
+        }))
+        await eventually(async () => await countSseServerResponses(inspector, probeToken) >= transient.length,
+          'inspector did not observe all active SSE responses')
         await Promise.all(transient.map(({ context }) => context.close()))
         let returned = false
         const deadline = Date.now() + 10_000
         while (!returned && Date.now() < deadline) {
-          returned = await countSseServerResponses(inspector) === baseline
+          returned = await countSseServerResponses(inspector, probeToken) === 0
           if (!returned) await new Promise((resolve) => setTimeout(resolve, 100))
         }
         expect(returned, 'closed SSE responses remained retained after garbage collection')

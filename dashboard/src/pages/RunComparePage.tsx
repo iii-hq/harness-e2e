@@ -513,7 +513,20 @@ export function RunComparison({
                 data-criterion={change.id}
               >
                 <div className="cmp-criterion-head">
-                  <span className="cmp-criterion-id">{change.id}</span>
+                  <div className="cmp-criterion-label">
+                    {change.descriptions.a === change.descriptions.b
+                      ? (change.descriptions.a ??
+                        'Description not recorded in this result.')
+                      : (['a', 'b'] as const).map((which) => (
+                          <p className="cmp-criterion-description" key={which}>
+                            <span className="cmp-letter-sm">
+                              {which.toUpperCase()}
+                            </span>{' '}
+                            {change.descriptions[which] ??
+                              'Description not recorded in this result.'}
+                          </p>
+                        ))}
+                  </div>
                   <span className="cmp-mono">
                     <span className="cmp-faint-num">
                       {change.a}/{change.possible} →{' '}
@@ -525,13 +538,9 @@ export function RunComparison({
                     {Math.abs(change.b - change.a)}
                   </span>
                 </div>
-                {(['a', 'b'] as const).map((which) => (
-                  <p className="cmp-faint cmp-criterion-label" key={which}>
-                    <span className="cmp-letter-sm">{which.toUpperCase()}</span>{' '}
-                    {change.descriptions[which] ??
-                      'Description not recorded in this result.'}
-                  </p>
-                ))}
+                <p className="cmp-faint cmp-mono cmp-criterion-id">
+                  {change.id}
+                </p>
                 {(['a', 'b'] as const).map((which) =>
                   change.reasons[which] ? (
                     <div className="cmp-reason" key={which}>

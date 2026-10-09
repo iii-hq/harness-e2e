@@ -87,17 +87,24 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (1, 24))
         self.assertEqual(found["verification.evidence_coverage"]["denominator"], 2)
 
-    def test_missing_subject_checks_is_zero_where_objectively_measurable(self):
+    def test_missing_or_invalid_subject_checks_leave_precision_unassessed(self):
         task, state = self.verification_task()
         failed = {"implementation.function_removal"}
-        with patch.object(module, "feature_probe", return_value=(self.feature(failed=failed), None)):
-            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
-        self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (0, 1))
-        self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (0, 24))
-        self.assertEqual((found["verification.precision"]["numerator"], found["verification.precision"]["denominator"], found["verification.precision"]["value"]), (0, 0, 1))
-        self.assertEqual((found["verification.evidence_coverage"]["numerator"], found["verification.evidence_coverage"]["denominator"], found["verification.evidence_coverage"]["value"]), (0, 0, 0))
+        for name, contents in (("missing", None), ("invalid", "{")):
+            with self.subTest(name):
+                checks = task / "workspace" / "output" / "checks.json"
+                if contents is None:
+                    checks.unlink(missing_ok=True)
+                else:
+                    checks.write_text(contents)
+                with patch.object(module, "feature_probe", return_value=(self.feature(failed=failed), None)):
+                    found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+                self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (0, 1))
+                self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (0, 24))
+                self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), ("not_applicable", 0, 0))
+                self.assertEqual((found["verification.evidence_coverage"]["numerator"], found["verification.evidence_coverage"]["denominator"], found["verification.evidence_coverage"]["value"]), (0, 0, 0))
 
-    def test_all_passing_implementation_has_full_recall_and_precision(self):
+    def test_all_passing_implementation_has_full_recall_and_unassessed_precision(self):
         task, state = self.verification_task()
         command = "curl -fsS http://api/check"
         evidence = task / "workspace" / "output" / "evidence.json"
@@ -110,7 +117,7 @@ class ValidationTests(unittest.TestCase):
         with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"], found["verification.recall"]["value"]), (0, 0, 1))
-        self.assertEqual((found["verification.precision"]["numerator"], found["verification.precision"]["denominator"], found["verification.precision"]["value"]), (0, 0, 1))
+        self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), ("not_applicable", 0, 0))
 
     def test_false_positive_and_missed_failure_are_scored_independently(self):
         task, state = self.verification_task()
@@ -120,7 +127,7 @@ class ValidationTests(unittest.TestCase):
         case_id = "implementation.function_removal"
         for name, actual_failures, reported_status, expected_recall, expected_precision in (
             ("false positive", set(), "fail", (0, 0, 1), (0, 1, None)),
-            ("missed failure", {case_id}, "pass", (0, 1, None), (0, 0, 1)),
+            ("missed failure", {case_id}, "pass", (0, 1, None), (0, 0, None)),
         ):
             with self.subTest(name):
                 (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
@@ -133,6 +140,8 @@ class ValidationTests(unittest.TestCase):
                 precision = found["verification.precision"]
                 self.assertEqual((recall["numerator"], recall["denominator"], recall.get("value")), expected_recall)
                 self.assertEqual((precision["numerator"], precision["denominator"], precision.get("value")), expected_precision)
+                if reported_status != "fail":
+                    self.assertEqual(precision["status"], "not_applicable")
 
     def test_blocked_independent_probe_keeps_truth_unavailable(self):
         task, state = self.verification_task()
@@ -192,7 +201,9 @@ class ValidationTests(unittest.TestCase):
         def execute(_state, command, timeout=120):
             commands.append(command)
             stdout = ""
-            if "config --format json" in command:
+            if "socket.socket()" in command:
+                stdout = "52340 52341\n"
+            elif "config --format json" in command:
                 stdout = json.dumps({"services": {"web": {"ports": [
                     {"published": "65000", "target": 3000},
                 ]}}})
@@ -212,11 +223,23 @@ class ValidationTests(unittest.TestCase):
             module.environment_observations(task, ASSETS, state)
         self.assertTrue(any("docker compose -f /workspace/registry/compose.yaml restart" in command for command in commands))
         self.assertTrue(any("--filter label=com.docker.compose.project=validator-123456789012" in command for command in commands))
-        self.assertTrue(any("WEB_PORT=41000 API_PORT=41001" in command for command in commands))
+        self.assertTrue(any("WEB_PORT=52340 API_PORT=52341" in command for command in commands))
+        self.assertFalse(any("41000" in command or "41001" in command for command in commands))
         browser = next(command for command in commands if "environment-web" not in command and "E2E_APP_URL=" in command)
         self.assertIn("compose -f /workspace/registry/compose.yaml exec -T", browser)
         self.assertIn("E2E_APP_URL=http://127.0.0.1:3000", browser)
         self.assertNotIn("docker run", browser)
+
+        def execute_without_ports(state, command, timeout=120):
+            if "socket.socket()" in command:
+                return {"exit_code": 1, "stdout": "", "stderr": "cannot allocate ports"}
+            return execute(state, command, timeout)
+        with patch.object(module, "controller_command", side_effect=execute_without_ports):
+            found = {item["id"]: item for item in module.environment_observations(task, ASSETS, state)}
+        for metric in ("environment.clean_reproduction", "environment.parallel_isolation", "environment.cleanup_scope"):
+            self.assertEqual(found[metric]["status"], "unavailable")
+            self.assertEqual(found[metric]["reason"], "validator_port_allocation_unavailable")
+        self.assertEqual(found["environment.cleanup_completeness"]["status"], "measured")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@
 //! `state::set` tail never ran), and the wake-expiry fallback that keeps a
 //! parent from parking forever on evidence that will never arrive.
 
+use anyhow::Context;
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -39,17 +40,17 @@ const EXPIRY_DELAY_MS: u64 = 150_000;
 const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::scored(
     "bounded_failure",
     40,
-    "Does the child fail after exactly the budgeted denials while the verdict key remains unwritten?",
+    "Does the child fail after exactly two validation retry requests, without writing a verdict?",
 );
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     30,
-    "Is the validator scoped to the child with the deadline wake armed before spawn?",
+    "Are calls to set a post-turn trigger and a state wake deadline made before the call that starts the expected child?",
 );
 const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "expiry_report",
     30,
-    "Is the parent woken by the expiry notice and does it report the give-up with the exact line?",
+    "Does the parent's final response contain both required markers: CHILD GAVE UP and PARENT DONE?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[BOUNDED_FAILURE, ORCHESTRATION_DISCIPLINE, EXPIRY_REPORT];
 
@@ -62,11 +63,11 @@ impl Scenario for SubagentValidationFailure {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Bounded Subagent Validation Failure")
+        Some("Handle a subagent that exhausts validation retries")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Bounds an impossible child validation loop and wakes the parent through an expiry fallback.")
+        Some("Limit an impossible child validation loop to two retry requests, then report that the child failed and the parent finished.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
@@ -161,17 +162,8 @@ impl Scenario for SubagentValidationFailure {
         run_id: &str,
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let child = child_session(run_id);
-        let child_status = context
-            .trigger_value("harness::status", json!({ "session_id": child }))
-            .await
-            .ok()
-            .and_then(|status| {
-                status
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
+        let (child_status, child_nudges) =
+            child_evidence(context, &observation.transcript, &child).await?;
         let verdict = common::state_value(
             context
                 .trigger(
@@ -180,13 +172,6 @@ impl Scenario for SubagentValidationFailure {
                 )
                 .await?,
         );
-        let child_nudges = context
-            .transcript(&child)
-            .await
-            .ok()
-            .as_ref()
-            .map(common::validation_nudges)
-            .unwrap_or(0);
         let calls = common::function_calls(&observation.transcript);
         let validator_index = calls.iter().position(|call| {
             call.function_id == "engine::register_trigger"
@@ -271,17 +256,8 @@ impl Scenario for SubagentValidationFailure {
         run_id: &str,
     ) -> anyhow::Result<ObjectiveEvaluation> {
         let child = child_session(run_id);
-        let child_status = context
-            .trigger_value("harness::status", json!({ "session_id": child }))
-            .await
-            .ok()
-            .and_then(|status| {
-                status
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
+        let (child_status, child_nudges) =
+            child_evidence(context, &observation.transcript, &child).await?;
         let verdict = common::state_value(
             context
                 .trigger(
@@ -290,11 +266,6 @@ impl Scenario for SubagentValidationFailure {
                 )
                 .await?,
         );
-        let child_nudges = match context.transcript(&child).await {
-            Ok(transcript) => common::validation_nudges(&transcript),
-            Err(_) => 0,
-        };
-
         let calls = common::function_calls(&observation.transcript);
         let validator_index = calls.iter().position(|call| {
             call.function_id == "engine::register_trigger"
@@ -346,7 +317,10 @@ impl Scenario for SubagentValidationFailure {
                      spawn@{spawn_index:?} — both must precede the spawn"
                     ),
                 ),
-                EXPIRY_REPORT.full_or_zero(reported, "expected the exact give-up report line"),
+                EXPIRY_REPORT.full_or_zero(
+                    reported,
+                    "expected both CHILD GAVE UP and PARENT DONE in the final response",
+                ),
             ],
         ))
     }
@@ -367,6 +341,30 @@ impl Scenario for SubagentValidationFailure {
             .await?;
         Ok(())
     }
+}
+
+async fn child_evidence(
+    context: &E2eContext,
+    transcript: &Value,
+    child: &str,
+) -> anyhow::Result<(String, usize)> {
+    let spawned = common::function_outcomes(transcript).iter().any(|call| {
+        call.function_id == "harness::spawn"
+            && call.arguments["session_id"] == child
+            && call.is_error == Some(false)
+    });
+    if !spawned {
+        return Ok(("not_spawned".into(), 0));
+    }
+    let status = context
+        .trigger_value("harness::status", json!({ "session_id": child }))
+        .await?
+        .get("status")
+        .and_then(Value::as_str)
+        .context("child status is missing")?
+        .to_string();
+    let nudges = common::validation_nudges(&context.transcript(child).await?);
+    Ok((status, nudges))
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -417,4 +415,42 @@ fn scope(run_id: &str) -> String {
 
 fn child_session(run_id: &str) -> String {
     format!("e2e_{run_id}-child-1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_a_created_child_requires_live_evidence() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let child = "expected-child";
+        assert_eq!(
+            child_evidence(&context, &json!({"messages":[]}), child)
+                .await
+                .unwrap(),
+            ("not_spawned".into(), 0)
+        );
+        for is_error in [true, false] {
+            let transcript = json!({"messages": [
+                {"message": {"role":"assistant", "content":[{
+                    "type":"function_call", "id":"spawn", "function_id":"harness::spawn",
+                    "arguments":{"session_id":child}
+                }]}},
+                {"message":{"role":"function_result", "function_call_id":"spawn",
+                    "function_id":"harness::spawn", "is_error":is_error, "details":{}}}
+            ]});
+            let evidence = child_evidence(&context, &transcript, child).await;
+            if is_error {
+                assert_eq!(evidence.unwrap(), ("not_spawned".into(), 0));
+            } else {
+                let error = evidence.unwrap_err();
+                assert_eq!(
+                    crate::context::transport_failure_code(&error),
+                    Some("transport_not_connected")
+                );
+            }
+        }
+        context.shutdown().await;
+    }
 }

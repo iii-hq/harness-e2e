@@ -285,6 +285,25 @@ try {
     0,
   )
 
+  await page.setViewportSize({ width: 390, height: 1000 })
+  const detailToggle = page.getByRole('button', {
+    name: `Details of the ${when} run`,
+  })
+  if ((await detailToggle.getAttribute('aria-expanded')) !== 'true') {
+    await detailToggle.click()
+  }
+  assert.equal(await detailToggle.getAttribute('aria-expanded'), 'true')
+  await detail.waitFor({ state: 'visible' })
+  const narrowCriteria = detail.locator('.th-criterion-history')
+  await narrowCriteria.waitFor({ state: 'visible' })
+  assert.equal(
+    await narrowCriteria.evaluate(
+      (element) =>
+        element.clientWidth > 0 && element.scrollWidth <= element.clientWidth,
+    ),
+    true,
+  )
+
   assert.deepEqual(errors, [])
   console.log(
     'Test history browser flow passed: every definition by default with chips, the chart by metric, a run opened on its session tree and links, the result filter in the URL, A then B ticked and a third refused, the A × B with what changed, the criterion that changed and why, calls by worker, both session trees and swap, back to the history, one definition at a time, the not-yet-run notice, narrow pane.',

@@ -3,7 +3,7 @@
 //! The subject receives a run-scoped Python fixture whose implementation is
 //! correct but quadratic. Public and hidden correctness probes protect the
 //! behavior, while instrumented values count equality/hash work independently
-//! of host speed. Wall-clock timing is captured only as an advisory signal.
+//! of host speed. Wall-clock timing is captured only as a measurement.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -51,31 +51,25 @@ const TASK_MANIFEST: &str = include_str!("../../tests/fixtures/performance-regre
 const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored_in(
     "functional_correctness",
     40,
-    "Do the complete public suite and runner-owned hidden semantic probes accept the optimized implementation?",
+    "Does the candidate implementation preserve the expected results in all public and hidden tests?",
     EvaluationDimension::Deliverable,
 );
 const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::scored_in(
     "deterministic_improvement",
-    35,
-    "Is instrumented equality and hash work bounded, near-linear, and improved by at least the declared factor?",
+    45,
+    "At 256 items, does the code use between 1 and 2,048 equality and hash operations, no more than one eighth of the baseline work, and at most three times the work at 128 items?",
     EvaluationDimension::StructuralIntegrity,
 );
 const PATCH_SCOPE: AssessmentSpec = AssessmentSpec::scored_in(
     "patch_scope",
     15,
-    "Is the allowed production file the only change while public tests, the task manifest, and fixture topology remain exact?",
+    "Does the change modify only src/deduplicate.py while preserving the supplied tests, task.json, and other fixture files?",
     EvaluationDimension::StructuralIntegrity,
-);
-const WALL_CLOCK_SIGNAL: AssessmentSpec = AssessmentSpec::scored(
-    "wall_clock_signal",
-    10,
-    "Does the candidate's median wall-clock measurement improve over the run-local baseline?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     FUNCTIONAL_CORRECTNESS,
     DETERMINISTIC_IMPROVEMENT,
     PATCH_SCOPE,
-    WALL_CLOCK_SIGNAL,
 ];
 
 const HIDDEN_PROBE: &str = r#"
@@ -235,11 +229,11 @@ impl Scenario for PerformanceRegression {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Remove a Performance Regression")
+        Some("Optimize Python deduplication without changing results")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Optimize a correct but quadratic Python implementation while preserving behavior and proving deterministic work reduction.")
+        Some("Optimize a quadratic Python deduplication function while preserving exact outputs and reducing measured work.")
     }
 
     fn canonical_seed(&self) -> u64 {
@@ -471,7 +465,6 @@ measure yourself."#,
     ) -> Result<ObjectiveEvaluation> {
         let audit = audit_fixture(run_id).await?;
         let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
-        let baseline_median = audit.baseline.as_ref().map(|baseline| baseline.median_ns);
         Ok(assessment::build_evaluation(
             if audit.production_patch_present {
                 crate::report::CompletionState::Completed
@@ -503,13 +496,6 @@ measure yourself."#,
                     audit.protected_files_exact,
                     audit.production_patch_present,
                     audit.unexpected_paths
-                ),
-            ),
-            WALL_CLOCK_SIGNAL.full_or_zero(
-                audit.wall_clock_improved(),
-                format!(
-                    "run-local baseline_median_ns={baseline_median:?}, candidate_median_ns={:?}; advisory only",
-                    audit.candidate_median_ns
                 ),
             ),
             ],
@@ -846,6 +832,77 @@ mod tests {
             .unwrap()
             .validate()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn wall_clock_does_not_change_score_and_remains_in_evidence() {
+        let run_id = format!("score-test-{}", std::process::id());
+        let root = fixture_root(&run_id);
+        reset_fixture(&root).unwrap();
+        fs::write(
+            root.join(PRODUCTION_PATH),
+            "def stable_unique(values):\n    return list(dict.fromkeys(values))\n",
+        )
+        .unwrap();
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let observation = ScenarioObservation {
+            case: ScenarioId::PerformanceRegression
+                .materialize(&run_id, CANONICAL_SEED)
+                .unwrap()
+                .case,
+            metrics: crate::wire::SessionMetricsResponse::from_normalized(
+                crate::wire::SessionMetricsPayload {
+                    root_session_id: run_id.clone(),
+                    complete: true,
+                    totals: Default::default(),
+                    by_session: Vec::new(),
+                    traces: None,
+                },
+            ),
+            transcript: serde_json::Value::Null,
+            response: String::new(),
+            deliverables: Vec::new(),
+        };
+        for (median_ns, improved) in [(1, false), (u64::MAX, true)] {
+            baselines().lock().unwrap().insert(
+                run_id.clone(),
+                Baseline {
+                    work_256: 32_640,
+                    median_ns,
+                },
+            );
+            let evaluation = PerformanceRegression
+                .evaluate(&context, &observation, &run_id)
+                .await
+                .unwrap();
+            assert_eq!(evaluation.awards.len(), 3);
+            assert_eq!(
+                evaluation
+                    .awards
+                    .iter()
+                    .filter_map(|award| award.awarded)
+                    .map(u16::from)
+                    .sum::<u16>(),
+                100
+            );
+            let capture = PerformanceRegression
+                .capture(&context, &observation, &run_id)
+                .await
+                .unwrap();
+            let evidence = capture[0].content.as_json().unwrap();
+            assert_eq!(evidence["wall_clock"]["improved"], improved);
+            assert!(
+                evidence["wall_clock"]["candidate_median_ns"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+        }
+        PerformanceRegression
+            .cleanup(&context, &run_id)
+            .await
+            .unwrap();
+        context.shutdown().await;
     }
 
     #[tokio::test]
