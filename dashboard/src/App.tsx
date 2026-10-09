@@ -25,9 +25,10 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'compare':
       return (
         <ExecutionComparePage
-          key={`${route.left}:${route.right}`}
-          left={route.left}
-          right={route.right}
+          key={route.executionIds.join('\n')}
+          executionIds={route.executionIds}
+          reference={route.reference}
+          compared={route.compared}
         />
       )
     case 'versions':

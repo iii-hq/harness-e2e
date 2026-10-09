@@ -20,6 +20,13 @@ import {
   useRef,
   useState,
 } from 'react'
+import {
+  GroupHighlights,
+  GroupMatrix,
+  GroupSummary,
+  type GroupView,
+  PairHeading,
+} from '@/components/compare/GroupComparison'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import {
   type Image,
@@ -40,6 +47,12 @@ import {
   hashForExecution,
   hashFrom,
 } from '@/hooks/use-hash-route'
+import {
+  groupMembers,
+  lettersText,
+  memberValues,
+  spreadOf,
+} from '@/lib/comparison-group'
 import type {
   DashboardDataBridge,
   DashboardExecutionDetail,
@@ -52,6 +65,7 @@ import {
   comparisonHighlights,
   type ExecutionComparison,
   exclusionPhrase,
+  exclusionWhere,
   gapPhrase,
   metricFigure,
   rerunPhrase,
@@ -77,9 +91,25 @@ import '@/components/execution/execution-page.css'
 import './compare.css'
 
 export type Sides = { a: DashboardExecutionDetail; b: DashboardExecutionDetail }
+export type { GroupView }
+
 type Which = 'a' | 'b'
+type Letters = Record<Which, string>
+const AB: Letters = { a: 'A', b: 'B' }
 
 const ROLE: Record<Which, string> = { a: 'Reference', b: 'Compared' }
+
+/** How the page names the pair's two sides: A and B alone, the group's
+ *  letters and "In detail" when the pair is one of a group. */
+type PairNames = {
+  letter: Letters
+  role: Record<Which, string>
+  /** In a group, why a test is out of every total, by the group's letters. */
+  out?: (scenarioId: string) => string | null
+}
+const PAIR: PairNames = { letter: AB, role: ROLE }
+const PairNamesContext = createContext<PairNames>(PAIR)
+const usePairNames = () => useContext(PairNamesContext)
 const LIVE = ['running', 'importing', 'cancelling']
 
 /* ------------------------------------------------------------- figures */
@@ -92,20 +122,23 @@ export function valueText(metric: ComparedMetric, side: Side): string {
   return value === null ? '—' : metricFigure(metric.format, value)
 }
 
-function sidesText(flags: Record<Side, boolean | number>) {
-  return [flags.baseline ? 'A' : null, flags.candidate ? 'B' : null]
+function sidesText(flags: Record<Side, boolean | number>, letter = AB) {
+  return [flags.baseline ? letter.a : null, flags.candidate ? letter.b : null]
     .filter(Boolean)
     .join(' and ')
 }
 
 /** For figures over every run: how many of them are out of the totals. */
-export function outsideText(metric: ComparedMetric): string | null {
+export function outsideText(
+  metric: ComparedMetric,
+  letter = AB,
+): string | null {
   const outside = metric.outside
   if (!outside || (!outside.baseline && !outside.candidate)) return null
   const parts = (['baseline', 'candidate'] as const).flatMap((side) =>
     outside[side]
       ? [
-          `${plural(outside[side], 'run')} in ${side === 'baseline' ? 'A' : 'B'}`,
+          `${plural(outside[side], 'run')} in ${side === 'baseline' ? letter.a : letter.b}`,
         ]
       : [],
   )
@@ -115,11 +148,11 @@ export function outsideText(metric: ComparedMetric): string | null {
 /** B minus A, with the relative change where it means something. Only the
  *  difference: no side is called better. A side short of runs is partial,
  *  and no difference is taken from it. */
-export function deltaText(metric: ComparedMetric): string {
+export function deltaText(metric: ComparedMetric, letter = AB): string {
   const delta = shownDelta(metric)
   if (delta === null)
     return metric.partial.baseline || metric.partial.candidate
-      ? `${sidesText(metric.partial)} partial`
+      ? `${sidesText(metric.partial, letter)} partial`
       : metric.baseline === null && metric.candidate === null
         ? ''
         : 'not comparable'
@@ -206,13 +239,18 @@ const REASON: Record<string, string> = {
 }
 
 /** Why a test is out of the totals, short enough for a pill. */
-function outLabel(scenario: ScenarioComparison): string | null {
+function outLabel(
+  scenario: ScenarioComparison,
+  names: PairNames = PAIR,
+): string | null {
   if (scenario.counted) return null
   if (scenario.leftOut) return 'left out'
   const exclusion = scenario.exclusion
   if (!exclusion) return 'out'
+  const group = names.out?.(scenario.id)
+  if (group) return group
   return exclusion.reason === 'missing' || exclusion.reason === 'no_score'
-    ? `${REASON[exclusion.reason]} in ${exclusion.sides.map((side) => side.toUpperCase()).join(' and ')}`
+    ? `${REASON[exclusion.reason]} in ${exclusionWhere(exclusion)}`
     : REASON[exclusion.reason]
 }
 
@@ -232,19 +270,20 @@ function SideCard({
   side: ComparisonSide
   detail: DashboardExecutionDetail
 }) {
+  const names = usePairNames()
   // The execution's result as the list and its page say it.
   const result = executionResult(buildExecutionPresentation(detail))
   return (
     <article
       className="cmp-side"
-      aria-label={`${which.toUpperCase()} · ${ROLE[which]}`}
+      aria-label={`${names.letter[which]} · ${names.role[which]}`}
       data-comparison-side={which}
     >
       <div className="cmp-side-top">
         <span className="cmp-letter" aria-hidden="true">
-          {which.toUpperCase()}
+          {names.letter[which]}
         </span>
-        <span className="cmp-faint">{ROLE[which]}</span>
+        <span className="cmp-faint">{names.role[which]}</span>
         <StatusLabel
           className="cmp-side-state"
           state={result.state}
@@ -298,13 +337,28 @@ function sameSentence(comparison: ExecutionComparison): string {
 
 /* -------------------------------------------------------------- picker */
 
+/** In a group, a test's score across every execution instead of A → B. */
+type PickerSpread = {
+  /** `52–87`, or `100 in all`; null when some execution has none. */
+  values: (scenarioId: string) => string | null
+  /** `differs in 4 of 5`, against the reference. */
+  note: (scenarioId: string) => string | null
+  /** Tests whose score is not the same in every execution. */
+  varied: string[]
+  /** Why a test is out of every total, by the executions' letters. */
+  out: (scenarioId: string) => string | null
+}
+
 function TestPicker({
   comparison,
   onCount,
+  spread,
 }: {
   comparison: ExecutionComparison
   onCount: (ids: string[] | null) => void
+  spread?: PickerSpread
 }) {
+  const names = usePairNames()
   const { scenarios, exclusions } = comparison
   const [open, setOpen] = useState(
     () =>
@@ -361,16 +415,18 @@ function TestPicker({
                 type="button"
                 onClick={() =>
                   onCount(
-                    ids(
-                      scenarios.filter((scenario) => {
-                        const delta = scoreDelta(scenario)
-                        return delta !== null && Math.abs(delta) > 1e-9
-                      }),
-                    ),
+                    spread
+                      ? spread.varied
+                      : ids(
+                          scenarios.filter((scenario) => {
+                            const delta = scoreDelta(scenario)
+                            return delta !== null && Math.abs(delta) > 1e-9
+                          }),
+                        ),
                   )
                 }
               >
-                Score changed
+                {spread ? 'Score varies' : 'Score changed'}
               </button>
               <button
                 type="button"
@@ -405,7 +461,7 @@ function TestPicker({
               const note = scenario.leftOut
                 ? 'Left out by you'
                 : scenario.exclusion
-                  ? `${scenario.exclusion.applied ? 'Out by itself' : 'Brought back'} · ${gap}`
+                  ? `${scenario.exclusion.applied ? 'Out by itself' : 'Brought back'} · ${spread?.out(scenario.id) ?? gap}`
                   : null
               return (
                 <li key={scenario.id} data-pick={scenario.id}>
@@ -427,16 +483,29 @@ function TestPicker({
                             <span className="cmp-pick-note">{note}</span>
                           ) : null}
                         </span>
-                        <span className="cmp-pick-values">
-                          {score ? valueText(score, 'baseline') : '—'} →{' '}
-                          {score ? valueText(score, 'candidate') : '—'}
-                        </span>
-                        <span
-                          className="cmp-pick-delta cmp-tone"
-                          data-tone={score ? metricTone(score) : undefined}
-                        >
-                          {score ? deltaText(score) : ''}
-                        </span>
+                        {spread ? (
+                          <>
+                            <span className="cmp-pick-values">
+                              {spread.values(scenario.id) ?? '—'}
+                            </span>
+                            <span className="cmp-pick-delta cmp-faint-num">
+                              {spread.note(scenario.id) ?? ''}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="cmp-pick-values">
+                              {score ? valueText(score, 'baseline') : '—'} →{' '}
+                              {score ? valueText(score, 'candidate') : '—'}
+                            </span>
+                            <span
+                              className="cmp-pick-delta cmp-tone"
+                              data-tone={score ? metricTone(score) : undefined}
+                            >
+                              {score ? deltaText(score, names.letter) : ''}
+                            </span>
+                          </>
+                        )}
                       </>
                     }
                   />
@@ -447,8 +516,9 @@ function TestPicker({
           <p className="cmp-note">
             <Info size={16} aria-hidden="true" />
             <span>
-              A test missing on one side, technically invalid, undetermined,
-              unscored or redefined leaves the totals by itself.{' '}
+              {spread
+                ? 'A test that any execution cannot measure (missing, technically invalid, undetermined, unscored or redefined) leaves every total, so each execution is read over the same tests.'
+                : 'A test missing on one side, technically invalid, undetermined, unscored or redefined leaves the totals by itself.'}{' '}
               {exclusions.length === 0
                 ? 'None did here.'
                 : `${plural(exclusions.length, 'test')} did here${out < exclusions.length ? `, ${exclusions.length - out} brought back` : ''}.`}
@@ -541,6 +611,7 @@ function Highlights({
 const KPIS = ['score', 'completed', 'tokens', 'duration', 'function_calls']
 
 function Totals({ comparison }: { comparison: ExecutionComparison }) {
+  const names = usePairNames()
   const [open, setOpen] = useState(false)
   const counted = comparison.scenarios.filter((scenario) => scenario.counted)
   const runs = (which: Which) =>
@@ -574,7 +645,7 @@ function Totals({ comparison }: { comparison: ExecutionComparison }) {
                 className="cmp-kpi-delta cmp-tone"
                 data-tone={metricTone(metric)}
               >
-                {deltaText(metric) || '—'}
+                {deltaText(metric, names.letter) || '—'}
               </span>
             </div>,
           ]
@@ -615,6 +686,7 @@ function MetricTable({
   caption: string
   metrics: ComparedMetric[]
 }) {
+  const names = usePairNames()
   return (
     <table className="cmp-metrics" data-comparison-metrics>
       <caption className="ep-sr">{caption}</caption>
@@ -623,8 +695,8 @@ function MetricTable({
           <th scope="col">
             <span className="ep-sr">Metric</span>
           </th>
-          <th scope="col">A</th>
-          <th scope="col">B</th>
+          <th scope="col">{names.letter.a}</th>
+          <th scope="col">{names.letter.b}</th>
           <th scope="col">Difference</th>
         </tr>
       </thead>
@@ -633,14 +705,17 @@ function MetricTable({
           <tr key={metric.id} data-metric-id={metric.id}>
             <th scope="row">
               {metric.label}
-              {outsideText(metric) ? (
-                <span className="cmp-faint-num"> · {outsideText(metric)}</span>
+              {outsideText(metric, names.letter) ? (
+                <span className="cmp-faint-num">
+                  {' '}
+                  · {outsideText(metric, names.letter)}
+                </span>
               ) : null}
             </th>
             <td className="cmp-faint-num">{valueText(metric, 'baseline')}</td>
             <td>{valueText(metric, 'candidate')}</td>
             <td className="cmp-delta cmp-tone" data-tone={metricTone(metric)}>
-              {deltaText(metric) || '—'}
+              {deltaText(metric, names.letter) || '—'}
             </td>
           </tr>
         ))}
@@ -708,7 +783,7 @@ function ScoreTrack({ a, b }: { a: number | null; b: number | null }) {
   )
 }
 
-function cellPair(scenario: ScenarioComparison, id: string) {
+function cellPair(scenario: ScenarioComparison, id: string, letter: Letters) {
   const metric = metricOf(scenario, id)
   if (!metric || (metric.baseline === null && metric.candidate === null))
     return <span className="cmp-faint-num">—</span>
@@ -718,7 +793,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
       <Pair
         a={a.runs ? `${metric.baseline ?? 0}/${a.runs}` : '—'}
         b={b.runs ? `${metric.candidate ?? 0}/${b.runs}` : '—'}
-        delta={deltaText(metric)}
+        delta={deltaText(metric, letter)}
         tone={metricTone(metric)}
       />
     )
@@ -727,7 +802,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
     <Pair
       a={valueText(metric, 'baseline')}
       b={valueText(metric, 'candidate')}
-      delta={deltaText(metric)}
+      delta={deltaText(metric, letter)}
       tone={metricTone(metric)}
     />
   )
@@ -748,6 +823,7 @@ function Results({
   onToggle: (scenarioId: string) => void
   onRunTest?: (scenarioId: string) => void
 }) {
+  const names = usePairNames()
   return (
     <section
       className="cmp-card cmp-results"
@@ -766,10 +842,12 @@ function Results({
         </div>
         <div className="cmp-legend" aria-hidden="true">
           <span>
-            <span className="cmp-track-a cmp-legend-dot" />A · Reference
+            <span className="cmp-track-a cmp-legend-dot" />
+            {names.letter.a} · {names.role.a}
           </span>
           <span>
-            <span className="cmp-track-b cmp-legend-dot" />B · Compared
+            <span className="cmp-track-b cmp-legend-dot" />
+            {names.letter.b} · {names.role.b}
           </span>
         </div>
       </div>
@@ -791,7 +869,7 @@ function Results({
             const expanded = open.has(scenario.id)
             const score = metricOf(scenario, 'score')
             const delta = scoreDelta(scenario)
-            const out = outLabel(scenario)
+            const out = outLabel(scenario, names)
             const detailId = `cmp-detail-${scenario.id}`
             return (
               <Fragment key={scenario.id}>
@@ -829,7 +907,11 @@ function Results({
                     {out ? (
                       <span
                         className="cmp-pill"
-                        title={exclusionPhrase(scenario) ?? undefined}
+                        title={
+                          names.out?.(scenario.id) ??
+                          exclusionPhrase(scenario) ??
+                          undefined
+                        }
                       >
                         {out}
                       </span>
@@ -852,14 +934,14 @@ function Results({
                             ? valueText(score, 'candidate')
                             : stateText(scenario.sides.b.state)
                         }
-                        delta={score ? deltaText(score) : ''}
+                        delta={score ? deltaText(score, names.letter) : ''}
                         tone={score ? metricTone(score) : undefined}
                       />
                     </span>
                   </td>
                   {CELLS.map(([id]) => (
                     <td key={id} className="cmp-wide" data-cell={id}>
-                      {cellPair(scenario, id)}
+                      {cellPair(scenario, id, names.letter)}
                     </td>
                   ))}
                 </tr>
@@ -897,8 +979,11 @@ const DETAIL_METRICS = [
   'technical_failures',
 ]
 
-function rowSummary(scenario: ScenarioComparison): string {
-  const out = exclusionPhrase(scenario)
+function rowSummary(
+  scenario: ScenarioComparison,
+  names: PairNames = PAIR,
+): string {
+  const out = names.out?.(scenario.id) ?? exclusionPhrase(scenario)
   const reran = rerunPhrase(scenario)
   const delta = scoreDelta(scenario)
   const moved =
@@ -906,7 +991,7 @@ function rowSummary(scenario: ScenarioComparison): string {
       ? 'No score to compare'
       : roundedPoints(delta) === 0
         ? 'Same score on both sides'
-        : `B ${delta < 0 ? 'lost' : 'gained'} ${plural(roundedPoints(delta), 'point')}`
+        : `${names.letter.b} ${delta < 0 ? 'lost' : 'gained'} ${plural(roundedPoints(delta), 'point')}`
   return [
     out ? `Out of the totals: ${out}` : null,
     scenario.criteria.length > 0
@@ -939,6 +1024,7 @@ export function RowDetail({
   onRunTest?: (scenarioId: string) => void
 }) {
   const runHref = useRunHref(sides)
+  const names = usePairNames()
   const runs = useMemo(
     () =>
       (['a', 'b'] as const).flatMap((which) =>
@@ -952,11 +1038,11 @@ export function RowDetail({
   const bothFull =
     score?.baseline === 100 && score?.candidate === 100
       ? 'No criterion changed. Both sides scored 100.'
-      : 'No criterion changed between A and B.'
+      : `No criterion changed between ${names.letter.a} and ${names.letter.b}.`
   return (
     <div className="cmp-detail" data-scenario-detail={scenario.id}>
       <div className="cmp-detail-bar">
-        <span className="cmp-faint">{rowSummary(scenario)}</span>
+        <span className="cmp-faint">{rowSummary(scenario, names)}</span>
         {onRunTest ? (
           <button
             type="button"
@@ -1016,7 +1102,7 @@ export function RowDetail({
               {(['a', 'b'] as const).flatMap((which) =>
                 criterion.reasons[which].map((reason) => (
                   <div className="cmp-reason" key={`${which}:${reason}`}>
-                    <span className="cmp-letter-sm">{which.toUpperCase()}</span>
+                    <span className="cmp-letter-sm">{names.letter[which]}</span>
                     <code>{reason}</code>
                   </div>
                 )),
@@ -1064,7 +1150,7 @@ export function RowDetail({
                   key={`${which}:${run.runId ?? index}`}
                   data-run-side={which}
                 >
-                  <span className="cmp-letter-sm">{which.toUpperCase()}</span>
+                  <span className="cmp-letter-sm">{names.letter[which]}</span>
                   <StatusLabel
                     state={runResultState({
                       status: run.status ?? 'unavailable',
@@ -1170,7 +1256,8 @@ export function ScreenshotFigure({
   /** The thumbnail's button, for focus to come back to. */
   buttonRef?: (button: HTMLButtonElement | null) => void
 }) {
-  const side = which.toUpperCase()
+  const names = usePairNames()
+  const side = names.letter[which]
   return (
     <figure
       className="cmp-shot"
@@ -1211,7 +1298,7 @@ export function ScreenshotFigure({
       )}
       <figcaption>
         <span className="cmp-letter-sm">{side}</span>
-        {ROLE[which]}
+        {names.role[which]}
         {evidenceHref ? <a href={evidenceHref}>Evidence record</a> : null}
       </figcaption>
     </figure>
@@ -1323,6 +1410,7 @@ function ScreenshotPairs({
 /* --------------------------------------------------------------- stack */
 
 function StackDetail({ stack }: { stack: StackComparison }) {
+  const names = usePairNames()
   const unrecorded = (['a', 'b'] as const).filter(
     (which) => !stack.recorded[which],
   )
@@ -1330,7 +1418,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
     return (
       <p className="cmp-faint cmp-empty-line">
         No stack recorded for{' '}
-        {unrecorded.map((which) => which.toUpperCase()).join(' and ')}: the
+        {unrecorded.map((which) => names.letter[which]).join(' and ')}: the
         workers cannot be compared.
       </p>
     )
@@ -1350,8 +1438,8 @@ function StackDetail({ stack }: { stack: StackComparison }) {
           <thead>
             <tr>
               <th scope="col">Worker</th>
-              <th scope="col">A</th>
-              <th scope="col">B</th>
+              <th scope="col">{names.letter.a}</th>
+              <th scope="col">{names.letter.b}</th>
             </tr>
           </thead>
           <tbody>
@@ -1379,8 +1467,8 @@ function StackDetail({ stack }: { stack: StackComparison }) {
             <thead>
               <tr>
                 <th scope="col">Worker</th>
-                <th scope="col">A</th>
-                <th scope="col">B</th>
+                <th scope="col">{names.letter.a}</th>
+                <th scope="col">{names.letter.b}</th>
                 <th scope="col">Why</th>
               </tr>
             </thead>
@@ -1401,7 +1489,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
         {(['a', 'b'] as const).map((which) =>
           onlyHere(which).length > 0 ? (
             <div key={which} data-stack-only={which}>
-              <dt>Only in {which.toUpperCase()}</dt>
+              <dt>Only in {names.letter[which]}</dt>
               <dd>{onlyHere(which).sort().join(', ')}</dd>
             </div>
           ) : null,
@@ -1418,6 +1506,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
 }
 
 function Methodology({ comparison }: { comparison: ExecutionComparison }) {
+  const { letter } = usePairNames()
   const reran = comparison.scenarios.flatMap((scenario) => {
     const phrase = rerunPhrase(scenario)
     return phrase ? [`${scenario.id}: ${phrase}`] : []
@@ -1426,9 +1515,10 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
   return (
     <div className="cmp-method">
       <p>
-        A is the reference only because it was chosen first; every difference is
-        B minus A, an observation that ranks neither side. Tests pair by
-        scenario, case seed and repetition, as Release Control pairs them.
+        {letter.a} is the reference only by choice; every difference is{' '}
+        {letter.b} minus {letter.a}, an observation that ranks neither side.
+        Tests pair by scenario, case seed and repetition, as Release Control
+        pairs them.
       </p>
       <p>
         A score is the mean of a side’s scored runs, given only when every
@@ -1440,7 +1530,8 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
         <div>
           <dt>Runner</dt>
           <dd>
-            A {runner.a ?? 'not recorded'} · B {runner.b ?? 'not recorded'}
+            {letter.a} {runner.a ?? 'not recorded'} · {letter.b}{' '}
+            {runner.b ?? 'not recorded'}
           </dd>
         </div>
         {runner.definitionsChanged.length > 0 ? (
@@ -1462,8 +1553,79 @@ function Methodology({ comparison }: { comparison: ExecutionComparison }) {
 
 /* ---------------------------------------------------------------- view */
 
-/** The comparison itself, from two loaded executions. Every difference is
- *  an observation: no side is labelled better or worse. */
+/** The test picker's values in a group: each test's score across every
+ *  execution, and in how many it differs from the reference. */
+function pickerSpread(group: GroupView, referenceId: string) {
+  const members = groupMembers(group.executions, referenceId, group.pairs)
+  const [first] = group.pairs
+  const scores = (id: string) => memberValues(members, first, 'score', id)
+  const others = members.filter((member) => !member.reference)
+  const reference = members.find((member) => member.reference)
+  const rounded = (value: number | null) =>
+    value === null ? null : Number(value.toFixed(1))
+  return {
+    members,
+    spread: {
+      values: (id: string) => {
+        const range = spreadOf(scores(id))
+        if (!range) return null
+        const [low, high] = [rounded(range.min), rounded(range.max)]
+        return low === high ? `${low} in all` : `${low}–${high}`
+      },
+      note: (id: string) => {
+        const values = scores(id)
+        if (!reference || values[reference.index] === null) return null
+        const differ = others.filter(
+          (member) =>
+            values[member.index] !== null &&
+            rounded(values[member.index]) !== rounded(values[reference.index]),
+        ).length
+        return differ === 0
+          ? 'same in all'
+          : `differs in ${differ} of ${others.length}`
+      },
+      out: (id: string) => {
+        const gap = group.group.exclusions.get(id)
+        if (!gap) return null
+        const where = lettersText(
+          members
+            .filter((member) => gap.executions.includes(member.id))
+            .map((member) => member.index),
+        )
+        return gap.reason === 'redefined'
+          ? 'redefined: the case inputs differ between the executions'
+          : `${gap.reason.replaceAll('_', ' ')} in ${where}`
+      },
+      // Only tests every execution scored: one that any of them did not
+      // run stays out of every total.
+      varied: first.scenarios
+        .filter((scenario) => {
+          const values = scores(scenario.id)
+          const range = spreadOf(values)
+          return (
+            values.every((value) => value !== null) &&
+            range !== null &&
+            rounded(range.max) !== rounded(range.min)
+          )
+        })
+        .map((scenario) => scenario.id),
+    },
+  }
+}
+
+/** `A and E`: the pair in detail, by letter. */
+function pairLetters(
+  members: ReturnType<typeof groupMembers>,
+  comparison: ExecutionComparison,
+) {
+  const letter = (id: string) =>
+    members.find((member) => member.id === id)?.letter ?? id
+  return `${letter(comparison.a.id)} and ${letter(comparison.b.id)}`
+}
+
+/** The comparison itself, from two loaded executions, or a group of more
+ *  read against one of them with a pair of it in detail. Every difference
+ *  is an observation: no side is labelled better or worse. */
 export function ComparisonView({
   comparison,
   sides,
@@ -1473,9 +1635,12 @@ export function ComparisonView({
   refreshError = null,
   onCount,
   onRunTest,
+  group,
 }: {
   comparison: ExecutionComparison
   sides: Sides
+  /** The group this pair is one of, when more than two are compared. */
+  group?: GroupView
   bridge?: DashboardDataBridge | null
   /** This comparison's hash, its choice included: where a run's transcript
    *  or evidence record opened from it goes back to. */
@@ -1494,6 +1659,22 @@ export function ComparisonView({
   const warning = runnerWarning(comparison.runner)
   const stack = stackChanges(comparison.stack)
   const same = sameSentence(comparison)
+  const referenceId = comparison.a.id
+  const grouped = useMemo(
+    () =>
+      group && group.pairs.length > 1 ? pickerSpread(group, referenceId) : null,
+    [group, referenceId],
+  )
+  const names: PairNames = useMemo(() => {
+    if (!grouped) return PAIR
+    const letter = (id: string) =>
+      grouped.members.find((member) => member.id === id)?.letter ?? id
+    return {
+      letter: { a: letter(comparison.a.id), b: letter(comparison.b.id) },
+      role: { a: 'Reference', b: 'In detail' },
+      out: grouped.spread.out,
+    }
+  }, [grouped, comparison.a.id, comparison.b.id])
   const toggle = (id: string) =>
     setOpen((current) => {
       const next = new Set(current)
@@ -1511,6 +1692,15 @@ export function ComparisonView({
         ),
       0,
     )
+  }
+  // A test of another execution of the group: that one comes into detail.
+  const showIn = (executionId: string | null, scenarioId: string) => {
+    if (group && executionId && executionId !== comparison.b.id)
+      window.location.hash =
+        executionId === referenceId
+          ? group.compareHref(comparison.b.id)
+          : group.compareHref(executionId)
+    show(scenarioId)
   }
   const live = (['a', 'b'] as const).filter((which) =>
     LIVE.includes(String(sides[which].status ?? '')),
@@ -1545,24 +1735,15 @@ export function ComparisonView({
         ]
       : []),
   ]
-  return (
-    <ComparisonHash.Provider value={here ?? null}>
-      {refreshError ? (
-        <p className="cmp-warning" role="status" data-comparison-refresh-error>
-          <AlertTriangle size={16} aria-hidden="true" />
-          <span>
-            Refresh failed. Showing the comparison as last loaded; updates will
-            retry. {refreshError}
-          </span>
-        </p>
-      ) : null}
+  const pair = (
+    <>
       <section className="cmp-sides" aria-label="Executions compared">
         <SideCard which="a" side={comparison.a} detail={sides.a} />
         <a
           className="cmp-swap"
           href={swap}
-          aria-label="Swap A and B"
-          title="Swap A and B"
+          aria-label={`Swap ${names.letter.a} and ${names.letter.b}`}
+          title={`Swap ${names.letter.a} and ${names.letter.b}`}
         >
           <ArrowLeftRight size={16} aria-hidden="true" />
         </a>
@@ -1572,86 +1753,150 @@ export function ComparisonView({
         <p className="cmp-live" role="status" data-comparison-live>
           <StatusLabel state="running" label="Running" />
           <span>
-            {live.map((which) => which.toUpperCase()).join(' and ')}{' '}
+            {live.map((which) => names.letter[which]).join(' and ')}{' '}
             {live.length === 1 ? 'is' : 'are'} still running: figures short of
             their planned runs are partial, and this page follows them.
           </span>
         </p>
       ) : null}
-
-      <section
-        className="cmp-changes"
-        aria-label="What changed"
-        data-comparison-changes
-      >
-        <div className="cmp-changes-row">
-          <span className="cmp-eyebrow">What changed</span>
-          {changes.length > 0 ? <FactList>{changes}</FactList> : null}
-          <span className="cmp-faint">
-            {changes.length === 0 ? `Nothing recorded differs. ${same}` : same}
-          </span>
-          <button
-            type="button"
-            className="cmp-act"
-            aria-controls="comparison-stack"
-            onClick={() => {
-              setStackOpen(true)
-              window.setTimeout(
-                () =>
-                  reach(document.getElementById('comparison-stack'), 'summary'),
-                0,
-              )
-            }}
+    </>
+  )
+  const results = (
+    <Results
+      comparison={comparison}
+      sides={sides}
+      bridge={bridge}
+      open={open}
+      onToggle={toggle}
+      onRunTest={onRunTest}
+    />
+  )
+  return (
+    <ComparisonHash.Provider value={here ?? null}>
+      <PairNamesContext.Provider value={names}>
+        {refreshError ? (
+          <p
+            className="cmp-warning"
+            role="status"
+            data-comparison-refresh-error
           >
-            Stack details
-          </button>
-        </div>
-        {warning ? (
-          <p className="cmp-warning" data-runner-warning>
             <AlertTriangle size={16} aria-hidden="true" />
-            <span>{warning}</span>
+            <span>
+              Refresh failed. Showing the comparison as last loaded; updates
+              will retry. {refreshError}
+            </span>
           </p>
         ) : null}
-      </section>
+        {group && grouped ? (
+          <>
+            <GroupSummary members={grouped.members} view={group} />
+            <TestPicker
+              comparison={comparison}
+              onCount={onCount}
+              spread={grouped.spread}
+            />
+            <GroupHighlights
+              members={grouped.members}
+              onShow={(scenarioId, executionId) =>
+                showIn(executionId, scenarioId)
+              }
+            />
+            <GroupMatrix
+              members={grouped.members}
+              view={group}
+              compared={comparison.b.id}
+              onOpen={(executionId, scenarioId) =>
+                showIn(executionId, scenarioId)
+              }
+            />
+            <section className="cmp-detail-pair" aria-label="In detail">
+              <PairHeading
+                members={grouped.members}
+                compared={comparison.b.id}
+                view={group}
+              />
+              {pair}
+              <Totals comparison={comparison} />
+              {results}
+            </section>
+          </>
+        ) : (
+          <>
+            {pair}
+            <section
+              className="cmp-changes"
+              aria-label="What changed"
+              data-comparison-changes
+            >
+              <div className="cmp-changes-row">
+                <span className="cmp-eyebrow">What changed</span>
+                {changes.length > 0 ? <FactList>{changes}</FactList> : null}
+                <span className="cmp-faint">
+                  {changes.length === 0
+                    ? `Nothing recorded differs. ${same}`
+                    : same}
+                </span>
+                <button
+                  type="button"
+                  className="cmp-act"
+                  aria-controls="comparison-stack"
+                  onClick={() => {
+                    setStackOpen(true)
+                    window.setTimeout(
+                      () =>
+                        reach(
+                          document.getElementById('comparison-stack'),
+                          'summary',
+                        ),
+                      0,
+                    )
+                  }}
+                >
+                  Stack details
+                </button>
+              </div>
+              {warning ? (
+                <p className="cmp-warning" data-runner-warning>
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <span>{warning}</span>
+                </p>
+              ) : null}
+            </section>
+            <TestPicker comparison={comparison} onCount={onCount} />
+            <Highlights comparison={comparison} onShow={show} />
+            <Totals comparison={comparison} />
+            {results}
+          </>
+        )}
 
-      <TestPicker comparison={comparison} onCount={onCount} />
-      <Highlights comparison={comparison} onShow={show} />
-      <Totals comparison={comparison} />
-      <Results
-        comparison={comparison}
-        sides={sides}
-        bridge={bridge}
-        open={open}
-        onToggle={toggle}
-        onRunTest={onRunTest}
-      />
-
-      <section className="cmp-more" aria-label="More about this comparison">
-        <DisclosureLayer
-          id="comparison-stack"
-          label="Stack"
-          scent={[
-            stack ?? 'same stack',
-            comparison.stack.same.length > 0
-              ? `${comparison.stack.same.length} the same`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-          open={stackOpen}
-          onToggle={setStackOpen}
-        >
-          <StackDetail stack={comparison.stack} />
-        </DisclosureLayer>
-        <DisclosureLayer
-          id="comparison-method"
-          label="Test contracts and methodology"
-          scent="Means per side, a test run again by its last attempt, changed definitions flagged"
-          open={false}
-        >
-          <Methodology comparison={comparison} />
-        </DisclosureLayer>
-      </section>
+        <section className="cmp-more" aria-label="More about this comparison">
+          <DisclosureLayer
+            id="comparison-stack"
+            label="Stack"
+            scent={[
+              grouped ? pairLetters(grouped.members, comparison) : null,
+              stack ?? 'same stack',
+              comparison.stack.same.length > 0
+                ? `${comparison.stack.same.length} the same`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            open={stackOpen}
+            onToggle={setStackOpen}
+          >
+            <StackDetail stack={comparison.stack} />
+          </DisclosureLayer>
+          <DisclosureLayer
+            id="comparison-method"
+            label="Test contracts and methodology"
+            scent="Means per side, a test run again by its last attempt, changed definitions flagged"
+            open={false}
+          >
+            <Methodology comparison={comparison} />
+          </DisclosureLayer>
+        </section>
+      </PairNamesContext.Provider>
     </ComparisonHash.Provider>
   )
 }
