@@ -9,8 +9,8 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 contract_tool="$repo_root/scripts/exact_stack_campaign.py"
 # Set by the execution's preparation: assemble the stack once through
-# compose::add, leave it and its worker-compose.lock under the artifact
-# directory, and stop there. Groups then start that stack frozen.
+# compose::add, export only its manifest and worker-compose.lock to the
+# artifact directory, and stop there. Groups then start that stack frozen.
 assemble_only=${HARNESS_E2E_ASSEMBLE_ONLY:-}
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
@@ -69,21 +69,21 @@ if (( ${#namespace} > 40 )); then
 fi
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-compose.XXXXXX")
-# TMPDIR is configurable; reject an uploaded runtime/secret tree before any
-# provider credential or Compose state is written into it.
-if ! python3 "$contract_tool" validate-layout \
-  --artifact-root "$artifact_dir" --runtime-root "$run_root" --allowed-root "$repo_root/target"; then
-  rmdir -- "$run_root"
-  exit 2
-fi
 project_dir="$run_root/project"
 evaluation_dir="$run_root/evaluation"
 engine_config="$project_dir/iii.config.yaml"
-compose_file="$artifact_dir/stack/worker-compose.yaml"
-compose_working_dir="$repo_root"
-if [[ -n "$project_template" ]]; then
-  compose_file="$project_dir/worker-compose.yaml"
-  compose_working_dir="$project_dir"
+# Compose injects the manifest's parent as III_COMPOSE_DIR and uses it as
+# package containers' default cwd. Moving only daemon state is insufficient:
+# data/secrets and other project-relative runtime would still be uploaded.
+compose_file="$project_dir/worker-compose.yaml"
+compose_working_dir="$project_dir"
+# TMPDIR is configurable; check the actual manifest as well as both roots
+# before any provider credential or Compose state is written into them.
+if ! python3 "$contract_tool" validate-layout \
+  --artifact-root "$artifact_dir" --runtime-root "$run_root" --allowed-root "$repo_root/target" \
+  --compose "$compose_file"; then
+  rmdir -- "$run_root"
+  exit 2
 fi
 compose_state="$run_root/compose-state"
 tools_dir="$run_root/bin"
@@ -181,6 +181,12 @@ await_compose_add() {
   fail "compose::add did not settle within ${compose_add_timeout_seconds}s"
 }
 
+export_compose() {
+  python3 "$contract_tool" export-compose \
+    --compose "$compose_file" --runtime-root "$run_root" \
+    --artifact-root "$artifact_dir" --allowed-root "$repo_root/target" "$@"
+}
+
 cleanup() {
   local status=$?
   trap - EXIT INT TERM ERR
@@ -205,6 +211,10 @@ cleanup() {
     jq -n --arg phase "$failure_phase" --arg error "$failure_reason" --argjson exit_code "$status" \
       '{phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' >"$artifact_dir/failure.json"
   fi
+  # Export named regular files, never the runtime tree. Keep the pre-up
+  # manifest immutable for compose-evidence; a final snapshot records any
+  # later changes, and the adjacent lock is retained byte for byte.
+  export_compose --final || status=1
   if [[ -f "$compose_file" && -f "$artifact_dir/stack/add.json" && -f "$artifact_dir/stack/up.json" \
         && -f "$artifact_dir/stack/status.json" && -f "$artifact_dir/stack/workers.json" \
         && -f "$artifact_dir/stack/processes-before.json" && -f "$artifact_dir/stack/processes-during.json" ]]; then
@@ -221,9 +231,6 @@ cleanup() {
       --process-during "$artifact_dir/stack/processes-during.json" \
       --process-after "$artifact_dir/stack/processes-after.json" \
       --output "$artifact_dir/compose-evidence.json" || status=1
-  fi
-  if [[ -n "$project_template" && -f "$compose_file" ]]; then
-    cp "$compose_file" "$artifact_dir/stack/worker-compose-final.yaml"
   fi
   rm -rf "$run_root"
   exit "$status"
@@ -336,6 +343,7 @@ project_args=(
   --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.suite.lane' "$contract_path")"
   --environment "harness-e2e.HARNESS_E2E_CAMPAIGN_GROUP=$campaign_group_id"
   --output "$compose_file"
+  --local-source-root "$artifact_dir/stack"
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )
@@ -433,7 +441,6 @@ else
     jq -n '{status:"skipped",reason:"the runner is built from a commit and declared; compose::up starts the project"}' \
       >"$artifact_dir/stack/add.json"
   fi
-  [[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 fi
 if [[ -n "$assemble_only" ]]; then
   # Ask on its own for whichever of those no graph brought.
@@ -452,6 +459,8 @@ if [[ -n "$assemble_only" ]]; then
   failure_phase=complete
   exit 0
 fi
+
+export_compose
 
 python3 "$contract_tool" roots --compose "$compose_file" \
   | jq -Rc 'split("@") | {worker: .[0], version: .[1]}' \
