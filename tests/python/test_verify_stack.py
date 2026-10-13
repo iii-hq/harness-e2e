@@ -130,6 +130,64 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(run.call_args.args[0][:4], ["gh", "run", "cancel", "42"])
 
+    def measure_with(self, views, monotonic=None):
+        """Run `measure` against a fake `gh`: `views` answers each `gh run view`
+        in turn (an exception is raised, a dict is printed as JSON)."""
+        calls = []
+
+        def fake_gh(*args, **_):
+            calls.append(args[:2])
+            if args[:2] == ("workflow", "run"):
+                return "https://github.com/iii-hq/harness-e2e/actions/runs/42\n"
+            if args[:2] == ("run", "view"):
+                answer = views.pop(0)
+                if isinstance(answer, Exception):
+                    raise answer
+                return verify_stack.json.dumps(answer)
+            if args[:2] == ("run", "download"):
+                directory = args[args.index("-D") + 1]
+                (Path(directory) / "execution-summary.json").write_text(
+                    verify_stack.json.dumps(summary(group("minimal_path"))))
+                return ""
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        previous = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+        try:
+            with patch.object(verify_stack, "gh", side_effect=fake_gh), \
+                    patch.object(verify_stack.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+                    patch.object(verify_stack.time, "sleep"), \
+                    patch.object(verify_stack.time, "monotonic", side_effect=monotonic or (lambda: 0)):
+                result = verify_stack.measure({"containers": {}}, "pr", "deepseek/deepseek-flash", None)
+        finally:
+            signal.signal(signal.SIGTERM, previous[0])
+            signal.signal(signal.SIGINT, previous[1])
+        return result, calls
+
+    def test_a_run_not_readable_yet_or_a_5xx_is_polled_again(self):
+        """Right after the dispatch the run 404s for a moment; the API also 5xxs now and then."""
+        failed = lambda status: verify_stack.VerifyError(  # noqa: E731
+            f"gh run view 42 failed: failed to get run: HTTP {status} "
+            "(https://api.github.com/repos/iii-hq/harness-e2e/actions/runs/42)")
+        views = [failed("404: Not Found"), failed("500"), {"status": "in_progress", "attempt": 1},
+                 {"status": "completed", "attempt": 1, "conclusion": "success"}]
+        (result, run_url), calls = self.measure_with(views)
+        self.assertEqual((result["status"], result["passed"], result["planned"]), ("passed", 1, 1))
+        self.assertEqual(calls.count(("run", "view")), 4)
+        self.assertTrue(run_url.endswith("/actions/runs/42"))
+
+    def test_a_lookup_error_that_will_not_pass_still_fails_fast(self):
+        denied = verify_stack.VerifyError("gh run view 42 failed: HTTP 401: Bad credentials")
+        with self.assertRaises(verify_stack.VerifyError):
+            self.measure_with([denied])
+
+    def test_a_run_never_readable_gives_up_at_the_deadline_with_the_last_error(self):
+        missing = verify_stack.VerifyError("gh run view 42 failed: failed to get run: HTTP 404: Not Found")
+        clock = iter([0, verify_stack.DEADLINE_SECONDS + 1])
+        (result, _), _ = self.measure_with([missing], monotonic=lambda: next(clock))
+        self.assertEqual(result["status"], "not_measured")
+        self.assertIn("did not finish", result["reason"])
+        self.assertIn("HTTP 404", result["reason"])
+
     def test_a_registry_outage_still_leaves_a_one_line_verdict(self):
         """A multi-line error must neither crash the tool nor break GITHUB_OUTPUT."""
         with tempfile.TemporaryDirectory() as directory:

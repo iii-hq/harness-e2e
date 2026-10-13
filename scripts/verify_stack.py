@@ -46,6 +46,11 @@ MARKER = "<!-- harness-e2e-verify -->"
 RUN_URL = re.compile(r"/actions/runs/(\d+)")
 POLL_SECONDS = 20
 DEADLINE_SECONDS = 45 * 60
+#: A failed `gh run view` worth another poll: a run GitHub has only just
+#: created is not readable for a moment (404), and the API has bad moments
+#: (5xx, a dropped connection). Anything else (credentials, permissions) is
+#: not going to pass and still fails the measurement at once.
+TRANSIENT = re.compile(r"HTTP (404|5\d\d)\b|error connecting|connection reset|timed? ?out", re.IGNORECASE)
 ICONS = {"passed": "🟢", "failed": "🔴", "not_measured": "🟡", "skipped": "⚪"}
 
 
@@ -214,14 +219,21 @@ def measure(stack: dict[str, Any], suite: str, model: str, token: str | None) ->
 
     deadline = time.monotonic() + DEADLINE_SECONDS
     while True:
-        run = json.loads(gh("run", "view", str(run_id), "-R", EXECUTOR_REPOSITORY,
-                            "--json", "status,attempt,conclusion", token=token))
+        try:
+            run = json.loads(gh("run", "view", str(run_id), "-R", EXECUTOR_REPOSITORY,
+                                "--json", "status,attempt,conclusion", token=token))
+            lookup_error = ""
+        except VerifyError as error:
+            if not TRANSIENT.search(str(error)):
+                raise
+            run, lookup_error = {"status": "unknown"}, str(error)
         if run["status"] == "completed":
             break
         if time.monotonic() > deadline:
             cancel()
+            last = f" (last lookup: {lookup_error})" if lookup_error else ""
             return {"status": "not_measured", "passed": 0, "planned": 0, "failed": [], "not_measured": [],
-                    "reason": f"the run did not finish in {DEADLINE_SECONDS // 60} minutes"}, run_url
+                    "reason": f"the run did not finish in {DEADLINE_SECONDS // 60} minutes{last}"}, run_url
         time.sleep(POLL_SECONDS)
 
     with tempfile.TemporaryDirectory() as directory:
