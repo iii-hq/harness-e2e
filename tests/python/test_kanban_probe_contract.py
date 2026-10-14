@@ -307,7 +307,7 @@ console.log(JSON.stringify(observed))
             self.skipTest("dashboard Playwright is not installed")
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
-import {{ boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
+import {{ PROBES, boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
 const browser = await chromium.launch({{ headless: true }})
 try {{
   const page = await browser.newPage()
@@ -319,6 +319,7 @@ try {{
       <section id="combined"><h2>Backlog <span>1</span></h2><article><h3>Card</h3></article></section>
       <section id="sibling"><header><h2>To do</h2><span aria-label="1 ticket">1</span></header></section>
       <section><h2><span>In progress</span><span aria-label="1 ticket">1</span></h2><ul><li><p>Paragraph card</p></li></ul></section>
+      <section id="parenthesized"><h2><span>In review</span> <span>(1)</span></h2><ul><li><p>Parenthesized card</p></li></ul></section>
     </main>`)
   await page.locator('#refresh').evaluate((button) => button.addEventListener('click', () => window.refreshed = true))
   await boardRefreshButton(page).click()
@@ -327,6 +328,7 @@ try {{
     sibling: await (await boardLaneWithCount(page, 'To do', 1)).count(),
     total: await boardTicketTotal(page, 5).count(),
     accessibleCount: await (await boardLaneWithCount(page, 'In progress', 1)).count(),
+    parenthesizedCount: await (await boardLaneWithCount(page, 'In review', 1)).count(),
     paragraphTitle: await boardTicketTitle(page, 'Paragraph card').count(),
     boardLink: await boardNavigation(page).count(),
     refreshed: await page.evaluate(() => window.refreshed === true),
@@ -337,9 +339,11 @@ try {{
   }})
   await boardNavigation(page).click()
   const duplicateBoardLinks = {{ count: await boardNavigation(page).count(), clicked: await page.evaluate(() => window.returnedToBoard === true) }}
-  await page.locator('#sibling span').evaluate((element) => {{ element.textContent = '2'; element.setAttribute('aria-label', '2 tickets') }})
-  let wrongLaneCountRejected = false
-  try {{ await boardLaneWithCount(page, 'To do', 1) }} catch {{ wrongLaneCountRejected = true }}
+  await page.locator('#sibling span').evaluate((element) => {{ element.textContent = '(2)'; element.setAttribute('aria-label', '2 tickets') }})
+  const wrongLaneCountsRejected = []
+  try {{ await boardLaneWithCount(page, 'To do', 1); wrongLaneCountsRejected.push(false) }} catch {{ wrongLaneCountsRejected.push(true) }}
+  await page.locator('#parenthesized h2 span').last().evaluate((element) => {{ element.textContent = '(10)' }})
+  try {{ await boardLaneWithCount(page, 'In review', 1); wrongLaneCountsRejected.push(false) }} catch {{ wrongLaneCountsRejected.push(true) }}
   await page.setContent('<p role="status">Loading tickets…</p><p>…</p><button>Reload</button>')
   const loading = {{ zero: await boardTicketTotal(page, 0).count(), refresh: await boardRefreshButton(page).count() }}
   await page.setContent('<p role="alert">Unable to load tickets.</p><button>Retry</button>')
@@ -370,28 +374,54 @@ try {{
   }}
   await page.setContent('<a href="/settings">Board settings</a><a href="/">Discard board</a>')
   const unrelatedNavigation = await boardNavigation(page).count()
-  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText }}))
+  const fabricatedLaneCounts = {{}}
+  const probeBrowser = {{ newContext: async () => {{
+    const context = await browser.newContext()
+    await context.route('http://board-probe.test/', (route) => route.fulfill({{
+      contentType: 'text/html',
+      body: '<p role="status">Loading tickets…</p><p role="alert">Unable to load tickets.</p><section><h2>Backlog <span>(0)</span></h2></section><script>fetch("/api/tickets").catch(() => {{}})</script>',
+    }}))
+    return context
+  }} }}
+  await PROBES.kanban_c3_board({{
+    api: async () => {{ throw new Error('unexpected api') }},
+    trigger: async () => {{ throw new Error('unexpected trigger') }},
+    browser: probeBrowser,
+    baseUrl: 'http://board-probe.test/',
+    output: '',
+    check: async (id, action) => {{
+      if (!['board_loading', 'board_error'].includes(id)) return
+      try {{ await action(); fabricatedLaneCounts[id] = null }}
+      catch (failure) {{ fabricatedLaneCounts[id] = failure.message }}
+    }},
+  }})
+  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountsRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText, fabricatedLaneCounts }}))
 }} finally {{
   await browser.close()
 }}
 """
         completed = subprocess.run(
             ["node", "--input-type=module", "--eval", script],
-            cwd=ROOT, text=True, capture_output=True, check=False, timeout=20,
+            cwd=ROOT, text=True, capture_output=True, check=False, timeout=35,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {
             "valid": {"combined": 1, "sibling": 1, "total": 1, "refreshed": True,
-                      "accessibleCount": 1, "paragraphTitle": 1, "boardLink": 1},
+                      "accessibleCount": 1, "parenthesizedCount": 1,
+                      "paragraphTitle": 1, "boardLink": 1},
             "duplicateBoardLinks": {"count": 1, "clicked": True},
             "unrelatedNavigation": 0,
-            "wrongLaneCountRejected": True,
+            "wrongLaneCountsRejected": [True, True],
             "loading": {"zero": 0, "refresh": 0},
             "error": {"zero": 0, "lanes": 0},
             "fabricatedZero": 1,
             "capturedEmptyBoard": {"total": 1, "lanes": [1, 1, 1, 1, 1]},
             "populatedBoard": 0,
             "safeText": {"heading": 1, "images": 0},
+            "fabricatedLaneCounts": {
+                "board_loading": "loading fabricated zero lane counts",
+                "board_error": "failed first read fabricated zero lane counts",
+            },
         })
 
     def test_creation_modal_accepts_its_own_accessible_title(self):

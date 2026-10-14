@@ -327,13 +327,13 @@ async function screenshot(page, output, name) {
 }
 
 export function boardLane(page, label) {
-  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+(?:\\s+tickets?)?)?$`, 'i') }).locator('xpath=ancestor::*[self::section or self::li or @role="region" or @role="listitem"][1]')
+  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*(?:\\d+(?:\\s+tickets?)?|\\(\\d+\\)))?$`, 'i') }).locator('xpath=ancestor::*[self::section or self::li or @role="region" or @role="listitem"][1]')
 }
 
 export async function boardLaneWithCount(page, label, count) {
   const lane = boardLane(page, label)
   await eventually(async () => await lane.count() === 1
-    && await lane.getByText(new RegExp(`^${count}$`)).filter({ visible: true }).count() === 1,
+    && await lane.getByText(new RegExp(`^(?:${count}|\\(${count}\\))$`)).filter({ visible: true }).count() === 1,
   `${label} lane count did not become ${count}`)
   return lane
 }
@@ -706,11 +706,11 @@ export const PROBES = {
           if (state === 'loading') {
             await expectText(page.getByRole('status').filter({ hasText: /load/i }), /load/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
-            expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'loading fabricated zero lane counts')
+            expect(await page.getByText(/^(?:0|\(0\))$/).filter({ visible: true }).count() === 0, 'loading fabricated zero lane counts')
           } else if (state === 'error') {
             await expectText(page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: /unable|error|fail/i }), /unable|error|fail/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'failed first read fabricated a zero total')
-            expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'failed first read fabricated zero lane counts')
+            expect(await page.getByText(/^(?:0|\(0\))$/).filter({ visible: true }).count() === 0, 'failed first read fabricated zero lane counts')
           } else {
             if (state === 'retry') {
               await page.getByRole('button', { name: /retry|try again/i }).waitFor({ state: 'visible' })
