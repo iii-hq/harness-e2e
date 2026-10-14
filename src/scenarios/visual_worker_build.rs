@@ -1197,20 +1197,19 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         )
         .await?;
     let narrow_dark = common::screenshot_png(context, session).await?;
-    let page_evidence = before_state["passed"] == true
-        && after_state["passed"] == true
-        && before["data"].is_string()
-        && after["data"].is_string()
-        && canvas["data"].is_string()
-        && narrow_dark["data"].is_string()
-        && open_canvas["result"]["visible"] == true
+    let canvas_evidence_ok = open_canvas["result"]["visible"] == true
         && open_canvas["result"]["same_id"] == true
         && opens_canvas
-        && graph["rendered_graph"] == true
+        && graph["rendered_graph"] == true;
+    let page_evidence =
+        browser_evidence_complete([&before, &after, &canvas, &narrow_dark], canvas_evidence_ok);
+    let passed = canvas_evidence_ok
+        && before_state["passed"] == true
+        && after_state["passed"] == true
         && reloaded_state["passed"] == true
         && persisted_canvas_id["result"] == true
-        && mobile["result"]["passed"] == true;
-    let passed = page_evidence && interaction["result"].get("error").is_none();
+        && mobile["result"]["passed"] == true
+        && interaction["result"].get("error").is_none();
     let captures = json!([
         {"id":"before","caption":format!("{} alone in the Console before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
         {"id":"after","caption":format!("{} alone in the Console after editing",kind.summary()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
@@ -1220,6 +1219,13 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
     Ok(
         json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page, persisted edit, and the Canvas graph it opened rendered in the Console"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
     )
+}
+
+fn browser_evidence_complete(screenshots: [&Value; 4], canvas_evidence_ok: bool) -> bool {
+    canvas_evidence_ok
+        && screenshots
+            .iter()
+            .all(|capture| capture["data"].is_string())
 }
 
 async fn inspect_ui(context: &E2eContext, kind: Kind, session: &str, phase: &str) -> Result<Value> {
@@ -1575,6 +1581,52 @@ mod tests {
                 "canvas_update" | "browser_interaction" | "evidence_complete"
             ))
             .all(|award| award.awarded.is_none()));
+    }
+
+    #[test]
+    fn screenshots_and_interaction_score_independently() {
+        let screenshot = json!({"data":"png"});
+        let screenshots = [&screenshot, &screenshot, &screenshot, &screenshot];
+        assert!(browser_evidence_complete(screenshots, true));
+        assert!(!browser_evidence_complete(screenshots, false));
+        let missing_screenshot = json!({});
+        assert!(!browser_evidence_complete(
+            [&screenshot, &missing_screenshot, &screenshot, &screenshot],
+            true,
+        ));
+
+        for (browser, evidence, expected_browser, expected_evidence) in
+            [(false, true, 0, 5), (true, false, 10, 0)]
+        {
+            let checks = ASSESSMENTS
+                .iter()
+                .map(|spec| {
+                    let passed = match spec.id() {
+                        "browser_interaction" => browser,
+                        "evidence_complete" => evidence,
+                        _ => true,
+                    };
+                    (
+                        spec.id().to_string(),
+                        json!({"passed":passed,"reason":"probe"}),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
+            let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
+            for (id, expected) in [
+                ("browser_interaction", expected_browser),
+                ("evidence_complete", expected_evidence),
+            ] {
+                assert_eq!(
+                    evaluation
+                        .awards
+                        .iter()
+                        .find(|award| award.id == id)
+                        .and_then(|award| award.awarded),
+                    Some(expected)
+                );
+            }
+        }
     }
 
     #[test]
