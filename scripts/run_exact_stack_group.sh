@@ -132,6 +132,35 @@ compose_trigger() {
     "$@"
 }
 
+start_compose() {
+  local payload=$1 attempt receipt error_log status delay
+  for attempt in 1 2 3; do
+    receipt="$artifact_dir/stack/up-attempt-$attempt.json"
+    error_log="$artifact_dir/logs/compose-up-attempt-$attempt.log"
+    if compose_trigger compose::up --json "$payload" >"$receipt" 2>"$error_log"; then
+      cat "$error_log" >&2
+      cp "$receipt" "$artifact_dir/stack/up.json"
+      return 0
+    else
+      status=$?
+    fi
+    cat "$error_log" >&2
+    cp "$receipt" "$artifact_dir/stack/up.json"
+    if ! grep -q 'PACKAGE_DOWNLOAD_FAILED' "$error_log" ||
+       ! grep -Eqi 'HTTP([^0-9]|status)*(429|5[0-9]{2})\b|status([^0-9])*(429|5[0-9]{2})\b|timed?[ -]?out|timeout|connection (reset|refused|closed|aborted)|error sending request|dns error|tcp connect error' "$error_log"; then
+      failure_reason="compose::up failed on attempt $attempt; see logs/compose-up-attempt-$attempt.log"
+      return "$status"
+    fi
+    if ((attempt == 3)); then
+      failure_reason="compose::up exhausted 3 attempts after transient package download failures; see logs/compose-up-attempt-3.log"
+      return "$status"
+    fi
+    delay=$((attempt * 5))
+    log "compose::up package download failed transiently on attempt $attempt/3; retrying in ${delay}s"
+    sleep "$delay"
+  done
+}
+
 project_trigger() {
   local function_id=$1
   local payload=$2
@@ -467,8 +496,8 @@ python3 "$contract_tool" roots --compose "$compose_file" \
   | jq -sc '.' >"$artifact_dir/stack/declared-workers.json"
 
 failure_phase=project_start
-compose_trigger compose::up --json "$(jq -cn --arg file "$compose_file" --argjson frozen "$frozen" '{file:$file,frozen:$frozen}')" \
-  >"$artifact_dir/stack/up.json"
+up_request=$(jq -cn --arg file "$compose_file" --argjson frozen "$frozen" '{file:$file,frozen:$frozen}')
+start_compose "$up_request"
 jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 "$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' \
