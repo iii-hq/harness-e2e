@@ -315,7 +315,7 @@ try {{
     <main>
       <p>5 tickets</p>
       <button id="refresh">Refresh</button>
-      <a href="/">Back to board</a>
+      <a href="/">← Back to board</a>
       <section id="combined"><h2>Backlog <span>1</span></h2><article><h3>Card</h3></article></section>
       <section id="sibling"><header><h2>To do</h2><span aria-label="1 ticket">1</span></header></section>
       <section><h2><span>In progress</span><span aria-label="1 ticket">1</span></h2><ul><li><p>Paragraph card</p></li></ul></section>
@@ -331,6 +331,12 @@ try {{
     boardLink: await boardNavigation(page).count(),
     refreshed: await page.evaluate(() => window.refreshed === true),
   }}
+  await page.locator('main').evaluate((main) => {{
+    main.insertAdjacentHTML('beforeend', '<a href="/">Board</a>')
+    main.addEventListener('click', (event) => {{ event.preventDefault(); window.returnedToBoard = event.target.closest('a')?.getAttribute('href') === '/' }})
+  }})
+  await boardNavigation(page).click()
+  const duplicateBoardLinks = {{ count: await boardNavigation(page).count(), clicked: await page.evaluate(() => window.returnedToBoard === true) }}
   await page.locator('#sibling span').evaluate((element) => {{ element.textContent = '2'; element.setAttribute('aria-label', '2 tickets') }})
   let wrongLaneCountRejected = false
   try {{ await boardLaneWithCount(page, 'To do', 1) }} catch {{ wrongLaneCountRejected = true }}
@@ -348,7 +354,9 @@ try {{
     heading: await page.getByRole('heading', {{ name: '<img src=x onerror=alert(1)> literal title' }}).count(),
     images: await page.locator('img[src="x"]').count(),
   }}
-  console.log(JSON.stringify({{ valid, wrongLaneCountRejected, loading, fabricatedZero, safeText }}))
+  await page.setContent('<a href="/settings">Board settings</a><a href="/">Discard board</a>')
+  const unrelatedNavigation = await boardNavigation(page).count()
+  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountRejected, loading, fabricatedZero, safeText }}))
 }} finally {{
   await browser.close()
 }}
@@ -361,10 +369,47 @@ try {{
         self.assertEqual(json.loads(completed.stdout), {
             "valid": {"combined": 1, "sibling": 1, "total": 1, "refreshed": True,
                       "accessibleCount": 1, "paragraphTitle": 1, "boardLink": 1},
+            "duplicateBoardLinks": {"count": 1, "clicked": True},
+            "unrelatedNavigation": 0,
             "wrongLaneCountRejected": True,
             "loading": {"zero": 0, "refresh": 0},
             "fabricatedZero": 1,
             "safeText": {"heading": 1, "images": 0},
+        })
+
+    def test_creation_modal_accepts_its_own_accessible_title(self):
+        if not PLAYWRIGHT.exists():
+            self.skipTest("dashboard Playwright is not installed")
+        script = f"""
+import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
+import {{ ticketCreationDialog, assertAccessibleFormControls }} from {json.dumps(PROBE.as_uri())}
+const browser = await chromium.launch({{ headless: true }})
+try {{
+  const page = await browser.newPage()
+  const results = []
+  for (const heading of ['New ticket', 'Create a ticket']) {{
+    await page.setContent(`<button id="open">New ticket</button>
+      <dialog aria-labelledby="create-heading"><h2 id="create-heading">${{heading}}</h2>
+        <label for="create-title">Title</label><input id="create-title" autofocus>
+      </dialog><dialog aria-label="Edit ticket"><label for="edit-title">Title</label><input id="edit-title"></dialog>`)
+    await page.locator('#open').evaluate(button => button.addEventListener('click', () => document.querySelector('dialog').showModal()))
+    await page.getByRole('button', {{ name: 'New ticket' }}).click()
+    const dialog = ticketCreationDialog(page)
+    await assertAccessibleFormControls(dialog)
+    results.push({{ count: await dialog.count(), focused: await dialog.getByLabel('Title').evaluate(element => element === document.activeElement) }})
+  }}
+  await page.setContent('<section><label for="outside-title">Title</label><input id="outside-title"></section><dialog open aria-label="Other"><p>No title control</p></dialog>')
+  console.log(JSON.stringify({{ results, unrelated: await ticketCreationDialog(page).count() }}))
+}} finally {{ await browser.close() }}
+"""
+        completed = subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            cwd=ROOT, text=True, capture_output=True, check=False, timeout=20,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {
+            "results": [{"count": 1, "focused": True}, {"count": 1, "focused": True}],
+            "unrelated": 0,
         })
 
     def test_store_duplication_preserves_envelopes_and_compose_rejects_console(self):

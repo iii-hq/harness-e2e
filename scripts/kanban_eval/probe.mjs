@@ -193,6 +193,8 @@ async function main() {
   const { check, stage } = createCheckRecorder(checks, async (id) => {
     for (const [index, page] of (browser?.contexts().flatMap((context) => context.pages()) ?? []).entries()) {
       await page.screenshot({ path: join(output, `failure-${id}-${index}.png`), fullPage: true, timeout: 3000 }).catch(() => {})
+      await page.locator('html').innerHTML({ timeout: 3000 }).then((html) => writeFile(join(output, `failure-${id}-${index}-dom.log`), html)).catch(() => {})
+      await page.locator('body').ariaSnapshot({ timeout: 3000 }).then((snapshot) => writeFile(join(output, `failure-${id}-${index}-aria.log`), snapshot)).catch(() => {})
     }
   }, async () => {
     // Failed flows must not leave intercepted requests or SSE clients in later checks.
@@ -363,6 +365,10 @@ export function ticketCard(page, ticket) {
     .filter({ visible: true })
 }
 
+export function ticketCreationDialog(page) {
+  return page.getByRole('dialog').filter({ visible: true, has: page.getByLabel('Title') })
+}
+
 export async function ticketDetail(page, ticket) {
   const action = page.getByRole('button', { name: /^delete ticket$/i }).filter({ visible: true })
   await action.waitFor({ state: 'visible', timeout: 8_000 })
@@ -431,7 +437,7 @@ export async function assertTicketDetails(page, ticket) {
 }
 
 export function boardNavigation(page) {
-  return page.getByRole('link', { name: /^(?:back to )?(?:the )?board[.!]?$/i }).filter({ visible: true })
+  return page.getByRole('link', { name: /^(?:←\s*)?(?:back to )?(?:the )?board[.!]?$/i }).filter({ visible: true }).first()
 }
 
 export function mutationFailureFeedback(page) {
@@ -826,7 +832,7 @@ export const PROBES = {
     const newForm = async (title) => {
       const opened = await pageFor(browser, baseUrl, { width: 390, height: 844 })
       await opened.page.getByRole('button', { name: 'New ticket' }).click()
-      const dialog = opened.page.getByRole('dialog', { name: 'New ticket' })
+      const dialog = ticketCreationDialog(opened.page)
       await dialog.getByLabel('Title').fill(title)
       await dialog.getByLabel('Description').fill(fields.description)
       await dialog.getByLabel('Status').selectOption(fields.status)
@@ -853,7 +859,7 @@ export const PROBES = {
     await check('ticket_modal', async () => {
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
       await page.getByRole('button', { name: 'New ticket' }).click()
-      const dialog = page.getByRole('dialog', { name: 'New ticket' })
+      const dialog = ticketCreationDialog(page)
       await assertAccessibleFormControls(dialog)
       expect(await dialog.getByLabel('Title').evaluate((element) => element === document.activeElement), 'modal did not focus the title field')
       await context.close()
