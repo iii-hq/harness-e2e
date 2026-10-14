@@ -345,7 +345,7 @@ try {{
   await page.locator('#parenthesized h2 span').last().evaluate((element) => {{ element.textContent = '(10)' }})
   try {{ await boardLaneWithCount(page, 'In review', 1); wrongLaneCountsRejected.push(false) }} catch {{ wrongLaneCountsRejected.push(true) }}
   const labels = ['Backlog', 'To do', 'In progress', 'In review', 'Done']
-  await page.setContent(`<main><section aria-label="Ticket board"><div class="columns">
+  await page.setContent(`<main><p>5 tickets</p><section aria-label="Ticket board"><div class="columns">
     ${{labels.map((label, index) => `<div class="column" data-status="${{index}}">
       <div class="column-header"><h2><span>${{label}}</span> <span>(1)</span></h2></div>
       <ul><li><span>KAN-${{index + 1}}</span><p>${{label}} probe</p><p><span>high</span><span>Grace</span></p></li></ul>
@@ -362,6 +362,14 @@ try {{
       assignees: await lane.getByText('Grace', {{ exact: true }}).count(),
     }})
   }}
+  await page.locator('.columns').evaluate((columns) => columns.insertAdjacentHTML('beforeend', `
+    <div class="column" data-status="duplicate-backlog">
+      <div class="column-header"><h2><span>Backlog</span> <span>(1)</span></h2></div>
+      <ul><li><span>KAN-6</span><p>Duplicate backlog probe</p><p><span>high</span><span>Grace</span></p></li></ul>
+    </div>`))
+  let duplicateBacklogRejected = false
+  try {{ await boardLaneWithCount(page, 'Backlog', 1) }} catch {{ duplicateBacklogRejected = true }}
+  await page.locator('[data-status="duplicate-backlog"]').evaluate((lane) => lane.remove())
   await page.locator('[data-status="0"]').evaluate((lane) => {{
     lane.querySelector('h2 span:last-child').textContent = '(2)'
     lane.querySelector('li > span').textContent = 'OTHER'
@@ -429,14 +437,14 @@ try {{
       catch (failure) {{ fabricatedLaneCounts[id] = failure.message }}
     }},
   }})
-  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountsRejected, divLaneScopes, crossColumnValuesRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText, fabricatedLaneCounts }}))
+  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountsRejected, divLaneScopes, duplicateBacklogRejected, crossColumnValuesRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText, fabricatedLaneCounts }}))
 }} finally {{
   await browser.close()
 }}
 """
         completed = subprocess.run(
             ["node", "--input-type=module", "--eval", script],
-            cwd=ROOT, text=True, capture_output=True, check=False, timeout=45,
+            cwd=ROOT, text=True, capture_output=True, check=False, timeout=55,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {
@@ -451,6 +459,7 @@ try {{
                  "priorities": 1, "assignees": 1}
                 for index in range(5)
             ],
+            "duplicateBacklogRejected": True,
             "crossColumnValuesRejected": {
                 "count": True, "key": True, "priority": True, "assignee": True,
             },

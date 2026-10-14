@@ -326,17 +326,22 @@ async function screenshot(page, output, name) {
   await page.screenshot({ path: join(output, `${name}.png`), fullPage: true })
 }
 
-export function boardLane(page, label) {
+function boardLaneHeading(page, labels) {
   const count = '(?:\\s*(?:\\d+(?:\\s+tickets?)?|\\(\\d+\\)))?'
-  const heading = page.getByRole('heading', { name: new RegExp(`^${label}${count}$`, 'i') })
-  const otherLabels = ['Backlog', 'To do', 'In progress', 'In review', 'Done'].filter((other) => other !== label).join('|')
-  const otherHeading = page.getByRole('heading', { name: new RegExp(`^(?:${otherLabels})${count}$`, 'i') })
+  return page.getByRole('heading', { name: new RegExp(`^(?:${labels.join('|')})${count}$`, 'i') })
+}
+
+export function boardLane(page, label) {
+  const heading = boardLaneHeading(page, [label])
+  const otherHeading = boardLaneHeading(page,
+    ['Backlog', 'To do', 'In progress', 'In review', 'Done'].filter((other) => other !== label))
   return heading.locator('xpath=ancestor::*').filter({ hasNot: otherHeading }).first()
 }
 
 export async function boardLaneWithCount(page, label, count) {
+  const heading = boardLaneHeading(page, [label])
   const lane = boardLane(page, label)
-  await eventually(async () => await lane.count() === 1
+  await eventually(async () => await heading.count() === 1 && await lane.count() === 1
     && await lane.getByText(new RegExp(`^(?:${count}|\\(${count}\\))$`)).filter({ visible: true }).count() === 1,
   `${label} lane count did not become ${count}`)
   return lane
