@@ -350,11 +350,6 @@ export function boardTicketTitle(scope, title) {
   return scope.getByText(title, { exact: true }).filter({ visible: true })
 }
 
-export function boardEmptyFeedback(page) {
-  return page.getByText(/^(?:no tickets\b.*|(?:the )?board is empty[.!]?)$/i)
-    .filter({ visible: true }).first()
-}
-
 function literalPattern(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -722,8 +717,7 @@ export const PROBES = {
               fail = false
               await page.getByRole('button', { name: /retry|try again/i }).click()
             }
-            await expectText(boardEmptyFeedback(page), /no tickets|empty/i)
-            expect(await boardTicketTotal(page, 0).count() === 1, 'empty store total is wrong')
+            await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'empty store total is wrong')
             for (const [, label] of statuses) await boardLaneWithCount(page, label, 0)
           }
         } finally { release() }
@@ -793,7 +787,6 @@ export const PROBES = {
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()
-        await expectText(boardEmptyFeedback(page), /no tickets|empty/i, STORE_SWITCH_TIMEOUT_MS)
         await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', STORE_SWITCH_TIMEOUT_MS)
         await page.getByRole('link', { name: /^settings$/i }).click()
         await settingsFormLoaded(alternateDir)

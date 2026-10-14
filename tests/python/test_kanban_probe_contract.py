@@ -342,8 +342,22 @@ try {{
   try {{ await boardLaneWithCount(page, 'To do', 1) }} catch {{ wrongLaneCountRejected = true }}
   await page.setContent('<p role="status">Loading tickets…</p><p>…</p><button>Reload</button>')
   const loading = {{ zero: await boardTicketTotal(page, 0).count(), refresh: await boardRefreshButton(page).count() }}
+  await page.setContent('<p role="alert">Unable to load tickets.</p><button>Retry</button>')
+  const error = {{ zero: await boardTicketTotal(page, 0).count(), lanes: await page.getByText(/^0$/).count() }}
   await page.setContent('<p role="status">Loading tickets…</p><p>0 tickets</p>')
   const fabricatedZero = await boardTicketTotal(page, 0).count()
+  await page.setContent(`<main><p>0 tickets</p><div id="board" aria-label="Ticket board">
+    ${{['Backlog', 'To do', 'In progress', 'In review', 'Done'].map(label =>
+      `<section class="column"><h2>${{label}}</h2><span class="column-count">0</span><p class="column-empty">No cards</p></section>`).join('')}}
+  </div></main>`)
+  const capturedEmptyBoard = {{ total: await boardTicketTotal(page, 0).count(), lanes: [] }}
+  for (const label of ['Backlog', 'To do', 'In progress', 'In review', 'Done'])
+    capturedEmptyBoard.lanes.push(await (await boardLaneWithCount(page, label, 0)).count())
+  await page.setContent(`<main><p>5 tickets</p><div id="board" aria-label="Ticket board">
+    ${{['Backlog', 'To do', 'In progress', 'In review', 'Done'].map((label, index) =>
+      `<section class="column"><h2>${{label}}</h2><span class="column-count">1</span><article><h3>Ticket ${{index + 1}}</h3></article></section>`).join('')}}
+  </div></main>`)
+  const populatedBoard = await boardTicketTotal(page, 0).count()
   await page.setContent('<main></main>')
   await page.locator('main').evaluate((main) => {{
     const title = document.createElement('h3')
@@ -356,7 +370,7 @@ try {{
   }}
   await page.setContent('<a href="/settings">Board settings</a><a href="/">Discard board</a>')
   const unrelatedNavigation = await boardNavigation(page).count()
-  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountRejected, loading, fabricatedZero, safeText }}))
+  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText }}))
 }} finally {{
   await browser.close()
 }}
@@ -373,7 +387,10 @@ try {{
             "unrelatedNavigation": 0,
             "wrongLaneCountRejected": True,
             "loading": {"zero": 0, "refresh": 0},
+            "error": {"zero": 0, "lanes": 0},
             "fabricatedZero": 1,
+            "capturedEmptyBoard": {"total": 1, "lanes": [1, 1, 1, 1, 1]},
+            "populatedBoard": 0,
             "safeText": {"heading": 1, "images": 0},
         })
 
