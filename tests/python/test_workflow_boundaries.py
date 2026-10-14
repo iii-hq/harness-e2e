@@ -26,11 +26,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         retained_outputs = {"needs.prepare.outputs.contract_artifact_id": "71"}
         for name in ("groups", "finalize"):
             download = next(step for step in jobs[name]["steps"]
-                            if step.get("with", {}).get("path") == "target/harness-e2e-contract")
-            expression = download["with"].get("artifact-ids", "").removeprefix("${{ ").removesuffix(" }}")
+                            if step.get("name") == "Download the execution contract")
+            expression = re.search(r"\$\{\{ (.*?) \}\}", download["run"]).group(1)
             self.assertEqual(retained_outputs.get(expression), "71")
-            self.assertEqual(download["with"].get("github-token"), "${{ github.token }}")
-            self.assertEqual(download["with"].get("run-id"), "${{ github.run_id }}")
+            self.assertEqual(download["env"].get("GITHUB_TOKEN"), "${{ github.token }}")
+            self.assertTrue(download["run"].endswith(" target/harness-e2e-contract"))
 
     def test_rerun_artifacts_belong_to_the_jobs_actual_execution(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())
