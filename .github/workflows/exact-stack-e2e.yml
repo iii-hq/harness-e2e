@@ -56,6 +56,7 @@ jobs:
       runner_revision: ${{ steps.stack_runner.outputs.revision }}
       materialized: ${{ steps.materialized.outputs.posted }}
       contract_artifact_id: ${{ steps.contract_upload.outputs.artifact-id }}
+      contract_artifact_digest: ${{ steps.contract_upload.outputs.artifact-digest }}
       contract_attempt: ${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -268,7 +269,7 @@ jobs:
       - name: Download the execution contract
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/download_artifact.sh '${{ needs.prepare.outputs.contract_artifact_id }}' target/harness-e2e-contract
+        run: scripts/download_artifact.sh '${{ needs.prepare.outputs.contract_artifact_id }}' target/harness-e2e-contract '${{ needs.prepare.outputs.contract_artifact_digest }}'
 
       - name: Restore this campaign's contract
         id: contract
@@ -423,7 +424,7 @@ jobs:
       - name: Download the execution contract
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/download_artifact.sh '${{ needs.prepare.outputs.contract_artifact_id }}' target/harness-e2e-contract
+        run: scripts/download_artifact.sh '${{ needs.prepare.outputs.contract_artifact_id }}' target/harness-e2e-contract '${{ needs.prepare.outputs.contract_artifact_digest }}'
 
       - name: Select group observation artifacts
         id: group_artifacts

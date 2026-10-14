@@ -23,14 +23,15 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(jobs["prepare"]["outputs"].get("contract_attempt"), "${{ github.run_attempt }}")
         self.assertEqual(upload["with"]["retention-days"], 90)
         # On attempt 2, preparation's retained output is still artifact 71.
-        retained_outputs = {"needs.prepare.outputs.contract_artifact_id": "71"}
+        retained_outputs = {"needs.prepare.outputs.contract_artifact_id": "71",
+                            "needs.prepare.outputs.contract_artifact_digest": "a" * 64}
         for name in ("groups", "finalize"):
             download = next(step for step in jobs[name]["steps"]
                             if step.get("name") == "Download the execution contract")
-            expression = re.search(r"\$\{\{ (.*?) \}\}", download["run"]).group(1)
-            self.assertEqual(retained_outputs.get(expression), "71")
+            expressions = re.findall(r"\$\{\{ (.*?) \}\}", download["run"])
+            self.assertEqual([retained_outputs.get(expression) for expression in expressions], ["71", "a" * 64])
             self.assertEqual(download["env"].get("GITHUB_TOKEN"), "${{ github.token }}")
-            self.assertTrue(download["run"].endswith(" target/harness-e2e-contract"))
+            self.assertIn(" target/harness-e2e-contract ", download["run"])
 
     def test_rerun_artifacts_belong_to_the_jobs_actual_execution(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())

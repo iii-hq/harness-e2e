@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import subprocess
@@ -13,7 +14,7 @@ SCRIPT = Path(__file__).parents[2] / "scripts" / "download_artifact.sh"
 
 
 class DownloadTests(unittest.TestCase):
-    def download(self, statuses):
+    def download(self, statuses, digest=None):
         body = io.BytesIO()
         with zipfile.ZipFile(body, "w") as archive:
             archive.writestr("contract.json", "ok")
@@ -42,10 +43,12 @@ class DownloadTests(unittest.TestCase):
                     "GITHUB_TOKEN": "test",
                 }
                 result = subprocess.run(
-                    ["bash", str(SCRIPT), "42", directory],
+                    ["bash", str(SCRIPT), "42", directory,
+                     digest or hashlib.sha256(body.getvalue()).hexdigest()],
                     env=environment, capture_output=True, text=True,
                 )
-                extracted = (Path(directory) / "contract.json").read_text() if result.returncode == 0 else None
+                contract = Path(directory) / "contract.json"
+                extracted = contract.read_text() if contract.exists() else None
         finally:
             server.shutdown()
             thread.join()
@@ -66,6 +69,12 @@ class DownloadTests(unittest.TestCase):
         result, requests, _ = self.download([404])
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(requests), 1)
+
+    def test_digest_mismatch_fails_before_extraction(self):
+        result, requests, extracted = self.download([200], "0" * 64)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(requests), 1)
+        self.assertIsNone(extracted)
 
 
 if __name__ == "__main__":

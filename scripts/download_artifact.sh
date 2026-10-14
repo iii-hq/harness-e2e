@@ -11,4 +11,5 @@ curl --fail --silent --show-error --location \
   --header "X-GitHub-Api-Version: 2022-11-28" \
   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$1/zip" \
   --output "$archive"
+printf '%s  %s\n' "$3" "$archive" | sha256sum --check --status
 unzip -q "$archive" -d "$2"
