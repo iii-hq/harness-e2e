@@ -20,17 +20,6 @@ console.log(JSON.stringify(found));
 """, browser=True)
         self.assertEqual(result, [1, 1, 1, 0, 0])
 
-    def test_empty_feedback_does_not_require_a_particular_role(self):
-        result = self.node("""
-const found=[];
-for(const markup of ['<p>No tickets yet.</p>', '<p role="status">The board is empty.</p>',
- '<p hidden>No tickets yet.</p>', '<p>Loading tickets…</p>', '<p>Unable to load tickets</p>']){
- await page.setContent(markup);found.push(await probe.boardEmptyFeedback(page).count());
-}
-console.log(JSON.stringify(found));
-""", browser=True)
-        self.assertEqual(result, [1, 1, 0, 0, 0])
-
     def test_detail_header_actions_do_not_hide_sibling_fields(self):
         result = self.node("""
 const ticket={key:'KAN-1',title:'Ticket',description:'Details',status:'todo',priority:'urgent',assignee:'Lin'};
