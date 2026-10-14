@@ -391,6 +391,7 @@ try {{
     await page.setContent(`<button id="open">New ticket</button>
       <dialog aria-labelledby="create-heading"><h2 id="create-heading">${{heading}}</h2>
         <label for="create-title">Title</label><input id="create-title" autofocus>
+        <button>Create ticket</button>
       </dialog><dialog aria-label="Edit ticket"><label for="edit-title">Title</label><input id="edit-title"></dialog>`)
     await page.locator('#open').evaluate(button => button.addEventListener('click', () => document.querySelector('dialog').showModal()))
     await page.getByRole('button', {{ name: 'New ticket' }}).click()
@@ -399,7 +400,9 @@ try {{
     results.push({{ count: await dialog.count(), focused: await dialog.getByLabel('Title').evaluate(element => element === document.activeElement) }})
   }}
   await page.setContent('<section><label for="outside-title">Title</label><input id="outside-title"></section><dialog open aria-label="Other"><p>No title control</p></dialog>')
-  console.log(JSON.stringify({{ results, unrelated: await ticketCreationDialog(page).count() }}))
+  const unrelated = await ticketCreationDialog(page).count()
+  await page.setContent('<dialog open aria-label="Edit ticket"><label for="edit-title">Title</label><input id="edit-title"><button>Save ticket</button></dialog><button>Create ticket</button>')
+  console.log(JSON.stringify({{ results, unrelated, editing: await ticketCreationDialog(page).count() }}))
 }} finally {{ await browser.close() }}
 """
         completed = subprocess.run(
@@ -410,6 +413,7 @@ try {{
         self.assertEqual(json.loads(completed.stdout), {
             "results": [{"count": 1, "focused": True}, {"count": 1, "focused": True}],
             "unrelated": 0,
+            "editing": 0,
         })
 
     def test_store_duplication_preserves_envelopes_and_compose_rejects_console(self):

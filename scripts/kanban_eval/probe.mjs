@@ -193,8 +193,8 @@ async function main() {
   const { check, stage } = createCheckRecorder(checks, async (id) => {
     for (const [index, page] of (browser?.contexts().flatMap((context) => context.pages()) ?? []).entries()) {
       await page.screenshot({ path: join(output, `failure-${id}-${index}.png`), fullPage: true, timeout: 3000 }).catch(() => {})
-      await page.locator('html').innerHTML({ timeout: 3000 }).then((html) => writeFile(join(output, `failure-${id}-${index}-dom.log`), html)).catch(() => {})
-      await page.locator('body').ariaSnapshot({ timeout: 3000 }).then((snapshot) => writeFile(join(output, `failure-${id}-${index}-aria.log`), snapshot)).catch(() => {})
+      await page.locator('html').innerHTML({ timeout: 3000 }).then((html) => writeFile(join(output, `failure-${id}-${index}-dom.log`), html.slice(0, 64 * 1024) + (html.length > 64 * 1024 ? '\n[truncated]\n' : ''))).catch(() => {})
+      await page.locator('body').ariaSnapshot({ timeout: 3000 }).then((snapshot) => writeFile(join(output, `failure-${id}-${index}-aria.log`), snapshot.slice(0, 64 * 1024) + (snapshot.length > 64 * 1024 ? '\n[truncated]\n' : ''))).catch(() => {})
     }
   }, async () => {
     // Failed flows must not leave intercepted requests or SSE clients in later checks.
@@ -367,6 +367,7 @@ export function ticketCard(page, ticket) {
 
 export function ticketCreationDialog(page) {
   return page.getByRole('dialog').filter({ visible: true, has: page.getByLabel('Title') })
+    .filter({ has: page.getByRole('button', { name: 'Create ticket', exact: true }) })
 }
 
 export async function ticketDetail(page, ticket) {
