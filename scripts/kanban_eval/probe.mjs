@@ -327,7 +327,11 @@ async function screenshot(page, output, name) {
 }
 
 export function boardLane(page, label) {
-  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*(?:\\d+(?:\\s+tickets?)?|\\(\\d+\\)))?$`, 'i') }).locator('xpath=ancestor::*[self::section or self::li or @role="region" or @role="listitem"][1]')
+  const count = '(?:\\s*(?:\\d+(?:\\s+tickets?)?|\\(\\d+\\)))?'
+  const heading = page.getByRole('heading', { name: new RegExp(`^${label}${count}$`, 'i') })
+  const otherLabels = ['Backlog', 'To do', 'In progress', 'In review', 'Done'].filter((other) => other !== label).join('|')
+  const otherHeading = page.getByRole('heading', { name: new RegExp(`^(?:${otherLabels})${count}$`, 'i') })
+  return heading.locator('xpath=ancestor::*').filter({ hasNot: otherHeading }).first()
 }
 
 export async function boardLaneWithCount(page, label, count) {

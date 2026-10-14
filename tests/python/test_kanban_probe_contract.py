@@ -307,7 +307,7 @@ console.log(JSON.stringify(observed))
             self.skipTest("dashboard Playwright is not installed")
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
-import {{ PROBES, boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
+import {{ PROBES, boardLane, boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
 const browser = await chromium.launch({{ headless: true }})
 try {{
   const page = await browser.newPage()
@@ -344,6 +344,40 @@ try {{
   try {{ await boardLaneWithCount(page, 'To do', 1); wrongLaneCountsRejected.push(false) }} catch {{ wrongLaneCountsRejected.push(true) }}
   await page.locator('#parenthesized h2 span').last().evaluate((element) => {{ element.textContent = '(10)' }})
   try {{ await boardLaneWithCount(page, 'In review', 1); wrongLaneCountsRejected.push(false) }} catch {{ wrongLaneCountsRejected.push(true) }}
+  const labels = ['Backlog', 'To do', 'In progress', 'In review', 'Done']
+  await page.setContent(`<main><section aria-label="Ticket board"><div class="columns">
+    ${{labels.map((label, index) => `<div class="column" data-status="${{index}}">
+      <div class="column-header"><h2><span>${{label}}</span> <span>(1)</span></h2></div>
+      <ul><li><span>KAN-${{index + 1}}</span><p>${{label}} probe</p><p><span>high</span><span>Grace</span></p></li></ul>
+    </div>`).join('')}}
+  </div></section></main>`)
+  const divLaneScopes = []
+  for (let index = 0; index < labels.length; index++) {{
+    const lane = await boardLaneWithCount(page, labels[index], 1)
+    divLaneScopes.push({{
+      status: await lane.getAttribute('data-status'),
+      ownCard: await boardTicketTitle(lane, `${{labels[index]}} probe`).count(),
+      foreignCard: await boardTicketTitle(lane, `${{labels[(index + 1) % labels.length]}} probe`).count(),
+      priorities: await lane.getByText(/^high$/i).count(),
+      assignees: await lane.getByText('Grace', {{ exact: true }}).count(),
+    }})
+  }}
+  await page.locator('[data-status="0"]').evaluate((lane) => {{
+    lane.querySelector('h2 span:last-child').textContent = '(2)'
+    lane.querySelector('li > span').textContent = 'OTHER'
+    lane.querySelector('li p:last-child span:first-child').textContent = 'low'
+    lane.querySelector('li p:last-child span:last-child').textContent = 'Nobody'
+  }})
+  await page.locator('[data-status="1"] li > span').evaluate((key) => {{ key.textContent = 'KAN-1' }})
+  let crossColumnCountRejected = false
+  try {{ await boardLaneWithCount(page, 'Backlog', 1) }} catch {{ crossColumnCountRejected = true }}
+  const backlog = boardLane(page, 'Backlog')
+  const crossColumnValuesRejected = {{
+    count: crossColumnCountRejected,
+    key: await backlog.getByText('KAN-1', {{ exact: true }}).count() === 0,
+    priority: await backlog.getByText(/^high$/i).count() === 0,
+    assignee: await backlog.getByText('Grace', {{ exact: true }}).count() === 0,
+  }}
   await page.setContent('<p role="status">Loading tickets…</p><p>…</p><button>Reload</button>')
   const loading = {{ zero: await boardTicketTotal(page, 0).count(), refresh: await boardRefreshButton(page).count() }}
   await page.setContent('<p role="alert">Unable to load tickets.</p><button>Retry</button>')
@@ -395,14 +429,14 @@ try {{
       catch (failure) {{ fabricatedLaneCounts[id] = failure.message }}
     }},
   }})
-  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountsRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText, fabricatedLaneCounts }}))
+  console.log(JSON.stringify({{ valid, duplicateBoardLinks, unrelatedNavigation, wrongLaneCountsRejected, divLaneScopes, crossColumnValuesRejected, loading, error, fabricatedZero, capturedEmptyBoard, populatedBoard, safeText, fabricatedLaneCounts }}))
 }} finally {{
   await browser.close()
 }}
 """
         completed = subprocess.run(
             ["node", "--input-type=module", "--eval", script],
-            cwd=ROOT, text=True, capture_output=True, check=False, timeout=35,
+            cwd=ROOT, text=True, capture_output=True, check=False, timeout=45,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {
@@ -412,6 +446,14 @@ try {{
             "duplicateBoardLinks": {"count": 1, "clicked": True},
             "unrelatedNavigation": 0,
             "wrongLaneCountsRejected": [True, True],
+            "divLaneScopes": [
+                {"status": str(index), "ownCard": 1, "foreignCard": 0,
+                 "priorities": 1, "assignees": 1}
+                for index in range(5)
+            ],
+            "crossColumnValuesRejected": {
+                "count": True, "key": True, "priority": True, "assignee": True,
+            },
             "loading": {"zero": 0, "refresh": 0},
             "error": {"zero": 0, "lanes": 0},
             "fabricatedZero": 1,
