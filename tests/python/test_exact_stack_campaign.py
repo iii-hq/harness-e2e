@@ -1456,6 +1456,73 @@ fail() {
         self.assertIn("await_compose_add", block)
         self.assertNotIn("runner_dependencies", MODULE.__dict__)
 
+    def test_stack_start_retries_only_transient_package_downloads(self):
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index("start_compose() {")
+        function = source[start:source.index("\n}\n\nproject_trigger", start) + 3]
+        transient_error = json.dumps({
+            "code": "PACKAGE_DOWNLOAD_FAILED",
+            "message": "container 'ade': could not download artifact: HTTP status server error (500 Internal Server Error) for url",
+            "stacktrace": None,
+        }, indent=2)
+        cases = (
+            ("transient_then_ok", 0, 2, transient_error, ""),
+            ("exhausted", 1, 3, "PACKAGE_DOWNLOAD_FAILED: request timed out", "exhausted 3 attempts"),
+            ("missing", 1, 1, "PACKAGE_DOWNLOAD_FAILED: download answered HTTP status 404", "failed on attempt 1"),
+            ("corrupt", 1, 1, "PACKAGE_DOWNLOAD_FAILED: archive decode failed: unexpected EOF", "failed on attempt 1"),
+            ("auth", 1, 1, "PACKAGE_DOWNLOAD_FAILED: download answered HTTP 403", "failed on attempt 1"),
+            ("config", 42, 1, "CONFIG_INVALID: dependency answered HTTP 500", "failed on attempt 1"),
+        )
+        shell = r'''set -Eeuo pipefail
+artifact_dir=$1
+mkdir -p "$artifact_dir/stack" "$artifact_dir/logs"
+failure_reason=""
+attempts=0
+log() { :; }
+sleep() { printf '%s\n' "$1" >>"$artifact_dir/delays"; }
+compose_trigger() {
+  attempts=$((attempts + 1))
+  printf '%s\n' "$*" >>"$artifact_dir/calls"
+  if [[ "$MODE" != transient_then_ok ]] || ((attempts == 1)); then
+    printf '%s\n' "$ERROR_MESSAGE" >&2
+    return "$ERROR_CODE"
+  fi
+  printf '{"status":"ok"}\n'
+}
+'''
+        for mode, expected_code, expected_attempts, message, reason in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                command = shell + function + r'''
+if start_compose '{}'; then status=0; else status=$?; fi
+printf '%s\n' "$attempts" >"$artifact_dir/attempts"
+printf '%s\n' "$failure_reason" >"$artifact_dir/reason"
+exit "$status"
+'''
+                result = subprocess.run(
+                    ["bash", "-c", command, "runner", str(root)],
+                    env={**os.environ, "MODE": mode, "ERROR_MESSAGE": message,
+                         "ERROR_CODE": str(expected_code or 1)}, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, expected_code, result.stderr)
+                self.assertEqual(int((root / "attempts").read_text()), expected_attempts)
+                self.assertEqual((root / "calls").read_text().splitlines(),
+                                 ["compose::up --json {}"] * expected_attempts)
+                failed_attempts = expected_attempts - (mode == "transient_then_ok")
+                self.assertEqual(result.stderr.count(message), failed_attempts)
+                for attempt in range(1, expected_attempts + 1):
+                    expected_log = "" if mode == "transient_then_ok" and attempt == 2 else message
+                    self.assertEqual((root / f"logs/compose-up-attempt-{attempt}.log").read_text().strip(), expected_log)
+                recorded_reason = (root / "reason").read_text().strip()
+                if reason:
+                    self.assertIn(reason, recorded_reason)
+                else:
+                    self.assertEqual(recorded_reason, "")
+                delays = (root / "delays").read_text().splitlines() if (root / "delays").exists() else []
+                self.assertEqual(delays, ["5", "10"][:expected_attempts - 1])
+                if mode == "transient_then_ok":
+                    self.assertEqual(json.loads((root / "stack/up.json").read_text()), {"status": "ok"})
+
     def test_a_group_starts_the_locked_stack_frozen_and_preparation_only_assembles_it(self):
         """What the launcher does with the lock, without an engine: the frozen
         decision, compose::add only where a project is still to be assembled,
@@ -1478,6 +1545,7 @@ compose_trigger() {
   if [[ -n "${BRINGS:-}" && "$*" == *"worker=harness@"* ]]; then cat "$BRINGS" >>"$compose_file"; fi
   echo '{"status":"ok"}'
 }
+start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/up.json"; }
 """
         compose = {"containers": {
             "harness": {"worker": "package://harness", "version": "latest"},
