@@ -197,6 +197,17 @@ class WrapperTests(unittest.TestCase):
                     self.assertNotIn(flag, run)
                 self.assertFalse(any("docker.sock" in value or "EXECUTOR_USER" in value for value in run))
 
+    def test_only_resolving_gets_the_fixture_token(self):
+        for phase in (["prepare", "resolve"], ["prepare", "fixtures"], ["prepare", "build"],
+                      ["prepare", "materialize"], ["prepare", "assemble"], ["group"], ["finalize"]):
+            with self.subTest(phase=phase):
+                if self.log.exists():
+                    self.log.unlink()
+                _, invoked = self.run_wrapper(*phase, env={"FIXTURE_TOKEN": "ghs_fixture"})
+                run = next(call for call in invoked if call[0] == "run")
+                self.assertEqual(("--env", "FIXTURE_TOKEN") in pairs(run), phase == ["prepare", "resolve"])
+                self.assertFalse(any("ghs_fixture" in value for value in run))
+
     def test_the_build_alone_mounts_the_build_cache_where_it_is(self):
         cache = self.directory / "data/worker-builds"
         for phase, mounted in ((["prepare", "build"], True), (["prepare", "materialize"], False), (["group"], False)):
@@ -451,9 +462,13 @@ class ExecutorTests(unittest.TestCase):
         # Each group once, in order, whatever the matrix repeats.
         groups = ["case-minimal-path", "case-registry-implementation", "case-trending-topics-build",
                   "case-kanban-board", "case-registry-implementation"]
+        # The fixture repositories' heads, as preparation resolved them once
+        # for every group.
+        kanban, fixture = "c" * 40, "d" * 40
         (contracts / "resolution.json").write_text(json.dumps({
             "matrix": {"include": [{"group_id": group} for group in groups]},
-            "template": {"id": "harness", "revision": "a" * 40}}))
+            "template": {"id": "harness", "revision": "a" * 40},
+            "fixture_revisions": {"kanban-e2e-fixture": kanban, "e2e-fixture": fixture}}))
         # Logs each call and whether it carried credentials; a fetch leaves
         # the commit it fetched as the checkout's HEAD.
         git = self.directory / "bin/git"
@@ -480,11 +495,17 @@ class ExecutorTests(unittest.TestCase):
         registry = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
         trending = "3ee24f7ace3c014db35423f14939ad3f6ce0c3d2"
         self.assertEqual(self.log.read_text().splitlines(), [
-            "git clone -q --branch main https://github.com/iii-hq/kanban-e2e-fixture.git target/kanban-fixture|",
+            "git init -q target/kanban-fixture|",
+            f"git -C target/kanban-fixture fetch -q https://github.com/iii-hq/kanban-e2e-fixture.git {kanban}|",
+            "git -C target/kanban-fixture checkout -q --detach FETCH_HEAD|",
+            # The bootstrap holds HEAD to main: main is the commit resolved.
+            "git -C target/kanban-fixture update-ref refs/heads/main HEAD|",
             "git init -q target/registry-sources/registry|" + header,
             f"git -C target/registry-sources/registry fetch -q --depth 1 https://github.com/iii-hq/registry.git {registry}|{header}",
             "git -C target/registry-sources/registry checkout -q --detach FETCH_HEAD|" + header,
-            "git clone -q --depth 1 https://github.com/iii-hq/e2e-fixture.git target/registry-sources/e2e-fixture|" + header,
+            "git init -q target/registry-sources/e2e-fixture|" + header,
+            f"git -C target/registry-sources/e2e-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {fixture}|{header}",
+            "git -C target/registry-sources/e2e-fixture checkout -q --detach FETCH_HEAD|" + header,
             "git init -q target/trending-topics-fixture|" + header,
             f"git -C target/trending-topics-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {trending}|{header}",
             "git -C target/trending-topics-fixture checkout -q --detach FETCH_HEAD|" + header,
@@ -493,13 +514,21 @@ class ExecutorTests(unittest.TestCase):
             "git -C target/execution-template checkout -q --detach FETCH_HEAD|",
         ])
         self.assertNotIn("ghs_fixture", self.log.read_text())
-        # Again, for one group: a commit already checked out stays, a branch
-        # is checked out anew.
+        # Again, for one group: a commit already checked out stays.
         self.log.write_text("")
         result = self.executor("prepare", "fixtures", env={
             **environment, "HARNESS_E2E_CAMPAIGN_GROUP_ID": "case-registry-implementation"})
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([line for line in self.log.read_text().splitlines() if "rev-parse" not in line], [])
+        # A head preparation could not resolve leaves the group on the
+        # branch, checked out anew, as before.
+        (contracts / "resolution.json").write_text(json.dumps({
+            "matrix": {"include": [{"group_id": "case-kanban-board"}, {"group_id": "case-registry-implementation"}]}}))
+        self.log.write_text("")
+        result = self.executor("prepare", "fixtures", env=environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([line for line in self.log.read_text().splitlines() if "rev-parse" not in line], [
+            "git clone -q --branch main https://github.com/iii-hq/kanban-e2e-fixture.git target/kanban-fixture|",
             "git clone -q --depth 1 https://github.com/iii-hq/e2e-fixture.git target/registry-sources/e2e-fixture|" + header,
         ])
 

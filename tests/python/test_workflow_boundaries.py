@@ -752,13 +752,29 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 self.assertNotIn("fixture_token.outputs.token", json.dumps(step))
         executor = (ROOT / "scripts/executor.sh").read_text()
         self.assertIn("REGISTRY_REVISION=662eb87c1bdbb395f36264d5d26bf823e2ace783", executor)
-        self.assertIn("checkout iii-hq/e2e-fixture \"\" target/registry-sources/e2e-fixture", executor)
+        self.assertIn("checkout iii-hq/e2e-fixture \"$fixture\" target/registry-sources/e2e-fixture", executor)
         self.assertIn('PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "', executor)
         # The token travels in the git calls' environment, never a URL or file.
         self.assertIn("GIT_CONFIG_KEY_0=http.https://github.com/.extraheader", executor)
         self.assertNotIn("token@github.com", executor)
         self.assertNotIn("git config", executor)
         self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", executor)
+
+    def test_preparation_resolves_the_private_fixture_head_with_a_token_only_resolve_holds(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())
+        steps = workflow["jobs"]["prepare"]["steps"]
+        token = next(step for step in steps if step.get("id") == "fixture_token")
+        self.assertEqual(token["uses"], "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349")
+        self.assertEqual(token["with"]["repositories"].split(), ["e2e-fixture"])
+        self.assertEqual(token["with"]["permission-contents"], "read")
+        # Warn, never restrict: without a token the groups check out the head.
+        self.assertIs(token["continue-on-error"], True)
+        resolve = next(step for step in steps if step.get("id") == "resolved")
+        self.assertEqual(resolve["env"]["FIXTURE_TOKEN"], "${{ steps.fixture_token.outputs.token }}")
+        self.assertLess(steps.index(token), steps.index(resolve))
+        for step in steps:
+            if step is not resolve:
+                self.assertNotIn("fixture_token.outputs.token", json.dumps(step))
 
     def test_trending_topics_group_fetches_only_the_pinned_fixture_without_credentials(self):
         executor = (ROOT / "scripts/executor.sh").read_text()

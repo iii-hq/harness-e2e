@@ -6,6 +6,7 @@ agreement — Release Control reads exactly the fields asserted here.
 """
 
 import importlib.util
+import io
 import json
 import subprocess
 import os
@@ -443,6 +444,45 @@ class StackResolutionTests(unittest.TestCase):
             self.assertEqual(prepare_execution.resolve_template("harness@v2", None)["ref"], "v2")
         self.assertTrue(urls[0].endswith("/commits/main") and urls[1].endswith("/commits/v2"))
         self.assertIsNone(prepare_execution.resolve_template(None, None))
+
+    def test_the_fixture_heads_are_resolved_once_and_one_that_is_not_is_only_a_warning(self):
+        asked = []
+
+        def get(url, token=None):
+            asked.append((url.removeprefix(prepare_execution.GITHUB_API_URL), token))
+            if "/e2e-fixture/" in url:
+                raise prepare_execution.ResolutionError(f"{url} answered HTTP 404")
+            return {"sha": "c" * 40}
+
+        with patch.object(prepare_execution, "get_json", side_effect=get), \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            revisions = prepare_execution.resolve_fixtures("ghs_fixture")
+        self.assertEqual(asked, [("/repos/iii-hq/kanban-e2e-fixture/commits/main", "ghs_fixture"),
+                                 ("/repos/iii-hq/e2e-fixture/commits/HEAD", "ghs_fixture")])
+        # Unresolved, the groups check out the branch, as they did before.
+        self.assertEqual(revisions, {"kanban-e2e-fixture": "c" * 40})
+        self.assertIn("::warning::", stderr.getvalue())
+        self.assertIn("iii-hq/e2e-fixture", stderr.getvalue())
+
+    def test_the_resolution_names_only_the_fixtures_its_groups_check_out(self):
+        fixtures = {"kanban-e2e-fixture": "c" * 40, "e2e-fixture": "d" * 40}
+        kanban = {**PROFILE_SNAPSHOT, "campaigns": [{**PROFILE_SNAPSHOT["campaigns"][0], "groups": [
+            {**PROFILE_SNAPSHOT["campaigns"][0]["groups"][0], "id": "case-kanban-c1-foundation"}]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "execution.json").write_text(json.dumps({
+                "model": "deepseek/deepseek-v4-flash", "cli": {"version": "0.24.2"}, "template": None,
+                "fixtures": fixtures}))
+            (root / "stack.yaml").write_text("containers: {}\n")
+            args = SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e")
+            (root / "suite.json").write_text(json.dumps(PROFILE_SNAPSHOT))
+            prepare_execution.command_contracts(args)
+            unused = json.loads((root / "contracts/resolution.json").read_text())
+            (root / "suite.json").write_text(json.dumps(kanban))
+            prepare_execution.command_contracts(args)
+            used = json.loads((root / "contracts/resolution.json").read_text())
+        self.assertNotIn("fixture_revisions", unused)
+        self.assertEqual(used["fixture_revisions"], {"kanban-e2e-fixture": "c" * 40})
 
     def test_the_suite_is_materialized_by_the_runner_the_stack_resolves_and_pins(self):
         """`iii compose build` resolves the stack's own runner declaration; its
@@ -937,7 +977,43 @@ class CommitPinTests(unittest.TestCase):
         # Named by its commit, never a release a series would compare it with.
         self.assertEqual(identity["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})
         self.assertEqual(observed["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})
+        # The build reporting its Cargo version is no divergence: it is named
+        # by its commit.
+        self.assertEqual(observed["stack_versions_observed"], {"harness": "1.8.8-rc.3", "state": "0.22.17"})
+        self.assertNotIn("stack_version_warnings", observed)
         self.assertNotIn("stack_commits", report_execution.identity_of(Args(), None))
+
+    def test_the_versions_a_run_names_are_the_ones_the_lock_installed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            resolution = root / "resolution.json"
+            resolution.write_text(json.dumps({
+                "stack_versions": {"harness": "1.8.53", "harness-e2e": "0.17.7", "state": "0.22.18"},
+                "fixture_revisions": {"kanban-e2e-fixture": "a" * 40, "e2e-fixture": "b" * 40}}))
+            # What each binary says about itself; `compose` is the engine's
+            # own and no lock names it.
+            (root / "compose-evidence.json").write_text(json.dumps({"runtime": {"observed_versions": {
+                "compose": "0.24.6-rc.5", "harness": "1.8.52", "harness-e2e": "0.17.7", "state": "0.22.17"}}}))
+            identity = report_execution.identity_of(Args(resolution=resolution), root)
+            # Before any group ran, the lock is all there is.
+            prepared = report_execution.identity_of(Args(resolution=resolution), None)
+        self.assertEqual(identity["stack_versions"], {"harness": "1.8.53", "harness-e2e": "0.17.7", "state": "0.22.18"})
+        self.assertEqual(identity["stack_versions_observed"], {
+            "compose": "0.24.6-rc.5", "harness": "1.8.52", "harness-e2e": "0.17.7", "state": "0.22.17"})
+        # Said, never acted on.
+        self.assertEqual(identity["stack_version_warnings"], [
+            "harness: lock 1.8.53, reported 1.8.52", "state: lock 0.22.18, reported 0.22.17"])
+        self.assertEqual(identity["fixture_revisions"], {"kanban-e2e-fixture": "a" * 40, "e2e-fixture": "b" * 40})
+        self.assertEqual(prepared["stack_versions"], identity["stack_versions"])
+        self.assertNotIn("stack_versions_observed", prepared)
+        self.assertNotIn("stack_version_warnings", prepared)
+        # No lock, no versions: what a binary declares is never taken for one.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "compose-evidence.json").write_text(json.dumps({"runtime": {"observed_versions": {"harness": "1.8.52"}}}))
+            unlocked = report_execution.identity_of(Args(), root)
+        self.assertNotIn("stack_versions", unlocked)
+        self.assertEqual(unlocked["stack_versions_observed"], {"harness": "1.8.52"})
 
     def test_a_runner_built_from_a_commit_materializes_and_aggregates(self):
         with tempfile.TemporaryDirectory() as directory:

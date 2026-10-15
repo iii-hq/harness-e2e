@@ -348,12 +348,15 @@ resolve|build|materialize|assemble|fixtures`, `group`, `package` or `finalize
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
 start from and no package brings (the Kanban fixture, the stack's template,
 the Registry sources and the trending topics fixture) below `target/`, three
-tries each, and `group` routes the fixture repositories
+tries each: the Kanban fixture and the Registry's `iii-hq/e2e-fixture` at the
+head `prepare resolve` resolved once for every group (else, with a warning,
+the branch), which the reports name in `identity.fixture_revisions`. `group` routes the fixture repositories
 a scenario clones to those checkouts; `finalize` lays each campaign's groups
 out from the group bundles the execution selected (linked, not copied) before
 aggregating them. Only `prepare resolve` and `prepare fixtures` get a
-`GITHUB_TOKEN`: a group's subject has a shell, and `prepare build` runs the
-commits a stack pins. `prepare` sees the checkout read-only but for
+`GITHUB_TOKEN`, and only `prepare resolve` the `FIXTURE_TOKEN` that reads the
+private fixture's head: a group's subject has a shell, and `prepare build`
+runs the commits a stack pins. `prepare` sees the checkout read-only but for
 `target/`, and `prepare` without a step runs resolve, build, materialize and
 assemble, each in a container of its own. Interrupted, the wrapper stops its container; a group whose image or
 container never started still writes its `failure.json`.

@@ -32,8 +32,10 @@ class KanbanBootstrapTest(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/exact-stack-e2e.yml').read_text()
         executor = (ROOT / 'scripts/executor.sh').read_text()
         group = (ROOT / 'scripts/run_exact_stack_group.sh').read_text()
-        # Checked out in full, anonymously, only for a Kanban group.
-        self.assertIn('case-kanban-*) checkout iii-hq/kanban-e2e-fixture main target/kanban-fixture full ;;', executor)
+        # Checked out in full, anonymously, only for a Kanban group, at the
+        # head preparation resolved, which the bootstrap knows as main.
+        self.assertIn('checkout iii-hq/kanban-e2e-fixture "${kanban:-main}" target/kanban-fixture full', executor)
+        self.assertIn('git -C target/kanban-fixture update-ref refs/heads/main HEAD', executor)
         self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow + executor)
         self.assertIn('scripts/run_in_image.sh prepare fixtures', workflow)
         # The group runs with the executor image's Node.

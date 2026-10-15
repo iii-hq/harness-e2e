@@ -24,8 +24,9 @@
 #
 # The environment the phases read passes through by name, never by value on
 # the command line: HARNESS_E2E_*, DISPATCH_*, the git configuration that
-# GIT_CONFIG_COUNT states, CI, the execution key, the provider credentials
-# and, to `prepare resolve` and `prepare fixtures` alone, GITHUB_TOKEN;
+# GIT_CONFIG_COUNT states, CI, the execution key, the provider credentials,
+# to `prepare resolve` and `prepare fixtures` alone, GITHUB_TOKEN, and to
+# `prepare resolve` alone FIXTURE_TOKEN (the private fixture's head);
 # --env-file adds a file of them. `prepare` without a step runs resolve,
 # build, materialize and assemble, each in a container of its own, the env
 # file only for assemble: the commits a stack pins are built with neither.
@@ -169,6 +170,7 @@ for name in $(compgen -e); do
     # Only resolving a dispatch and fetching fixtures call GitHub; a group's
     # subject has a shell, and a build runs a commit's code.
     GITHUB_TOKEN) [[ "$phase" != prepare || ! "${1:-}" =~ ^(resolve|fixtures)$ ]] || args+=(--env "$name") ;;
+    FIXTURE_TOKEN) [[ "$phase" != prepare || "${1:-}" != resolve ]] || args+=(--env "$name") ;;
     DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY) [[ "$building" == true ]] || args+=(--env "$name") ;;
     # What a subscription login holds besides its access token (which comes
     # in the env file): no secret, and for a group alone.
