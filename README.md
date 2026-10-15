@@ -298,7 +298,11 @@ replace it.
 ledger over OIDC: `materialized` before anything runs, one `shard` per
 campaign group, and a `summary` from the finalizer. Runs come from
 `results.json`, or from journal checkpoints when a group died before writing
-one. A group that produced neither still reports that fact.
+one. A group that produced neither still reports that fact. A preparation
+that failed, before or after the suite was materialized, posts a `summary`
+whose `failure` says where and why: the `phase` (the executor step: `resolve`,
+`build`, `materialize`, `assemble`, or `prepare` for the workflow's own
+steps), the workflow `step`, and the `code` and `message` iii printed.
 
 `workers` supplies versioned stack components. It does not orchestrate
 campaigns.

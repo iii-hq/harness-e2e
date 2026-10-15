@@ -55,6 +55,7 @@ jobs:
       matrix: ${{ steps.contracts.outputs.matrix }}
       runner_revision: ${{ steps.stack_runner.outputs.revision }}
       materialized: ${{ steps.materialized.outputs.posted }}
+      failure: ${{ steps.failure.outputs.record }}
       contract_artifact_id: ${{ steps.contract_upload.outputs.artifact-id }}
       contract_artifact_digest: ${{ steps.contract_upload.outputs.artifact-digest }}
       contract_attempt: ${{ github.run_attempt }}
@@ -66,6 +67,7 @@ jobs:
       # Identity: an execution that reports to Release Control comes from its
       # bot and names itself as it does.
       - name: Validate a Release Control dispatch
+        id: dispatch
         if: inputs.execution_id != ''
         env:
           RELEASE_CONTROL_BOT_LOGIN: ${{ vars.RELEASE_CONTROL_BOT_LOGIN }}
@@ -230,6 +232,17 @@ jobs:
           include-hidden-files: true
           retention-days: 90
           if-no-files-found: ignore
+
+      # Why preparation failed, for the report below: the executor step that
+      # failed (scripts/run_in_image.sh names it) and the error iii printed
+      # in it. Only for a dispatch from Release Control's bot.
+      - name: Record why preparation failed
+        id: failure
+        if: (failure() || cancelled()) && steps.dispatch.outcome == 'success'
+        run: |
+          record=$(python3 scripts/prepare_execution.py failure --directory target/harness-e2e-prepare) \
+            || record='{"phase":"prepare","code":null,"message":null}'
+          printf 'record=%s\n' "$record" >>"$GITHUB_OUTPUT"
 
   groups:
     name: ${{ matrix.campaign_id }} · ${{ matrix.group_id }}
@@ -585,13 +598,13 @@ jobs:
         if: always() && (steps.aggregate.outcome == 'failure' || steps.root_package.outcome == 'failure' || steps.root_upload.outcome == 'failure')
         run: exit 1
 
-  # Preparation can fail after Release Control was told which shards to expect
-  # (assembling the stack runs in it). Without this, no shard or summary would
-  # ever follow and the execution would stay open.
+  # Preparation can fail before Release Control knows of the run (its first
+  # report binds it) or after it was told which shards to expect. Either way
+  # no shard or summary would follow: this says where and why it failed.
   report_preparation_failure:
     name: Report a preparation that failed
     needs: prepare
-    if: always() && needs.prepare.result != 'success' && needs.prepare.outputs.materialized == 'true'
+    if: always() && needs.prepare.result != 'success' && (needs.prepare.outputs.failure != '' || needs.prepare.outputs.materialized == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: harness-e2e-trusted
@@ -600,16 +613,27 @@ jobs:
         with:
           persist-credentials: false
 
+      # The failure as preparation recorded it, in the step GitHub says failed.
       - name: Report the campaign summary
         env:
           EXECUTION_ID: ${{ inputs.execution_id }}
           RUNNER_REVISION: ${{ needs.prepare.outputs.runner_revision }}
+          FAILURE: ${{ needs.prepare.outputs.failure }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_CONTROL_API_URL: ${{ vars.RELEASE_CONTROL_API_URL }}
           RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
         run: |
           set -euo pipefail
           mkdir -p target/harness-e2e-campaign
-          jq -n '{campaigns:[],unavailable:"preparation failed after the suite was materialized; no group ran",outcome:"infra_failed",phase:"prepare"}' \
+          step=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "Materialize the suite and assemble the stack") | .steps[]
+                   | select(.conclusion == "failure" or .conclusion == "cancelled") | .name][0] // ""') || step=""
+          jq -n --argjson recorded "${FAILURE:-null}" --arg step "$step" '
+            ($recorded // {} | {phase: (.phase // "prepare"), step: ($step | if . == "" then null else . end), code, message}) as $f
+            | {campaigns: [],
+               unavailable: "preparation failed in \(if $f.step then "\($f.step) (\($f.phase))" else $f.phase end): \(
+                 [$f.code, $f.message] | map(strings) | join(": ") | if . == "" then "no cause was recorded" else . end); no group ran",
+               outcome: "infra_failed", phase: "prepare", failure: $f}' \
             >target/harness-e2e-campaign/execution-summary.json
           python3 scripts/report_execution.py summary \
             --execution-id "$EXECUTION_ID" \

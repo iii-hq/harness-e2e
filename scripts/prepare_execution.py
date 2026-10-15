@@ -24,6 +24,8 @@ reports go to. Everything else is resolved here, once for the whole execution:
                worker-compose.lock, into every contract. Each group starts it
                frozen, so all of them run the same versions.
     runner-binary  the runner a lock resolved, for the finalizer's aggregate.
+    failure    why preparation failed, from what scripts/run_in_image.sh kept
+               of its steps: the step that failed and the error iii printed.
 """
 
 from __future__ import annotations
@@ -780,6 +782,60 @@ def command_runner_binary(args: argparse.Namespace) -> None:
     print(built_runner(args.lock.parent) or fetch_runner(load_yaml(args.lock.read_text()), args.work_dir))
 
 
+#: How iii and the group launcher say why a call failed, a line each: the
+#: CLI's `error[CODE]: message`, `iii trigger`'s `Error: ` and what the engine
+#: or a worker answered (JSON, or plain text), and the launcher's `[FAIL] `.
+III_ERROR = re.compile(r"^(?:error\[(?P<code>[^\]\s]+)\]: |(?P<trigger>Error: )|\[FAIL\] )(?P<message>.*)$", re.MULTILINE)
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+#: How much of a failure's message is kept: the cause, not a log.
+FAILURE_MESSAGE_LIMIT = 300
+
+
+def iii_error(text: str) -> dict[str, str | None]:
+    """The code and message of the last error iii or the launcher printed in
+    `text`, the one that ended the step; without one, its last line is the
+    message."""
+    text = ANSI_ESCAPE.sub("", text)
+    matches = list(III_ERROR.finditer(text))
+    code = message = None
+    if matches:
+        match = matches[-1]
+        code, message = match["code"], match["message"]
+        if match["trigger"]:
+            try:
+                answered, _ = json.JSONDecoder().raw_decode(text, match.start("message"))
+            except ValueError:
+                answered = None
+            if isinstance(answered, dict):
+                code = answered.get("code") if isinstance(answered.get("code"), str) else None
+                message = answered.get("message") if isinstance(answered.get("message"), str) else message
+    else:
+        lines = [line for line in text.splitlines() if line.strip() and not line.startswith("::")]
+        message = lines[-1] if lines else None
+    if message:
+        message = " ".join(message.split())
+        if len(message) > FAILURE_MESSAGE_LIMIT:
+            message = message[: FAILURE_MESSAGE_LIMIT - 1] + "…"
+    return {"code": code or None, "message": message or None}
+
+
+def failure_record(directory: Path) -> dict[str, Any]:
+    """Why preparation failed, from what scripts/run_in_image.sh left in
+    `directory`: the step that failed (`failed` names it) is the phase, and
+    what it printed gives the cause. When no executor step failed (one of the
+    workflow's own did), the phase is `prepare` and nothing more is known."""
+    marker = directory / "failed"
+    phase = marker.read_text().strip() if marker.is_file() else ""
+    log = directory / f"{phase}.log"
+    if not phase or not log.is_file():
+        return {"phase": phase or "prepare", "code": None, "message": None}
+    return {"phase": phase, **iii_error(log.read_text(errors="replace"))}
+
+
+def command_failure(args: argparse.Namespace) -> None:
+    print(json.dumps(failure_record(args.directory)))
+
+
 def main() -> int:
     os.environ["III_TELEMETRY_ENABLED"] = "false"
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -800,11 +856,14 @@ def main() -> int:
     runner_binary = commands.add_parser("runner-binary")
     runner_binary.add_argument("--lock", type=Path, required=True)
     runner_binary.add_argument("--work-dir", type=Path, required=True)
+    failure = commands.add_parser("failure", help="why preparation failed, as one JSON line")
+    failure.add_argument("--directory", type=Path, required=True, help="where run_in_image.sh kept the steps")
     args = parser.parse_args()
     handlers = {
         "dispatch": command_dispatch, "runtime": command_runtime, "commits": command_commits,
         "runner": command_runner,
         "contracts": command_contracts, "lock": command_lock, "runner-binary": command_runner_binary,
+        "failure": command_failure,
     }
     try:
         handlers[args.command](args)
