@@ -379,9 +379,12 @@ pub(super) struct TestSpecProjection {
     /// Human-readable test name; absent on responses from older runners.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Editorial description; absent until the scenario defines a `SUMMARY`.
+    /// The task in plain words; absent when the scenario states none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// What the test protects and what breaks when it fails.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protects: Option<String>,
     /// The prompt as materialized for a representative run: run-scoped paths
     /// resolve against a catalog namespace, never a real execution.
     pub prompt: String,
@@ -1287,6 +1290,7 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
     TestSpecProjection {
         title: id.title().map(str::to_string),
         summary: id.summary().map(str::to_string),
+        protects: id.protects().map(str::to_string),
         prompt: spec.prompt.clone(),
         criteria: spec
             .criteria
@@ -2406,6 +2410,10 @@ mod tests {
         assert_eq!(
             spec.summary.as_deref(),
             ScenarioId::ChessEngineBuild.summary()
+        );
+        assert_eq!(
+            spec.protects.as_deref(),
+            ScenarioId::ChessEngineBuild.protects()
         );
 
         // Weights, policy and the description of every criterion travel with it.

@@ -111,11 +111,15 @@ impl Scenario for ContentionLedger {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Contended Atomic Ledger")
+        Some("Parallel agents, no lost updates")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Coordinates parallel writers that atomically update one ledger and verifies the result after a barrier wake.")
+        Some("Create a counter table and an audit table, arm one wake-up that fires when all three writers mark themselves done, and spawn three writers in parallel; each adds 1 to the counter five times atomically and logs every step. When woken, verify the totals and reply \"LEDGER-BALANCED 15/15\".")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("Several subagents can write to the same database row at once without losing updates, and the parent is woken exactly once when all of them have finished. If it fails, work split across agents silently loses updates, or the parent never learns it finished.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

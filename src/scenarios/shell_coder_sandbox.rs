@@ -231,11 +231,15 @@ impl Scenario for ShellCoderSandbox {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Repair Code in a Shell Sandbox")
+        Some("Fix failing Python code")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Investigate and repair a Python reconciliation CLI through constrained shell and coding tools, then verify its behavior and scope.")
+        Some("A small Python project has a failing reconciliation module. Reproduce the failing tests, write a short diagnosis, fix only src/reconcile.py, rerun the tests until green, and run the demo command, whose output must match exactly.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent can use iii's shell and coder workers to read a project, run its tests, edit the code and verify the fix in a real workspace. If it fails, coding agents on iii can't make, or can't prove, a working code change.")
     }
 
     fn canonical_seed(&self) -> u64 {

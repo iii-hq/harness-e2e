@@ -93,11 +93,15 @@ impl Scenario for TimerWake {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Timer Wake and Resume")
+        Some("Resume work when a timer fires")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Arms a one-shot timer, resumes the original session, and writes the requested result after the wake.")
+        Some("Arm one wake-up timer for about six seconds and end the turn. When the timer wakes the session, call a status function once, save {\"status\":\"fired\"} in state, and reply \"timer fired\" with the token it returned.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent can set a timer on itself, end its turn, and be woken in the same session when the timer fires, instead of polling or staying busy. If it fails, scheduled follow-ups never happen, and agents burn tokens polling instead of waiting.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

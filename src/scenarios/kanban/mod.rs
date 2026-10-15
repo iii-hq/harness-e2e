@@ -37,22 +37,31 @@ pub const IDS: [&str; 7] = [
     "kanban_c7_live",
 ];
 const TITLES: [&str; 7] = [
-    "Kanban C1: Application Foundation",
-    "Kanban C2: Ticket Persistence",
-    "Kanban: Load and refresh the ticket board",
-    "Kanban C4: Ticket Creation and Deletion",
-    "Kanban C5: Ticket Editing and Movement",
-    "Kanban C6: Ticket Discussion",
-    "Kanban: Synchronize tickets across sessions",
+    "Kanban 1: app and settings",
+    "Kanban 2: save tickets durably",
+    "Kanban 3: show the ticket board",
+    "Kanban 4: create and delete tickets",
+    "Kanban 5: edit and move tickets",
+    "Kanban 6: comments and replies",
+    "Kanban 7: live updates across tabs",
 ];
 const SUMMARIES: [&str; 7] = [
-    "Establishes the standalone Kanban application, configuration lifecycle, responsive settings, and hot reload.",
-    "Implements durable ticket storage with valid identities, isolated stores, restart persistence, and corruption safety.",
-    "Loads tickets into an accessible, responsive board and handles empty, error, refresh, and safe-text states.",
-    "Implements accessible ticket creation, detail navigation, lookup, validation, and durable soft deletion.",
-    "Implements resilient ticket editing and movement across pointer, mobile, navigation, failure, and restart paths.",
-    "Implements persistent, safely rendered comments and replies while preserving drafts across failures and navigation.",
-    "Keeps ticket changes synchronized across sessions without losing local interaction state or accepting stale responses.",
+    "Create a Node/TypeScript app run by Compose with a settings page whose data directory is stored in the iii configuration service; saving from the page and changing it directly in iii must both take effect. No tickets yet.",
+    "Add tickets stored in the configured data directory, exposed as iii functions create, list and get, with defaults, readable keys (KAN-1, KAN-2…) and safe handling of invalid input and corrupt files. No board yet.",
+    "Make the home page a read-only board with five columns, per-column and total counts, and ticket cards, loaded through the existing iii list function, with refresh, loading, empty and recoverable error states. No creating or editing yet.",
+    "Add ticket creation in a modal, a same-tab detail view opened by keyboard or mouse, and a delete that hides the ticket but keeps its record on disk and never reuses its key, over HTTP and iii.",
+    "Add editing with save and cancel, partial updates over HTTP and iii, and drag-and-drop between columns that saves only the status; a failed save must keep the user's draft.",
+    "Add comments and nested replies on ticket details, stored on the ticket and shown in a timeline, with safe rendering and drafts kept across failures.",
+    "Keep every open browser session in sync over server-sent events after any change, including changes made directly through iii functions, without losing focus, drafts or newer data.",
+];
+const PROTECTS: [&str; 7] = [
+    "An agent can stand up a standalone iii app under Compose whose settings live in the iii configuration service. If it fails, agents can't bootstrap a new iii app that starts and keeps its settings.",
+    "An agent can add durable storage behind iii functions that survives restarts and refuses to corrupt existing data. If it fails, apps built by agents lose or corrupt user records.",
+    "An agent can put a browser UI on top of existing iii functions and show loading, empty and error states honestly. If it fails, users see wrong or made-up numbers when data is slow or missing.",
+    "An agent can add a create, view and delete flow that works the same through the browser, HTTP and iii functions. If it fails, the basic create and delete flows in agent-built apps break.",
+    "An agent can add editing and drag-and-drop that save correctly and survive failures. If it fails, user edits get lost or saved wrong.",
+    "An agent can add threaded comments that are stored safely and show user text without running it. If it fails, user comments are lost or become an injection risk.",
+    "An agent can add live updates so changes made anywhere, including directly through iii, reach every open session. If it fails, users see stale boards and overwrite each other's changes.",
 ];
 
 #[derive(Deserialize)]
@@ -115,6 +124,10 @@ impl Scenario for Kanban {
 
     fn summary(&self) -> Option<&'static str> {
         Some(SUMMARIES[self.0])
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some(PROTECTS[self.0])
     }
 
     fn canonical_seed_only(&self) -> bool {

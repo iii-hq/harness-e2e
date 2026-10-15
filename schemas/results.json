@@ -1033,6 +1033,13 @@
         "passed": {
           "type": "boolean"
         },
+        "protects": {
+          "description": "What the test protects and what breaks when it fails.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "runs": {
           "type": "array",
           "items": {

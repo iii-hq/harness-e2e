@@ -170,11 +170,15 @@ impl Scenario for DatabaseMigrationRecovery {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Database Migration Recovery")
+        Some("Finish an interrupted database migration")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Resumes and replays an interrupted database migration without changing protected source data.")
+        Some("A money-column migration stopped after one row. In one transaction, copy the remaining valid orders as integer cents, quarantine the invalid one, create the compatibility view and mark the journal complete; then run the same transaction again and reply with the exact success line.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent can resume a half-finished database migration with iii database transactions, run it again safely, and leave data outside the migration untouched. If it fails, agents can leave a production migration half-done or applied twice.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

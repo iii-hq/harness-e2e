@@ -312,6 +312,12 @@
         "inputs_sha256": {
           "type": "string"
         },
+        "protects": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "required_capabilities": {
           "type": "array",
           "items": {

@@ -92,13 +92,15 @@ impl Scenario for PersistentState {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Persistent State Migration")
+        Some("Safe update of saved data")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some(
-            "Migrates an existing state record with one write while preserving all unrelated data.",
-        )
+        Some("Read a saved record at revision 1 and migrate it to revision 2 with a single write: mark \"beta\" done, add \"gamma\", keep owner, \"alpha\" and metadata. Confirm briefly.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent can update a record in iii state without losing or corrupting the fields it was not asked to change. If it fails, an agent can silently corrupt or drop user data it was only meant to update.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
