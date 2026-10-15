@@ -416,6 +416,12 @@ fi
 chmod 600 "$env_file"
 python3 "$contract_tool" credentials-env --contract "$contract_path" --output "$env_file"
 
+# A declared path://./ worker's source sits beside the original manifest; a
+# second attempt finds it where the first attempt's stack/ was kept.
+local_source_root="$artifact_dir/stack"
+if ((group_attempt > 1)) && [[ -d "$artifact_dir/attempts/1/stack" ]]; then
+  local_source_root="$artifact_dir/attempts/1/stack"
+fi
 project_args=(
   --contract "$contract_path"
   --env-file "$env_file"
@@ -425,7 +431,7 @@ project_args=(
   --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.suite.lane' "$contract_path")"
   --environment "harness-e2e.HARNESS_E2E_CAMPAIGN_GROUP=$campaign_group_id"
   --output "$compose_file"
-  --local-source-root "$artifact_dir/stack"
+  --local-source-root "$local_source_root"
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )

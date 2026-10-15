@@ -565,6 +565,25 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.assertIn('attempts/1/failure.json', {entry['path'] for entry in bundle['files']})
         self.assertNotIn(self.env['DEEPSEEK_API_KEY'], (self.artifacts / 'failure.json').read_text())
 
+    def test_a_second_attempt_still_finds_the_declared_local_sources(self):
+        source = self.artifacts / 'stack/local'
+        (source / 'bin').mkdir(parents=True)
+        (source / 'source.txt').write_text('existing local source')
+        (source / 'bin/built').write_text('existing build')
+        self.contract['runtime']['compose']['containers']['local'] = {
+            'worker':'path://./local', 'working_dir':'./local', 'scripts':{'run':'cat ./bin/built'}}
+        self.env['FAKE_FAIL'] = 'up'
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        rows = self.observed()
+        # Both attempts got as far as starting the stack, the local source staged each time.
+        self.assertEqual(len([row for row in rows if row['kind'] == 'compose::up']), 6)
+        staged = [row for row in rows if row['kind'] == 'local']
+        self.assertTrue(staged)
+        self.assertTrue(all(row['source_bytes'] == 'existing local source' for row in staged))
+        self.assertEqual(json.loads((self.artifacts / 'failure.json').read_text())['phase'], 'project_start')
+        self.assertEqual((self.artifacts / 'attempts/1/stack/local/source.txt').read_text(), 'existing local source')
+
     def test_a_group_whose_run_started_is_never_tried_again(self):
         self.env['FAKE_FAIL'] = 'results'
         result = self.launch()
