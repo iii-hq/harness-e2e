@@ -20,7 +20,7 @@ GRAPH = {"harness", "ade", "state", "queue"}
 COMMIT = "c46ead4ffb5051ae922888139849dcdb47e07805"
 
 
-def group(scenario, outcome="passed", valid=True, state="complete"):
+def group(scenario, outcome="passed", valid=True, state="complete", completion=1.0):
     """One group of an execution-summary.json, as the finalizer writes it."""
     return {
         "group_id": f"case-{scenario}",
@@ -28,6 +28,7 @@ def group(scenario, outcome="passed", valid=True, state="complete"):
         "objective_outcome": outcome,
         "infrastructure_valid": valid,
         "report_state": state,
+        "completion_rate": completion,
         "status": "passed",
     }
 
@@ -85,6 +86,16 @@ class VerdictTests(unittest.TestCase):
     def test_a_failure_is_reported_even_when_another_group_was_not_measured(self):
         result = verify_stack.verdict(summary(group("a", "failed"), group("b", "inconclusive", state="partial")))
         self.assertEqual(result["status"], "failed")
+
+    def test_a_passed_group_whose_runs_did_not_complete_is_failed(self):
+        """The objective outcome passes a run that only stalled; completion says it did not finish."""
+        result = verify_stack.verdict(summary(group("minimal_path"), group("persistent_state", completion=0.0)))
+        self.assertEqual((result["status"], result["passed"]), ("failed", 1))
+        self.assertEqual(result["failed"], ["persistent_state (0% of runs completed)"])
+
+    def test_a_passed_group_without_completion_evidence_was_not_measured(self):
+        result = verify_stack.verdict(summary(group("minimal_path", completion=None)))
+        self.assertEqual((result["status"], result["not_measured"]), ("not_measured", ["minimal_path"]))
 
     def test_an_empty_summary_is_not_measured(self):
         self.assertEqual(verify_stack.verdict({"campaigns": []})["status"], "not_measured")

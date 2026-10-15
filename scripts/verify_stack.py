@@ -7,10 +7,13 @@ an iii release (`--iii`). This tool builds the stack from `stacks/default.yaml`,
 dispatches `exact-stack-e2e.yml` without an execution (its reports only go to
 artifacts), waits for the run and reads `execution-summary.json`:
 
-    passed        every group measured and its objective outcome is `passed`
-    failed        a measured group's objective outcome is `failed`
-    not_measured  the run produced no summary, a group is inconclusive or its
-                  infrastructure was invalid, or the run never finished
+    passed        every group measured, its objective outcome `passed` and
+                  every one of its runs completed (`completion_rate` 1.0)
+    failed        a measured group's objective outcome is `failed`, or it
+                  passed with runs that did not complete
+    not_measured  the run produced no summary, a group is inconclusive, its
+                  infrastructure was invalid or it has no completion
+                  evidence, or the run never finished
     skipped       nothing the caller changed is part of the harness graph
 
 A green workflow proves nothing here: the campaign is advisory, so the
@@ -121,9 +124,15 @@ def verdict(summary: dict[str, Any]) -> dict[str, Any]:
     def name(group: dict[str, Any]) -> str:
         return ", ".join(group.get("scenarios") or []) or str(group.get("group_id"))
 
-    passed = [g for g in groups if measured(g) and g["objective_outcome"] == "passed"]
+    # A passed objective whose runs did not all complete (a stall the scoring
+    # does not see) is no pass: it fails, and the rate says why. Without
+    # completion evidence (null) there is nothing to say either way.
+    passed = [g for g in groups if measured(g) and g["objective_outcome"] == "passed" and g.get("completion_rate") == 1.0]
     failed = [name(g) for g in groups if measured(g) and g["objective_outcome"] == "failed"]
-    unmeasured = [name(g) for g in groups if not measured(g)]
+    failed += [f"{name(g)} ({g['completion_rate']:.0%} of runs completed)" for g in groups
+               if measured(g) and g["objective_outcome"] == "passed" and g.get("completion_rate") not in (None, 1.0)]
+    unmeasured = [name(g) for g in groups if not measured(g)
+                  or (g["objective_outcome"] == "passed" and g.get("completion_rate") is None)]
     planned = max(planned, len(groups))
     # Nothing measured is never a pass: 0 of 0 groups says nothing about the stack.
     complete = planned > 0 and not unmeasured and len(passed) == planned
