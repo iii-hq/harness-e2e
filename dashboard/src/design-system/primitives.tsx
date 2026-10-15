@@ -156,7 +156,8 @@ export type Breadcrumb = { label: string; href?: string }
 
 export type PageHeaderProps = HTMLAttributes<HTMLElement> & {
   title: string
-  summary: ReactNode
+  /** Omitted when the page states its subject below the header. */
+  summary?: ReactNode
   headingLevel?: 1 | 2
   /** Id for the heading element, so a section can point aria-labelledby at it. */
   headingId?: string
@@ -245,7 +246,7 @@ export function PageHeader({
           </Heading>
           {titleAction}
         </div>
-        <p className="ds-page-summary">{summary}</p>
+        {summary ? <p className="ds-page-summary">{summary}</p> : null}
       </div>
       {actions ? <div className="ds-page-actions">{actions}</div> : null}
     </header>

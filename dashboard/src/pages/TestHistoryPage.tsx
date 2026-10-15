@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
 import { RunsTable } from '@/components/history/RunsTable'
-import { TestContract } from '@/components/history/TestContract'
+import { TestCard, TestContract } from '@/components/history/TestContract'
 import { LossesPanel, TrendChart } from '@/components/history/TrendChart'
 import {
   buttonClassName,
@@ -396,7 +396,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       <DashboardPageActions active="tests" context={testId} />
       <PageHeader
         variant="detail"
-        mono
+        mono={!spec?.title}
         className="th-header"
         back={{
           label: 'Back to Tests',
@@ -404,12 +404,15 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         }}
         title={spec?.title ?? testId}
         headingId="test-history-title"
-        summary={`${testId} · ${
-          spec?.summary ||
-          (loading && !history
-            ? 'Loading the history…'
-            : 'Every run of this test, newest first.')
-        }`}
+        summary={
+          spec
+            ? null
+            : `${testId} · ${
+                loading && !history
+                  ? 'Loading the history…'
+                  : 'Every run of this test, newest first.'
+              }`
+        }
         actions={
           <>
             {copied ? (
@@ -462,6 +465,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           </>
         }
       />
+      {spec ? <TestCard spec={spec} testId={testId} /> : null}
       <FactList className="th-facts" aria-label="About this test">
         {historyFacts(history, row).map((fact) => (
           <FactChip key={fact.label} {...fact} />

@@ -918,6 +918,55 @@
   margin-top: calc(var(--spacing) * 1);
 }
 
+/* The test in plain words: label beside value on a wide pane, above it on a
+   narrow one; the id closes the card, small. */
+.th-brief {
+  padding: calc(var(--spacing) * 0.5) calc(var(--spacing) * 3.5)
+    calc(var(--spacing) * 2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.th-brief dl {
+  margin: 0;
+}
+
+.th-brief dl > div {
+  display: grid;
+  grid-template-columns: calc(var(--spacing) * 32) minmax(0, 1fr);
+  gap: calc(var(--spacing) * 3);
+  padding: calc(var(--spacing) * 2) 0;
+  border-bottom: var(--ds-row-divider);
+}
+
+.harness-e2e-shell[data-narrow="true"] .th-brief dl > div {
+  grid-template-columns: minmax(0, 1fr);
+  gap: calc(var(--spacing) * 0.5);
+}
+
+.th-brief dt {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 5);
+}
+
+.th-brief dd {
+  min-width: 0;
+  margin: 0;
+  line-height: calc(var(--spacing) * 5);
+  overflow-wrap: anywhere;
+}
+
+.th-brief ul {
+  margin: 0;
+  padding-inline-start: calc(var(--spacing) * 4);
+  list-style: disc;
+}
+
+.th-brief p {
+  margin: calc(var(--spacing) * 2) 0 0;
+}
+
 /* Prompt and scoring */
 .th-contract-col {
   display: flex;

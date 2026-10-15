@@ -198,7 +198,10 @@ export type TestCriterion = {
  *  the limits the run answers to. Absent on responses from older harnesses. */
 export type TestSpec = {
   title?: string
+  /** The task in plain words. */
   summary?: string
+  /** What the test protects, then "If it fails, …". */
+  protects?: string
   prompt: string
   criteria: TestCriterion[]
   execution: {
