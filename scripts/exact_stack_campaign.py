@@ -1172,9 +1172,10 @@ def package_bundle(
     reserved for credentials, is withheld: removed from the tree, so it is
     never uploaded, and listed in `withheld` by path and reason (the names
     found, never a value or a digest of it). The rest of the group's evidence
-    is packaged and its runs are reported as they are. Whoever checks a
-    reference to a withheld file (the runner's manifest, a deliverable) finds
-    it named here rather than missing."""
+    is packaged and its runs are reported as they are. Neither Release
+    Control nor the Console reads `withheld` yet: a deliverable or other
+    reference to a withheld file fails their integrity check closed (the
+    evidence shows as unavailable), as a missing file would."""
     import shutil
 
     files, reserved = _package_files(root)

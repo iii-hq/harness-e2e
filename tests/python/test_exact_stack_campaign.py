@@ -1443,6 +1443,10 @@ fail() {
             self.assertEqual(manifest["withheld"],
                              [{"path": withheld, "withheld": "credential", "reason": "holds DEEPSEEK_API_KEY"}])
             self.assertFalse(session.exists())
+            # Nothing to verify it against: no file entry and no digest, so a
+            # reader that checks a reference to it fails closed.
+            self.assertNotIn(withheld, {entry["path"] for entry in manifest["files"]})
+            self.assertNotIn("sha256", manifest["withheld"][0])
             self.assertEqual(sorted(entry["path"] for entry in manifest["files"]),
                              ["logs/engine.log", "native/execution-1/evidence/transcript.json", "results.json",
                               "stack-lock.json"])
