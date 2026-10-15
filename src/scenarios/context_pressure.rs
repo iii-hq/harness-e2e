@@ -49,16 +49,16 @@ pub const CANONICAL_SEED: u64 = 3003;
 const RUNG: Rung = Rung { segments: 48 };
 const MAX_SEGMENTS: u32 = 48;
 
-const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::scored_in(
+const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::gate_in(
     "charter_preserved",
     40,
-    "Does the final report reproduce every planted charter fact verbatim after the full distractor load?",
+    "Was the charter read only before the first document, and does the final report repeat its mission, checkpoint, quorum and seal verbatim?",
     EvaluationDimension::Deliverable,
 );
-const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::scored(
+const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::gate(
     "needles_recovered",
     30,
-    "Does every segment needle appear in the report exactly once and in ascending segment order?",
+    "Does the final report contain every document's marker, in ascending document order?",
 );
 const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "ingestion_discipline",
@@ -68,7 +68,7 @@ const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
 const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
     10,
-    "Does the report include the required facts and needles without echoing document text?",
+    "Does the report start with the CONTEXT-LADDER-REPORT header, carry the charter values and every marker, and stay within 1,024 characters plus 64 per document?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CHARTER_PRESERVED,
@@ -382,6 +382,9 @@ seal=<seal from the charter>
 struct IngestionAudit {
     charter_calls: usize,
     charter_first: bool,
+    /// At least one charter call, and none after the first document: the
+    /// values in the report had to survive the whole load.
+    charter_before_documents: bool,
     segments_exact: bool,
     segment_calls: usize,
     other_calls: usize,
@@ -411,10 +414,13 @@ fn ingestion_audit(run_id: &str, segments: u32, calls: &[ObservedFunctionCall]) 
                 && !common::is_contract_discovery(&call.function_id)
         })
         .count();
-    let charter_first = charter_positions.len() == 1
-        && segment_calls
-            .iter()
-            .all(|(position, _)| *position > charter_positions[0]);
+    let charter_before_documents = !charter_positions.is_empty()
+        && segment_calls.first().is_none_or(|(first_segment, _)| {
+            charter_positions
+                .iter()
+                .all(|charter| charter < first_segment)
+        });
+    let charter_first = charter_before_documents && charter_positions.len() == 1;
     let segments_exact = segment_calls.len() == segments as usize
         && segment_calls
             .iter()
@@ -425,6 +431,7 @@ fn ingestion_audit(run_id: &str, segments: u32, calls: &[ObservedFunctionCall]) 
     IngestionAudit {
         charter_calls: charter_positions.len(),
         charter_first,
+        charter_before_documents,
         segments_exact,
         segment_calls: segment_calls.len(),
         other_calls,
@@ -432,6 +439,7 @@ fn ingestion_audit(run_id: &str, segments: u32, calls: &[ObservedFunctionCall]) 
 }
 
 struct ReportAudit {
+    header: bool,
     charter_preserved: bool,
     needles_ordered: bool,
     missing_needles: usize,
@@ -439,8 +447,8 @@ struct ReportAudit {
 
 fn report_audit(response: &str, run_id: &str, segments: u32) -> ReportAudit {
     let charter = charter(run_id);
-    let charter_preserved = response.trim_start().starts_with(&report_header(segments))
-        && response.contains(&format!("mission={}", charter.mission))
+    let header = response.trim_start().starts_with(&report_header(segments));
+    let charter_preserved = response.contains(&format!("mission={}", charter.mission))
         && response.contains(&format!("checkpoint={}", charter.checkpoint))
         && response.contains(&format!("quorum={}", charter.quorum))
         && response.contains(&format!("seal={}", charter.seal));
@@ -455,6 +463,7 @@ fn report_audit(response: &str, run_id: &str, segments: u32) -> ReportAudit {
     let needles_ordered =
         missing_needles == 0 && positions.windows(2).all(|window| window[0] < window[1]);
     ReportAudit {
+        header,
         charter_preserved,
         needles_ordered,
         missing_needles,
@@ -492,53 +501,50 @@ fn evaluate_rung(
         && ingestion.other_calls == 0
         && errors == 0;
     let response_chars = observation.response.chars().count();
-    let concise = report.charter_preserved
+    let concise = report.header
+        && report.charter_preserved
         && report.needles_ordered
         && response_chars <= report_budget_chars(segments);
 
-    Ok(assessment::build_evaluation(
-        if report.charter_preserved && report.needles_ordered {
-            crate::report::CompletionState::Completed
-        } else {
-            crate::report::CompletionState::TaskIncomplete
-        },
-        [
-            CHARTER_PRESERVED.full_or_zero(
-                report.charter_preserved,
-                format!(
-                    "report must start with `{}` and reproduce mission, checkpoint, quorum, \
-                 and seal verbatim",
-                    report_header(segments)
-                ),
+    Ok(assessment::build_evaluation([
+        CHARTER_PRESERVED.full_or_zero(
+            ingestion.charter_before_documents && report.charter_preserved,
+            format!(
+                "charter_read_only_before_documents={} (charter_calls={}), charter_values_in_report={}",
+                ingestion.charter_before_documents,
+                ingestion.charter_calls,
+                report.charter_preserved
             ),
-            NEEDLES_RECOVERED.full_or_zero(
-                report.needles_ordered,
-                format!(
-                    "missing {} of {segments} needle(s); needles must appear in ascending order",
-                    report.missing_needles
-                ),
+        ),
+        NEEDLES_RECOVERED.full_or_zero(
+            report.needles_ordered,
+            format!(
+                "missing {} of {segments} needle(s); needles must appear in ascending order",
+                report.missing_needles
             ),
-            INGESTION_DISCIPLINE.full_or_zero(
-                disciplined,
-                format!(
-                    "charter_calls={} (first={}), segment_calls={}/{segments} exact={}, \
+        ),
+        INGESTION_DISCIPLINE.full_or_zero(
+            disciplined,
+            format!(
+                "charter_calls={} (first={}), segment_calls={}/{segments} exact={}, \
                  other_calls={}, function_errors={errors}",
-                    ingestion.charter_calls,
-                    ingestion.charter_first,
-                    ingestion.segment_calls,
-                    ingestion.segments_exact,
-                    ingestion.other_calls
-                ),
+                ingestion.charter_calls,
+                ingestion.charter_first,
+                ingestion.segment_calls,
+                ingestion.segments_exact,
+                ingestion.other_calls
             ),
-            CONCISE_REPORT.full_or_zero(
-                concise,
-                format!(
-                    "observed {response_chars} character(s); budget {}",
-                    report_budget_chars(segments)
-                ),
+        ),
+        CONCISE_REPORT.full_or_zero(
+            concise,
+            format!(
+                "starts_with `{}`={}; observed {response_chars} character(s); budget {}",
+                report_header(segments),
+                report.header,
+                report_budget_chars(segments)
             ),
-        ],
-    ))
+        ),
+    ]))
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -585,6 +591,7 @@ fn deliverable_contract() -> DeliverableContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::CompletionState;
 
     #[test]
     fn every_seed_request_normalizes_to_the_maximum_case() {
@@ -708,6 +715,71 @@ mod tests {
         assert_eq!(audit.other_calls, 0, "function discovery is exempt");
         assert!(audit.charter_first);
         assert!(audit.segments_exact);
+    }
+
+    fn completion_of(calls: Vec<ObservedFunctionCall>, response: &str) -> CompletionState {
+        let run_id = "run";
+        let blocks = calls
+            .into_iter()
+            .map(|call| {
+                json!({
+                    "type": "function_call",
+                    "id": "call",
+                    "function_id": call.function_id,
+                    "arguments": call.arguments,
+                })
+            })
+            .collect::<Vec<_>>();
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::ContextPressure,
+            run_id,
+            json!({ "messages": [{ "message": { "role": "assistant", "content": blocks } }] }),
+            response,
+            Vec::new(),
+        );
+        assessment::completion(ASSESSMENTS, &evaluate_rung(&observation, run_id).unwrap())
+    }
+
+    #[test]
+    fn completion_needs_the_charter_read_before_the_documents() {
+        let run_id = "run";
+        let charter_call = || call(charter_function_id(run_id), json!({}));
+        let documents = || {
+            (0..RUNG.segments)
+                .map(|index| call(segment_function_id(run_id), json!({ "index": index })))
+                .collect::<Vec<_>>()
+        };
+        let report = full_report(run_id, RUNG.segments);
+
+        let mut intended = vec![charter_call()];
+        intended.extend(documents());
+        assert_eq!(completion_of(intended, &report), CompletionState::Completed);
+
+        // Shortcut: read the charter again right before the report.
+        let mut reread = vec![charter_call()];
+        reread.extend(documents());
+        reread.push(charter_call());
+        assert_eq!(
+            completion_of(reread, &report),
+            CompletionState::TaskIncomplete
+        );
+        // Shortcut: read the charter only at the end.
+        let mut late = documents();
+        late.push(charter_call());
+        assert_eq!(
+            completion_of(late, &report),
+            CompletionState::TaskIncomplete
+        );
+
+        // Less elegant, still remembered: the charter twice up front, one
+        // document read twice, and a sentence before the required header.
+        let mut clumsy = vec![charter_call(), charter_call()];
+        clumsy.extend(documents());
+        clumsy.push(call(segment_function_id(run_id), json!({ "index": 3 })));
+        assert_eq!(
+            completion_of(clumsy, &format!("Here is the report.\n{report}")),
+            CompletionState::Completed
+        );
     }
 
     #[test]

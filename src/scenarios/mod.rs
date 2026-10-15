@@ -188,6 +188,9 @@ pub struct CriterionSpec {
     /// the others only move the score. Reported so a reader can say which
     /// criterion left a task incomplete.
     pub gate: bool,
+    /// Points that already meet the task's purpose on a proportional gate;
+    /// `None` means full points.
+    pub gate_minimum: Option<u8>,
 }
 
 impl CriterionSpec {
@@ -205,11 +208,21 @@ impl CriterionSpec {
             policy: AssessmentPolicy::Advisory,
             dimension,
             gate: false,
+            gate_minimum: None,
         }
     }
 
     pub const fn with_gate(self, gate: bool) -> Self {
         Self { gate, ..self }
+    }
+
+    /// A gate that already passes at `points`, below the criterion's weight.
+    pub const fn with_gate_minimum(self, points: u8) -> Self {
+        Self {
+            gate: true,
+            gate_minimum: Some(points),
+            ..self
+        }
     }
 }
 
@@ -386,11 +399,46 @@ pub struct ScenarioObservation {
     pub deliverables: Vec<CapturedDeliverable>,
 }
 
+impl ScenarioObservation {
+    /// A complete single-session run of `scenario`'s canonical case, for
+    /// evaluator tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        scenario: ScenarioId,
+        run_id: &str,
+        transcript: Value,
+        response: &str,
+        deliverables: Vec<CapturedDeliverable>,
+    ) -> Self {
+        Self {
+            case: scenario
+                .materialize(run_id, scenario.canonical_seed())
+                .expect("materialize the canonical case")
+                .case,
+            metrics: SessionMetricsResponse::from_normalized(crate::wire::SessionMetricsPayload {
+                root_session_id: format!("e2e_{run_id}"),
+                complete: true,
+                totals: crate::wire::SessionUsageTotals {
+                    sessions: 1,
+                    ..Default::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            }),
+            transcript,
+            response: response.to_string(),
+            deliverables,
+        }
+    }
+}
+
 pub struct ObjectiveEvaluation {
-    /// Whether the subject reached the task's terminal state. This is
-    /// deliberately independent from score: a completed task may still be
-    /// objectively wrong or low quality.
-    pub completion: CompletionState,
+    /// Whether the subject delivered the task's primary flow. `None` derives
+    /// it from the gate criteria (`crate::report::gate_completion`); a
+    /// scenario sets it only when a prerequisite decides before any gate, such
+    /// as a build that never started. Independent from score: a completed task
+    /// may still lose points on the other criteria.
+    pub completion: Option<CompletionState>,
     pub awards: Vec<CriterionAward>,
     /// Execution failure after partial observations were obtained.
     pub infrastructure_error: Option<String>,
@@ -934,6 +982,23 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{scenario:?} invalid schema: {error}"));
             }
         }
+    }
+
+    /// Completed means the primary flow was delivered, and the gate criteria
+    /// say which flow that is: a scenario without one can never complete.
+    #[test]
+    fn every_scenario_declares_the_gates_its_completion_reads() {
+        let ungated: Vec<_> = ScenarioId::ALL
+            .into_iter()
+            .filter(|scenario| {
+                !scenario
+                    .spec(CONTRACT_NAMESPACE)
+                    .criteria
+                    .iter()
+                    .any(|criterion| criterion.gate)
+            })
+            .collect();
+        assert!(ungated.is_empty(), "scenarios without a gate: {ungated:?}");
     }
 
     #[test]

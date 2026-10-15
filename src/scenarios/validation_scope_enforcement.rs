@@ -42,7 +42,7 @@ const SELF_GATE_ENGAGED: AssessmentSpec = AssessmentSpec::scored(
     30,
     "Did the self-registration gate the session with exactly one denial while the marker remained unset?",
 );
-const TEARDOWN_UNGATED: AssessmentSpec = AssessmentSpec::scored(
+const TEARDOWN_UNGATED: AssessmentSpec = AssessmentSpec::gate(
     "teardown_ungated",
     35,
     "Did owner unregistration remove the gate mid-loop, allowing the turn to complete with the marker still absent?",
@@ -227,35 +227,28 @@ impl Scenario for ValidationScopeEnforcement {
         let teardown_ungated = marker_absent && teardown_called && reported;
         let self_gate_engaged = self_registered && nudges == 1;
 
-        Ok(assessment::build_evaluation(
-            if teardown_called {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                FOREIGN_SCOPE_REFUSED.full_or_zero(
-                    foreign_scope_refused,
-                    format!(
+        Ok(assessment::build_evaluation([
+            FOREIGN_SCOPE_REFUSED.full_or_zero(
+                foreign_scope_refused,
+                format!(
                     "attempted={foreign_attempted}, out-of-scope error visible={refusal_delivered}"
                 ),
-                ),
-                SELF_GATE_ENGAGED.full_or_zero(
-                    self_gate_engaged,
-                    format!(
-                        "self_registered={self_registered}; observed {nudges} nudge(s), expected \
+            ),
+            SELF_GATE_ENGAGED.full_or_zero(
+                self_gate_engaged,
+                format!(
+                    "self_registered={self_registered}; observed {nudges} nudge(s), expected \
                      exactly one before teardown"
-                    ),
                 ),
-                TEARDOWN_UNGATED.full_or_zero(
-                    teardown_ungated,
-                    format!(
-                        "marker={marker}, teardown_called={teardown_called}, reported={reported} \
+            ),
+            TEARDOWN_UNGATED.full_or_zero(
+                teardown_ungated,
+                format!(
+                    "marker={marker}, teardown_called={teardown_called}, reported={reported} \
                      — completion must come from the teardown, never from passing"
-                    ),
                 ),
-            ],
-        ))
+            ),
+        ]))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {

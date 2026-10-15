@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use crate::context::E2eContext;
-use crate::report::{CompletionState, EvaluationDimension};
+use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
@@ -38,7 +38,7 @@ const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "Is the scenario Worker configuration valid and ready, with every required function registered with descriptions and object schemas?",
     EvaluationDimension::Deliverable,
 );
-const FORM_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
+const FORM_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::gate(
     "domain_primary",
     20,
     "Does the feature preview list exactly Title, Work type, User story, and Acceptance criteria as visible fields, report no missing required fields, and allow submission?",
@@ -48,7 +48,7 @@ const FORM_DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
     15,
     "After adding Environment, does the bug preview list exactly Title, Work type, Reproduction, Expected behavior, and Environment as visible fields, report no missing required fields, and allow submission?",
 );
-const MACHINE_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::scored(
+const MACHINE_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::gate(
     "domain_primary",
     20,
     "Does a start event in the queued state return the running state?",
@@ -73,7 +73,7 @@ const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     10,
     "Does the live edit save the expected updated diagram under the same Canvas ID?",
 );
-const CONSOLE: AssessmentSpec = AssessmentSpec::scored_in(
+const CONSOLE: AssessmentSpec = AssessmentSpec::gate_in(
     "console_delivery",
     10,
     "Does Console expose the enabled Worker and Canvas scripts and styles with content hashes, no warnings, and non-empty Worker files?",
@@ -253,11 +253,7 @@ macro_rules! scenario_impl {
                     .find(|item| item.id == evidence_id($kind))
                     .and_then(|item| item.content.as_json())
                     .context("visual Worker evidence deliverable is missing")?;
-                Ok(evaluate_evidence(
-                    $kind,
-                    evidence,
-                    observation.metrics.complete,
-                ))
+                Ok(evaluate_evidence($kind, evidence))
             }
 
             async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -1396,21 +1392,14 @@ return {{passed:routeOk&&domainVisible&&branchOk&&noOverflow&&!errorText,route_o
     Ok(observed)
 }
 
-fn evaluate_evidence(kind: Kind, evidence: &Value, complete: bool) -> ObjectiveEvaluation {
-    assessment::build_evaluation(
-        if complete {
-            CompletionState::Completed
+fn evaluate_evidence(kind: Kind, evidence: &Value) -> ObjectiveEvaluation {
+    assessment::build_evaluation(kind.assessments().iter().copied().map(|spec| {
+        if evidence["checks"][spec.id()]["status"] == "blocked" {
+            spec.unverified(reason(evidence, spec.id()))
         } else {
-            CompletionState::TaskIncomplete
-        },
-        kind.assessments().iter().copied().map(|spec| {
-            if evidence["checks"][spec.id()]["status"] == "blocked" {
-                spec.unverified(reason(evidence, spec.id()))
-            } else {
-                spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
-            }
-        }),
-    )
+            spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
+        }
+    }))
 }
 
 async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
@@ -1731,7 +1720,8 @@ mod tests {
             let blocked=matches!(spec.id(),"canvas_update"|"browser_interaction"|"evidence_complete");
             (spec.id().to_string(),json!({"passed":!blocked,"status":if blocked{"blocked"}else{"evaluated"},"reason":"probe"}))
         }).collect::<serde_json::Map<_,_>>();
-        let evaluation = evaluate_evidence(Kind::Form, &json!({"checks":checks}), true);
+        let evaluation = evaluate_evidence(Kind::Form, &json!({"checks":checks}));
+        assert_eq!(evaluation.completion, None);
         assert_eq!(
             evaluation
                 .awards
@@ -1780,7 +1770,7 @@ mod tests {
                     )
                 })
                 .collect::<serde_json::Map<_, _>>();
-            let evaluation = evaluate_evidence(Kind::Form, &json!({"checks":checks}), true);
+            let evaluation = evaluate_evidence(Kind::Form, &json!({"checks":checks}));
             for (id, expected) in [
                 ("browser_interaction", expected_browser),
                 ("evidence_complete", expected_evidence),

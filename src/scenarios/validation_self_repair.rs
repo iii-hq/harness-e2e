@@ -35,10 +35,10 @@ const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const REQUIRED_NAMES: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
-const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::scored(
+const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::gate(
     "data_repaired",
     40,
-    "Do all invariants hold at the end with every required name preserved by the repair?",
+    "Did at least one validator rejection name the seeded defects (beta=-5 and the duplicate beta), and does the final table then break no rule: every amount positive, names unique, and alpha, beta, gamma and delta present?",
 );
 const DIAGNOSIS_DRIVEN: AssessmentSpec = AssessmentSpec::scored(
     "diagnosis_driven",
@@ -300,10 +300,9 @@ impl Scenario for ValidationSelfRepair {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<ObjectiveEvaluation> {
-        let auditor = function_id(run_id);
         // The capture read the same rows and ran the same audit before
         // cleanup; reuse its verdict instead of reading the table again.
-        let (row_count, remaining) = match captured_dataset(observation) {
+        let dataset = match captured_dataset(observation) {
             Some(dataset) => dataset,
             None => {
                 let rows = fetch_rows(context.client(), &table(run_id))
@@ -313,69 +312,7 @@ impl Scenario for ValidationSelfRepair {
                 (rows.len(), remaining)
             }
         };
-        let repaired = remaining.is_empty() && row_count > 0;
-
-        let calls = common::function_calls(&observation.transcript);
-        let registrations: Vec<_> = calls
-            .iter()
-            .filter(|call| {
-                call.function_id == "engine::register_trigger"
-                    && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
-            })
-            .collect();
-        let envelope_mode = registrations.len() == 1
-            && registrations[0]
-                .arguments
-                .get("function_id")
-                .and_then(Value::as_str)
-                == Some(auditor.as_str())
-            && registrations[0]
-                .arguments
-                .pointer("/config/payload")
-                .is_none();
-
-        let nudges = nudge_texts(&observation.transcript);
-        // The first audit must name the REAL defects — proof the flawed seed
-        // reached the table and the diagnosis carried facts, not fixes.
-        let diagnosed = nudges.first().is_some_and(|text| {
-            text.contains("data audit failed")
-                && text.contains("beta=-5")
-                && text.contains("duplicate name: beta")
-        });
-
-        Ok(assessment::build_evaluation(
-            if repaired {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                DATA_REPAIRED.full_or_zero(
-                    repaired,
-                    format!("rows={row_count}, remaining violations: {remaining:?}"),
-                ),
-                DIAGNOSIS_DRIVEN.full_or_zero(
-                    diagnosed && envelope_mode,
-                    format!(
-                        "first audit nudge: {:?}; observed {} post-turn registration(s); need \
-                     exactly one targeting {auditor} with no payload",
-                        nudges.first(),
-                        registrations.len()
-                    ),
-                ),
-                DECISIVE_REPAIR.award(
-                    match nudges.len() {
-                        1 => DECISIVE_REPAIR.weight(),
-                        2 => 15,
-                        _ => 0,
-                    },
-                    format!(
-                        "{} audit rejection(s); full marks for repairing in one",
-                        nudges.len()
-                    ),
-                )?,
-            ],
-        ))
+        evaluate_observation(observation, run_id, dataset)
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -388,6 +325,73 @@ impl Scenario for ValidationSelfRepair {
             .await?;
         Ok(())
     }
+}
+
+/// Scores the run from its transcript and the final table, read as
+/// `(row_count, remaining_violations)`.
+fn evaluate_observation(
+    observation: &ScenarioObservation,
+    run_id: &str,
+    (row_count, remaining): (usize, Vec<String>),
+) -> anyhow::Result<ObjectiveEvaluation> {
+    let auditor = function_id(run_id);
+    let calls = common::function_calls(&observation.transcript);
+    let registrations: Vec<_> = calls
+        .iter()
+        .filter(|call| {
+            call.function_id == "engine::register_trigger"
+                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
+        })
+        .collect();
+    let envelope_mode = registrations.len() == 1
+        && registrations[0]
+            .arguments
+            .get("function_id")
+            .and_then(Value::as_str)
+            == Some(auditor.as_str())
+        && registrations[0]
+            .arguments
+            .pointer("/config/payload")
+            .is_none();
+
+    let nudges = nudge_texts(&observation.transcript);
+    // The first audit must name the REAL defects — proof the flawed seed
+    // reached the table and the diagnosis carried facts, not fixes.
+    let diagnosed = nudges.first().is_some_and(|text| names_seed_defects(text));
+    // The capability is the validator loop: a clean table only counts when
+    // the validator rejected the flawed seed at some point. Seeding clean
+    // data and skipping the validator is not a repair.
+    let rejected_seed = nudges.iter().any(|text| names_seed_defects(text));
+    let repaired = remaining.is_empty() && row_count > 0;
+
+    Ok(assessment::build_evaluation([
+        DATA_REPAIRED.full_or_zero(
+            rejected_seed && repaired,
+            format!(
+                "validator_named_seed_defects={rejected_seed}, rows={row_count}, remaining violations: {remaining:?}"
+            ),
+        ),
+        DIAGNOSIS_DRIVEN.full_or_zero(
+            diagnosed && envelope_mode,
+            format!(
+                "first audit nudge: {:?}; observed {} post-turn registration(s); need \
+                 exactly one targeting {auditor} with no payload",
+                nudges.first(),
+                registrations.len()
+            ),
+        ),
+        DECISIVE_REPAIR.award(
+            match nudges.len() {
+                1 => DECISIVE_REPAIR.weight(),
+                2 => 15,
+                _ => 0,
+            },
+            format!(
+                "{} audit rejection(s); full marks for repairing in one",
+                nudges.len()
+            ),
+        )?,
+    ]))
 }
 
 fn deliverable_contract() -> super::DeliverableContract {
@@ -428,6 +432,12 @@ fn captured_dataset(observation: &ScenarioObservation) -> Option<(usize, Vec<Str
 }
 
 /// The text of each validation nudge, in transcript order.
+fn names_seed_defects(text: &str) -> bool {
+    text.contains("data audit failed")
+        && text.contains("beta=-5")
+        && text.contains("duplicate name: beta")
+}
+
 fn nudge_texts(transcript: &Value) -> Vec<String> {
     transcript
         .get("messages")
@@ -452,4 +462,68 @@ fn nudge_texts(transcript: &Value) -> Vec<String> {
                 })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::CompletionState;
+
+    fn nudge(text: &str) -> Value {
+        json!({
+            "entry_id": "turn_nudge_1",
+            "message": { "role": "user", "content": [{ "type": "text", "text": text }] },
+        })
+    }
+
+    fn completion_of(nudges: &[&str], remaining: Vec<String>) -> CompletionState {
+        let run_id = "run";
+        let observation = ScenarioObservation::for_test(
+            super::super::ScenarioId::ValidationSelfRepair,
+            run_id,
+            json!({ "messages": nudges.iter().map(|text| nudge(text)).collect::<Vec<_>>() }),
+            "",
+            Vec::new(),
+        );
+        assessment::completion(
+            ASSESSMENTS,
+            &evaluate_observation(&observation, run_id, (4, remaining)).unwrap(),
+        )
+    }
+
+    #[test]
+    fn completion_needs_a_validator_rejection_of_the_seeded_defects() {
+        let seed = vec![
+            ("alpha".to_string(), 10),
+            ("beta".to_string(), -5),
+            ("gamma".to_string(), 30),
+            ("beta".to_string(), 7),
+            ("delta".to_string(), 200),
+        ];
+        let rejection = format!("data audit failed: {}.", violations(&seed).join("; "));
+        assert!(names_seed_defects(&rejection));
+
+        // The intended path: the validator rejects the seed, the repair holds.
+        assert_eq!(
+            completion_of(&[&rejection], Vec::new()),
+            CompletionState::Completed
+        );
+        // Shortcut: seed clean data and never meet the validator.
+        assert_eq!(
+            completion_of(&[], Vec::new()),
+            CompletionState::TaskIncomplete
+        );
+        // The validator rejected, but the table still breaks a rule.
+        assert_eq!(
+            completion_of(&[&rejection], vec!["duplicate name: beta x2".into()]),
+            CompletionState::TaskIncomplete
+        );
+        // Less elegant, still the loop: a first repair that misses, so the
+        // validator rejects three times. Only repair points are lost.
+        let second = "data audit failed: duplicate name: delta x2.";
+        assert_eq!(
+            completion_of(&[&rejection, second, second], Vec::new()),
+            CompletionState::Completed
+        );
+    }
 }

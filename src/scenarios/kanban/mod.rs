@@ -618,7 +618,7 @@ async fn evaluate(
     validate_rubric(index, result)?;
     let awards = criterion_awards(index, result);
     Ok(ObjectiveEvaluation {
-        completion: completion(index, result),
+        completion: Some(completion(index, result)),
         awards,
         infrastructure_error: None,
     })
@@ -985,6 +985,7 @@ mod tests {
                 awarded: award.awarded,
                 reason: award.reason.clone(),
                 gate: criterion.gate,
+                gate_minimum: criterion.gate_minimum,
             })
             .collect::<Vec<_>>();
         assert_eq!(crate::report::criteria_score(&reports), Some(0));

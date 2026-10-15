@@ -60,13 +60,15 @@ const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     10,
     "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
 );
-const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
+// Points scale with the oracle cases that match; the gate needs all of them,
+// because the refactor must not change how any alert is routed.
+const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
     "match_equivalent",
     70,
-    "What proportion of route::match test cases match the expected receivers, group-by labels, and group-by-all flags?",
+    "Does route::match return the oracle's receivers, group-by labels and group-by-all flags for all 18 frozen alert cases, with points in proportion to the cases that match?",
     EvaluationDimension::Deliverable,
 );
-const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
+const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,
     "Does Alertmanager's TestRouteMatch pass using route::match on the live engine and fail when that engine is unavailable?",
@@ -133,10 +135,6 @@ impl Snapshot {
         self.function_registered
             && !self.match_cases.is_empty()
             && self.match_cases.iter().all(|(_, passed, _)| *passed)
-    }
-
-    fn task_completed(&self) -> bool {
-        self.delegation_wired && self.match_equivalent()
     }
 
     fn match_awarded(&self) -> u8 {
@@ -325,22 +323,7 @@ and process started from this workspace."#,
         _observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<ObjectiveEvaluation> {
-        let snapshot = collect_snapshot(context, &workspace_root(run_id)).await?;
-        Ok(assessment::build_evaluation(
-            if snapshot.task_completed() {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                REVISION_PINNED
-                    .full_or_zero(snapshot.revision_pinned(), revision_reason(&snapshot)),
-                MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(&snapshot))?,
-                DELEGATION_WIRED
-                    .full_or_zero(snapshot.delegation_wired, delegation_reason(&snapshot)),
-                SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(&snapshot)),
-            ],
-        ))
+        evaluate_snapshot(&collect_snapshot(context, &workspace_root(run_id)).await?)
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -349,6 +332,15 @@ and process started from this workspace."#,
         let removed = common::remove_directory(&root);
         stopped.and(removed)
     }
+}
+
+fn evaluate_snapshot(snapshot: &Snapshot) -> Result<ObjectiveEvaluation> {
+    Ok(assessment::build_evaluation([
+        REVISION_PINNED.full_or_zero(snapshot.revision_pinned(), revision_reason(snapshot)),
+        MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(snapshot))?,
+        DELEGATION_WIRED.full_or_zero(snapshot.delegation_wired, delegation_reason(snapshot)),
+        SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(snapshot)),
+    ]))
 }
 
 fn oracle() -> Result<Oracle> {
@@ -1098,6 +1090,41 @@ mod tests {
     }
 
     #[test]
+    fn completion_needs_every_oracle_case_and_the_wired_delegation() {
+        use crate::report::CompletionState;
+        let completion = |snapshot: &Snapshot| {
+            assessment::completion(ASSESSMENTS, &evaluate_snapshot(snapshot).unwrap())
+        };
+        let cases = |failing: usize| {
+            (0..18)
+                .map(|index| (format!("case-{index}"), index >= failing, String::new()))
+                .collect::<Vec<_>>()
+        };
+        let mut snapshot = valid_snapshot();
+        snapshot.match_cases = cases(0);
+        assert_eq!(completion(&snapshot), CompletionState::Completed);
+
+        // One alert routed differently is a behaviour change: points, no completion.
+        snapshot.match_cases = cases(1);
+        assert_eq!(snapshot.match_awarded(), 66);
+        assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
+        snapshot.match_cases = cases(3);
+        assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
+
+        // Every case matches, but Alertmanager does not call route::match.
+        snapshot.match_cases = cases(0);
+        snapshot.delegation_wired = false;
+        assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
+
+        // Less tidy, same delivery: the checkout left the pinned revision and
+        // touched protected files. Only those points are lost.
+        snapshot.delegation_wired = true;
+        snapshot.pinned_reachable = false;
+        snapshot.protected_unchanged = false;
+        assert_eq!(completion(&snapshot), CompletionState::Completed);
+    }
+
+    #[test]
     fn scenario_and_materialization_validate() {
         AlertmanagerRouteMatch
             .spec("alertmanager-route-test")
@@ -1204,7 +1231,6 @@ mod tests {
     fn live_calls_score_partially_and_scope_stays_separate() {
         let mut snapshot = valid_snapshot();
         assert!(snapshot.match_equivalent());
-        assert!(snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), MATCH_EQUIVALENT.weight());
         assert!(snapshot.scope_exact());
         snapshot.match_cases.push((
@@ -1213,7 +1239,6 @@ mod tests {
             "receivers [\"team-X-pager\"]".into(),
         ));
         assert!(!snapshot.match_equivalent());
-        assert!(!snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), 35);
         assert!(match_reason(&snapshot).contains("1 of 2 live calls"));
         snapshot.match_cases = vec![(
@@ -1221,17 +1246,12 @@ mod tests {
             false,
             "receivers [\"team-X-pager\"]".into(),
         )];
-        assert!(!snapshot.task_completed());
-        snapshot.delegation_wired = false;
-        assert!(!snapshot.task_completed());
-        snapshot.delegation_wired = true;
         assert_eq!(snapshot.match_awarded(), 0);
         snapshot.match_cases = vec![(
             "route_test_owner-team-A".into(),
             false,
             "trigger failed".into(),
         )];
-        assert!(!snapshot.task_completed());
         snapshot.function_registered = false;
         assert_eq!(snapshot.match_awarded(), 0);
         assert!(match_reason(&snapshot).contains("not registered"));
@@ -1310,11 +1330,6 @@ mod tests {
             .expect("evaluate");
         let _ = common::remove_directory(&root);
         context.shutdown().await;
-        assert!(
-            snapshot.task_completed(),
-            "task incomplete: {}",
-            match_reason(&snapshot)
-        );
         assert_eq!(
             snapshot.match_awarded(),
             MATCH_EQUIVALENT.weight(),
@@ -1328,10 +1343,7 @@ mod tests {
             "{}",
             delegation_reason(&snapshot)
         );
-        assert_eq!(
-            evaluation.completion,
-            crate::report::CompletionState::Completed
-        );
+        assert_eq!(evaluation.completion, None);
         let match_award = evaluation
             .awards
             .iter()

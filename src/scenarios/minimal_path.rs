@@ -6,7 +6,6 @@ use anyhow::bail;
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
-use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
@@ -21,10 +20,10 @@ const OWNER: &str = "efficiency-suite";
 const DONE_MARKER: &str = "MIN-DONE";
 const DELIVERABLE_ID: &str = "minimal_result_record";
 
-const EXACT_RESULT: AssessmentSpec = AssessmentSpec::scored(
+const EXACT_RESULT: AssessmentSpec = AssessmentSpec::gate(
     "exact_result",
     40,
-    "Does the final value exactly match the requested object, with exactly one successful state::set write?",
+    "Is the final value exactly the requested object?",
 );
 const SINGLE_TASK_CALL: AssessmentSpec = AssessmentSpec::scored(
     "single_task_call",
@@ -230,14 +229,9 @@ impl Scenario for MinimalPath {
         let state_matches = state == expected;
 
         Ok(assessment::build_evaluation(
-            if state_matches {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
             [
                 EXACT_RESULT.full_or_zero(
-                    state_matches && exact_writes == 1,
+                    state_matches,
                     format!("state_matches={state_matches}, successful_exact_writes={exact_writes}"),
                 ),
                 SINGLE_TASK_CALL.full_or_zero(

@@ -30,10 +30,10 @@ const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     20,
     "Does the timer retire after waking the original session exactly once?",
 );
-const WAKE_ACTION: AssessmentSpec = AssessmentSpec::scored(
+const WAKE_ACTION: AssessmentSpec = AssessmentSpec::gate(
     "wake_action",
     25,
-    "Does the timer-woken turn persist the requested result?",
+    "Did this run's timer wake the session, and did a state::set after that wake store the requested result that state still holds at the end?",
 );
 const NO_POLLING: AssessmentSpec = AssessmentSpec::scored(
     "no_polling",
@@ -292,108 +292,9 @@ binding armed."#,
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<ObjectiveEvaluation> {
-        let names = Names::new(run_id);
-        let token = signal_token(run_id);
-        let audit = timer_audit(&observation.transcript, &names);
-        let expected = observation
-            .case
-            .inputs
-            .get("expected")
-            .cloned()
-            .unwrap_or(Value::Null);
-        // `capture` read `{scope}/{RESULT_KEY}` before cleanup and stored the
-        // value verbatim, so the evaluator scores that record instead of
-        // reading the same location again.
-        let observed = captured_result(&observation.deliverables);
-        let calls = common::function_calls(&observation.transcript);
-        let writes: Vec<_> = calls
-            .iter()
-            .enumerate()
-            .filter(|(_, call)| call.function_id == "state::set")
-            .collect();
-        let exact_write = writes.len() == 1
-            && writes[0].1.arguments
-                == json!({ "scope": names.scope, "key": RESULT_KEY, "value": expected });
-        let timer_armed = audit.registrations == 1
-            && audit.matching_timers == 1
-            && writes.len() == 1
-            && audit
-                .timer_anchor
-                .is_some_and(|timer| timer.position < writes[0].0);
-
-        let records = common::trigger_fired_records(&observation.transcript)
-            .into_iter()
-            .filter(|record| {
-                record.get("label").and_then(Value::as_str) == Some(names.timer_label.as_str())
-            })
-            .collect::<Vec<_>>();
-        let timer_fired = records.len() == 1
-            && records[0].get("retired").and_then(Value::as_bool) == Some(true)
-            && records[0].get("once").and_then(Value::as_bool) == Some(true)
-            && records[0].get("target").and_then(Value::as_str) == Some("harness::send");
-        let root_only = observation.metrics.totals.sessions == 1
-            && calls
-                .iter()
-                .all(|call| call.function_id != "harness::spawn");
-        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let discovery_errors = common::identified_discovery_errors(&observation.transcript);
-        let operational_errors = common::operational_function_errors(
-            observation.metrics.totals.function_call_errors,
-            discovery_errors,
-        );
-        let response = observation.response.to_ascii_lowercase();
-        let signal_reported = observation.response.contains(&token);
-        let confirmed = response.contains("timer") && response.contains("fired") && signal_reported;
-
-        let parent_woken = timer_fired && root_only;
-        let wake_action = exact_write && observed == expected;
-        let no_polling = audit.disciplined();
-        let clean_completion = active_bindings == 0 && operational_errors == 0 && confirmed;
-
-        Ok(assessment::build_evaluation(
-            if confirmed {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-            TIMER_ARMED.full_or_zero(
-                timer_armed,
-                format!(
-                    "registrations={}, timers={}, writes={}",
-                    audit.registrations,
-                    audit.matching_timers,
-                    writes.len()
-                ),
-            ),
-            PARENT_WOKEN.full_or_zero(
-                parent_woken,
-                format!("timer_fired={timer_fired}, root_only={root_only}"),
-            ),
-            WAKE_ACTION.full_or_zero(
-                wake_action,
-                format!("exact_write={exact_write}, observed={observed}"),
-            ),
-            NO_POLLING.full_or_zero(
-                no_polling,
-                format!(
-                    "status_calls={}, early_status_calls={}, after_wake={}, state_writes={}, spawns={}",
-                    audit.status_sites.len(),
-                    audit.early_status_calls(),
-                    audit.single_status_after_wake(),
-                    audit.state_writes,
-                    audit.spawns
-                ),
-            ),
-            CLEAN_COMPLETION.full_or_zero(
-                clean_completion,
-                format!(
-                    "active_bindings={active_bindings}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}, confirmed={confirmed}",
-                    observation.metrics.totals.function_call_errors,
-                ),
-            ),
-            ],
-        ))
+        let active_bindings =
+            common::active_binding_count(context, &Names::new(run_id).root_session).await?;
+        Ok(evaluate_observation(observation, run_id, active_bindings))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -431,6 +332,114 @@ binding armed."#,
     }
 }
 
+/// Scores the run from its transcript, the captured result and the bindings
+/// still armed after it.
+fn evaluate_observation(
+    observation: &ScenarioObservation,
+    run_id: &str,
+    active_bindings: usize,
+) -> ObjectiveEvaluation {
+    let names = Names::new(run_id);
+    let token = signal_token(run_id);
+    let audit = timer_audit(&observation.transcript, &names);
+    let expected = observation
+        .case
+        .inputs
+        .get("expected")
+        .cloned()
+        .unwrap_or(Value::Null);
+    // `capture` read `{scope}/{RESULT_KEY}` before cleanup and stored the
+    // value verbatim, so the evaluator scores that record instead of
+    // reading the same location again.
+    let observed = captured_result(&observation.deliverables);
+    let calls = common::function_calls(&observation.transcript);
+    let writes: Vec<_> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.function_id == "state::set")
+        .collect();
+    let timer_armed = audit.registrations == 1
+        && audit.matching_timers == 1
+        && writes.len() == 1
+        && audit
+            .timer_anchor
+            .is_some_and(|timer| timer.position < writes[0].0);
+
+    let records = common::trigger_fired_records(&observation.transcript)
+        .into_iter()
+        .filter(|record| {
+            record.get("label").and_then(Value::as_str) == Some(names.timer_label.as_str())
+        })
+        .collect::<Vec<_>>();
+    let timer_fired = records.len() == 1
+        && records[0].get("retired").and_then(Value::as_bool) == Some(true)
+        && records[0].get("once").and_then(Value::as_bool) == Some(true)
+        && records[0].get("target").and_then(Value::as_str) == Some("harness::send");
+    let root_only = observation.metrics.totals.sessions == 1
+        && calls
+            .iter()
+            .all(|call| call.function_id != "harness::spawn");
+    let discovery_errors = common::identified_discovery_errors(&observation.transcript);
+    let operational_errors = common::operational_function_errors(
+        observation.metrics.totals.function_call_errors,
+        discovery_errors,
+    );
+    let response = observation.response.to_ascii_lowercase();
+    let signal_reported = observation.response.contains(&token);
+    let confirmed = response.contains("timer") && response.contains("fired") && signal_reported;
+
+    let parent_woken = timer_fired && root_only;
+    // The capability is the wake: the requested result must be written after
+    // the timer woke this session. How many writes it took is discipline.
+    let written_after_wake = audit.result_writes_after_wake.contains(&expected);
+    let wake_action = written_after_wake && observed == expected;
+    let no_polling = audit.disciplined();
+    let clean_completion = active_bindings == 0 && operational_errors == 0 && confirmed;
+
+    assessment::build_evaluation(
+        [
+        TIMER_ARMED.full_or_zero(
+            timer_armed,
+            format!(
+                "registrations={}, timers={}, writes={}",
+                audit.registrations,
+                audit.matching_timers,
+                writes.len()
+            ),
+        ),
+        PARENT_WOKEN.full_or_zero(
+            parent_woken,
+            format!("timer_fired={timer_fired}, root_only={root_only}"),
+        ),
+        WAKE_ACTION.full_or_zero(
+            wake_action,
+            format!(
+                "woken={}, result_written_after_wake={written_after_wake}, observed={observed}",
+                audit.fired_entry.is_some()
+            ),
+        ),
+        NO_POLLING.full_or_zero(
+            no_polling,
+            format!(
+                "status_calls={}, early_status_calls={}, after_wake={}, state_writes={}, spawns={}",
+                audit.status_sites.len(),
+                audit.early_status_calls(),
+                audit.single_status_after_wake(),
+                audit.state_writes,
+                audit.spawns
+            ),
+        ),
+        CLEAN_COMPLETION.full_or_zero(
+            clean_completion,
+            format!(
+                "active_bindings={active_bindings}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}, confirmed={confirmed}",
+                observation.metrics.totals.function_call_errors,
+            ),
+        ),
+        ],
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CallSite {
     entry: usize,
@@ -445,6 +454,8 @@ struct TimerAudit {
     status_sites: Vec<CallSite>,
     fired_entry: Option<usize>,
     state_writes: usize,
+    /// Values written to the result key after the timer woke the session.
+    result_writes_after_wake: Vec<Value>,
     spawns: usize,
 }
 
@@ -525,7 +536,18 @@ fn timer_audit(transcript: &Value, names: &Names) -> TimerAudit {
                         }
                     }
                 }
-                "state::set" => audit.state_writes += 1,
+                "state::set" => {
+                    audit.state_writes += 1;
+                    if audit.fired_entry.is_some()
+                        && arguments.get("scope").and_then(Value::as_str)
+                            == Some(names.scope.as_str())
+                        && arguments.get("key").and_then(Value::as_str) == Some(RESULT_KEY)
+                    {
+                        audit
+                            .result_writes_after_wake
+                            .push(arguments.get("value").cloned().unwrap_or(Value::Null));
+                    }
+                }
                 "harness::spawn" => audit.spawns += 1,
                 id if id == names.signal_function => audit.status_sites.push(site),
                 _ => {}
@@ -770,5 +792,90 @@ mod tests {
         // A record that never arrived reads as null and never matches.
         assert_eq!(captured_result(&[]), Value::Null);
         assert_eq!(captured_result(&[record(json!({}))]), Value::Null);
+    }
+
+    fn completion_of(messages: Vec<Value>) -> crate::report::CompletionState {
+        let run_id = "run";
+        let token = signal_token(run_id);
+        let observation = ScenarioObservation::for_test(
+            super::super::ScenarioId::TimerWake,
+            run_id,
+            json!({ "messages": messages }),
+            &format!("timer fired {token}"),
+            vec![CapturedDeliverable {
+                id: DELIVERABLE_ID.to_string(),
+                kind: "timer_result".to_string(),
+                content: json!({ "result": expected_result() }).into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        );
+        assessment::completion(ASSESSMENTS, &evaluate_observation(&observation, run_id, 0))
+    }
+
+    #[test]
+    fn completion_needs_the_result_written_after_the_timer_wake() {
+        use crate::report::CompletionState;
+        let names = Names::new("run");
+        let arm = || {
+            assistant_entry(vec![call_block(
+                "engine::register_trigger",
+                timer_arguments(&names.timer_label),
+            )])
+        };
+
+        // The intended path: arm, end the turn, write after the wake.
+        assert_eq!(
+            completion_of(vec![
+                arm(),
+                fired_entry(&names.timer_label),
+                assistant_entry(vec![
+                    call_block(&names.signal_function, json!({})),
+                    state_write(&names),
+                ]),
+            ]),
+            CompletionState::Completed
+        );
+
+        // Shortcut: write the value at once, with no timer at all.
+        assert_eq!(
+            completion_of(vec![assistant_entry(vec![state_write(&names)])]),
+            CompletionState::TaskIncomplete
+        );
+        // Shortcut: arm the timer but write before it fires.
+        assert_eq!(
+            completion_of(vec![
+                assistant_entry(vec![
+                    call_block(
+                        "engine::register_trigger",
+                        timer_arguments(&names.timer_label)
+                    ),
+                    state_write(&names),
+                ]),
+                fired_entry(&names.timer_label),
+            ]),
+            CompletionState::TaskIncomplete
+        );
+
+        // Less elegant, still the capability: polls early and writes twice,
+        // once before and once after the wake. Only points are lost.
+        assert_eq!(
+            completion_of(vec![
+                assistant_entry(vec![
+                    call_block(
+                        "engine::register_trigger",
+                        timer_arguments(&names.timer_label)
+                    ),
+                    call_block(&names.signal_function, json!({})),
+                    state_write(&names),
+                ]),
+                fired_entry(&names.timer_label),
+                assistant_entry(vec![
+                    call_block(&names.signal_function, json!({})),
+                    state_write(&names),
+                ]),
+            ]),
+            CompletionState::Completed
+        );
     }
 }
