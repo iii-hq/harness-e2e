@@ -11,6 +11,45 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
+# What the failed step printed on stderr in the two preparations that failed
+# on 2026-10-15: the stack's runner could not be downloaded, before the suite
+# was materialized (run 38685948868), and the Registry could not be reached
+# while the stack was assembled, after (run 38688101472).
+MATERIALIZE_STDERR = """\
+· harness-e2e Pending
+build failed [PACKAGE_DOWNLOAD_FAILED] after 32.5s
+error[PACKAGE_DOWNLOAD_FAILED]: container 'harness-e2e': could not download https://api.workers.iii.dev/download/harness-e2e/0.17.7/x86_64-unknown-linux-gnu: HTTP status server error (504 Gateway Timeout) for url (https://api.workers.iii.dev/download/harness-e2e/0.17.7/x86_64-unknown-linux-gnu)
+error: Command '['/tmp/tmp.rkuwuOGuyQ/bin/iii', 'compose', 'build', '-f', '/tmp/tmp.rkuwuOGuyQ/worker-compose.yaml']' returned non-zero exit status 1.
+"""
+ASSEMBLE_STDERR = """\
+
+[05:41:46] Downloading exact iii CLI 0.24.6-rc.5
+
+[05:41:50] compose::add admitted operation compose:ad5a9fe7-a045-4661-a16a-02824a1f41d6; waiting for it to settle
+[FAIL] compose::add failed: container 'fp': cannot reach the registry at https://api.workers.iii.dev: error sending request for url (https://api.workers.iii.dev/resolve)
+
+[05:42:56] Downloading exact iii CLI 0.24.6-rc.5
+
+[05:43:00] compose::add admitted operation compose:286bec6e-bf7d-44a0-a017-9a1b7bdaad7d; waiting for it to settle
+[FAIL] compose::add failed: container 'canvas': cannot reach the registry at https://api.workers.iii.dev: error sending request for url (https://api.workers.iii.dev/resolve)
+the stack could not be assembled
+"""
+
+
+def evaluate(condition, contexts):
+    """A workflow `if:` given the value of each context it reads: as much of
+    GitHub's expression syntax as the conditions checked here use."""
+    expression = condition.replace("&&", " and ").replace("||", " or ")
+    for name, value in contexts.items():
+        expression = expression.replace(name, repr(value))
+    return eval(expression)
+
+
+def run_step(step, cwd, env):
+    """A `run:` step as GitHub's default shell runs it."""
+    return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+                          cwd=cwd, env={**os.environ, **env}, check=True, capture_output=True, text=True)
+
 
 class WorkflowBoundaryTests(unittest.TestCase):
     def test_partial_reruns_download_the_contract_uploaded_by_preparation(self):
@@ -390,12 +429,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         # never fails a prepared execution.
         self.assertIn("exact_stack_campaign.py package", steps["Package the stack assembly evidence"]["run"])
         self.assertTrue(steps["Package the stack assembly evidence"]["continue-on-error"])
-        # A preparation that fails after the materialized report still closes
-        # the execution in Release Control.
-        failed = workflow["jobs"]["report_preparation_failure"]
-        self.assertEqual(failed["needs"], "prepare")
-        self.assertEqual(failed["if"], "always() && needs.prepare.result != 'success' && needs.prepare.outputs.materialized == 'true'")
-        self.assertIn("report_execution.py summary", failed["steps"][-1]["run"])
+        # A preparation that fails, before or after the materialized report,
+        # still reports to Release Control: see
+        # test_a_preparation_that_failed_says_why_whether_or_not_the_suite_was_materialized.
         self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["materialized"], "${{ steps.materialized.outputs.posted }}")
         self.assertIn('echo "posted=true"', steps["Report the materialized suite"]["run"])
         report = steps["Report the materialized suite"]["run"]
@@ -432,6 +468,130 @@ class WorkflowBoundaryTests(unittest.TestCase):
         # the OIDC identity now, and the first one binds the run.
         self.assertNotIn("/admit", workflow)
         self.assertNotIn("exact_stack_campaign.py admit", workflow)
+
+    def test_a_preparation_that_failed_says_why_whether_or_not_the_suite_was_materialized(self):
+        """The step that failed and the error iii printed in it reach Release
+        Control as the summary's `failure`. Its first report binds the run, so
+        one that failed before the suite was materialized is bound by this."""
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
+        prepare = workflow["jobs"]["prepare"]
+        steps = {step.get("name"): step for step in prepare["steps"]}
+        record = prepare["steps"][-1]
+        self.assertEqual(record["name"], "Record why preparation failed")
+        self.assertEqual(prepare["outputs"]["failure"], "${{ steps.failure.outputs.record }}")
+        # Recorded when preparation failed or was cancelled, and only for a
+        # dispatch Release Control's bot made: a person's re-run reports nothing.
+        self.assertEqual(steps["Validate a Release Control dispatch"]["id"], "dispatch")
+        for failed, cancelled, dispatch, recorded in ((True, False, "success", True), (False, True, "success", True),
+                                                      (False, False, "success", False), (True, False, "failure", False),
+                                                      (True, False, "skipped", False)):
+            self.assertEqual(evaluate(record["if"], {"failure()": failed, "cancelled()": cancelled,
+                                                      "steps.dispatch.outcome": dispatch}), recorded)
+        job = workflow["jobs"]["report_preparation_failure"]
+        self.assertEqual(job["needs"], "prepare")
+        report = job["steps"][-1]
+        self.assertEqual(job["steps"][-1]["env"]["FAILURE"], "${{ needs.prepare.outputs.failure }}")
+        # The name of the job GitHub is asked for the step that failed.
+        self.assertIn(f'select(.name == "{prepare["name"]}")', report["run"])
+
+        cases = {
+            "materialize": ("Materialize the suite with the stack's runner", MATERIALIZE_STDERR, "", {
+                "phase": "materialize",
+                "step": "Materialize the suite with the stack's runner",
+                "code": "PACKAGE_DOWNLOAD_FAILED",
+                "message": "container 'harness-e2e': could not download https://api.workers.iii.dev/download/harness-e2e/"
+                           "0.17.7/x86_64-unknown-linux-gnu: HTTP status server error (504 Gateway Timeout) for url "
+                           "(https://api.workers.iii.dev/download/harness-e2e/0.17.7/x86_64-unknown-linux-gnu)",
+            }),
+            # Tried twice: the error that ended the step is the second's.
+            "assemble": ("Assemble the stack and lock every contract to it", ASSEMBLE_STDERR, "true", {
+                "phase": "assemble",
+                "step": "Assemble the stack and lock every contract to it",
+                "code": None,
+                "message": "compose::add failed: container 'canvas': cannot reach the registry at "
+                           "https://api.workers.iii.dev: error sending request for url (https://api.workers.iii.dev/resolve)",
+            }),
+        }
+        for phase, (step, stderr, materialized, failure) in cases.items():
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                (root / "scripts").symlink_to(ROOT / "scripts")
+                # As scripts/run_in_image.sh leaves a step that failed.
+                prepared = root / "target/harness-e2e-prepare"
+                prepared.mkdir(parents=True)
+                (prepared / f"{phase}.log").write_text(stderr)
+                (prepared / "failed").write_text(f"{phase}\n")
+                (root / "output").write_text("")
+                run_step(record, root, {"GITHUB_OUTPUT": str(root / "output")})
+                output = (root / "output").read_text()
+                self.assertTrue(output.startswith("record=") and output.endswith("\n") and output.count("\n") == 1)
+                recorded = output.removeprefix("record=").strip()
+                self.assertEqual(json.loads(recorded), {key: failure[key] for key in ("phase", "code", "message")})
+
+                # The report runs whether or not the suite was materialized.
+                self.assertTrue(evaluate(job["if"], {
+                    "always()": True, "needs.prepare.result": "failure",
+                    "needs.prepare.outputs.failure": recorded, "needs.prepare.outputs.materialized": materialized}))
+
+                # GitHub names the step that failed; gh's --jq is jq's.
+                (root / "jobs.json").write_text(json.dumps({"jobs": [
+                    {"name": prepare["name"], "steps": [
+                        {"name": "Set up job", "conclusion": "success"},
+                        {"name": step, "conclusion": "failure"},
+                        {"name": "Record why preparation failed", "conclusion": "success"},
+                        {"name": "Upload the stack assembly evidence", "conclusion": "skipped"}]},
+                    {"name": job["name"], "steps": [{"name": "Set up job", "conclusion": None}]}]}))
+                (root / "bin").mkdir()
+                (root / "bin/gh").write_text(
+                    "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$FAKE_GH_LOG\"\n"
+                    "while [[ \"$1\" != --jq ]]; do shift; done\njq -r \"$2\" \"$FAKE_JOBS\"\n")
+                (root / "bin/gh").chmod(0o755)
+                run_step(report, root, {
+                    "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "FAKE_JOBS": str(root / "jobs.json"),
+                    "FAKE_GH_LOG": str(root / "gh.log"), "GITHUB_REPOSITORY": "iii-hq/harness-e2e",
+                    "GITHUB_RUN_ID": "38685948868", "GITHUB_RUN_ATTEMPT": "1",
+                    "EXECUTION_ID": "3de56c88-68f6-497f-8542-ab30bd30e6b5", "RUNNER_REVISION": "",
+                    "FAILURE": recorded, "RELEASE_CONTROL_API_URL": "",
+                    "RELEASE_CONTROL_OIDC_AUDIENCE": "release-control-harness-e2e"})
+                self.assertIn("repos/iii-hq/harness-e2e/actions/runs/38685948868/attempts/1/jobs",
+                              (root / "gh.log").read_text())
+                # Not delivered here: what would have been posted is on disk.
+                payload = json.loads((root / "target/harness-e2e-campaign/ledger-summary.json").read_text())
+                self.assertEqual(payload["kind"], "summary")
+                cause = ": ".join(part for part in (failure["code"], failure["message"]) if part)
+                self.assertEqual(payload["summary"], {
+                    "campaigns": [],
+                    "unavailable": f"preparation failed in {step} ({phase}): {cause}; no group ran",
+                    "outcome": "infra_failed",
+                    "phase": "prepare",
+                    "failure": failure,
+                })
+
+        # GitHub not naming the step, or withholding the record (an output it
+        # takes for a secret), leaves them unknown, never the report.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "scripts").symlink_to(ROOT / "scripts")
+            (root / "bin").mkdir()
+            (root / "bin/gh").write_text("#!/usr/bin/env bash\nexit 1\n")
+            (root / "bin/gh").chmod(0o755)
+            run_step(report, root, {
+                "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "iii-hq/harness-e2e",
+                "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "EXECUTION_ID": "3de56c88-68f6-497f-8542-ab30bd30e6b5",
+                "RUNNER_REVISION": "", "FAILURE": "",
+                "RELEASE_CONTROL_API_URL": "", "RELEASE_CONTROL_OIDC_AUDIENCE": "release-control-harness-e2e"})
+            summary = json.loads((root / "target/harness-e2e-campaign/ledger-summary.json").read_text())["summary"]
+            self.assertEqual(summary["failure"], {"phase": "prepare", "step": None, "code": None, "message": None})
+            self.assertEqual(summary["unavailable"], "preparation failed in prepare: no cause was recorded; no group ran")
+
+        # A suite Release Control was told of is closed even without the
+        # record. Nothing recorded and nothing materialized (the dispatch was
+        # not Release Control's), or a preparation that succeeded: no report.
+        for result, failure, materialized, reported in (("failure", "", "true", True), ("cancelled", "", "true", True),
+                                                        ("failure", "", "", False), ("success", "", "true", False)):
+            self.assertEqual(evaluate(job["if"], {
+                "always()": True, "needs.prepare.result": result,
+                "needs.prepare.outputs.failure": failure, "needs.prepare.outputs.materialized": materialized}), reported)
 
     def test_finalizer_aggregates_only_campaigns_from_the_current_execution(self):
         import shutil

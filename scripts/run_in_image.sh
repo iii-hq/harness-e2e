@@ -68,6 +68,25 @@ if [[ "$phase" == prepare && $# -eq 0 ]]; then
   exit 0
 fi
 
+# A preparation step keeps what it prints on stderr in
+# target/harness-e2e-prepare/STEP.log and, when it fails, names itself in
+# target/harness-e2e-prepare/failed: the workflow tells Release Control why
+# preparation failed from the error iii printed there.
+step=${1:-}
+prepared=$root/target/harness-e2e-prepare
+cidfile=""
+finish() {
+  local status=$?
+  [[ -z "$cidfile" ]] || rm -f "$cidfile"
+  [[ "$phase" != prepare ]] || ((status == 0)) || printf '%s\n' "$step" >"$prepared/failed"
+}
+trap finish EXIT
+if [[ "$phase" == prepare ]]; then
+  mkdir -p "$prepared"
+  rm -f "$prepared/failed"
+  exec 2> >(tee "$prepared/$step.log" >&2)
+fi
+
 # A group that fails before its container ran leaves its failure where the
 # launcher would have, so it reports an infrastructure failure, not nothing.
 record_failure() {
@@ -98,7 +117,6 @@ else
 fi
 
 cidfile=$(mktemp -u "${TMPDIR:-/tmp}/harness-e2e-executor.XXXXXX.cid")
-trap 'rm -f "$cidfile"' EXIT
 
 labels=(--label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
   --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}")

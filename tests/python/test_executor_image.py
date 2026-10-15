@@ -26,9 +26,9 @@ DIGEST = "ghcr.io/iii-hq/harness-e2e@sha256:" + "d" * 64
 # succeeds when FAKE_PUBLISHED is set; `image inspect` finds the image once it
 # was pulled or built, with a digest either way, as the containerd image store
 # gives a local build one too. `build` fails with FAKE_BUILD_EXIT. `run`
-# writes its --cidfile and exits with FAKE_RUN_EXIT; FAKE_RUN_EXIT=125 is a
-# container that never started (no cid), and FAKE_RUN_BLOCKS keeps it
-# running until `docker stop` names its cid.
+# writes its --cidfile, prints FAKE_RUN_STDERR on stderr and exits with
+# FAKE_RUN_EXIT; FAKE_RUN_EXIT=125 is a container that never started (no
+# cid), and FAKE_RUN_BLOCKS keeps it running until `docker stop` names its cid.
 FAKE_DOCKER = textwrap.dedent("""\
     #!/usr/bin/env bash
     printf '%s\\n' "$@" '' >>"$FAKE_LOG"
@@ -40,6 +40,7 @@ FAKE_DOCKER = textwrap.dedent("""\
         [[ "${FAKE_RUN_EXIT:-0}" != 125 ]] || exit 125
         while [[ "$1" != --cidfile ]]; do shift; done
         printf 'cid-4f2a' >"$2"
+        [[ -z "${FAKE_RUN_STDERR:-}" ]] || printf '%s\\n' "$FAKE_RUN_STDERR" >&2
         if [[ -n "${FAKE_RUN_BLOCKS:-}" ]]; then
           printf '%s' "$$" >"$FAKE_STATE/run.pid"
           exec sleep 30
@@ -287,6 +288,28 @@ class WrapperTests(unittest.TestCase):
         self.run_wrapper("prepare", "fixtures", status=1, env={
             "FAKE_RUN_EXIT": "1", "HARNESS_E2E_ARTIFACTS_DIR": str(self.artifacts)})
         self.assertFalse((self.artifacts / "failure.json").exists())
+
+    def test_a_preparation_step_keeps_what_it_printed_and_one_that_fails_names_itself(self):
+        prepared = self.root / "target/harness-e2e-prepare"
+        error = "error[PACKAGE_DOWNLOAD_FAILED]: container 'harness-e2e': could not download"
+        result, _ = self.run_wrapper("prepare", "materialize", status=1,
+                                     env={"FAKE_RUN_EXIT": "1", "FAKE_RUN_STDERR": error})
+        # Still on the step's own stderr, and kept for the workflow to read.
+        self.assertIn(error, result.stderr)
+        self.assertIn(error, (prepared / "materialize.log").read_text())
+        self.assertEqual((prepared / "failed").read_text(), "materialize\n")
+        # The next step that runs starts over: it failed or it did not.
+        self.run_wrapper("prepare", "assemble", env={"FAKE_RUN_STDERR": "[05:41:46] Downloading exact iii CLI"})
+        self.assertFalse((prepared / "failed").exists())
+        self.assertIn("Downloading exact iii CLI", (prepared / "assemble.log").read_text())
+        # An image that cannot be had fails the step all the same.
+        (self.directory / "state/present").unlink()
+        self.run_wrapper("prepare", "resolve", published=False, status=7, env={"FAKE_BUILD_EXIT": "7"})
+        self.assertEqual((prepared / "failed").read_text(), "resolve\n")
+        # Only preparation keeps them.
+        shutil.rmtree(prepared)
+        self.run_wrapper("group", status=1, env={"FAKE_RUN_EXIT": "1", "FAKE_RUN_STDERR": error})
+        self.assertFalse(prepared.exists())
 
     def test_an_interrupted_wrapper_stops_its_container(self):
         wrapper = subprocess.Popen(["bash", str(self.root / "scripts/run_in_image.sh"), "group"],

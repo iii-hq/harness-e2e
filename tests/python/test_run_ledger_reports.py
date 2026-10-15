@@ -921,5 +921,37 @@ class CommitPinTests(unittest.TestCase):
             self.assertTrue(os.access(runner, os.X_OK))
 
 
+class PreparationFailureTests(unittest.TestCase):
+    def test_a_failed_preparation_is_explained_by_the_error_iii_answered(self):
+        """The two forms of the 2026-10-15 runs are in test_workflow_boundaries;
+        these are the others a step may print."""
+        error = prepare_execution.iii_error
+        # What `iii trigger` prints when the engine or a worker refused a call,
+        # in color, its JSON over several lines.
+        self.assertEqual(
+            error('\x1b[31mError: {\n  "code": "REGISTRY_UNAVAILABLE",\n  "message": "the registry\\n answered 503"\n}\x1b[0m\n'),
+            {"code": "REGISTRY_UNAVAILABLE", "message": "the registry answered 503"})
+        self.assertEqual(error("Error: connection refused (os error 111)\n"),
+                         {"code": None, "message": "connection refused (os error 111)"})
+        # No error iii printed: the step's last word, never a workflow command.
+        self.assertEqual(error("[12:00:01] Resolving\nerror: release iii/v0.24.6 publishes no iii.tar.gz\n"
+                               "::warning::checking out iii-hq/templates failed (try 1 of 3)\n"),
+                         {"code": None, "message": "error: release iii/v0.24.6 publishes no iii.tar.gz"})
+        self.assertEqual(error(""), {"code": None, "message": None})
+        # The cause, not a log.
+        message = error("error[BUILD_FAILED]: " + "x" * 400)["message"]
+        self.assertEqual((len(message), message[-1]), (300, "…"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = pathlib.Path(directory)
+            # A step outside the executor failed: nothing more is known.
+            self.assertEqual(prepare_execution.failure_record(prepared),
+                             {"phase": "prepare", "code": None, "message": None})
+            (prepared / "failed").write_text("assemble\n")
+            (prepared / "assemble.log").write_text("[FAIL] compose::add answered 'rejected'\n")
+            self.assertEqual(prepare_execution.failure_record(prepared),
+                             {"phase": "assemble", "code": None, "message": "compose::add answered 'rejected'"})
+
+
 if __name__ == "__main__":
     unittest.main()
