@@ -713,6 +713,9 @@ dependencies via `scripts/smoke_registry_install.py`. It checks a non-default
 namespace, a renamed database container/configuration entry, an unchanged
 saved configuration, a separate SQLite file, persistence after restarting
 the entire Engine/Compose stack, and the pool's return after a saved edit.
+It runs in its own `registry-smoke` job. A Registry that stays unreachable
+(transport errors, 5xx, 429) after three attempts becomes a warning, not a
+failure; `--registry` pointed at a closed port rehearses that.
 
 The worker exposes:
 
