@@ -267,6 +267,8 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.assertTrue((self.artifacts / 'stack/worker-compose.lock').is_file())
         self.assertEqual((self.artifacts / 'stack/worker-compose.lock').read_text(), self.env['FAKE_LOCK'])
         bundle = MODULE.package_bundle(self.artifacts, self.contract, {}, {'DEEPSEEK_API_KEY':self.env['DEEPSEEK_API_KEY']})
+        # The launcher's own evidence never holds the key: nothing withheld.
+        self.assertEqual(bundle['withheld'], [])
         paths = {entry['path'] for entry in bundle['files']}
         self.assertFalse(any(path.endswith('.env') or '/secrets/' in path or 'compose-state/' in path for path in paths))
         return rows, paths
@@ -431,30 +433,33 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.assertFalse(list(self.artifacts.rglob('*.env')))
         self.assertFalse(list(self.artifacts.glob('harness-e2e-compose.*')))
 
-    def test_old_manifest_under_artifacts_rejects_secret_sentinel_and_empty_directory(self):
+    def test_old_manifest_under_artifacts_withholds_secret_sentinel_and_empty_directory(self):
         Path(self.env['HARNESS_E2E_CONTRACT']).write_text(json.dumps(self.contract))
         manifest = self.artifacts / 'stack/worker-compose.yaml'
         manifest.parent.mkdir()
         manifest.write_text('containers: {}\n')
         secret = manifest.parent / 'data/secrets'
-        secret.mkdir(parents=True)
-        for empty in (False, True):
-            with self.subTest(empty=empty):
-                sentinel = secret / 'sentinel'
-                if empty:
-                    sentinel.unlink()
+        withheld = [{'path': 'stack/data/secrets', 'withheld': 'credential', 'reason': 'reserved credential path'}]
+        for empty, packaged in ((False, 'module'), (True, 'module'), (False, 'command')):
+            with self.subTest(empty=empty, packaged=packaged):
+                secret.mkdir(parents=True, exist_ok=True)
+                if not empty:
+                    (secret / 'sentinel').write_text('synthetic-secret-never-upload')
+                if packaged == 'module':
+                    bundle = MODULE.package_bundle(self.artifacts, self.contract, {})
                 else:
-                    sentinel.write_text('synthetic-secret-never-upload')
-                with self.assertRaisesRegex(ValueError, 'reserved credential path: stack/data/secrets'):
-                    MODULE.package_bundle(self.artifacts, self.contract, {})
-                result = subprocess.run(
-                    ['python3', str(self.repo / 'scripts/exact_stack_campaign.py'), 'package',
-                     '--root', str(self.artifacts), '--contract', self.env['HARNESS_E2E_CONTRACT'],
-                     '--workflow', '{}', '--output', str(self.root / 'bundle.json')],
-                    env=self.env, capture_output=True, text=True, timeout=5)
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn('reserved credential path: stack/data/secrets', result.stdout)
-                self.assertFalse((self.root / 'bundle.json').exists())
+                    result = subprocess.run(
+                        ['python3', str(self.repo / 'scripts/exact_stack_campaign.py'), 'package',
+                         '--root', str(self.artifacts), '--contract', self.env['HARNESS_E2E_CONTRACT'],
+                         '--workflow', '{}', '--output', str(self.root / 'bundle.json')],
+                        env=self.env, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('::warning::withheld stack/data/secrets from the evidence', result.stdout)
+                    bundle = json.loads((self.root / 'bundle.json').read_text())
+                self.assertEqual(bundle['withheld'], withheld)
+                self.assertFalse(secret.exists())
+                self.assertEqual([entry['path'] for entry in bundle['files']], ['stack/worker-compose.yaml'])
+                self.assertNotIn('synthetic-secret-never-upload', json.dumps(bundle))
 
     def test_actual_manifest_and_lock_layout_validation_rejects_symlink_and_path_escapes(self):
         project = self.tmp / 'project'
@@ -527,15 +532,16 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
             MODULE.stage_relative_workers(manifest, source.parent, project)
         self.assertFalse((project / 'local').exists())
 
-    def test_introduced_artifact_credentials_and_symlinks_still_fail_after_launcher(self):
+    def test_introduced_credential_paths_are_withheld_and_symlinks_still_fail_after_launcher(self):
         self.assertEqual(self.launch().returncode, 0)
         self.assert_private()
         for name in ('secrets', '.env'):
             path = self.artifacts / name
             path.mkdir()
-            with self.assertRaisesRegex(ValueError, 'reserved credential path'):
-                MODULE.package_bundle(self.artifacts, self.contract, {})
-            path.rmdir()
+            bundle = MODULE.package_bundle(self.artifacts, self.contract, {})
+            self.assertEqual([entry['path'] for entry in bundle['withheld']], [name])
+            self.assertFalse(path.exists())
+        # A symlink is still refused: what it points at cannot be vouched for.
         link = self.artifacts / 'escape'
         link.symlink_to(self.root)
         with self.assertRaisesRegex(ValueError, 'symlink'):

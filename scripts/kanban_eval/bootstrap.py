@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -59,7 +60,12 @@ def main():
     if args.output.exists():
         raise ValueError('runtime output must be new')
     root.mkdir(parents=True, exist_ok=True)
-    tools = Path(__file__).with_name('tools')
+    # Installed below the runtime root from the pinned manifests beside this
+    # script: a group sees the checkout read-only.
+    tools = root / 'tools'
+    tools.mkdir(exist_ok=True)
+    for name in ('package.json', 'package-lock.json'):
+        shutil.copyfile(Path(__file__).with_name('tools') / name, tools / name)
     cache = root / 'npm-cache'
     dependencies = fixture / 'kanban/node_modules'
     browser_dependencies = tools
