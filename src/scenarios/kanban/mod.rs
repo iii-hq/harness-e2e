@@ -659,48 +659,62 @@ fn completion(index: usize, result: &Value) -> CompletionState {
     }
 }
 
-fn prerequisite_failed(result: &Value) -> bool {
-    result["status"] == "failed"
-        && result["functional_status"] == "failed"
-        && result["checks"].as_array().is_some_and(|checks| {
-            checks.iter().any(|check| {
-                check["status"] == "failed"
-                    && matches!(
-                        check["id"].as_str(),
-                        Some(
-                            "application_present"
-                                | "typecheck"
-                                | "test"
-                                | "build"
-                                | "application_startup"
-                        )
-                    )
-            })
-        })
+/// The build or startup check of the subject's own application that failed.
+/// The evaluator reports one as `failed` only when the subject's command
+/// exited non-zero or its application never became ready; a failure of the
+/// evaluator itself arrives as `infrastructure_failed` or `evaluation_failed`,
+/// with no functional status, and never reaches scoring.
+fn failed_prerequisite(result: &Value) -> Option<&Value> {
+    if result["status"] != "failed" || result["functional_status"] != "failed" {
+        return None;
+    }
+    result["checks"].as_array()?.iter().find(|check| {
+        check["status"] == "failed"
+            && matches!(
+                check["id"].as_str(),
+                Some(
+                    "application_present" | "typecheck" | "test" | "build" | "application_startup"
+                )
+            )
+    })
 }
 
+fn prerequisite_failed(result: &Value) -> bool {
+    failed_prerequisite(result).is_some()
+}
+
+/// A criterion the probe never reached because the subject's application did
+/// not build or start scores 0, like any other failure the subject caused.
+/// Without such a failure, a criterion with no verdict stays unscored.
 fn criterion_awards(index: usize, result: &Value) -> Vec<CriterionAward> {
+    let prerequisite = failed_prerequisite(result).map(|check| {
+        format!(
+            "prerequisite '{}' failed: {}",
+            check["id"].as_str().unwrap_or_default(),
+            check["detail"].as_str().unwrap_or("no detail reported")
+        )
+    });
     criteria(index)
         .into_iter()
         .map(|criterion| {
             let check = result["checks"]
                 .as_array()
                 .and_then(|checks| checks.iter().find(|check| check["id"] == criterion.id));
+            let detail = check
+                .and_then(|check| check["detail"].as_str())
+                .unwrap_or("Not verified: prerequisite evidence unavailable")
+                .to_string();
+            let status = check.and_then(|check| check["status"].as_str());
+            let (awarded, reason) = match (status, &prerequisite) {
+                (Some("passed"), _) => (Some(criterion.weight), detail),
+                (Some("failed"), _) => (Some(0), detail),
+                (_, Some(prerequisite)) => (Some(0), prerequisite.clone()),
+                (_, None) => (None, detail),
+            };
             CriterionAward {
                 id: criterion.id.into(),
-                awarded: match check.and_then(|check| check["status"].as_str()) {
-                    Some("passed") => Some(criterion.weight),
-                    Some("failed") => Some(0),
-                    _ => None,
-                },
-                reason: check
-                    .and_then(|check| check["detail"].as_str())
-                    .unwrap_or(if prerequisite_failed(result) {
-                        "Not verified: application prerequisite failed; see build/startup evidence"
-                    } else {
-                        "Not verified: prerequisite evidence unavailable"
-                    })
-                    .into(),
+                awarded,
+                reason,
             }
         })
         .collect()
@@ -906,16 +920,79 @@ mod tests {
     }
 
     #[test]
-    fn startup_failure_does_not_fabricate_functional_criterion_failures() {
-        let result = json!({"status":"failed", "functional_status":"failed", "checks":[
-            {"id":"application_startup", "status":"failed", "detail":"Compose file is missing"}
-        ]});
-        validate_evaluation(&json!({"result":result})).unwrap();
-        let awards = criterion_awards(0, &result);
+    fn a_subject_prerequisite_failure_scores_every_unreached_criterion_zero() {
+        for id in [
+            "application_present",
+            "typecheck",
+            "test",
+            "build",
+            "application_startup",
+        ] {
+            let result = json!({"status":"failed", "functional_status":"failed", "checks":[
+                {"id":id, "status":"failed", "detail":"Compose file is missing"}
+            ]});
+            validate_evaluation(&json!({"result":result})).unwrap();
+            let awards = criterion_awards(0, &result);
+            assert_eq!(awards.len(), rubric(0).len());
+            assert!(awards.iter().all(|award| award.awarded == Some(0)));
+            assert!(awards.iter().all(|award| award.reason
+                == format!("prerequisite '{id}' failed: Compose file is missing")));
+            assert_eq!(completion(0, &result), CompletionState::TaskIncomplete);
+        }
+        // A failure the subject's prerequisites did not cause leaves the
+        // unreached criteria unscored, never zero.
+        let awards = criterion_awards(
+            0,
+            &json!({"status":"failed", "functional_status":"failed", "checks":[
+                {"id":"application_startup", "status":"passed"},
+                {"id":"live_sse_protocol_contract", "status":"failed"}
+            ]}),
+        );
         assert!(awards.iter().all(|award| award.awarded.is_none()));
-        assert!(awards
-            .iter()
-            .all(|award| award.reason.contains("prerequisite failed")));
+    }
+
+    /// Run 38577676991 (kanban_c1_foundation, 2026-10-14): the subject's
+    /// worker-compose.yaml declared `run:`, which iii compose rejects with
+    /// INVALID_COMPOSE_FILE, so the application never started. The result is
+    /// copied verbatim from its kanban_evaluation artifact; the run was
+    /// reported task_incomplete with score null.
+    #[test]
+    fn a_compose_file_the_subject_broke_scores_zero_instead_of_no_score() {
+        let value = json!({"result": {
+            "case_id": "kanban_c1_foundation",
+            "checks": [
+                {"detail": "isolated command exit 0", "id": "typecheck", "status": "passed"},
+                {"detail": "isolated command exit 0", "id": "test", "status": "passed"},
+                {"detail": "isolated command exit 0", "id": "build", "status": "passed"},
+                {"detail": "Compose application did not become ready; see runtime.log.",
+                 "id": "application_startup", "status": "failed"}
+            ],
+            "functional_status": "failed",
+            "schema": "kanban-evaluation",
+            "status": "failed"
+        }});
+        validate_evaluation(&value).unwrap();
+        let result = &value["result"];
+        validate_rubric(0, result).unwrap();
+        let awards = criterion_awards(0, result);
+        let reports = criteria(0)
+            .into_iter()
+            .zip(&awards)
+            .map(|(criterion, award)| crate::report::CriterionReport {
+                id: award.id.clone(),
+                description: None,
+                possible: criterion.weight,
+                awarded: award.awarded,
+                reason: award.reason.clone(),
+                gate: criterion.gate,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(crate::report::criteria_score(&reports), Some(0));
+        assert_eq!(completion(0, result), CompletionState::TaskIncomplete);
+        assert_eq!(
+            awards[0].reason,
+            "prerequisite 'application_startup' failed: Compose application did not become ready; see runtime.log."
+        );
     }
 
     #[test]

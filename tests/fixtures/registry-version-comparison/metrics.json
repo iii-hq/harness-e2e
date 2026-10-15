@@ -615,7 +615,7 @@
         {
           "id": "verification.recall",
           "question": "What proportion of independently failing required checks did the tester report as failing?",
-          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1.",
+          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1 when the tester delivered a readable report, 0 when it did not.",
           "measurement": "ratio",
           "weight": 35,
           "numerator": "Required check IDs reported as failing and independently reproduced.",
@@ -666,8 +666,8 @@
         },
         {
           "id": "verification.source_preservation",
-          "question": "Did verification leave the product source unchanged?",
-          "expected": "The final product source equals the delivered implementation snapshot.",
+          "question": "Did the tester deliver a readable report and leave the product source unchanged?",
+          "expected": "A readable checks.json exists and the final product source equals the delivered implementation snapshot.",
           "measurement": "binary",
           "evidence": [
             "Executor source diff against the delivered snapshot."
