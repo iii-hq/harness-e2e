@@ -39,35 +39,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build the runner the browser flows drive
         run: cargo build --locked --bin harness-e2e
-      - name: Install the Engine for packaged Registry validation
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/registry-smoke-bin"
-          curl -fsSL --retry 3 \
-            https://github.com/iii-hq/iii/releases/download/iii/v0.24.4-rc.1/iii-x86_64-unknown-linux-gnu.tar.gz \
-            -o "$RUNNER_TEMP/registry-smoke-cli.tar.gz"
-          printf '%s  %s\n' \
-            8cd32ed7164dcb89a5c0c85a1d9130e96a44572db4399dc8dcc1c255d53e9572 \
-            "$RUNNER_TEMP/registry-smoke-cli.tar.gz" | sha256sum --check --status
-          tar -xzf "$RUNNER_TEMP/registry-smoke-cli.tar.gz" -C "$RUNNER_TEMP/registry-smoke-bin"
-          echo "$RUNNER_TEMP/registry-smoke-bin" >> "$GITHUB_PATH"
-          python3 -m pip install --quiet pyyaml
-      - name: Validate packaged Registry installation and restart
-        run: |
-          python3 scripts/smoke_registry_install.py \
-            --binary target/debug/harness-e2e \
-            --output target/registry-install-smoke
-      - name: Retain Registry installation failure evidence
-        if: failure()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: registry-install-smoke
-          if-no-files-found: ignore
-          path: |
-            target/registry-install-smoke/*.log
-            target/registry-install-smoke/worker-compose.*
-            target/registry-install-smoke/registry-resolution.json
-            target/registry-install-smoke/compose-state/**/logs/*.log
       - name: Validate the Console browser flows
         run: |
           pnpm --dir dashboard exec playwright install --with-deps chromium
@@ -97,3 +68,50 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 -m unittest discover -s tests/python -p 'test_*.py'
+
+  # The packaged install pulls real dependencies from the production Registry.
+  # It runs apart from `validate` so an outage cannot hold back the other
+  # checks; the smoke itself turns an unreachable Registry into a warning.
+  registry-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --locked --bin harness-e2e
+      - name: Install the Engine for packaged Registry validation
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/registry-smoke-bin"
+          curl -fsSL --retry 3 \
+            https://github.com/iii-hq/iii/releases/download/iii/v0.24.4-rc.1/iii-x86_64-unknown-linux-gnu.tar.gz \
+            -o "$RUNNER_TEMP/registry-smoke-cli.tar.gz"
+          printf '%s  %s\n' \
+            8cd32ed7164dcb89a5c0c85a1d9130e96a44572db4399dc8dcc1c255d53e9572 \
+            "$RUNNER_TEMP/registry-smoke-cli.tar.gz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/registry-smoke-cli.tar.gz" -C "$RUNNER_TEMP/registry-smoke-bin"
+          echo "$RUNNER_TEMP/registry-smoke-bin" >> "$GITHUB_PATH"
+          python3 -m pip install --quiet pyyaml
+      - name: Validate packaged Registry installation and restart
+        run: |
+          python3 scripts/smoke_registry_install.py \
+            --binary target/debug/harness-e2e \
+            --output target/registry-install-smoke
+      - name: Retain Registry installation failure evidence
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: registry-install-smoke
+          if-no-files-found: ignore
+          path: |
+            target/registry-install-smoke/**/*.log
+            target/registry-install-smoke/**/worker-compose.*
+            target/registry-install-smoke/**/registry-resolution.json

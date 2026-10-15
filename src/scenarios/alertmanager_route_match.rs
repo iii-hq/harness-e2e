@@ -1392,6 +1392,44 @@ mod tests {
         .unwrap();
     }
 
+    /// Fetches the modules `./dispatch/` tests need, retrying the module
+    /// proxy. `false` when the proxy stays unreachable: the probe cannot run
+    /// offline, so the caller skips with a warning instead of failing CI.
+    async fn fetch_dispatch_modules(checkout: &Path) -> bool {
+        for attempt in 1..=3 {
+            let output = Command::new("go")
+                .args(["list", "-buildvcs=false", "-deps", "-test", "./dispatch/"])
+                .current_dir(checkout)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .output()
+                .await
+                .unwrap();
+            if output.status.success() {
+                return true;
+            }
+            let error = String::from_utf8_lossy(&output.stderr);
+            // Go quotes the URL it failed to fetch; anything else is real.
+            assert!(error.contains("https://"), "go list failed: {error}");
+            if attempt == 3 {
+                let reason = error.lines().last().unwrap_or_default();
+                // Written past the test harness's capture so Actions shows it.
+                std::io::Write::write_all(
+                    &mut std::io::stdout(),
+                    format!(
+                        "::warning title=Go module proxy unreachable::delegation probe test \
+                         skipped: {reason}\n"
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+                return false;
+            }
+            tokio::time::sleep(Duration::from_secs(15 * attempt)).await;
+        }
+        unreachable!()
+    }
+
     /// Needs Go 1.25+ on PATH, as CI and the exact-stack runners provide.
     #[tokio::test]
     async fn delegation_probe_tells_a_wired_router_from_the_pinned_one() {
@@ -1403,6 +1441,9 @@ mod tests {
         fs::write(&bundle, BUNDLE_BYTES).unwrap();
         let checkout = temporary.path().join("checkout");
         validate_bundle(&bundle, &checkout).await.unwrap();
+        if !fetch_dispatch_modules(&checkout).await {
+            return;
+        }
         let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
         assert!(!wired, "the pinned router must not count: {detail}");
         assert!(detail.contains("passes without the engine"), "{detail}");

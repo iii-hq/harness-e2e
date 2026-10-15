@@ -4,11 +4,15 @@
 The candidate archive replaces only the harness-e2e artifact in a frozen lock;
 the Engine, Compose and every dependency run normally. No control namespace
 or E2E database configuration is supplied. Requires iii and PyYAML.
+
+An unreachable Registry is not a defect of the package: after three tries
+the smoke emits a GitHub warning and exits 0. Anything else still fails.
 """
 
 import argparse
 import functools
 import hashlib
+import http.client
 import http.server
 import json
 import os
@@ -19,6 +23,7 @@ import subprocess
 import tarfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import yaml
@@ -28,19 +33,48 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 NAMESPACE = "registry-install-smoke"
 DATABASE = "sql-service"
 CONFIG = "operator-sql-config"
+REGISTRY = "https://api.workers.iii.dev"
+ATTEMPTS = 3
 
 
-def run(binary, directory):
-    directory.mkdir(parents=True, exist_ok=True)
-    directory = directory.resolve()
-    manifest = json.loads(subprocess.check_output([str(binary), "--manifest"], text=True))
+class RegistryUnavailable(Exception):
+    """The Registry did not answer; says nothing about the package."""
+
+
+def registry_outage(stderr):
+    """Compose could not reach the Registry, or a dependency download failed
+    in transport, 5xx or 429. Client errors, the local candidate's download
+    and digest mismatches (their own code) are real."""
+    if "REGISTRY_UNREACHABLE" in stderr:
+        return True
+    if "PACKAGE_DOWNLOAD_FAILED" not in stderr or "127.0.0.1" in stderr:
+        return False
+    return "client error" not in stderr or "429" in stderr
+
+
+def resolve(registry):
     request = urllib.request.Request(
-        "https://api.workers.iii.dev/resolve",
+        registry + "/resolve",
         data=json.dumps({"worker": "harness-e2e", "version": "latest"}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        resolved = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code < 500 and error.code != 429:
+            raise
+        error.close()
+        raise RegistryUnavailable(f"{registry}/resolve answered {error.code}") from error
+    except (OSError, http.client.HTTPException) as error:
+        raise RegistryUnavailable(f"{registry}/resolve: {error!r}") from error
+
+
+def run(binary, directory, registry=REGISTRY):
+    directory.mkdir(parents=True, exist_ok=True)
+    directory = directory.resolve()
+    manifest = json.loads(subprocess.check_output([str(binary), "--manifest"], text=True))
+    resolved = resolve(registry)
     (directory / "registry-resolution.json").write_text(json.dumps(resolved, indent=2))
     archive = directory / "candidate.tar.gz"
     with tarfile.open(archive, "w:gz") as output:
@@ -107,6 +141,8 @@ def run(binary, directory):
             "--timeout-ms", str(timeout * 1000), "--json", json.dumps(payload or {}),
         ], cwd=directory, env=env, capture_output=True, text=True, timeout=timeout + 5)
         if result.returncode:
+            if registry_outage(result.stderr):
+                raise RegistryUnavailable(result.stderr.strip())
             raise RuntimeError(result.stderr)
         return json.loads(result.stdout)
 
@@ -192,11 +228,31 @@ def run(binary, directory):
     finally:
         stop()
         server.shutdown()
+        server.server_close()
+
+
+def main(binary, directory, registry=REGISTRY, delay=30):
+    """Retry a Registry outage with backoff, then warn instead of failing."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return run(binary, directory / f"attempt-{attempt}", registry)
+        except RegistryUnavailable as error:
+            reason = " ".join(str(error).split())[:500]
+            if attempt == ATTEMPTS:
+                print(f"::warning title=Registry unreachable::Packaged install not validated "
+                      f"after {ATTEMPTS} attempts: {reason}", flush=True)
+                return
+            print(f"Registry unreachable (attempt {attempt}/{ATTEMPTS}): {reason}; "
+                  f"retrying in {delay}s", flush=True)
+            time.sleep(delay)
+            delay *= 2
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
+    parser.add_argument("--registry", default=REGISTRY,
+                        help="Registry API base; an unreachable one rehearses an outage")
     args = parser.parse_args()
-    run(args.binary.resolve(), args.output)
+    main(args.binary.resolve(), args.output, args.registry)
