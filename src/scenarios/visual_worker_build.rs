@@ -86,7 +86,7 @@ const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
 const EVIDENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     5,
-    "After the page passes its edit, keyboard, theme, reload, layout, and Canvas checks, are screenshots saved before and after editing, of the graph, and in a narrow dark view, with Worker source and Compose hashes?",
+    "After the Worker page opens its updated Canvas graph, are screenshots saved before and after editing, of the graph, and in a narrow dark view, with Worker source and Compose hashes?",
     EvaluationDimension::StructuralIntegrity,
 );
 const FORM_ASSESSMENTS: &[AssessmentSpec] = &[
@@ -1759,7 +1759,8 @@ mod tests {
         for (browser, evidence, expected_browser, expected_evidence) in
             [(false, true, 0, 5), (true, false, 10, 0)]
         {
-            let checks = ASSESSMENTS
+            let checks = Kind::Form
+                .assessments()
                 .iter()
                 .map(|spec| {
                     let passed = match spec.id() {
@@ -1773,7 +1774,7 @@ mod tests {
                     )
                 })
                 .collect::<serde_json::Map<_, _>>();
-            let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
+            let evaluation = evaluate_evidence(Kind::Form, &json!({"checks":checks}), true);
             for (id, expected) in [
                 ("browser_interaction", expected_browser),
                 ("evidence_complete", expected_evidence),
