@@ -320,7 +320,7 @@ try {
   // focus and keeps them.
   await inRepository.locator('[data-suite="pr"]').click()
   const discard = page.getByRole('alertdialog', {
-    name: 'Discard changes to Regression copy?',
+    name: `Discard changes to ${regression.label} copy?`,
   })
   await discard.waitFor()
   assert.equal(
@@ -434,7 +434,7 @@ try {
       .getByRole('option', { name: new RegExp(`^${escaped}(\\s|$)`) })
       .click()
   }
-  await pickSuite(run, 'PR')
+  await pickSuite(run, pr.label)
   for (const scenario of pr.scenarios)
     assert.ok(
       await run
@@ -448,7 +448,9 @@ try {
   await run
     .getByRole('checkbox', { name: pr.scenarios[0], exact: true })
     .click()
-  await run.getByText('Changed from PR. Runs as a custom selection.').waitFor()
+  await run
+    .getByText(`Changed from ${pr.label}. Runs as a custom selection.`)
+    .waitFor()
   await run.getByRole('button', { name: 'Reset', exact: true }).click()
   assert.equal(await suiteField.getAttribute('data-value'), 'pr')
   await run
@@ -466,7 +468,7 @@ try {
   assert.deepEqual(calls.start[0], {
     label: '',
     parameters: {
-      suite: { id: 'pr', label: 'PR' },
+      suite: { id: 'pr', label: pr.label },
       scenarios: pr.scenarios,
       runs: pr.repetitions,
       technical_retries: pr.technical_retries,
@@ -480,9 +482,12 @@ try {
   // The execution names its suite in the header, with its digest.
   const band = page.locator('[data-execution-facts]')
   await band
-    .getByText(`PR · ${pr.sha256.replace(/^sha256:/, '').slice(0, 12)}`, {
-      exact: true,
-    })
+    .getByText(
+      `${pr.label} · ${pr.sha256.replace(/^sha256:/, '').slice(0, 12)}`,
+      {
+        exact: true,
+      },
+    )
     .waitFor()
 
   // Run again keeps the suite.

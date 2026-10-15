@@ -33,7 +33,7 @@ Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the
 
 For standalone verification of a previously delivered implementation, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on the worker with the explicit `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. The paired profile does not use this external input. Delivery files also remain in normal captured evidence after cleanup.
 
-Use the Software engineering profile template in the Console and add planning and environment if all four Registry cases are needed locally. Keep one repetition and run the Docker builds sequentially on a disk-constrained executor.
+Use the Application builds and changes suite in the Console and add planning and environment if all four Registry cases are needed locally. Keep one repetition and run the Docker builds sequentially on a disk-constrained executor.
 
 ## Run
 

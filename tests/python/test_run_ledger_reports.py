@@ -166,6 +166,7 @@ class ReportPayloadTests(unittest.TestCase):
             "scenarios": [
                 {
                     "scenario_id": "tool_contract_recovery",
+                    "title": "Recover from a changed tool contract",
                     "case_id": "tool_contract_recovery@1",
                     "behavior_sha256": "sha256:" + "b" * 64,
                     "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64},
@@ -187,11 +188,20 @@ class ReportPayloadTests(unittest.TestCase):
                 "repetition",
                 "run",
                 "scenario_id",
+                "scenario_title",
                 "seed",
             ],
         )
         self.assertEqual(runs[0]["definition_sha256"], "sha256:" + "1" * 64)
         self.assertEqual(runs[0]["run"]["run_id"], "run-a")
+        self.assertEqual(
+            [run["scenario_title"] for run in runs],
+            ["Recover from a changed tool contract"] * 2,
+        )
+        self.assertEqual([run["run"] for run in runs], results["scenarios"][0]["runs"])
+
+        del results["scenarios"][0]["title"]
+        self.assertTrue(all("scenario_title" not in run for run in report_execution.runs_from_results(results)))
 
     def test_a_group_that_died_still_reports_its_committed_runs(self):
         artifacts = self.tmp / "artifacts"

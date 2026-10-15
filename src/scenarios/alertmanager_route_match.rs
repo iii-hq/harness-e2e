@@ -32,7 +32,7 @@ use super::{
 
 pub const ID: &str = "alertmanager_route_match";
 pub const CANONICAL_SEED: u64 = 0x616c_7274_0001;
-pub const SUMMARY: &str = "Refactor Alertmanager route matching into an iii function and verify its receivers and group-by labels against a frozen upstream oracle.";
+pub const SUMMARY: &str = "Move Alertmanager route matching into an iii function while preserving receivers and grouping. Verify that matching succeeds with the Engine running and fails when it is unavailable.";
 
 const UPSTREAM_REPOSITORY: &str = "prometheus/alertmanager";
 const UPSTREAM_URL: &str = "https://github.com/prometheus/alertmanager";
@@ -59,23 +59,23 @@ const BUNDLE_BYTES: &[u8] =
 const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     "revision_pinned",
     10,
-    "Is the checkout at the pinned bundle revision or one of its descendants?",
+    "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
 );
 const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
     "match_equivalent",
     70,
-    "Does every live route::match call return the receivers and group-by labels in the frozen oracle?",
+    "What proportion of route::match test cases match the expected receivers, group-by labels, and group-by-all flags?",
     EvaluationDimension::Deliverable,
 );
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
     "delegation_wired",
     10,
-    "Does upstream TestRouteMatch call route::match and fail when the engine is unavailable?",
+    "Does Alertmanager's TestRouteMatch pass using route::match on the live engine and fail when that engine is unavailable?",
 );
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
     10,
-    "Do notify/, api/, and config/testdata/ remain identical to the pinned tree?",
+    "Are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REVISION_PINNED,
@@ -136,16 +136,8 @@ impl Snapshot {
             && self.match_cases.iter().all(|(_, passed, _)| *passed)
     }
 
-    /// The task is done once `route::match` answers with a match payload and
-    /// the Go router calls it. Exact agreement with the oracle stays in the
-    /// score.
     fn task_completed(&self) -> bool {
-        self.delegation_wired
-            && self.function_registered
-            && self
-                .match_cases
-                .iter()
-                .any(|(_, passed, reason)| call_answered(*passed, reason))
+        self.delegation_wired && self.match_equivalent()
     }
 
     fn match_awarded(&self) -> u8 {
@@ -175,7 +167,7 @@ impl Scenario for AlertmanagerRouteMatch {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Refactor Alertmanager Route Matching")
+        Some("Refactor Alertmanager routing without changing results")
     }
 
     fn summary(&self) -> Option<&'static str> {
@@ -740,10 +732,6 @@ fn revision_reason(snapshot: &Snapshot) -> String {
     }
 }
 
-fn call_answered(passed: bool, reason: &str) -> bool {
-    passed || reason.starts_with("receivers ")
-}
-
 fn match_reason(snapshot: &Snapshot) -> String {
     let passed = snapshot
         .match_cases
@@ -1213,6 +1201,7 @@ mod tests {
     fn live_calls_score_partially_and_scope_stays_separate() {
         let mut snapshot = valid_snapshot();
         assert!(snapshot.match_equivalent());
+        assert!(snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), MATCH_EQUIVALENT.weight());
         assert!(snapshot.scope_exact());
         snapshot.match_cases.push((
@@ -1221,7 +1210,7 @@ mod tests {
             "receivers [\"team-X-pager\"]".into(),
         ));
         assert!(!snapshot.match_equivalent());
-        assert!(snapshot.task_completed());
+        assert!(!snapshot.task_completed());
         assert_eq!(snapshot.match_awarded(), 35);
         assert!(match_reason(&snapshot).contains("1 of 2 live calls"));
         snapshot.match_cases = vec![(
@@ -1229,7 +1218,7 @@ mod tests {
             false,
             "receivers [\"team-X-pager\"]".into(),
         )];
-        assert!(snapshot.task_completed());
+        assert!(!snapshot.task_completed());
         snapshot.delegation_wired = false;
         assert!(!snapshot.task_completed());
         snapshot.delegation_wired = true;
