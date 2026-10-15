@@ -247,6 +247,9 @@ def shard_payload(args: argparse.Namespace) -> dict[str, Any]:
     artifacts = args.artifacts
     runs, source = collect_runs(artifacts) if artifacts and artifacts.is_dir() else ([], "none")
     failure = obj(read_json(artifacts / "failure.json")) if artifacts else {}
+    # A group the launcher tried twice before its run started: which attempt
+    # this is, and why the earlier one failed.
+    attempts = obj(read_json(artifacts / "stack/attempt.json")) if artifacts else {}
     return {
         "kind": "shard",
         "execution_id": args.execution_id,
@@ -259,6 +262,7 @@ def shard_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "outcome": args.outcome,
                 "evidence": source,
                 "failure": failure or None,
+                "attempts": attempts or None,
             }
         ),
         "identity": identity_of(args, artifacts),

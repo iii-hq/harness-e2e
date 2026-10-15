@@ -62,7 +62,8 @@ class KanbanBootstrapTest(unittest.TestCase):
             (fixture / 'kanban/pnpm-lock.yaml').write_text('lockfileVersion: 9\n')
             runtime = root / 'runtime'
             output = root / 'runtime.json'
-            tools = ROOT / 'scripts/kanban_eval/tools'
+            # Below the runtime root: a group sees the checkout read-only.
+            tools = runtime.resolve() / 'tools'
             commands = []
 
             def fake_run(*command, **_kwargs):
@@ -88,6 +89,10 @@ class KanbanBootstrapTest(unittest.TestCase):
                 bootstrap.main()
 
             self.assertEqual(commands[0], ('docker', 'pull', bootstrap.IMAGE))
+            self.assertEqual(commands[1][-2:], ('--prefix', str(tools)))
+            for name in ('package.json', 'package-lock.json'):
+                self.assertEqual((tools / name).read_bytes(), (ROOT / 'scripts/kanban_eval/tools' / name).read_bytes())
+            self.assertEqual(json.loads(output.read_text())['browser-dependencies'], str(tools / 'node_modules'))
             self.assertIn('--store-dir', commands[2])
             self.assertIn('--ignore-scripts', commands[2])
             self.assertFalse(any('--with-deps' in command for command in commands))

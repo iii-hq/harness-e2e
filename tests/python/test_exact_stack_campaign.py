@@ -485,10 +485,13 @@ contract_path=$1/contract.json
 compose_file=$1/worker-compose.yaml
 contract_tool="$2"
 profile_assets=true
+iii_failed=$1/iii-failed
 fail() { printf '%s\\n' "$1" >&2; return 1; }
 project_trigger() {
   test "$1" = directory::skills::download_from_registry
   test "$(jq -r '.version' <<<"$2")" = 1.2.3
+  # As iii_trigger names a call that failed.
+  if [[ "$MODE" != ok ]]; then printf '%s' "$1" >"$iii_failed"; fi
   if [[ "$MODE" == missing ]]; then echo 'D310 not_found: registry worker "harness" has no published skills bundle.' >&2; return 1; fi
   if [[ "$MODE" == broken ]]; then echo 'registry unavailable' >&2; return 1; fi
   printf 'downloaded profile' >"$project_dir/agents/tech-lead.md"
@@ -500,9 +503,13 @@ project_trigger() {
                 if mode == "broken":
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("Could not load pinned skills", result.stderr)
+                    # The failure that ends the group stays named.
+                    self.assertTrue((root / "iii-failed").exists())
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual((root / "project/agents/tech-lead.md").read_text(), "selected template")
+                    # A worker with no skills bundle is no cause of a later failure.
+                    self.assertFalse((root / "iii-failed").exists())
 
     def test_agent_profile_is_validated_and_reaches_native_admission(self):
         contract = campaign_contract()
@@ -815,6 +822,7 @@ artifact_dir=$1
 e2e_data="$artifact_dir/native"
 repo_root=$2
 remote_execution_id=execution-1
+iii_failed=$1/iii-failed
 project_trigger() {
   if [[ "$1" == "e2e::results-get" ]]; then
     printf '%s\n' "$RESULTS_RESPONSE"
@@ -1238,15 +1246,23 @@ fail() {
                 self.assertEqual(reference["size_bytes"], len(payload))
                 self.assertEqual(checkpoint.read_bytes(), payload)
 
-    def test_package_rejects_credential_paths_instead_of_silently_omitting_them(self):
-        for relative in [".env", ".env.local", "provider-zai.env", "secrets/key", ".aws/credentials", ".ssh/id_ed25519", ".gnupg/key"]:
+    def test_package_withholds_credential_paths_and_says_so_instead_of_dropping_the_group(self):
+        for relative, held in [(".env", ".env"), (".env.local", ".env.local"), ("provider-zai.env", "provider-zai.env"),
+                               ("secrets/key", "secrets"), ("stack/data/secrets/sentinel", "stack/data/secrets"),
+                               (".aws/credentials", ".aws"), (".ssh/id_ed25519", ".ssh"), (".gnupg/key", ".gnupg")]:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 credential = root / relative
                 credential.parent.mkdir(parents=True, exist_ok=True)
                 credential.write_text("fake-secret-never-upload\n")
-                with self.assertRaisesRegex(ValueError, "reserved credential path"):
-                    MODULE.package_bundle(root, campaign_contract(), {})
+                (root / "results.json").write_text("{}\n")
+                manifest = MODULE.package_bundle(root, campaign_contract(), {})
+                self.assertEqual(manifest["withheld"],
+                                 [{"path": held, "withheld": "credential", "reason": "reserved credential path"}])
+                self.assertFalse((root / held).exists())
+                self.assertEqual([entry["path"] for entry in manifest["files"]], ["results.json"])
+                self.assertEqual(manifest["terminal_payload"], "results.json")
+                self.assertNotIn("fake-secret", json.dumps(manifest))
 
     def test_separate_runtime_secrets_are_not_part_of_the_artifact_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1363,7 +1379,7 @@ fail() {
                 self.assertNotIn(b"sk-", payload)
             self.assertNotIn("sk-", json.dumps(manifest))
 
-    def test_package_refuses_a_credential_in_a_file_bound_by_digests_and_rewrites_nothing(self):
+    def test_package_withholds_only_a_bound_file_that_holds_a_credential(self):
         credentials = {"OPENAI_API_KEY": "sk-openai-0123456789"}
         for relative in ["results.json", "native/0123/evidence/run/attempt/transcript.json", "stack/status.json",
                          "groups/case-a/logs/engine.log"]:
@@ -1371,22 +1387,85 @@ fail() {
                 root = Path(directory)
                 (root / "logs").mkdir()
                 (root / "logs/engine.log").write_text("sk-openai-0123456789\n")
+                (root / "manifest.json").write_text('{"kept": true}\n')
                 bound = root / relative
                 bound.parent.mkdir(parents=True, exist_ok=True)
                 bound.write_text('{"output": "sk-openai-0123456789"}\n')
-                with self.assertRaises(ValueError) as refused:
-                    MODULE.package_bundle(root, campaign_contract(), {}, credentials)
-                self.assertIn(f"{relative} (OPENAI_API_KEY)", str(refused.exception))
-                self.assertNotIn("sk-openai", str(refused.exception))
-                # Nothing was rewritten: the tree is not uploaded at all.
-                self.assertEqual(bound.read_text(), '{"output": "sk-openai-0123456789"}\n')
-                self.assertEqual((root / "logs/engine.log").read_text(), "sk-openai-0123456789\n")
+                manifest = MODULE.package_bundle(root, campaign_contract(), {}, credentials)
+                # A file bound by a digest is never rewritten: it is not uploaded.
+                self.assertEqual(manifest["withheld"],
+                                 [{"path": relative, "withheld": "credential", "reason": "holds OPENAI_API_KEY"}])
+                self.assertFalse(bound.exists())
+                # The launcher's logs are redacted, the rest kept as it was.
+                self.assertEqual((root / "logs/engine.log").read_text(), "[redacted:OPENAI_API_KEY]\n")
+                self.assertEqual(sorted(entry["path"] for entry in manifest["files"]), ["logs/engine.log", "manifest.json"])
+                self.assertEqual(manifest["redaction"]["credentials"], {"OPENAI_API_KEY": 2})
+                self.assertNotIn("sk-openai", json.dumps(manifest))
         # Without credentials nothing changes and the manifest says so.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "results.json").write_text("sk-openai-0123456789\n")
             untouched = MODULE.package_bundle(root, campaign_contract(), {})
             self.assertEqual(untouched["redaction"], {"credentials": {}, "files": [], "too_short": []})
+            self.assertEqual(untouched["withheld"], [])
+
+    def test_a_session_log_holding_the_key_is_withheld_alone_and_the_groups_runs_are_reported(self):
+        """2026-10-03: a session-manager JSONL held the provider's key, and the
+        whole group was refused. Now that file alone stays behind."""
+        key = "sk-deepseek-0123456789abcdef"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundle"
+            native = root / "native/execution-1"
+            session = native / "evidence/session-manager/sessions/s-1.jsonl"
+            session.parent.mkdir(parents=True)
+            session.write_text('{"role":"user","content":"hi"}\n'
+                               f'{{"role":"tool","content":"DEEPSEEK_API_KEY={key}"}}\n')
+            transcript = native / "evidence/transcript.json"
+            transcript.write_text('{"turns": 3}\n')
+            run = {"run_id": "run-1", "status": "passed", "score": 100}
+            results = {"scenarios": [{"scenario_id": "direct_answer", "case_id": "direct_answer:4404",
+                                      "case": {"seed": 4404}, "runs": [run]}]}
+            (root / "results.json").write_text(json.dumps(results) + "\n")
+            (root / "logs").mkdir()
+            (root / "logs/engine.log").write_text(f"started with {key}\n")
+            (root / "stack-lock.json").write_text(json.dumps(campaign_contract()))
+            credentials = Path(directory) / "provider-credentials.env"
+            credentials.write_text(f"DEEPSEEK_API_KEY={key}\n")
+            packaged = subprocess.run(
+                ["python3", str(SCRIPT), "package", "--root", str(root), "--contract", str(root / "stack-lock.json"),
+                 "--workflow", "{}", "--credentials", str(credentials), "--output", str(root / "bundle-manifest.json")],
+                env={"PATH": os.environ["PATH"]}, capture_output=True, text=True)
+            self.assertEqual(packaged.returncode, 0, packaged.stdout + packaged.stderr)
+            withheld = "native/execution-1/evidence/session-manager/sessions/s-1.jsonl"
+            self.assertIn(f"::warning::withheld {withheld} from the evidence: holds DEEPSEEK_API_KEY",
+                          packaged.stdout)
+            manifest = json.loads((root / "bundle-manifest.json").read_text())
+            self.assertEqual(manifest["withheld"],
+                             [{"path": withheld, "withheld": "credential", "reason": "holds DEEPSEEK_API_KEY"}])
+            self.assertFalse(session.exists())
+            # Nothing to verify it against: no file entry and no digest, so a
+            # reader that checks a reference to it fails closed.
+            self.assertNotIn(withheld, {entry["path"] for entry in manifest["files"]})
+            self.assertNotIn("sha256", manifest["withheld"][0])
+            self.assertEqual(sorted(entry["path"] for entry in manifest["files"]),
+                             ["logs/engine.log", "native/execution-1/evidence/transcript.json", "results.json",
+                              "stack-lock.json"])
+            # The key leaves in nothing: not the tree, the manifest or the log.
+            for path in root.rglob("*"):
+                if path.is_file():
+                    self.assertNotIn(key, path.read_text(), path)
+            self.assertNotIn(key, packaged.stdout + packaged.stderr)
+            # The shard reports the group's runs from what is uploaded.
+            payload = Path(directory) / "shard.json"
+            reported = subprocess.run(
+                ["python3", str(ROOT / "scripts/report_execution.py"), "shard", "--execution-id", "e-1",
+                 "--oidc-audience", "a", "--artifacts", str(root), "--campaign-id", "c", "--group-id", "g",
+                 "--outcome", "success", "--output", str(payload)],
+                env={"PATH": os.environ["PATH"]}, capture_output=True, text=True)
+            self.assertEqual(reported.returncode, 0, reported.stderr)
+            shard = json.loads(payload.read_text())
+            self.assertEqual(shard["group"]["evidence"], "results")
+            self.assertEqual([(entry["scenario_id"], entry["run"]) for entry in shard["runs"]], [("direct_answer", run)])
 
     def test_the_package_command_checks_what_its_file_and_environment_name(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1408,13 +1487,15 @@ fail() {
             self.assertEqual(manifest["redaction"]["credentials"], {"OPENAI_API_KEY": 1, "XAI_API_KEY": 1})
             # A value too short to look for is said where the job shows it.
             self.assertIn("::warning::SHORT_KEY is shorter than 8 characters", result.stdout)
-            # In a bound file it fails loudly, naming the file and the name.
+            # In a bound file it is withheld out loud, naming the file and the name.
             (root / "results.json").write_text('{"x": "sk-env-0123456789"}\n')
-            refused = subprocess.run(command, env=environment, capture_output=True, text=True)
-            self.assertEqual(refused.returncode, 2)
-            self.assertIn("results.json (XAI_API_KEY)", refused.stdout)
-            self.assertNotIn("sk-env", refused.stdout + refused.stderr)
-            # An unreadable file is a refusal too, not a traceback.
+            withheld = subprocess.run(command, env=environment, capture_output=True, text=True)
+            self.assertEqual(withheld.returncode, 0, withheld.stdout)
+            self.assertIn("::warning::withheld results.json from the evidence: holds XAI_API_KEY", withheld.stdout)
+            self.assertNotIn("sk-env", withheld.stdout + withheld.stderr)
+            self.assertFalse((root / "results.json").exists())
+            # An unreadable file cannot be checked: a refusal, not a traceback.
+            (root / "results.json").write_text("{}\n")
             (root / "results.json").chmod(0)
             try:
                 if os.access(root / "results.json", os.R_OK):

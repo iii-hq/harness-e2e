@@ -117,7 +117,10 @@ class WrapperTests(unittest.TestCase):
             ("--mount", "type=volume,dst=/var/lib/docker,volume-label=harness-e2e.execution=42,"
                         "volume-label=harness-e2e.phase=group,volume-label=harness-e2e.group=case-minimal-path"),
             ("--security-opt", "no-new-privileges"),
-            ("--volume", f"{root}:{root}"),
+            # The checkout read-only, target/ alone writable: the group's
+            # subject cannot rewrite the scripts the host runs after it.
+            ("--volume", f"{root}:{root}:ro"),
+            ("--volume", f"{root}/target:{root}/target"),
             ("--workdir", str(root)),
             ("--env", f"HARNESS_E2E_EXECUTOR_IMAGE={DIGEST}"),
             ("--label", "harness-e2e.execution=42"),
@@ -125,7 +128,8 @@ class WrapperTests(unittest.TestCase):
             ("--label", "harness-e2e.group=case-minimal-path"),
         ]:
             self.assertIn(pair, options)
-        self.assertEqual([flag for flag, value in options if flag == "--volume"], ["--volume"])
+        self.assertEqual(sorted(value for flag, value in options if flag == "--volume"),
+                         [f"{root}/target:{root}/target", f"{root}:{root}:ro"])
         for flag in ("--group-add", "--network", "--env-file"):
             self.assertNotIn(flag, run)
         self.assertFalse(any("docker.sock" in value or value.startswith("TMPDIR=") for value in run))
@@ -182,13 +186,10 @@ class WrapperTests(unittest.TestCase):
                 _, invoked = self.run_wrapper(*phase, env={"GITHUB_TOKEN": "ghs_token"})
                 run = next(call for call in invoked if call[0] == "run")
                 self.assertEqual(("--env", "GITHUB_TOKEN") in pairs(run), phase[1:] in (["resolve"], ["fixtures"]))
-                # Preparing, only target/ is writable: a pinned commit's build
-                # or the stack's runner cannot rewrite the scripts.
+                # Only target/ is writable: a pinned commit's build, the
+                # stack's runner or the finalizer cannot rewrite the scripts.
                 volumes = [value for flag, value in zip(run, run[1:]) if flag == "--volume"]
-                if phase[0] == "prepare":
-                    self.assertEqual(volumes, [f"{root}:{root}:ro", f"{root}/target:{root}/target"])
-                else:
-                    self.assertEqual(volumes, [f"{root}:{root}"])
+                self.assertEqual(volumes, [f"{root}:{root}:ro", f"{root}/target:{root}/target"])
                 self.assertIn(("--user", f"{os.getuid()}:{os.getgid()}"), pairs(run))
                 self.assertIn(("--security-opt", "no-new-privileges"), pairs(run))
                 for flag in ("--privileged", "--cgroupns", "--mount", "--group-add", "--network"):
@@ -579,7 +580,7 @@ class ExecutorTests(unittest.TestCase):
 
     def test_a_group_starts_its_own_docker_daemon_runs_as_the_user_and_stops_the_daemon_after(self):
         env = self.daemon_fakes("""\
-            echo "group ran as the user telemetry=${III_TELEMETRY_ENABLED:-on}" >>"$FAKE_LOG"
+            echo "group ran as the user telemetry=${III_TELEMETRY_ENABLED:-on} own docker=${HARNESS_E2E_OWN_DOCKER:-}" >>"$FAKE_LOG"
             grep SigIgn /proc/self/status | sed 's/^/group /' >>"$FAKE_LOG"
             sh -c 'grep SigIgn /proc/self/status' | sed 's/^/group child /' >>"$FAKE_LOG"
             exit 3
@@ -599,8 +600,9 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual([line for line in lines if "SigIgn" not in line], [
             f"dockerd --group 1234 as {os.getuid()} telemetry=false",
             "setpriv --reuid 4321 --regid 1234 --clear-groups env --default-signal=INT,QUIT "
-            "bash scripts/run_exact_stack_group.sh",
-            "group ran as the user telemetry=false",
+            "HARNESS_E2E_OWN_DOCKER=1 bash scripts/run_exact_stack_group.sh",
+            # Its launcher knows every container of that daemon is the group's.
+            "group ran as the user telemetry=false own docker=1",
             "dockerd stopped",
         ])
 

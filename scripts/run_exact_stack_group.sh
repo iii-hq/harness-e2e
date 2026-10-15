@@ -6,6 +6,7 @@ export III_TELEMETRY_ENABLED=false
 : "${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+launcher="$script_dir/${BASH_SOURCE[0]##*/}"
 repo_root=$(cd -- "$script_dir/.." && pwd)
 contract_tool="$repo_root/scripts/exact_stack_campaign.py"
 # Set by the execution's preparation: assemble the stack once through
@@ -14,7 +15,15 @@ contract_tool="$repo_root/scripts/exact_stack_campaign.py"
 assemble_only=${HARNESS_E2E_ASSEMBLE_ONLY:-}
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
+# How long the engine, Compose and the runner each have to become ready, in
+# seconds of wall clock. Each readiness probe answers within probe_ms or
+# counts as not ready yet, so a probe that hangs never stretches the wait.
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
+probe_ms=5000
+# A group that fails before any run started is tried once more, this long
+# after the first attempt; HARNESS_E2E_GROUP_ATTEMPT is the launcher's own.
+retry_delay_seconds=60
+group_attempt=${HARNESS_E2E_GROUP_ATTEMPT:-1}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 compose_add_timeout_seconds=${HARNESS_E2E_COMPOSE_ADD_TIMEOUT_SECONDS:-600}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
@@ -96,14 +105,28 @@ engine_url="ws://127.0.0.1:${engine_port}"
 mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$e2e_data" \
   "$evaluation_dir" "$artifact_dir/logs" "$artifact_dir/stack"
 chmod 700 "$compose_state"
+# A second attempt says so where a reader of the group looks first: the
+# attempt, and why the first one failed (its failure.json, under attempts/1).
+if ((group_attempt > 1)); then
+  { cat "$artifact_dir/attempts/1/failure.json" 2>/dev/null || true; } \
+    | jq -s --argjson attempt "$group_attempt" '{attempt: $attempt, earlier_attempts: .}' \
+    >"$artifact_dir/stack/attempt.json" \
+    || jq -n --argjson attempt "$group_attempt" '{attempt: $attempt}' >"$artifact_dir/stack/attempt.json"
+fi
 
 iii_bin="$tools_dir/iii"
+# The stderr of the last `iii trigger`, and the function it called when that
+# call failed: what iii answered is the cause a failure record gives.
+iii_stderr="$run_root/iii-stderr.log"
+iii_failed="$run_root/iii-failed-function"
 engine_pid=""
 compose_pid=""
 compose_started=false
 compose_down=false
+run_started=false
 failure_phase=cli_install
 failure_reason=""
+failure_line=""
 
 log() {
   printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
@@ -122,14 +145,30 @@ capture_processes() {
     >"$output"
 }
 
+# iii_trigger TIMEOUT_MS FUNCTION [ARGS...]: one call into the engine. A CLI
+# that hangs past its own timeout is stopped a second later; in the
+# foreground, so an interrupt reaches it as it reaches the launcher. Its
+# stderr is passed on as it came, after the call; when the call fails, the
+# function stays named in $iii_failed until a later call succeeds or the
+# launcher tolerates the failure.
+iii_trigger() {
+  local timeout_ms=$1 function_id=$2 status=0
+  shift 2
+  timeout --foreground -k 1 $((timeout_ms / 1000 + 1)) "$iii_bin" trigger "$function_id" \
+    --engine "$engine_url" --timeout-ms "$timeout_ms" "$@" 2>"$iii_stderr" || status=$?
+  cat "$iii_stderr" >&2
+  if ((status == 0)); then
+    rm -f "$iii_failed"
+  else
+    printf '%s' "$function_id" >"$iii_failed"
+  fi
+  return "$status"
+}
+
 compose_trigger() {
   local function_id=$1
   shift
-  "$iii_bin" trigger "$function_id" \
-    --engine "$engine_url" \
-    --namespace "$namespace" \
-    --timeout-ms 600000 \
-    "$@"
+  iii_trigger 600000 "$function_id" --namespace "$namespace" "$@"
 }
 
 start_compose() {
@@ -165,11 +204,7 @@ project_trigger() {
   local function_id=$1
   local payload=$2
   local timeout_ms=${3:-30000}
-  "$iii_bin" trigger "$function_id" \
-    --engine "$engine_url" \
-    --namespace "$namespace" \
-    --timeout-ms "$timeout_ms" \
-    --json "$payload"
+  iii_trigger "$timeout_ms" "$function_id" --namespace "$namespace" --json "$payload"
 }
 
 # `compose::add` may either finish synchronously or return an asynchronous
@@ -218,8 +253,15 @@ export_compose() {
 
 cleanup() {
   local status=$?
+  local exited=$status
   trap - EXIT INT TERM ERR
   set +e
+  # The call that failed, before taking the stack down makes others.
+  local failed_call=""
+  if [[ -f "$iii_failed" ]]; then
+    failed_call=$(<"$iii_failed")
+    mv -f "$iii_stderr" "$run_root/failed-call.log"
+  fi
   if [[ "$compose_started" == true && "$compose_down" != true ]] && kill -0 "$compose_pid" 2>/dev/null; then
     compose_trigger compose::down "file=$compose_file" >"$artifact_dir/stack/down.json" 2>>"$artifact_dir/logs/compose-commands.log"
     compose_down=true
@@ -236,9 +278,15 @@ cleanup() {
     wait "$engine_pid" 2>/dev/null || true
   fi
   if ((status != 0)); then
-    [[ -n "$failure_reason" ]] || failure_reason="Compose execution failed during $failure_phase (exit $status)"
-    jq -n --arg phase "$failure_phase" --arg error "$failure_reason" --argjson exit_code "$status" \
-      '{phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' >"$artifact_dir/failure.json"
+    # The phase, and what iii answered when one of its calls failed: its code
+    # and the start of its message, not the line of this script.
+    local record=(--output "$artifact_dir/failure.json" --phase "$failure_phase" --exit-code "$status"
+      --attempt "$group_attempt")
+    [[ -z "$failure_reason" ]] || record+=(--reason "$failure_reason")
+    [[ -z "$failure_line" ]] || record+=(--line "$failure_line")
+    [[ -z "$failed_call" ]] || record+=(--iii-function "$failed_call" --iii-stderr "$run_root/failed-call.log")
+    [[ ! -f "$artifact_dir/attempts/1/failure.json" ]] || record+=(--earlier "$artifact_dir/attempts/1/failure.json")
+    python3 "$contract_tool" failure "${record[@]}"
   fi
   # Export named regular files, never the runtime tree. Keep the pre-up
   # manifest immutable for compose-evidence; a final snapshot records any
@@ -261,13 +309,71 @@ cleanup() {
       --process-after "$artifact_dir/stack/processes-after.json" \
       --output "$artifact_dir/compose-evidence.json" || status=1
   fi
+  local clean=true
+  stop_leftovers || clean=false
   rm -rf "$run_root"
+  # Before e2e::run nothing of the subject has run: a passing fault of the
+  # stack (GitHub answering 500 for an artifact, an engine slow to come up)
+  # gets the group one more attempt from a clean start, a minute later. Once
+  # e2e::run was called, never: the subject's result is not drawn again.
+  # Never after an interruption, never with anything of this attempt still
+  # running, and not for preparation, which assembles with tries of its own
+  # (scripts/executor.sh). The pause comes first: interrupted during it, the
+  # group ends with this attempt's evidence where it is. Then that evidence
+  # moves under attempts/1.
+  if ((exited != 0 && exited != 130 && exited != 143 && group_attempt == 1)) \
+    && [[ "$run_started" == false && -z "$assemble_only" ]]; then
+    if [[ "$clean" != true ]]; then
+      printf '::warning::%s failed during %s and left processes or containers it could not stop; not trying it again\n' \
+        "$campaign_group_id" "$failure_phase" >&2
+    else
+      printf '::warning::%s failed during %s before any run started; trying the group once more in %ss\n' \
+        "$campaign_group_id" "$failure_phase" "$retry_delay_seconds" >&2
+      sleep "$retry_delay_seconds"
+      mkdir -p "$artifact_dir/attempts/1"
+      find "$artifact_dir" -mindepth 1 -maxdepth 1 ! -name attempts -exec mv -t "$artifact_dir/attempts/1" -- {} +
+      exec env -u HARNESS_E2E_KANBAN_RUNTIME HARNESS_E2E_GROUP_ATTEMPT=2 bash "$launcher"
+    fi
+  fi
   exit "$status"
+}
+
+# The processes of this attempt, by their working directory or command line
+# under the private runtime root. awk reads the root from its environment so
+# that its own command line does not name it.
+runtime_processes() {
+  {
+    find /proc -mindepth 2 -maxdepth 2 -name cwd \( -lname "$run_root" -o -lname "$run_root/*" \) 2>/dev/null \
+      | cut -d/ -f3
+    ps -eo pid=,args= | RUNTIME_ROOT=$run_root/ awk 'index($0, ENVIRON["RUNTIME_ROOT"]) {print $1}'
+  } | sort -un
+}
+
+# What the attempt started and outlived it. Compose starts each worker in a
+# process group of its own, without a parent-death signal, so killing the
+# engine's and Compose's groups can leave workers running that reconnect to
+# whatever engine listens next on the port, under the same namespace. Each
+# process of the runtime root is killed, and every container when the Docker
+# daemon is the group's own (HARNESS_E2E_OWN_DOCKER, set by
+# scripts/executor.sh). Fails when something is still there.
+stop_leftovers() {
+  local pids containers=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pids=$(runtime_processes)
+    if [[ "${HARNESS_E2E_OWN_DOCKER:-}" == 1 ]]; then
+      containers=$(docker ps -aq) || return 1
+    fi
+    [[ -n "$pids$containers" ]] || return 0
+    # shellcheck disable=SC2086 # one pid or container id per word
+    { [[ -z "$pids" ]] || kill -KILL $pids; [[ -z "$containers" ]] || docker rm -f $containers; } >/dev/null 2>&1
+    sleep 0.5
+  done
+  return 1
 }
 
 on_error() {
   local status=$? line=$1
-  [[ -n "$failure_reason" ]] || failure_reason="command failed during $failure_phase at line $line (exit $status)"
+  [[ -n "$failure_line" ]] || failure_line=$line
   return "$status"
 }
 
@@ -277,25 +383,26 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 wait_for_engine() {
-  local response
-  for ((attempt = 0; attempt < wait_seconds; attempt++)); do
+  local response started=$SECONDS
+  while ((SECONDS - started < wait_seconds)); do
     kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before becoming ready"
-    response=$("$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' 2>/dev/null || true)
+    response=$(iii_trigger "$probe_ms" engine::workers::list --json '{}' 2>/dev/null || true)
     jq -e '.workers != null' <<<"$response" >/dev/null 2>&1 && return 0
     sleep 1
   done
-  fail "iii engine did not become ready within ${wait_seconds}s"
+  fail "iii engine did not become ready within ${wait_seconds}s (gave up after $((SECONDS - started))s)"
 }
 
 wait_for_compose() {
-  for ((attempt = 0; attempt < wait_seconds; attempt++)); do
+  local started=$SECONDS
+  while ((SECONDS - started < wait_seconds)); do
     kill -0 "$compose_pid" 2>/dev/null || fail "iii compose exited before becoming ready"
-    if compose_trigger compose::list --json '{}' >/dev/null 2>&1; then
+    if iii_trigger "$probe_ms" compose::list --namespace "$namespace" --json '{}' >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
-  fail "iii compose did not become ready within ${wait_seconds}s"
+  fail "iii compose did not become ready within ${wait_seconds}s (gave up after $((SECONDS - started))s)"
 }
 
 capture_processes "$artifact_dir/stack/processes-before.json"
@@ -363,6 +470,12 @@ fi
 chmod 600 "$env_file"
 python3 "$contract_tool" credentials-env --contract "$contract_path" --output "$env_file"
 
+# A declared path://./ worker's source sits beside the original manifest; a
+# second attempt finds it where the first attempt's stack/ was kept.
+local_source_root="$artifact_dir/stack"
+if ((group_attempt > 1)) && [[ -d "$artifact_dir/attempts/1/stack" ]]; then
+  local_source_root="$artifact_dir/attempts/1/stack"
+fi
 project_args=(
   --contract "$contract_path"
   --env-file "$env_file"
@@ -372,7 +485,7 @@ project_args=(
   --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.suite.lane' "$contract_path")"
   --environment "harness-e2e.HARNESS_E2E_CAMPAIGN_GROUP=$campaign_group_id"
   --output "$compose_file"
-  --local-source-root "$artifact_dir/stack"
+  --local-source-root "$local_source_root"
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )
@@ -500,8 +613,7 @@ up_request=$(jq -cn --arg file "$compose_file" --argjson frozen "$frozen" '{file
 start_compose "$up_request"
 jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
-"$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' \
-  >"$artifact_dir/stack/workers.json"
+iii_trigger 30000 engine::workers::list --json '{}' >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 
 if [[ "$profile_assets" == true ]]; then
@@ -518,6 +630,7 @@ if [[ "$profile_assets" == true ]]; then
       # A worker may legitimately publish no skill bundle. Other failures must
       # not turn a requested profile into an execution with different assets.
       grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" || fail "Could not load pinned skills for $worker"
+      rm -f "$iii_failed"
     fi
   done < <(jq -c '.[]' "$artifact_dir/stack/declared-workers.json")
   # Registry bundles may also contain profiles. The explicitly selected
@@ -545,17 +658,19 @@ fi
 failure_phase=runner_readiness
 catalog_payload=$(jq -cn --argjson seed "$seed" '{seed:$seed}')
 runner_ready=false
-for ((attempt = 0; attempt < wait_seconds; attempt++)); do
+readiness_started=$SECONDS
+while ((SECONDS - readiness_started < wait_seconds)); do
   kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before the E2E runner became ready"
   kill -0 "$compose_pid" 2>/dev/null || fail "iii compose exited before the E2E runner became ready"
-  if project_trigger e2e::scenarios-list "$catalog_payload" 120000 \
+  if project_trigger e2e::scenarios-list "$catalog_payload" "$probe_ms" \
     >"$artifact_dir/catalog.json" 2>"$artifact_dir/logs/runner-readiness.log"; then
     runner_ready=true
     break
   fi
   sleep 1
 done
-[[ "$runner_ready" == true ]] || fail "E2E runner did not register e2e::scenarios-list within ${wait_seconds}s"
+[[ "$runner_ready" == true ]] || fail "E2E runner did not register e2e::scenarios-list within \
+${wait_seconds}s (gave up after $((SECONDS - readiness_started))s)"
 
 failure_phase=materialization
 python3 "$contract_tool" materialize \
@@ -567,6 +682,7 @@ python3 "$contract_tool" materialize \
   --group-id "$campaign_group_id"
 
 failure_phase=execution
+run_started=true
 project_trigger e2e::run "$(jq -c . "$artifact_dir/run-request.json")" "$((admission_timeout_seconds * 1000))" \
   >"$artifact_dir/accepted.json"
 remote_execution_id=$(jq -er '.execution_id | select(type == "string" and length > 0)' "$artifact_dir/accepted.json")
@@ -628,6 +744,8 @@ if project_trigger e2e::archive \
     "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 120000 \
     >"$artifact_dir/archive-head.json" 2>>"$artifact_dir/logs/archive.log" || true
 fi
+# Archiving is best effort: whatever it answered is not why the group failed.
+rm -f "$iii_failed"
 [[ -z "$terminal_failure" ]] || fail "$terminal_failure"
 
 failure_phase=compose_down

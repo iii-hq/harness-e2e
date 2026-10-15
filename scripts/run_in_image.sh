@@ -7,8 +7,11 @@
 #   scripts/run_in_image.sh image    print the image this checkout runs in
 #
 # The image holds only tools (the Dockerfile beside scripts/). The scripts are
-# this checkout's: its root is mounted at the same path, with the target/
-# directory every phase reads and writes. No container can gain privileges,
+# this checkout's: its root is mounted read-only at the same path, and only
+# the target/ directory, where every phase writes, read-write. What a pinned
+# commit's build, the stack's runner or a group's subject writes stays below
+# target/; the scripts the host runs afterwards are out of its reach (short of
+# the root a group's user can reach, below). No container can gain privileges,
 # each has a network of its own (a group starts its engine on 49134 there),
 # and every phase runs as the calling user. Nothing reaches the host's
 # Docker: a `group` container is privileged and starts as root, with a volume
@@ -26,8 +29,8 @@
 # --env-file adds a file of them. `prepare` without a step runs resolve,
 # build, materialize and assemble, each in a container of its own, the env
 # file only for assemble: the commits a stack pins are built with neither.
-# A `prepare` container sees the checkout read-only but for target/, and
-# `prepare build` alone the build cache HARNESS_E2E_WORKER_BUILDS names.
+# `prepare build` alone also sees the build cache HARNESS_E2E_WORKER_BUILDS
+# names.
 # The phase learns which variables are credentials from
 # HARNESS_E2E_CREDENTIALS, the names of that file: the launcher writes those
 # into the stack's .env and packaging redacts their values out of evidence.
@@ -99,13 +102,8 @@ trap 'rm -f "$cidfile"' EXIT
 
 labels=(--label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
   --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}")
-mounts=(--volume "$root:$root")
-if [[ "$phase" == prepare ]]; then
-  # What a pinned commit's build or the stack's runner writes stays below
-  # target/: the scripts the host runs afterwards are out of its reach.
-  mkdir -p "$root/target"
-  mounts=(--volume "$root:$root:ro" --volume "$root/target:$root/target")
-fi
+mkdir -p "$root/target"
+mounts=(--volume "$root:$root:ro" --volume "$root/target:$root/target")
 args=(run --rm --init --cidfile "$cidfile" "${labels[@]}"
   --security-opt no-new-privileges
   "${mounts[@]}" --workdir "$root"

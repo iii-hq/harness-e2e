@@ -167,23 +167,23 @@ def newest_release_candidate(versions: list[str]) -> str | None:
     tags, the rule Release Control dispatches with
     (`resolveNewestCliReleaseCandidate`). Stable releases and other
     pre-releases are not candidates; candidates order by core, then N."""
-    ranked = [
-        (tuple(int(part) for part in match.groups()), version)
-        for version in versions
-        if (match := RELEASE_CANDIDATE.fullmatch(version))
-    ]
-    return max(ranked)[1] if ranked else None
+    return next(iter(release_candidates(versions)), None)
 
 
-def resolve_cli(selector: str, token: str | None) -> dict[str, str]:
-    """The iii release every group installs, with its archive's digest."""
-    version = str(selector).strip()
-    if version == "latest":
-        refs = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/git/matching-refs/tags/iii/v", token=token)
-        tags = [str(ref.get("ref", "")).removeprefix("refs/tags/iii/v") for ref in refs]
-        version = newest_release_candidate(tags) or ""
-        if not version:
-            raise ResolutionError(f"{III_REPOSITORY} has no release candidate")
+def release_candidates(versions: list[str]) -> list[str]:
+    """Every release candidate among `versions`, newest first."""
+    ranked = sorted(
+        ((tuple(int(part) for part in match.groups()), version)
+         for version in versions
+         if (match := RELEASE_CANDIDATE.fullmatch(version))),
+        reverse=True,
+    )
+    return [version for _, version in ranked]
+
+
+def cli_release(version: str, token: str | None) -> dict[str, str] | None:
+    """iii/v<version>'s archive for the groups, with its digest; None while
+    the release publishes no such archive."""
     release = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/releases/tags/iii/v{version}", token=token)
     for asset in release.get("assets") or []:
         if asset.get("name") == CLI_ASSET:
@@ -193,7 +193,51 @@ def resolve_cli(selector: str, token: str | None) -> dict[str, str]:
                 raise ResolutionError(f"iii/v{version} {CLI_ASSET} has no SHA-256 digest")
             digest = digest if digest.startswith("sha256:") else f"sha256:{digest}"
             return {"version": version, "target": CLI_TARGET, "asset": CLI_ASSET, "sha256": digest}
-    raise ResolutionError(f"release iii/v{version} publishes no {CLI_ASSET}")
+    return None
+
+
+def resolve_cli(selector: str, token: str | None, skipped: list[dict[str, str]] | None = None) -> dict[str, str]:
+    """The iii release every group installs, with its archive's digest.
+
+    `latest` is the newest release candidate that publishes the archive: one
+    tagged a moment ago may not have it yet (its release still building, or
+    not created). Then an earlier candidate of the same X.Y.Z runs, or the
+    candidate right before the newest, never one further back, said out loud;
+    each candidate passed over is appended to `skipped`, with why."""
+    version = str(selector).strip()
+    if version != "latest":
+        cli = cli_release(version, token)
+        if cli is None:
+            raise ResolutionError(f"release iii/v{version} publishes no {CLI_ASSET}")
+        return cli
+    refs = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/git/matching-refs/tags/iii/v", token=token)
+    candidates = release_candidates([str(ref.get("ref", "")).removeprefix("refs/tags/iii/v") for ref in refs])
+    if not candidates:
+        raise ResolutionError(f"{III_REPOSITORY} has no release candidate")
+    newest = candidates[0]
+    core = RELEASE_CANDIDATE.fullmatch(newest).groups()[:3]
+    allowed = [version for index, version in enumerate(candidates)
+               if index == 1 or RELEASE_CANDIDATE.fullmatch(version).groups()[:3] == core]
+    passed: list[dict[str, str]] = []
+    for version in allowed:
+        try:
+            cli = cli_release(version, token)
+            reason = f"publishes no {CLI_ASSET}"
+        except ResolutionError as error:
+            cause = error.__cause__
+            if not (isinstance(cause, urllib.error.HTTPError) and cause.code == 404):
+                raise
+            cli, reason = None, "has no release yet (HTTP 404)"
+        if cli is not None:
+            if passed:
+                print(f"::warning::iii/v{newest} publishes no {CLI_ASSET} yet; iii: latest runs "
+                      f"iii/v{version}, the newest release candidate that does", flush=True)
+            if skipped is not None:
+                skipped.extend(passed)
+            return cli
+        passed.append({"version": version, "reason": reason})
+    raise ResolutionError(f"iii/v{newest} publishes no {CLI_ASSET}, nor does any candidate that may run in its "
+                          f"place ({', '.join('iii/v' + version for version in allowed[1:]) or 'none'})")
 
 
 def resolve_template(value: Any, token: str | None) -> dict[str, str] | None:
@@ -628,9 +672,14 @@ def command_runtime(args: argparse.Namespace) -> None:
     token = os.environ.get("GITHUB_TOKEN") or None
     execution = json.loads((args.contract_dir / "execution.json").read_text())
     stack = load_yaml((args.contract_dir / "stack.yaml").read_text())
-    cli = resolve_cli(stack.get("iii") or "latest", token)
+    requested = str(stack.get("iii") or "latest")
+    skipped: list[dict[str, str]] = []
+    cli = resolve_cli(requested, token, skipped)
     commits = resolve_commits(stack, token)
-    execution.update(iii=cli["version"], cli=cli, template=resolve_template(stack.get("template"), token),
+    # What was asked, what runs, and every newer candidate passed over and why.
+    execution.update(iii=cli["version"], cli=cli,
+                     iii_resolution={"requested": requested, "resolved": cli["version"], "skipped": skipped},
+                     template=resolve_template(stack.get("template"), token),
                      commits=commits, builds=builds_key(commits))
     write_json(args.contract_dir / "execution.json", execution)
 

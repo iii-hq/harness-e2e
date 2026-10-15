@@ -53,11 +53,19 @@ ENVIRONMENT_CREDENTIALS = ("DEEPSEEK_API_KEY", "ZAI_API_KEY", "TYPESAFE_API_KEY"
 #: Shorter values are not looked for in evidence: they would match anywhere
 #: and break the JSON they sit in.
 REDACTION_MIN_LENGTH = 8
-#: What the launcher captures from the processes it starts, below a bundle's
-#: root: nothing hashes it, so a credential found there is replaced. Every
-#: other file is bound by a digest (the runner's references, the aggregator's
-#: campaign bundle, Release Control's checks) and is never rewritten.
-REWRITABLE_ROOT = "logs"
+#: What the launcher captures from the processes it starts, and the whole
+#: tree of a group's attempt that failed before any run started, below a
+#: bundle's root: nothing hashes them, so a credential found there is
+#: replaced. Every other file is bound by a digest (the runner's references,
+#: the aggregator's campaign bundle, Release Control's checks) and is never
+#: rewritten.
+REWRITABLE_ROOTS = ("logs", "attempts")
+#: How much of the message iii answered a failure record keeps: the cause,
+#: not a log. The whole stderr stays in the group's logs.
+FAILURE_MESSAGE_LIMIT = 300
+#: Where `iii trigger` prints what the engine or a worker answered when a
+#: call fails: `Error: {"code": ..., "message": ...}`, or plain text.
+III_ERROR = re.compile(r"^Error: ", re.MULTILINE)
 #: The providers that sign in with a subscription login rather than a key:
 #: the variable a group receives its access token in (never a refresh or id
 #: token), the one that tells the provider where its login is, and the file
@@ -181,17 +189,31 @@ def credential_forms(value: str) -> list[str]:
     return sorted(forms, key=len, reverse=True)
 
 
-def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> dict[str, Any]:
+def redact_text(text: str, credentials: dict[str, str]) -> str:
+    """`text` with each credential long enough to look for, as written and as
+    JSON escapes it, replaced by `[redacted:NAME]`."""
+    scanned = [(name, value) for name, value in credentials.items() if len(value) >= REDACTION_MIN_LENGTH]
+    # Longest first: a value that holds another is replaced whole.
+    for name, value in sorted(scanned, key=lambda item: (-len(item[1]), item[0])):
+        for form in credential_forms(value):
+            text = text.replace(form, f"[redacted:{name}]")
+    return text
+
+
+def redact_tree(
+    root: Path, paths: list[str], credentials: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """Look for each credential's value in the files at `paths`. Found in the
     launcher's logs, it is replaced by `[redacted:NAME]`; found anywhere else,
-    nothing is rewritten and the tree is refused. Says how often per name,
-    never the value."""
+    the file is bound by a digest and never rewritten: it is returned, with
+    the names found in it, for packaging to withhold. Says how often per
+    name, never the value."""
     scanned = {name: value for name, value in credentials.items() if len(value) >= REDACTION_MIN_LENGTH}
     # Longest first: a value that holds another is replaced whole.
     ordered = sorted(scanned.items(), key=lambda item: (-len(item[1]), item[0]))
     hits = dict.fromkeys(sorted(scanned), 0)
     rewrites: dict[Path, bytes] = {}
-    bound = []
+    bound: dict[str, list[str]] = {}
     for relative in paths:
         path = root / relative
         payload = original = path.read_bytes()
@@ -205,22 +227,17 @@ def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> di
                     payload = payload.replace(form.encode(), f"[redacted:{name}]".encode())
         if payload == original:
             continue
-        if Path(relative).parts[0] == REWRITABLE_ROOT:
+        if Path(relative).parts[0] in REWRITABLE_ROOTS:
             rewrites[path] = payload
         else:
-            bound.append(f"{relative} ({', '.join(sorted(found))})")
-    if bound:
-        raise ValueError(
-            "provider credentials found in files bound by digests, which are never rewritten: "
-            + "; ".join(bound)
-        )
+            bound[relative] = sorted(found)
     for path, payload in rewrites.items():
         path.write_bytes(payload)
     return {
         "credentials": hits,
         "files": sorted(path.relative_to(root).as_posix() for path in rewrites),
         "too_short": sorted(set(credentials) - set(scanned)),
-    }
+    }, bound
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -1036,23 +1053,94 @@ def export_compose_files(
         shutil.copyfile(source, destination)
 
 
-def _package_files(root: Path) -> list[dict[str, Any]]:
-    """Hash regular files without ever traversing or dereferencing symlinks."""
+def iii_error(stderr: str) -> dict[str, str]:
+    """The code and message of the last error `iii trigger` printed; an error
+    in plain text is its message. Nothing when it printed none."""
+    starts = [match.end() for match in III_ERROR.finditer(stderr)]
+    if not starts:
+        return {}
+    text = stderr[starts[-1]:].strip()
+    try:
+        answered, _ = json.JSONDecoder().raw_decode(text)
+    except ValueError:
+        answered = None
+    if not isinstance(answered, dict):
+        answered = {"message": text.splitlines()[0] if text else ""}
+    error = {}
+    if isinstance(answered.get("code"), str) and answered["code"]:
+        error["code"] = answered["code"]
+    message = answered.get("message")
+    if isinstance(message, str) and message.strip():
+        message = " ".join(message.split())
+        if len(message) > FAILURE_MESSAGE_LIMIT:
+            message = message[:FAILURE_MESSAGE_LIMIT - 1] + "…"
+        error["message"] = message
+    return error
+
+
+def failure_record(
+    phase: str,
+    exit_code: int,
+    attempt: int = 1,
+    reason: str | None = None,
+    line: int | None = None,
+    function: str | None = None,
+    stderr: str = "",
+    earlier: list[dict[str, Any]] | None = None,
+    credentials: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """A group's `failure.json`: the phase it failed in and why. When the
+    call that failed was iii's, its code and message (`function` names the
+    call) are the cause, and the error says so unless the launcher gave a
+    reason of its own. Earlier attempts of the group come along.
+
+    The credentials the group received are redacted out of it here, before
+    the message is cut short (a cut could leave part of one), so packaging
+    never has to withhold the record of why the group failed."""
+    credentials = credentials or {}
+    stderr = redact_text(stderr, credentials)
+    reason = redact_text(reason, credentials) if reason else reason
+    answered = iii_error(stderr) if function else {}
+    if not reason and function:
+        cause = ": ".join(answered[key] for key in ("code", "message") if key in answered)
+        reason = (f"{function} failed during {phase}: {cause}" if cause
+                  else f"{function} failed during {phase} (exit {exit_code})")
+    if not reason:
+        reason = (f"command failed during {phase} at line {line} (exit {exit_code})" if line
+                  else f"Compose execution failed during {phase} (exit {exit_code})")
+    record: dict[str, Any] = {
+        "phase": phase, "outcome": "infra_failed", "error": reason, "exit_code": exit_code, "attempt": attempt,
+    }
+    if function:
+        record.update(answered, function=function)
+    if earlier:
+        record["earlier_attempts"] = earlier
+    return json.loads(redact_text(json.dumps(record), credentials))
+
+
+def reserved_credential_path(name: str) -> bool:
+    """A file or folder name that holds credentials wherever it appears."""
+    return (name == ".env" or name.startswith(".env.") or name.endswith(".env")
+            or name in {"secrets", ".aws", ".ssh", ".gnupg"})
+
+
+def _package_files(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Hash regular files without ever traversing or dereferencing symlinks.
+    Reserved credential paths are listed apart, never read nor entered."""
     if root.is_symlink():
         raise ValueError(f"artifact root must not be a symlink: {root}")
     resolved_root = root.resolve(strict=True)
     files: list[dict[str, Any]] = []
+    reserved: list[str] = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
+        if any(relative.startswith(f"{folder}/") for folder in reserved):
+            continue
         if path.is_symlink():
             raise ValueError(f"artifact tree contains symlink: {relative}")
-        if (
-            path.name == ".env"
-            or path.name.startswith(".env.")
-            or path.name.endswith(".env")
-            or path.name in {"secrets", ".aws", ".ssh", ".gnupg"}
-        ):
-            raise ValueError(f"artifact tree contains a reserved credential path: {relative}")
+        if reserved_credential_path(path.name):
+            reserved.append(relative)
+            continue
         if not path.is_file() or path.name == "bundle-manifest.json":
             continue
         resolved = path.resolve(strict=True)
@@ -1068,7 +1156,7 @@ def _package_files(root: Path) -> list[dict[str, Any]]:
                 "size_bytes": len(payload),
             }
         )
-    return files
+    return files, reserved
 
 
 def package_bundle(
@@ -1078,11 +1166,34 @@ def package_bundle(
     credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Check the tree and look for the credentials the phase received in it
-    (see `redact_tree`), then hash it: the digests are of what is uploaded."""
-    files = _package_files(root)
-    redaction = redact_tree(root, [entry["path"] for entry in files], credentials or {})
-    if redaction["files"]:
-        files = _package_files(root)
+    (see `redact_tree`), then hash it: the digests are of what is uploaded.
+
+    A file that holds one of them outside the launcher's logs, or a path
+    reserved for credentials, is withheld: removed from the tree, so it is
+    never uploaded, and listed in `withheld` by path and reason (the names
+    found, never a value or a digest of it). The rest of the group's evidence
+    is packaged and its runs are reported as they are. Neither Release
+    Control nor the Console reads `withheld` yet: a deliverable or other
+    reference to a withheld file fails their integrity check closed (the
+    evidence shows as unavailable), as a missing file would."""
+    import shutil
+
+    files, reserved = _package_files(root)
+    redaction, bound = redact_tree(root, [entry["path"] for entry in files], credentials or {})
+    withheld = sorted(
+        [{"path": path, "withheld": "credential", "reason": "reserved credential path"} for path in reserved]
+        + [{"path": path, "withheld": "credential", "reason": "holds " + ", ".join(names)}
+           for path, names in bound.items()],
+        key=lambda entry: entry["path"],
+    )
+    for entry in withheld:
+        path = root / entry["path"]
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    if redaction["files"] or withheld:
+        files, _ = _package_files(root)
     return {
         "schema": "e2e-observation-bundle",
         "campaign_id": contract["campaign_id"],
@@ -1093,6 +1204,7 @@ def package_bundle(
         "terminal_payload": "results.json" if (root / "results.json").is_file() else None,
         "failure_payload": "failure.json" if (root / "failure.json").is_file() else None,
         "files": files,
+        "withheld": withheld,
         "redaction": redaction,
     }
 
@@ -1165,9 +1277,33 @@ def main() -> int:
     export.add_argument("--artifact-root", type=Path, required=True)
     export.add_argument("--allowed-root", type=Path, required=True)
     export.add_argument("--final", action="store_true")
+    failure = commands.add_parser("failure", help="a group's failure.json")
+    failure.add_argument("--output", type=Path, required=True)
+    failure.add_argument("--phase", required=True)
+    failure.add_argument("--exit-code", type=int, required=True)
+    failure.add_argument("--attempt", type=int, default=1)
+    failure.add_argument("--reason")
+    failure.add_argument("--line", type=int)
+    failure.add_argument("--iii-function", help="the iii call that failed")
+    failure.add_argument("--iii-stderr", type=Path, help="what that call printed on stderr")
+    failure.add_argument("--earlier", type=Path, action="append", default=[],
+                         help="the failure.json of an earlier attempt")
     args = parser.parse_args()
 
     try:
+        if args.command == "failure":
+            # Whatever else went wrong, the group's failure is recorded.
+            stderr = args.iii_stderr.read_text(errors="replace") if args.iii_stderr and args.iii_stderr.is_file() else ""
+            earlier = []
+            for path in args.earlier:
+                try:
+                    earlier.append(load_object(path, "earlier failure"))
+                except (ValueError, OSError):
+                    earlier.append({"unreadable": path.name})
+            record = failure_record(args.phase, args.exit_code, args.attempt, args.reason, args.line,
+                                    args.iii_function, stderr, earlier, received_credentials(os.environ))
+            args.output.write_text(json.dumps(record, indent=2) + "\n")
+            return 0
         if args.command == "export-compose":
             export_compose_files(args.compose, args.runtime_root, args.artifact_root, args.allowed_root, args.final)
             return 0
@@ -1277,6 +1413,8 @@ def main() -> int:
                 raise ValueError("workflow must be a JSON object")
             credentials = received_credentials(os.environ, args.credentials)
             manifest = package_bundle(args.root, contract, workflow, credentials)
+            for entry in manifest["withheld"]:
+                print(f"::warning::withheld {entry['path']} from the evidence: {entry['reason']}")
             for name in manifest["redaction"]["too_short"]:
                 print(f"::warning::{name} is shorter than {REDACTION_MIN_LENGTH} characters: "
                       "the evidence is not checked for it")
