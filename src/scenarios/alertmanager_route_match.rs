@@ -59,7 +59,8 @@ const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     "revision_pinned",
     10,
     "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
-);
+)
+.labeled("Checkout is based on the supplied revision");
 // Points scale with the oracle cases that match; the gate needs all of them,
 // because the refactor must not change how any alert is routed.
 const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
@@ -67,17 +68,20 @@ const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
     70,
     "Does route::match return the oracle's receivers, group-by labels and group-by-all flags for all 18 frozen alert cases, with points in proportion to the cases that match?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("route::match routes alerts like the oracle");
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,
     "Does Alertmanager's TestRouteMatch pass using route::match on the live engine and fail when that engine is unavailable?",
-);
+)
+.labeled("Alertmanager's route test passes through iii");
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
     10,
     "Are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
-);
+)
+.labeled("Protected Alertmanager files stay unchanged");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REVISION_PINNED,
     MATCH_EQUIVALENT,

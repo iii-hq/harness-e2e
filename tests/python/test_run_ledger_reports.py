@@ -217,7 +217,8 @@ class ReportPayloadTests(unittest.TestCase):
         artifacts = self.tmp / "artifacts"
         artifacts.mkdir()
         criteria = [
-            {"id": "exact_migrated_state", "description": "Does the stored value match?", "possible": 50,
+            {"id": "exact_migrated_state", "description": "Does the stored value match?",
+             "label": "Stored record matches the migration exactly", "possible": 50,
              "awarded": 50, "reason": "exact", "gate": True},
             {"id": "concise_migration_confirmation", "description": "Is the reply concise?", "possible": 10,
              "awarded": 0, "reason": "long", "gate": False},
@@ -245,10 +246,14 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual(run["scenario_title"], "Safe update of saved data")
         self.assertEqual(run["scenario_summary"], "Read a saved record at revision 1 and migrate it to revision 2.")
         self.assertEqual(run["scenario_protects"], "An agent can update a record. If it fails, data is lost.")
-        # "Completed when" and "Score also counts" are read from the criteria.
+        # "Completed when" and "Score also counts" are read from the criteria,
+        # by label when a criterion states one, else by description.
         self.assertEqual(
-            [(item["description"], item["gate"]) for item in run["run"]["criteria"]],
-            [("Does the stored value match?", True), ("Is the reply concise?", False)],
+            [(item.get("label"), item["description"], item["gate"]) for item in run["run"]["criteria"]],
+            [
+                ("Stored record matches the migration exactly", "Does the stored value match?", True),
+                (None, "Is the reply concise?", False),
+            ],
         )
 
     def test_a_group_that_died_still_reports_its_committed_runs(self):

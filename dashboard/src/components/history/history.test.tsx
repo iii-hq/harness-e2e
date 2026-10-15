@@ -143,6 +143,10 @@ describe('the contract', () => {
       criteria: base.criteria.map((criterion) => ({
         ...criterion,
         gate: gates.has(criterion.id),
+        label:
+          criterion.id === 'domain_primary'
+            ? 'Feature preview shows exactly the right fields'
+            : undefined,
       })),
     }
     const description = (id: string) =>
@@ -160,7 +164,10 @@ describe('the contract', () => {
       at('<dt>Protects</dt><dd>An agent can build a Console Worker.'),
       at('<dt>Task</dt><dd>Build a Worker whose Console page'),
       at('<dt>Completed when</dt>'),
-      at(`<li>${description('domain_primary')}</li>`),
+      // A labelled criterion reads as its label and opens on its question.
+      at(
+        `<li><details><summary>Feature preview shows exactly the right fields</summary><p class="th-faint">${description('domain_primary')}</p></details></li>`,
+      ),
       at(`<li>${description('console_delivery')}</li>`),
       at('<dt>Score also counts</dt>'),
       at(`<li>${description('runtime_contract')}</li>`),
@@ -169,6 +176,7 @@ describe('the contract', () => {
     ]
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect((html.match(/<li>/g) ?? []).length).toBe(base.criteria.length)
+    expect((html.match(/<details>/g) ?? []).length).toBe(1)
 
     // Without a gate nothing says when it completes; the criteria only score.
     const ungated = renderToStaticMarkup(

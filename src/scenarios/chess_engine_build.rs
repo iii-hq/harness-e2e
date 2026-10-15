@@ -45,60 +45,71 @@ const RUNTIME_CONTRACT: AssessmentSpec = AssessmentSpec::scored_in(
     10,
     "Does worker-compose.yaml declare the run-scoped Worker, does Compose report it ready, and are all four described iii functions registered?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Worker is ready with its four functions");
 const START_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_start",
     7,
     "Do the starting-position legal moves and perft results match the independent oracle?",
-);
+)
+.labeled("Starting-position moves match the oracle");
 const CASTLING_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_castling",
     7,
     "Do the castling-position legal moves and perft results match the independent oracle?",
-);
+)
+.labeled("Castling moves match the oracle");
 const EN_PASSANT_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_en_passant",
     7,
     "Do the en-passant-position legal moves and perft results match the independent oracle?",
-);
+)
+.labeled("En passant moves match the oracle");
 const PROMOTION_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_promotion",
     7,
     "Do the promotion-position legal moves and perft results match the independent oracle?",
-);
+)
+.labeled("Promotion moves match the oracle");
 const CHECK_RULES: AssessmentSpec = AssessmentSpec::scored(
     "rules_check_evasion",
     7,
     "Do the check-evasion-position legal moves and perft results match the independent oracle?",
-);
+)
+.labeled("Check-evasion moves match the oracle");
 const PLAY_RULES: AssessmentSpec = AssessmentSpec::scored(
     "play_contract",
     10,
     "Does the Worker apply a legal move to the exact oracle FEN and reject an illegal move?",
-);
+)
+.labeled("Legal moves apply, illegal moves are rejected");
 const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     "invalid_inputs",
     10,
     "Does the Worker reject malformed FEN, invalid depth, and malformed move requests?",
-);
+)
+.labeled("Malformed FEN, depth and moves are rejected");
 const CONSOLE_DELIVERY: AssessmentSpec = AssessmentSpec::scored_in(
     "console_delivery",
     15,
     "Does the Worker register loadable script and style assets with fresh Console hashes, no warnings, and an enabled worker?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Console loads the Worker's page assets cleanly");
 const PLAYABLE_UI: AssessmentSpec = AssessmentSpec::gate_in(
     "playable_ui",
     10,
     "Does the real iii Console render the 64-square page and play e2-e4 and e7-e5 through Worker functions to both oracle FENs?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Console board plays e2-e4 and e7-e5");
 const EVIDENCE_COMPLETE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     10,
     "Are portable before-and-after screenshots and capture metadata bound to the candidate, Compose, and checked-FEN hashes?",
     EvaluationDimension::StructuralIntegrity,
-);
+)
+.labeled("Screenshots and metadata match the candidate");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     RUNTIME_CONTRACT,
     START_RULES,

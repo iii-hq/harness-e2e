@@ -24,27 +24,32 @@ const TIMER_ARMED: AssessmentSpec = AssessmentSpec::scored(
     "timer_armed",
     20,
     "Is exactly one wake-only relative timer armed before any result write?",
-);
+)
+.labeled("One wake-only timer armed before writing");
 const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
     "Does the timer retire after waking the original session exactly once?",
-);
+)
+.labeled("Timer woke the session exactly once");
 const WAKE_ACTION: AssessmentSpec = AssessmentSpec::gate(
     "wake_action",
     25,
     "Did this run's timer wake the session, and did a state::set after that wake store the requested result that state still holds at the end?",
-);
+)
+.labeled("Result written after the timer wake");
 const NO_POLLING: AssessmentSpec = AssessmentSpec::scored(
     "no_polling",
     20,
     "Is the gated status function called exactly once after the timer wake and never before it?",
-);
+)
+.labeled("Status checked once, only after waking");
 const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::scored(
     "clean_completion",
     15,
     "Does the root complete without children, errors, or surviving bindings?",
-);
+)
+.labeled("Session ends with no errors or leftovers");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     TIMER_ARMED,
     PARENT_WOKEN,

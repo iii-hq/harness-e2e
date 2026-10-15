@@ -23,17 +23,18 @@ const FIXTURE_REVISION: &str = "3ee24f7ace3c014db35423f14939ad3f6ce0c3d2";
 const APP_BASELINE: &str = "76a23abebff553a8ccf1397bd2f991c273bac03c";
 const DELIVERABLE_ID: &str = "trending_topics_build_evidence";
 
-const CRITERIA: [(&str, u8, &str); 10] = [
-    ("B01", 20, "Is the final clean build branch a non-merge descendant of the immutable baseline, pushed to the attempt remote with only allowed paths changed?"),
-    ("B02", 10, "Does the frozen install, build, and preview lifecycle complete successfully?"),
-    ("B03", 15, "Does the home page show the edition and exactly the six input topics with their associated ranks and titles?"),
-    ("B04", 10, "Are the topics presented in ascending numeric rank in both DOM and visual reading order?"),
-    ("B05", 15, "Does every article route show its exact title and complete visible source body?"),
-    ("B06", 10, "Do the home, article, All topics, and browser Back navigation flows work?"),
-    ("B07", 5, "Do direct entry and reload work for every article URL?"),
-    ("B08", 5, "Does every article expose a Source link with the exact input URL?"),
-    ("B09", 5, "Do pages have the required semantic structure and keyboard-operable links with visible focus?"),
-    ("B10", 5, "Do desktop and mobile layouts avoid horizontal overflow and keep required links unobstructed?"),
+/// (id, weight, description the subject is scored on, label for readers).
+const CRITERIA: [(&str, u8, &str, &str); 10] = [
+    ("B01", 20, "Is the final clean build branch a non-merge descendant of the immutable baseline, pushed to the attempt remote with only allowed paths changed?", "Clean build branch pushed from the baseline"),
+    ("B02", 10, "Does the frozen install, build, and preview lifecycle complete successfully?", "Install, build and preview succeed"),
+    ("B03", 15, "Does the home page show the edition and exactly the six input topics with their associated ranks and titles?", "Home page shows the six input topics"),
+    ("B04", 10, "Are the topics presented in ascending numeric rank in both DOM and visual reading order?", "Topics appear in ascending rank order"),
+    ("B05", 15, "Does every article route show its exact title and complete visible source body?", "Every article shows its exact source text"),
+    ("B06", 10, "Do the home, article, All topics, and browser Back navigation flows work?", "Home, article and Back navigation work"),
+    ("B07", 5, "Do direct entry and reload work for every article URL?", "Article URLs work on direct entry and reload"),
+    ("B08", 5, "Does every article expose a Source link with the exact input URL?", "Every article links to its exact source"),
+    ("B09", 5, "Do pages have the required semantic structure and keyboard-operable links with visible focus?", "Semantic structure and keyboard focus are correct"),
+    ("B10", 5, "Do desktop and mobile layouts avoid horizontal overflow and keep required links unobstructed?", "Desktop and mobile layouts have no overflow"),
 ];
 
 /// The deliverable itself: a pushed build that installs, shows the six topics on
@@ -187,9 +188,10 @@ impl Scenario for TrendingTopicsBuild {
             denied_functions: &[],
             criteria: CRITERIA
                 .iter()
-                .map(|(id, weight, description)| {
+                .map(|(id, weight, description, label)| {
                     CriterionSpec::scored(id, *weight, description, EvaluationDimension::Deliverable)
                         .with_gate(GATES.contains(id))
+                        .labeled(label)
                 })
                 .collect(),
         }
@@ -703,7 +705,7 @@ fn awards(result: &Value) -> Result<Vec<CriterionAward>> {
     }
     CRITERIA
         .iter()
-        .map(|(id, weight, _)| {
+        .map(|(id, weight, _, _)| {
             let matches = observations
                 .iter()
                 .filter(|observation| observation["id"] == *id)
@@ -788,7 +790,7 @@ mod tests {
 
     fn result(status: &str, complete: bool) -> Value {
         json!({
-            "criteria": CRITERIA.iter().map(|(id, _, _)| json!({"id":id,"status":status,"reason":"control"})).collect::<Vec<_>>(),
+            "criteria": CRITERIA.iter().map(|(id, _, _, _)| json!({"id":id,"status":status,"reason":"control"})).collect::<Vec<_>>(),
             "complete": complete,
             "infrastructure_errors": [],
             "delivery": {},
@@ -873,12 +875,12 @@ mod tests {
         assert_eq!(
             CRITERIA
                 .iter()
-                .map(|(_, weight, _)| u16::from(*weight))
+                .map(|(_, weight, _, _)| u16::from(*weight))
                 .sum::<u16>(),
             100
         );
         assert_eq!(
-            CRITERIA.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+            CRITERIA.iter().map(|(id, _, _, _)| *id).collect::<Vec<_>>(),
             ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B09", "B10"]
         );
         let names = RUNTIME_ASSETS

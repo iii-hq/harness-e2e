@@ -39,17 +39,20 @@ const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::gate(
     "data_repaired",
     40,
     "Did at least one validator rejection name the seeded defects (beta=-5 and the duplicate beta), and does the final table then break no rule: every amount positive, names unique, and alpha, beta, gamma and delta present?",
-);
+)
+.labeled("Rejected data repaired until every rule holds");
 const DIAGNOSIS_DRIVEN: AssessmentSpec = AssessmentSpec::scored(
     "diagnosis_driven",
     30,
     "Did one envelope-mode auditor registration reject the flawed seed with a factual defect list and no prescribed fix?",
-);
+)
+.labeled("Auditor rejects the seed with facts only");
 const DECISIVE_REPAIR: AssessmentSpec = AssessmentSpec::scored(
     "decisive_repair",
     30,
     "Did the model's own repair converge within two rounds, with full credit for one and half credit for two?",
-);
+)
+.labeled("Repair converged within two rounds");
 const ASSESSMENTS: &[AssessmentSpec] = &[DATA_REPAIRED, DIAGNOSIS_DRIVEN, DECISIVE_REPAIR];
 
 /// The invariants, shared verbatim by the audit function and the evaluator.

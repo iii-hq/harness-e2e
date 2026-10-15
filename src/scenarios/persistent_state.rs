@@ -24,22 +24,26 @@ const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::gate(
     "exact_migrated_state",
     50,
     "Does the stored value exactly equal the migrated record with no missing or additional fields?",
-);
+)
+.labeled("Stored record matches the migration exactly");
 const READ_THEN_WRITE_ONCE: AssessmentSpec = AssessmentSpec::scored(
     "read_then_write_once",
     25,
     "Did the subject read the owned key before exactly one successful state::set, with no errors or writes elsewhere?",
-);
+)
+.labeled("Read the key, then wrote it once");
 const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
     "existing_data_preserved",
     15,
     "Do the baseline owner, alpha item, and metadata remain unchanged while beta is completed and gamma is appended once?",
-);
+)
+.labeled("Existing data kept, only the migration applied");
 const CONCISE_MIGRATION_CONFIRMATION: AssessmentSpec = AssessmentSpec::scored(
     "concise_migration_confirmation",
     10,
     "Is the final response concise and does it state that revision 2 contains three items?",
-);
+)
+.labeled("Reply briefly confirms revision 2 has three items");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     EXACT_MIGRATED_STATE,
     READ_THEN_WRITE_ONCE,

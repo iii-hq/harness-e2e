@@ -51,22 +51,26 @@ const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::gate(
     "exact_migration_result",
     40,
     "Are there five target rows with exact cents, one quarantine row for legacy ID 103, and six compatibility rows with only 103 quarantined?",
-);
+)
+.labeled("Migrated rows and quarantine are exact");
 const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::gate(
     "idempotent_replay",
     20,
     "Did at least two database::transaction calls succeed, and does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
-);
+)
+.labeled("Replaying the migration adds no duplicates");
 const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::gate(
     "source_and_sentinel_preserved",
     25,
     "Does at least one database::transaction succeed while the six legacy rows and the sentinel row remain unchanged?",
-);
+)
+.labeled("Legacy and sentinel rows stay unchanged");
 const TRANSACTION_SCOPE_AND_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "transaction_scope_and_report",
     15,
     "Were all subject writes limited to two database::transaction calls on prefixed relations, with the exact success report returned?",
-);
+)
+.labeled("Writes stay in two scoped transactions");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     EXACT_MIGRATION_RESULT,
     IDEMPOTENT_REPLAY,

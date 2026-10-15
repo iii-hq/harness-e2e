@@ -37,60 +37,71 @@ const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     10,
     "Is the scenario Worker configuration valid and ready, with every required function registered with descriptions and object schemas?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Worker is ready with every function registered");
 const FORM_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::gate(
     "domain_primary",
     20,
     "Does the feature preview list exactly Title, Work type, User story, and Acceptance criteria as visible fields, report no missing required fields, and allow submission?",
-);
+)
+.labeled("Feature preview shows exactly the right fields");
 const FORM_DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
     "domain_branch",
     15,
     "After adding Environment, does the bug preview list exactly Title, Work type, Reproduction, Expected behavior, and Environment as visible fields, report no missing required fields, and allow submission?",
-);
+)
+.labeled("Bug preview shows exactly the right fields");
 const MACHINE_DOMAIN_PRIMARY: AssessmentSpec = AssessmentSpec::gate(
     "domain_primary",
     20,
     "Does a start event in the queued state return the running state?",
-);
+)
+.labeled("Start moves a queued job to running");
 const MACHINE_DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
     "domain_branch",
     15,
     "After adding the cancel transition, does a cancel event in the running state return the cancelled state?",
-);
+)
+.labeled("Cancel moves a running job to cancelled");
 const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     "invalid_inputs",
     10,
     "Does the Worker reject invalid input and preserve the applied edit on the next valid request?",
-);
+)
+.labeled("Invalid input is rejected and the edit kept");
 const CANVAS_INITIAL: AssessmentSpec = AssessmentSpec::scored(
     "canvas_initial",
     10,
     "Does Canvas store and return the expected initial form flowchart or job state diagram?",
-);
+)
+.labeled("Canvas holds the expected initial diagram");
 const CANVAS_UPDATE: AssessmentSpec = AssessmentSpec::scored(
     "canvas_update",
     10,
     "Does the live edit save the expected updated diagram under the same Canvas ID?",
-);
+)
+.labeled("Live edit updates the same Canvas diagram");
 const CONSOLE: AssessmentSpec = AssessmentSpec::gate_in(
     "console_delivery",
     10,
     "Does Console expose the enabled Worker and Canvas scripts and styles with content hashes, no warnings, and non-empty Worker files?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Console serves the Worker's page assets");
 const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
     "browser_interaction",
     10,
     "Does the Console page complete its form or simulator flow, apply the edit with Tab and Enter, persist it after reload, open the updated Canvas graph, fit a narrow pane without horizontal overflow, and apply visibly different light and dark themes with at least 3:1 contrast for the result and main control?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Console page flow, edit and themes work");
 const EVIDENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     5,
     "After the Worker page opens its updated Canvas graph, are screenshots saved before and after editing, of the graph, and in a narrow dark view, with Worker source and Compose hashes?",
     EvaluationDimension::StructuralIntegrity,
-);
+)
+.labeled("Screenshots and hashes cover every step");
 const FORM_ASSESSMENTS: &[AssessmentSpec] = &[
     RUNTIME,
     FORM_DOMAIN_PRIMARY,

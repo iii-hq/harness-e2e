@@ -188,6 +188,8 @@ export type TestCriterion = {
   id: string
   weight: number
   description: string
+  /** The requirement as a short statement, for the test card. */
+  label?: string
   gate?: boolean
   kind: AssessmentKind
   policy: AssessmentPolicy

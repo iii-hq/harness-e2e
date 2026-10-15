@@ -2043,6 +2043,7 @@ fn populate_composite_report(
             CriterionReport {
                 id: criterion.id.clone(),
                 description: declared.map(|criterion| criterion.description.to_owned()),
+                label: declared.and_then(|criterion| criterion.label.map(str::to_owned)),
                 possible: criterion.weight,
                 awarded: criterion.score.and_then(|score| {
                     score.is_finite().then(|| {
@@ -3139,6 +3140,7 @@ pub(crate) fn criterion_reports(
             CriterionReport {
                 id: criterion.id.to_string(),
                 description: Some(criterion.description.to_string()),
+                label: criterion.label.map(str::to_string),
                 possible: criterion.weight,
                 awarded: award.as_ref().and_then(|(awarded, _)| *awarded),
                 reason: award
@@ -4227,6 +4229,7 @@ mod tests {
             CriterionReport {
                 id: "required".into(),
                 description: None,
+                label: None,
                 possible: 70,
                 awarded: Some(35),
                 reason: "required behavior was incomplete".into(),
@@ -4236,6 +4239,7 @@ mod tests {
             CriterionReport {
                 id: "signal".into(),
                 description: None,
+                label: None,
                 possible: 30,
                 awarded: Some(12),
                 reason: "partial efficiency evidence".into(),

@@ -24,32 +24,38 @@ const EXACT_RESULT: AssessmentSpec = AssessmentSpec::gate(
     "exact_result",
     40,
     "Is the final value exactly the requested object?",
-);
+)
+.labeled("Stored value is exactly the requested object");
 const SINGLE_TASK_CALL: AssessmentSpec = AssessmentSpec::scored(
     "single_task_call",
     13,
     "Did the session make exactly one non-discovery function call, the required state::set?",
-);
+)
+.labeled("Exactly one call: the required state::set");
 const AT_MOST_TWO_TASK_CALLS: AssessmentSpec = AssessmentSpec::scored(
     "at_most_two_task_calls",
     12,
     "Did the session make at most two non-discovery calls, all on the owned scope and key, including the required write?",
-);
+)
+.labeled("At most two calls, all on its key");
 const SINGLE_TURN: AssessmentSpec = AssessmentSpec::scored(
     "single_turn",
     10,
     "Did the session complete in exactly one turn?",
-);
+)
+.labeled("Finished in exactly one turn");
 const AT_MOST_TWO_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "at_most_two_turns",
     10,
     "Did the session complete in no more than two turns?",
-);
+)
+.labeled("Finished in at most two turns");
 const ZERO_FRICTION: AssessmentSpec = AssessmentSpec::scored(
     "zero_friction",
     15,
     "Did the session finish without function-call errors or extra calls and return one concise confirmation line containing MIN-DONE?",
-);
+)
+.labeled("No errors or extra calls, one-line confirmation");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     EXACT_RESULT,
     SINGLE_TASK_CALL,

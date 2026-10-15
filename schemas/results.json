@@ -686,6 +686,13 @@
         "id": {
           "type": "string"
         },
+        "label": {
+          "description": "The criterion as a short statement; absent in reports older than the field and for criteria that state none. Readers fall back to `description`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "possible": {
           "type": "integer",
           "format": "uint8",

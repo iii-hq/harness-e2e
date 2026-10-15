@@ -54,22 +54,26 @@ const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::gate_in(
     40,
     "Was the charter read only before the first document, and does the final report repeat its mission, checkpoint, quorum and seal verbatim?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Report repeats the charter values verbatim");
 const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::gate(
     "needles_recovered",
     30,
     "Does the final report contain every document's marker, in ascending document order?",
-);
+)
+.labeled("Report has every document's marker, in order");
 const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "ingestion_discipline",
     20,
     "Was the charter read first and each segment exactly once in ascending order, with no calls beyond function discovery and no errors?",
-);
+)
+.labeled("Charter and segments read once, in order");
 const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
     10,
     "Does the report start with the CONTEXT-LADDER-REPORT header, carry the charter values and every marker, and stay within 1,024 characters plus 64 per document?",
-);
+)
+.labeled("Report keeps the header and length limit");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CHARTER_PRESERVED,
     NEEDLES_RECOVERED,

@@ -144,6 +144,10 @@ pub struct CriterionReport {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The criterion as a short statement; absent in reports older than the
+    /// field and for criteria that state none. Readers fall back to `description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub possible: u8,
     pub awarded: Option<u8>,
     pub reason: String,
@@ -3784,6 +3788,7 @@ mod tests {
         failed.criteria.push(CriterionReport {
             id: "correctness".into(),
             description: None,
+            label: None,
             possible: 100,
             awarded: Some(50),
             reason: "only half of the expected result was present".into(),
@@ -3971,6 +3976,7 @@ mod tests {
         let criterion = |awarded: Option<u8>, possible: u8| CriterionReport {
             id: format!("c{possible}"),
             description: None,
+            label: None,
             possible,
             awarded,
             reason: "observed".into(),
@@ -4006,6 +4012,7 @@ mod tests {
         let criterion = |gate: bool, awarded: Option<u8>, possible: u8| CriterionReport {
             id: format!("c{possible}"),
             description: None,
+            label: None,
             possible,
             awarded,
             reason: "observed".into(),
