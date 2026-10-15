@@ -189,6 +189,17 @@ def credential_forms(value: str) -> list[str]:
     return sorted(forms, key=len, reverse=True)
 
 
+def redact_text(text: str, credentials: dict[str, str]) -> str:
+    """`text` with each credential long enough to look for, as written and as
+    JSON escapes it, replaced by `[redacted:NAME]`."""
+    scanned = [(name, value) for name, value in credentials.items() if len(value) >= REDACTION_MIN_LENGTH]
+    # Longest first: a value that holds another is replaced whole.
+    for name, value in sorted(scanned, key=lambda item: (-len(item[1]), item[0])):
+        for form in credential_forms(value):
+            text = text.replace(form, f"[redacted:{name}]")
+    return text
+
+
 def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> dict[str, Any]:
     """Look for each credential's value in the files at `paths`. Found in the
     launcher's logs, it is replaced by `[redacted:NAME]`; found anywhere else,
@@ -1078,11 +1089,19 @@ def failure_record(
     function: str | None = None,
     stderr: str = "",
     earlier: list[dict[str, Any]] | None = None,
+    credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """A group's `failure.json`: the phase it failed in and why. When the
     call that failed was iii's, its code and message (`function` names the
     call) are the cause, and the error says so unless the launcher gave a
-    reason of its own. Earlier attempts of the group come along."""
+    reason of its own. Earlier attempts of the group come along.
+
+    The credentials the group received are redacted out of it here, before
+    the message is cut short (a cut could leave part of one), so packaging
+    never has to withhold the record of why the group failed."""
+    credentials = credentials or {}
+    stderr = redact_text(stderr, credentials)
+    reason = redact_text(reason, credentials) if reason else reason
     answered = iii_error(stderr) if function else {}
     if not reason and function:
         cause = ": ".join(answered[key] for key in ("code", "message") if key in answered)
@@ -1098,7 +1117,7 @@ def failure_record(
         record.update(answered, function=function)
     if earlier:
         record["earlier_attempts"] = earlier
-    return record
+    return json.loads(redact_text(json.dumps(record), credentials))
 
 
 def _package_files(root: Path) -> list[dict[str, Any]]:
@@ -1254,7 +1273,7 @@ def main() -> int:
                 except (ValueError, OSError):
                     earlier.append({"unreadable": path.name})
             record = failure_record(args.phase, args.exit_code, args.attempt, args.reason, args.line,
-                                    args.iii_function, stderr, earlier)
+                                    args.iii_function, stderr, earlier, received_credentials(os.environ))
             args.output.write_text(json.dumps(record, indent=2) + "\n")
             return 0
         if args.command == "export-compose":

@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -49,8 +50,17 @@ if args[0] != 'trigger':
     while True:
         time.sleep(1)
 function = args[1]
+def error(code, message):
+    print('Error: ' + json.dumps({'code': code, 'message': message, 'stacktrace': None}, indent=2), file=sys.stderr)
+    sys.exit(1)
 if os.environ.get('FAKE_HANG') == function:
     # A call that never answers: only the launcher's own bound ends it.
+    if os.environ.get('FAKE_BREAK_LOCK'):
+        # Exporting the lock will fail, and the launcher's status with it.
+        for lock in pathlib.Path(os.environ['TMPDIR']).glob('harness-e2e-compose.*/project/worker-compose.lock'):
+            lock.unlink()
+            lock.mkdir()
+    record('hang', function=function)
     time.sleep(3600)
 if function == 'engine::workers::list':
     answer({'workers': []})
@@ -97,7 +107,30 @@ elif function.startswith('compose::'):
         # An actual add mutates the project: export must retain these bytes.
         content['assembled_by_fake'] = True
         path.write_text(yaml.safe_dump(content, sort_keys=False))
-    if function == 'compose::up' and os.environ.get('FAKE_FAIL') == 'up':
+    if function == 'compose::up' and os.environ.get('FAKE_ORPHANS'):
+        # Workers Compose starts in a process group of their own outlive it:
+        # one by its cwd, one by its command line under the runtime root.
+        orphans = pathlib.Path(os.environ['FAKE_ORPHANS'])
+        earlier = [int(pid) for pid in orphans.read_text().split()] if orphans.exists() else []
+        def alive(pid):
+            try:
+                return pathlib.Path(f'/proc/{pid}/status').read_text().split('State:')[1].split()[0] != 'Z'
+            except (OSError, IndexError):
+                return False
+        containers = pathlib.Path(os.environ['FAKE_CONTAINERS'])
+        record('orphans', alive=[pid for pid in earlier if alive(pid)],
+               containers=containers.read_text().split() if containers.exists() else [])
+        sleeper = [sys.executable, '-c', 'import time; time.sleep(3600)']
+        for command, cwd in ((sleeper, path.parent), (sleeper + [str(path.parent / 'worker')], '/')):
+            child = subprocess.Popen(command, cwd=cwd, start_new_session=True,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with orphans.open('a') as file:
+                file.write(f'{child.pid}\n')
+        with containers.open('a') as file:
+            file.write(f'container-{len(earlier)}\n')
+    if function == 'compose::up' and (os.environ.get('FAKE_FAIL') == 'up'
+                                      or (os.environ.get('FAKE_FAIL') == 'up-once'
+                                          and not os.environ.get('HARNESS_E2E_GROUP_ATTEMPT'))):
         # What iii printed on 2026-10-14, when GitHub answered 500 for ade.
         print('Error: ' + json.dumps({'code': 'PACKAGE_DOWNLOAD_FAILED', 'message': (
             "container 'ade': could not download https://api.workers.iii.dev/download/ade/1.9.60/"
@@ -112,8 +145,12 @@ elif function.startswith('compose::'):
         path.write_text(yaml.safe_dump(content, sort_keys=False))
     answer({'status': 'ok'})
 elif function == 'e2e::scenarios-list':
+    if os.environ.get('FAKE_FAIL') == 'catalog':
+        error('function_not_found', 'Function e2e::scenarios-list not found in namespace e2e.')
     answer(json.loads(os.environ['FAKE_CATALOG']))
 elif function == 'e2e::run':
+    if os.environ.get('FAKE_FAIL') == 'run':
+        error('ADMISSION_TIMEOUT', 'the runner did not admit the run in time')
     request = json.loads(option('--json'))
     native = pathlib.Path(os.environ['HARNESS_E2E_ARTIFACTS_DIR']) / 'native/execution-1'
     journal = native / 'journal/events/00000001.json'
@@ -126,7 +163,9 @@ elif function == 'e2e::run':
         (native / name).write_text(json.dumps({'synthetic': name}) + '\n')
     answer({'execution_id': 'execution-1'})
 elif function == 'e2e::status':
-    answer({'execution_id':'execution-1', 'phase':'completed', 'terminal':True})
+    phase = os.environ.get('FAKE_STATUS', 'completed')
+    answer({'execution_id':'execution-1', 'phase':phase, 'terminal':True,
+            **({'error': 'the subject gave up'} if phase != 'completed' else {})})
 elif function == 'e2e::results-get':
     if os.environ.get('FAKE_FAIL') == 'results':
         print('synthetic results-get failure', file=sys.stderr)
@@ -136,6 +175,8 @@ elif function == 'e2e::results-get':
         name.removesuffix('.json') + '_sha256':'sha256:' + hashlib.sha256((native / name).read_bytes()).hexdigest()
         for name in ('results.json', 'manifest.json')}}})
 elif function in ('e2e::archive', 'e2e::archive-head'):
+    if os.environ.get('FAKE_FAIL') == 'archive':
+        error('ARCHIVE_UNAVAILABLE', 'longitudinal storage is not configured')
     answer({'status':'ok'})
 else:
     raise SystemExit('unimplemented fake boundary: ' + function)
@@ -159,7 +200,7 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.tmp = self.root / 'private-tmp'
         self.tmp.mkdir()
         self.calls = self.root / 'calls.jsonl'
-        tools = self.root / 'tools'
+        tools = self.tools = self.root / 'tools'
         tools.mkdir()
         archive = self.root / 'fake-cli.tar.gz'
         payload = FAKE_III.encode()
@@ -177,7 +218,9 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         # The launcher waits with sleep(1); this one only says how long.
         self.sleeps = self.root / 'sleeps'
         sleep = tools / 'sleep'
-        sleep.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_SLEEPS"\n')
+        sleep.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_SLEEPS"\n'
+                         # Interrupted while it waits that long, as a cancelled job is.
+                         '[ "$1" != "${FAKE_SLEEP_TERM:-}" ] || kill -TERM "$PPID"\n')
         sleep.chmod(0o755)
         self.contract = campaign_contract()
         self.contract['runtime']['cli']['sha256'] = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -595,6 +638,165 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.assertEqual((failure['phase'], failure['attempt'], failure['function']),
                          ('results', 1, 'e2e::results-get'))
         self.assertNotIn('earlier_attempts', failure)
+
+    def test_a_run_the_runner_did_not_admit_is_never_tried_again(self):
+        # Whether the runner started it is unknown: the result is not drawn twice.
+        self.env['FAKE_FAIL'] = 'run'
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len([row for row in self.observed() if row['kind'] == 'compose::up']), 1)
+        self.assertFalse((self.artifacts / 'attempts').exists())
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        self.assertEqual((failure['phase'], failure['attempt'], failure['function'], failure['code']),
+                         ('execution', 1, 'e2e::run', 'ADMISSION_TIMEOUT'))
+
+    def wait_for_hang(self, process):
+        """Until the launcher's call that never answers has started."""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and process.poll() is None:
+            if self.calls.exists() and any(row['kind'] == 'hang' for row in self.observed()):
+                return
+            time.sleep(0.1)
+        self.fail('the hung call never started')
+
+    def test_an_interrupted_group_is_never_tried_again(self):
+        """Ctrl-C reaches the whole process group, as a terminal sends it: the
+        call in flight (in the foreground) stops at once, not at its timeout.
+        TERM reaches the launcher alone, as a stopped container's does."""
+        self.env['HARNESS_E2E_WAIT_SECONDS'] = '60'
+        # The last: cleanup fails after the interruption (the lock cannot be
+        # exported), which must not turn it into a failure worth a retry.
+        for signal_name, status, hung, exit_status in (
+                ('SIGINT', 130, 'engine::workers::list', 130), ('SIGTERM', 143, 'engine::workers::list', 143),
+                ('SIGTERM', 143, 'e2e::scenarios-list', 1)):
+            with self.subTest(signal=signal_name, hung=hung):
+                self.env['FAKE_HANG'] = hung
+                if exit_status != status:
+                    self.env['FAKE_BREAK_LOCK'] = '1'
+                shutil.rmtree(self.artifacts)
+                self.artifacts.mkdir()
+                self.calls.unlink(missing_ok=True)
+                self.sleeps.unlink(missing_ok=True)
+                Path(self.env['HARNESS_E2E_CONTRACT']).write_text(json.dumps(self.contract))
+                process = subprocess.Popen(['bash', str(self.repo / 'scripts/run_exact_stack_group.sh')], env=self.env,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                           start_new_session=True)
+                self.wait_for_hang(process)
+                sent = time.monotonic()
+                if signal_name == 'SIGINT':
+                    os.killpg(process.pid, signal.SIGINT)
+                else:
+                    process.send_signal(signal.SIGTERM)
+                _, stderr = process.communicate(timeout=30)
+                self.assertEqual(process.returncode, exit_status, stderr)
+                if signal_name == 'SIGINT':
+                    # The probe would have waited out its 6 s.
+                    self.assertLess(time.monotonic() - sent, 4)
+                self.assertFalse((self.artifacts / 'attempts').exists())
+                self.assertNotIn('once more', stderr)
+                self.assertNotIn('60', self.sleeps.read_text().split() if self.sleeps.exists() else [])
+                failure = json.loads((self.artifacts / 'failure.json').read_text())
+                phase = 'engine_start' if hung == 'engine::workers::list' else 'runner_readiness'
+                self.assertEqual((failure['phase'], failure['attempt'], failure['exit_code']), (phase, 1, status))
+                self.assertFalse(list(self.tmp.glob('harness-e2e-compose.*')))
+
+    def test_cancelled_while_it_waits_to_try_again_the_group_keeps_its_evidence(self):
+        self.env['FAKE_FAIL'] = 'up'
+        self.env['FAKE_SLEEP_TERM'] = '60'
+        result = self.launch()
+        self.assertEqual(result.returncode, -signal.SIGTERM, result.stderr)
+        # Nothing moved: the first attempt's failure is the group's.
+        self.assertFalse((self.artifacts / 'attempts').exists())
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        self.assertEqual((failure['phase'], failure['attempt'], failure['code']),
+                         ('project_start', 1, 'PACKAGE_DOWNLOAD_FAILED'))
+        self.assertTrue((self.artifacts / 'logs/compose-up-attempt-3.log').is_file())
+        self.assertEqual(len([row for row in self.observed() if row['kind'] == 'compose::up']), 3)
+
+    def test_what_the_first_attempt_left_running_is_gone_before_the_second(self):
+        """Compose starts each worker in a process group of its own, with no
+        parent-death signal: killing Compose leaves them connected to the next
+        engine on the port. Before the second attempt every process under
+        the runtime root, and every container of the group's own daemon, goes."""
+        orphans = self.root / 'orphans'
+        containers = self.root / 'containers'
+        docker_log = self.root / 'docker.log'
+        docker = self.tools / 'docker'
+        docker.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_DOCKER_LOG"\n'
+                          'case "$1" in ps) cat "$FAKE_CONTAINERS" 2>/dev/null ;; rm) : >"$FAKE_CONTAINERS" ;; esac\n')
+        docker.chmod(0o755)
+        self.env.update({'FAKE_ORPHANS': str(orphans), 'FAKE_CONTAINERS': str(containers),
+                         'FAKE_DOCKER_LOG': str(docker_log), 'HARNESS_E2E_OWN_DOCKER': '1',
+                         # The runner never registers, so the stack is up when the attempt fails.
+                         'FAKE_FAIL': 'catalog', 'HARNESS_E2E_WAIT_SECONDS': '1'})
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        seen = [row for row in self.observed() if row['kind'] == 'orphans']
+        self.assertEqual(len(seen), 2, 'one compose::up an attempt')
+        first = [int(pid) for pid in orphans.read_text().split()]
+        self.assertEqual(len(first), 4)
+        # When the second attempt started its stack, nothing of the first ran.
+        self.assertEqual(seen[1], {**seen[1], 'alive': [], 'containers': []})
+        self.assertIn('rm -f container-0', docker_log.read_text())
+        # Nor of the second, once it ended.
+        for pid in first:
+            state = Path(f'/proc/{pid}/status')
+            self.assertFalse(state.exists() and '\nState:\tZ' not in state.read_text(), pid)
+        self.assertEqual(json.loads((self.artifacts / 'failure.json').read_text())['phase'], 'runner_readiness')
+
+    def test_a_group_tried_again_says_so_at_the_top_and_in_its_shard(self):
+        self.env['FAKE_FAIL'] = 'up-once'
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.artifacts / 'failure.json').exists())
+        marker = json.loads((self.artifacts / 'stack/attempt.json').read_text())
+        self.assertEqual(marker['attempt'], 2)
+        [earlier] = marker['earlier_attempts']
+        self.assertEqual((earlier['attempt'], earlier['phase'], earlier['code'], earlier['function']),
+                         (1, 'project_start', 'PACKAGE_DOWNLOAD_FAILED', 'compose::up'))
+        self.assertEqual(earlier, json.loads((self.artifacts / 'attempts/1/failure.json').read_text()))
+        payload = self.root / 'shard.json'
+        reported = subprocess.run(
+            ['python3', str(ROOT / 'scripts/report_execution.py'), 'shard', '--execution-id', 'e-1',
+             '--oidc-audience', 'a', '--artifacts', str(self.artifacts), '--campaign-id', 'c', '--group-id', 'g',
+             '--outcome', 'success', '--output', str(payload)],
+            env={'PATH': os.environ['PATH']}, capture_output=True, text=True)
+        self.assertEqual(reported.returncode, 0, reported.stderr)
+        self.assertEqual(json.loads(payload.read_text())['group']['attempts'], marker)
+
+    def test_a_failure_the_launcher_tolerated_is_never_named_as_the_cause(self):
+        # Archiving is best effort; the run itself ended in failure after it.
+        self.env.update({'FAKE_FAIL': 'archive', 'FAKE_STATUS': 'failed'})
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ARCHIVE_UNAVAILABLE', (self.artifacts / 'logs/archive.log').read_text())
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        self.assertEqual((failure['phase'], failure['error']), ('results', 'the subject gave up'))
+        for key in ('function', 'code', 'message'):
+            self.assertNotIn(key, failure)
+
+    def test_the_failure_record_never_holds_a_credential(self):
+        key = 'sk-deepseek-0123456789abcdef'
+        stderr = 'Error: ' + json.dumps({'code': 'PROVIDER_REJECTED', 'message': 'x' * 280 + f' key={key} rest'})
+        earlier = [{'attempt': 1, 'phase': 'project_start', 'error': f'compose::up said {key}'}]
+        record = MODULE.failure_record('project_start', 1, 2, f'compose::up failed with {key}', None, 'compose::up',
+                                       stderr, earlier, {'DEEPSEEK_API_KEY': key})
+        text = json.dumps(record)
+        # Cut after redaction: not even the key's first characters remain.
+        self.assertNotIn('sk-deep', text)
+        self.assertEqual(record['error'], 'compose::up failed with [redacted:DEEPSEEK_API_KEY]')
+        self.assertEqual(record['earlier_attempts'][0]['error'], 'compose::up said [redacted:DEEPSEEK_API_KEY]')
+        self.assertTrue(record['message'].startswith('x' * 280 + ' key=[redac'))
+        # The command takes them from what the group received.
+        log = self.root / 'stderr.log'
+        log.write_text(stderr)
+        output = self.root / 'failure.json'
+        subprocess.run(['python3', str(self.repo / 'scripts/exact_stack_campaign.py'), 'failure',
+                        '--output', str(output), '--phase', 'project_start', '--exit-code', '1',
+                        '--iii-function', 'compose::up', '--iii-stderr', str(log)],
+                       env={'PATH': os.environ['PATH'], 'DEEPSEEK_API_KEY': key}, check=True)
+        self.assertNotIn('sk-deep', output.read_text())
+        self.assertIn(' key=[redacted:DEEP', output.read_text())
 
     def test_the_failure_record_keeps_what_iii_answered_and_never_more_than_its_start(self):
         progress = 'resolving ade@1.9.60\nError: {\n  "code": "X_FAILED",\n  "message": "first"\n}\n'

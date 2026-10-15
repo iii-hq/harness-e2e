@@ -105,6 +105,14 @@ engine_url="ws://127.0.0.1:${engine_port}"
 mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$e2e_data" \
   "$evaluation_dir" "$artifact_dir/logs" "$artifact_dir/stack"
 chmod 700 "$compose_state"
+# A second attempt says so where a reader of the group looks first: the
+# attempt, and why the first one failed (its failure.json, under attempts/1).
+if ((group_attempt > 1)); then
+  { cat "$artifact_dir/attempts/1/failure.json" 2>/dev/null || true; } \
+    | jq -s --argjson attempt "$group_attempt" '{attempt: $attempt, earlier_attempts: .}' \
+    >"$artifact_dir/stack/attempt.json" \
+    || jq -n --argjson attempt "$group_attempt" '{attempt: $attempt}' >"$artifact_dir/stack/attempt.json"
+fi
 
 iii_bin="$tools_dir/iii"
 # The stderr of the last `iii trigger`, and the function it called when that
@@ -138,13 +146,15 @@ capture_processes() {
 }
 
 # iii_trigger TIMEOUT_MS FUNCTION [ARGS...]: one call into the engine. A CLI
-# that hangs past its own timeout is stopped a second later. Its stderr is
-# passed on as it came, after the call; when the call fails, the function
-# stays named in $iii_failed until a later call succeeds.
+# that hangs past its own timeout is stopped a second later; in the
+# foreground, so an interrupt reaches it as it reaches the launcher. Its
+# stderr is passed on as it came, after the call; when the call fails, the
+# function stays named in $iii_failed until a later call succeeds or the
+# launcher tolerates the failure.
 iii_trigger() {
   local timeout_ms=$1 function_id=$2 status=0
   shift 2
-  timeout -k 1 $((timeout_ms / 1000 + 1)) "$iii_bin" trigger "$function_id" \
+  timeout --foreground -k 1 $((timeout_ms / 1000 + 1)) "$iii_bin" trigger "$function_id" \
     --engine "$engine_url" --timeout-ms "$timeout_ms" "$@" 2>"$iii_stderr" || status=$?
   cat "$iii_stderr" >&2
   if ((status == 0)); then
@@ -243,6 +253,7 @@ export_compose() {
 
 cleanup() {
   local status=$?
+  local exited=$status
   trap - EXIT INT TERM ERR
   set +e
   # The call that failed, before taking the stack down makes others.
@@ -298,23 +309,66 @@ cleanup() {
       --process-after "$artifact_dir/stack/processes-after.json" \
       --output "$artifact_dir/compose-evidence.json" || status=1
   fi
+  local clean=true
+  stop_leftovers || clean=false
   rm -rf "$run_root"
   # Before e2e::run nothing of the subject has run: a passing fault of the
   # stack (GitHub answering 500 for an artifact, an engine slow to come up)
   # gets the group one more attempt from a clean start, a minute later. Once
-  # e2e::run was called, never: the subject's result is not drawn again. The
-  # first attempt's evidence stays under attempts/1. Preparation assembles
-  # with tries of its own (scripts/executor.sh); an interruption ends here.
-  if ((status != 0 && status != 130 && status != 143 && group_attempt == 1)) \
+  # e2e::run was called, never: the subject's result is not drawn again.
+  # Never after an interruption, never with anything of this attempt still
+  # running, and not for preparation, which assembles with tries of its own
+  # (scripts/executor.sh). The pause comes first: interrupted during it, the
+  # group ends with this attempt's evidence where it is. Then that evidence
+  # moves under attempts/1.
+  if ((exited != 0 && exited != 130 && exited != 143 && group_attempt == 1)) \
     && [[ "$run_started" == false && -z "$assemble_only" ]]; then
-    mkdir -p "$artifact_dir/attempts/1"
-    find "$artifact_dir" -mindepth 1 -maxdepth 1 ! -name attempts -exec mv -t "$artifact_dir/attempts/1" -- {} +
-    printf '::warning::%s failed during %s before any run started; trying the group once more in %ss\n' \
-      "$campaign_group_id" "$failure_phase" "$retry_delay_seconds" >&2
-    sleep "$retry_delay_seconds"
-    exec env -u HARNESS_E2E_KANBAN_RUNTIME HARNESS_E2E_GROUP_ATTEMPT=2 bash "$launcher"
+    if [[ "$clean" != true ]]; then
+      printf '::warning::%s failed during %s and left processes or containers it could not stop; not trying it again\n' \
+        "$campaign_group_id" "$failure_phase" >&2
+    else
+      printf '::warning::%s failed during %s before any run started; trying the group once more in %ss\n' \
+        "$campaign_group_id" "$failure_phase" "$retry_delay_seconds" >&2
+      sleep "$retry_delay_seconds"
+      mkdir -p "$artifact_dir/attempts/1"
+      find "$artifact_dir" -mindepth 1 -maxdepth 1 ! -name attempts -exec mv -t "$artifact_dir/attempts/1" -- {} +
+      exec env -u HARNESS_E2E_KANBAN_RUNTIME HARNESS_E2E_GROUP_ATTEMPT=2 bash "$launcher"
+    fi
   fi
   exit "$status"
+}
+
+# The processes of this attempt, by their working directory or command line
+# under the private runtime root. awk reads the root from its environment so
+# that its own command line does not name it.
+runtime_processes() {
+  {
+    find /proc -mindepth 2 -maxdepth 2 -name cwd \( -lname "$run_root" -o -lname "$run_root/*" \) 2>/dev/null \
+      | cut -d/ -f3
+    ps -eo pid=,args= | RUNTIME_ROOT=$run_root/ awk 'index($0, ENVIRON["RUNTIME_ROOT"]) {print $1}'
+  } | sort -un
+}
+
+# What the attempt started and outlived it. Compose starts each worker in a
+# process group of its own, without a parent-death signal, so killing the
+# engine's and Compose's groups can leave workers running that reconnect to
+# whatever engine listens next on the port, under the same namespace. Each
+# process of the runtime root is killed, and every container when the Docker
+# daemon is the group's own (HARNESS_E2E_OWN_DOCKER, set by
+# scripts/executor.sh). Fails when something is still there.
+stop_leftovers() {
+  local pids containers=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pids=$(runtime_processes)
+    if [[ "${HARNESS_E2E_OWN_DOCKER:-}" == 1 ]]; then
+      containers=$(docker ps -aq) || return 1
+    fi
+    [[ -n "$pids$containers" ]] || return 0
+    # shellcheck disable=SC2086 # one pid or container id per word
+    { [[ -z "$pids" ]] || kill -KILL $pids; [[ -z "$containers" ]] || docker rm -f $containers; } >/dev/null 2>&1
+    sleep 0.5
+  done
+  return 1
 }
 
 on_error() {
@@ -576,6 +630,7 @@ if [[ "$profile_assets" == true ]]; then
       # A worker may legitimately publish no skill bundle. Other failures must
       # not turn a requested profile into an execution with different assets.
       grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" || fail "Could not load pinned skills for $worker"
+      rm -f "$iii_failed"
     fi
   done < <(jq -c '.[]' "$artifact_dir/stack/declared-workers.json")
   # Registry bundles may also contain profiles. The explicitly selected
@@ -689,6 +744,8 @@ if project_trigger e2e::archive \
     "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 120000 \
     >"$artifact_dir/archive-head.json" 2>>"$artifact_dir/logs/archive.log" || true
 fi
+# Archiving is best effort: whatever it answered is not why the group failed.
+rm -f "$iii_failed"
 [[ -z "$terminal_failure" ]] || fail "$terminal_failure"
 
 failure_phase=compose_down

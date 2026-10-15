@@ -267,8 +267,9 @@ group() {
     stop_daemon
     return 1
   fi
+  # The launcher may remove every container of this daemon: all are the group's.
   setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups \
-    env --default-signal=INT,QUIT bash scripts/run_exact_stack_group.sh &
+    env --default-signal=INT,QUIT HARNESS_E2E_OWN_DOCKER=1 bash scripts/run_exact_stack_group.sh &
   launcher=$!
   # A stopped container stops the group first: the launcher takes its stack
   # down, then the daemon its containers.

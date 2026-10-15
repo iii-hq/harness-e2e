@@ -485,10 +485,13 @@ contract_path=$1/contract.json
 compose_file=$1/worker-compose.yaml
 contract_tool="$2"
 profile_assets=true
+iii_failed=$1/iii-failed
 fail() { printf '%s\\n' "$1" >&2; return 1; }
 project_trigger() {
   test "$1" = directory::skills::download_from_registry
   test "$(jq -r '.version' <<<"$2")" = 1.2.3
+  # As iii_trigger names a call that failed.
+  if [[ "$MODE" != ok ]]; then printf '%s' "$1" >"$iii_failed"; fi
   if [[ "$MODE" == missing ]]; then echo 'D310 not_found: registry worker "harness" has no published skills bundle.' >&2; return 1; fi
   if [[ "$MODE" == broken ]]; then echo 'registry unavailable' >&2; return 1; fi
   printf 'downloaded profile' >"$project_dir/agents/tech-lead.md"
@@ -500,9 +503,13 @@ project_trigger() {
                 if mode == "broken":
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("Could not load pinned skills", result.stderr)
+                    # The failure that ends the group stays named.
+                    self.assertTrue((root / "iii-failed").exists())
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual((root / "project/agents/tech-lead.md").read_text(), "selected template")
+                    # A worker with no skills bundle is no cause of a later failure.
+                    self.assertFalse((root / "iii-failed").exists())
 
     def test_agent_profile_is_validated_and_reaches_native_admission(self):
         contract = campaign_contract()
@@ -815,6 +822,7 @@ artifact_dir=$1
 e2e_data="$artifact_dir/native"
 repo_root=$2
 remote_execution_id=execution-1
+iii_failed=$1/iii-failed
 project_trigger() {
   if [[ "$1" == "e2e::results-get" ]]; then
     printf '%s\n' "$RESULTS_RESPONSE"

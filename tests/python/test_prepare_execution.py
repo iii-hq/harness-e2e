@@ -2,10 +2,13 @@
 import contextlib
 import importlib.util
 import io
+import json
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -36,8 +39,10 @@ class LatestCliTests(unittest.TestCase):
             return {"assets": releases[tag]}
 
         said = io.StringIO()
+        self.skipped = []
+        self.get = get
         with patch.object(prepare_execution, "get_json", side_effect=get), contextlib.redirect_stdout(said):
-            cli = prepare_execution.resolve_cli(selector, None)
+            cli = prepare_execution.resolve_cli(selector, None, self.skipped)
         return cli, asked, said.getvalue()
 
     def test_the_newest_candidate_runs_when_it_has_the_archive(self):
@@ -55,9 +60,43 @@ class LatestCliTests(unittest.TestCase):
                 self.assertEqual(asked, ["0.24.4-rc.2", "0.24.4-rc.1"])
                 self.assertEqual(said, f"::warning::iii/v0.24.4-rc.2 publishes no {prepare_execution.CLI_ASSET} yet; "
                                        "iii: latest runs iii/v0.24.4-rc.1, the newest release candidate that does\n")
+                reason = "has no release yet (HTTP 404)" if newest is None else f"publishes no {prepare_execution.CLI_ASSET}"
+                self.assertEqual(self.skipped, [{"version": "0.24.4-rc.2", "reason": reason}])
+
+    def test_the_fallback_stays_within_the_newest_core_or_the_candidate_right_before_it(self):
+        # Any earlier candidate of the newest X.Y.Z, never another X.Y.Z past the one right before.
+        cli, asked, _ = self.resolve({"0.24.4-rc.9": [ARCHIVE], "0.25.0-rc.1": [ARCHIVE],
+                                      "0.25.0-rc.2": [], "0.25.0-rc.3": None})
+        self.assertEqual(cli["version"], "0.25.0-rc.1")
+        self.assertEqual(asked, ["0.25.0-rc.3", "0.25.0-rc.2", "0.25.0-rc.1"])
+        self.assertEqual([entry["version"] for entry in self.skipped], ["0.25.0-rc.3", "0.25.0-rc.2"])
+        # A new X.Y.Z with one candidate gives way to the candidate before it…
+        cli, _, _ = self.resolve({"0.24.4-rc.2": [ARCHIVE], "0.25.0-rc.1": []})
+        self.assertEqual(cli["version"], "0.24.4-rc.2")
+        # …and to nothing older.
+        with self.assertRaisesRegex(prepare_execution.ResolutionError,
+                                    r"iii/v0.25.0-rc.1 publishes no .*\(iii/v0.24.4-rc.2\)"):
+            self.resolve({"0.24.3-rc.1": [ARCHIVE], "0.24.4-rc.2": [], "0.25.0-rc.1": []})
+
+    def test_the_execution_records_what_was_asked_what_runs_and_what_was_passed_over(self):
+        releases = {"0.24.4-rc.1": [ARCHIVE], "0.24.4-rc.2": []}
+        self.resolve(releases)
+        with tempfile.TemporaryDirectory() as directory:
+            contract_dir = Path(directory)
+            (contract_dir / "execution.json").write_text("{}")
+            (contract_dir / "stack.yaml").write_text("containers: {}\n")
+            with patch.object(prepare_execution, "get_json", side_effect=self.get), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                prepare_execution.command_runtime(SimpleNamespace(contract_dir=contract_dir))
+            execution = json.loads((contract_dir / "execution.json").read_text())
+        self.assertEqual(execution["iii"], "0.24.4-rc.1")
+        self.assertEqual(execution["iii_resolution"], {
+            "requested": "latest", "resolved": "0.24.4-rc.1",
+            "skipped": [{"version": "0.24.4-rc.2", "reason": f"publishes no {prepare_execution.CLI_ASSET}"}],
+        })
 
     def test_integrity_and_a_named_version_still_fail(self):
-        with self.assertRaisesRegex(prepare_execution.ResolutionError, "no iii-hq/iii release candidate publishes"):
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, "nor does any candidate"):
             self.resolve({"0.24.4-rc.1": [], "0.24.4-rc.2": []})
         # A digest is what the groups check the download against.
         with self.assertRaisesRegex(prepare_execution.ResolutionError, "digest"):

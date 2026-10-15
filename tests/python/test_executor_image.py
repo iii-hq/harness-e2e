@@ -579,7 +579,7 @@ class ExecutorTests(unittest.TestCase):
 
     def test_a_group_starts_its_own_docker_daemon_runs_as_the_user_and_stops_the_daemon_after(self):
         env = self.daemon_fakes("""\
-            echo "group ran as the user telemetry=${III_TELEMETRY_ENABLED:-on}" >>"$FAKE_LOG"
+            echo "group ran as the user telemetry=${III_TELEMETRY_ENABLED:-on} own docker=${HARNESS_E2E_OWN_DOCKER:-}" >>"$FAKE_LOG"
             grep SigIgn /proc/self/status | sed 's/^/group /' >>"$FAKE_LOG"
             sh -c 'grep SigIgn /proc/self/status' | sed 's/^/group child /' >>"$FAKE_LOG"
             exit 3
@@ -599,8 +599,9 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual([line for line in lines if "SigIgn" not in line], [
             f"dockerd --group 1234 as {os.getuid()} telemetry=false",
             "setpriv --reuid 4321 --regid 1234 --clear-groups env --default-signal=INT,QUIT "
-            "bash scripts/run_exact_stack_group.sh",
-            "group ran as the user telemetry=false",
+            "HARNESS_E2E_OWN_DOCKER=1 bash scripts/run_exact_stack_group.sh",
+            # Its launcher knows every container of that daemon is the group's.
+            "group ran as the user telemetry=false own docker=1",
             "dockerd stopped",
         ])
 
