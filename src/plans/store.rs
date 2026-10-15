@@ -3940,11 +3940,13 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn native_coordination_covers_every_suite_of_the_master_plan() {
         for (suite, expected_slots, expected_submissions) in [
-            ("regression", 9, 9),
+            ("regression", 27, 27),
             ("software-engineering", 14, 13),
             ("linkly", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
+            ("software-engineering-x3", 42, 39),
+            ("null-canary", 9, 9),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));

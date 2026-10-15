@@ -24,7 +24,7 @@ use harness_e2e::control::{
     ExecutionPhase, ResultsGetResponse, ResultsListResponse, RunAccepted, ScenariosListResponse,
     StatusResponse,
 };
-use harness_e2e::report::TechnicalState;
+use harness_e2e::report::{CompletionState, TechnicalState};
 use harness_e2e::scenarios::ScenarioId;
 use serde_json::json;
 
@@ -269,27 +269,7 @@ async fn run_minimal_path(live: &Live) {
     );
     assert!(accepted.request_sha256.starts_with("sha256:"));
 
-    let started = Instant::now();
-    let status = loop {
-        let status: StatusResponse = live
-            .context
-            .trigger(
-                "e2e::status",
-                json!({ "execution_id": accepted.execution_id }),
-            )
-            .await
-            .expect("e2e::status answers while the execution runs");
-        if status.terminal {
-            break status;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(timeout_seconds),
-            "execution {} still in phase {:?} after {timeout_seconds}s",
-            accepted.execution_id,
-            status.phase
-        );
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    };
+    let status = wait_until_terminal(live, &accepted.execution_id, timeout_seconds).await;
     assert_eq!(
         status.phase,
         ExecutionPhase::Completed,
@@ -362,5 +342,114 @@ async fn run_minimal_path(live: &Live) {
             .iter()
             .any(|execution| execution.execution_id == accepted.execution_id),
         "the execution is listed for its lane and scenario"
+    );
+}
+
+async fn wait_until_terminal(
+    live: &Live,
+    execution_id: &str,
+    timeout_seconds: u64,
+) -> StatusResponse {
+    let started = Instant::now();
+    loop {
+        let status: StatusResponse = live
+            .context
+            .trigger("e2e::status", json!({ "execution_id": execution_id }))
+            .await
+            .expect("e2e::status answers while the execution runs");
+        if status.terminal {
+            return status;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(timeout_seconds),
+            "execution {execution_id} still in phase {:?} after {timeout_seconds}s",
+            status.phase
+        );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// The null-canary suite against a live stack: every Core runtime regression
+/// test, run as the `null-agent` Directory profile (it answers `done` and
+/// calls nothing), must be technically valid, score 0 and stay incomplete.
+/// The failure lists every test that paid, with the calls the agent made, so
+/// a disobedient agent is told apart from an evaluator hole. The stack's
+/// Directory must serve `config/agents/null-agent.md`.
+#[test]
+#[ignore = "requires HARNESS_E2E_LIVE_URL, HARNESS_E2E_LIVE_PROVIDER, HARNESS_E2E_LIVE_MODEL and a Directory serving config/agents/null-agent.md"]
+fn the_null_agent_earns_nothing_in_the_null_canary_suite() {
+    let _serial = one_at_a_time();
+    let live = live();
+    runtime().block_on(run_null_canary(live));
+}
+
+async fn run_null_canary(live: &Live) {
+    let provider = std::env::var("HARNESS_E2E_LIVE_PROVIDER").expect("HARNESS_E2E_LIVE_PROVIDER");
+    let model = std::env::var("HARNESS_E2E_LIVE_MODEL").expect("HARNESS_E2E_LIVE_MODEL");
+    let scenarios = harness_e2e::test_plan::embedded()
+        .unwrap()
+        .materialize("null-canary")
+        .unwrap()
+        .scenario_ids;
+    let accepted: RunAccepted = live
+        .context
+        .trigger(
+            "e2e::run",
+            json!({
+                "idempotency_key": format!("live-null-canary:{}", uuid::Uuid::new_v4().simple()),
+                "label": LIVE_LABEL,
+                "lane": "local",
+                "model": model,
+                "provider": provider,
+                "agent": "null-agent",
+                "scenarios": scenarios,
+                "runs": 1,
+                "technical_retries": 0,
+            }),
+        )
+        .await
+        .expect("e2e::run admits the null canary");
+    let status = wait_until_terminal(live, &accepted.execution_id, 3600).await;
+    assert_eq!(status.phase, ExecutionPhase::Completed, "{}", status.error);
+    let results: ResultsGetResponse = live
+        .context
+        .trigger(
+            "e2e::results-get",
+            json!({ "execution_id": accepted.execution_id }),
+        )
+        .await
+        .unwrap();
+    let report = results
+        .report
+        .expect("a completed execution retains its report");
+    assert_eq!(report.scenarios.len(), scenarios.len());
+    let paid: Vec<String> = report
+        .scenarios
+        .iter()
+        .flat_map(|scenario| scenario.runs.iter().map(move |run| (scenario, run)))
+        .filter(|(_, run)| {
+            run.score != Some(0)
+                || run.completion != CompletionState::TaskIncomplete
+                || run.technical != TechnicalState::Valid
+        })
+        .map(|(scenario, run)| {
+            format!(
+                "{}: score {:?}, {:?}, {:?}, status {:?}, function calls {:?}",
+                scenario.scenario_id,
+                run.score,
+                run.completion,
+                run.technical,
+                run.status,
+                run.metrics
+                    .as_ref()
+                    .map(|metrics| metrics.totals.function_calls)
+            )
+        })
+        .collect();
+    assert!(
+        paid.is_empty(),
+        "execution {}: the null agent earned something, or a run proved nothing:\n{}",
+        accepted.execution_id,
+        paid.join("\n")
     );
 }

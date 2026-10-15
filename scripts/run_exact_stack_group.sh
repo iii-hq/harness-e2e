@@ -506,7 +506,13 @@ if [[ -n "$project_template" ]]; then
     --template-package shell=ide --template-package console=ade)
 fi
 # The Directory's configuration is per group; the assembled stack has none.
+# It also serves this repository's own profiles (config/agents: null-agent,
+# the null-canary subject); a template file with the same id wins.
 if [[ "$profile_assets" == true && -z "$assemble_only" ]]; then
+  mkdir -p "$project_dir/agents"
+  for profile in "$repo_root"/config/agents/*.md; do
+    [[ -e "$project_dir/agents/${profile##*/}" ]] || cp "$profile" "$project_dir/agents/"
+  done
   project_args+=(--profile-root "$project_dir")
 fi
 if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then

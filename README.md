@@ -177,8 +177,10 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | ID | Purpose |
 | --- | --- | --- |
-| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks; one technical retry where safe. |
+| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, three independent rounds; one technical retry where safe. |
+| Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
+| Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
@@ -203,6 +205,20 @@ receives the implementation delivery. Trending topics runs in
 `case-trending-topics-build`. Baseline worker versions come from the resolved
 stack contract. Alertmanager runs in its own group, needs Go 1.25+, and has no
 turn or token ceiling.
+
+A suite with `repetitions: 3` (`regression`, `software-engineering-x3`)
+materializes three campaigns, `<suite>-r01` to `-r03`, with the same groups and
+seeds; every group of every round is its own job, so a round adds jobs, not
+time to a job.
+
+The `null-canary` suite runs the regression's nine tests once, with no
+technical retries, and is meant to run as the `null-agent` Directory profile
+([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
+`done` and calls no function. The executor copies `config/agents/` into the
+project's agents folder whenever an execution names a profile. Every run must
+score 0 and stay `task_incomplete`; a point or a completion is a hole in that
+test's evaluator, and a function call means the agent disobeyed, not that the
+evaluator paid.
 
 The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 `case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
