@@ -414,7 +414,13 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         runner = project["containers"]["e2e"]
         self.assertEqual(runner["config_name"], "e2e-group-harness-e2e")
         self.assertEqual(runner["config_override"]["data_dir"], str(root / "native"))
-        self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr", "III_TELEMETRY_ENABLED": "false"})
+        # The runner names what it measured by the lock the group starts, not
+        # by the checkout it was built from.
+        self.assertEqual(json.loads(runner["environment"].pop("HARNESS_E2E_STACK_VERSIONS")),
+                         {"harness": "1.9.3", "state": "0.22.8"})
+        self.assertEqual(runner["environment"], {
+            "HARNESS_E2E_LANE": "local-pr", "III_TELEMETRY_ENABLED": "false", "HARNESS_E2E_STACK_MODE": "registry",
+            "HARNESS_E2E_STACK_DIGEST": MODULE.canonical_sha256(contract["runtime"]["lock"])})
         self.assertEqual(project["containers"]["directory"]["config_override"]["agents_folder"],
                          str(root / "project/agents"))
         # iii 0.24.3+ serves the package's empty default as the live value:
