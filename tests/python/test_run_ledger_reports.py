@@ -166,7 +166,9 @@ class ReportPayloadTests(unittest.TestCase):
             "scenarios": [
                 {
                     "scenario_id": "tool_contract_recovery",
-                    "title": "Recover from a changed tool contract",
+                    "title": "Adapt to a replaced tool",
+                    "summary": "A runbook names a calendar function that no longer exists.",
+                    "protects": "Agents find a retired function's replacement. If it fails, agents break.",
                     "case_id": "tool_contract_recovery@1",
                     "behavior_sha256": "sha256:" + "b" * 64,
                     "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64},
@@ -188,20 +190,65 @@ class ReportPayloadTests(unittest.TestCase):
                 "repetition",
                 "run",
                 "scenario_id",
+                "scenario_protects",
+                "scenario_summary",
                 "scenario_title",
                 "seed",
             ],
         )
         self.assertEqual(runs[0]["definition_sha256"], "sha256:" + "1" * 64)
         self.assertEqual(runs[0]["run"]["run_id"], "run-a")
-        self.assertEqual(
-            [run["scenario_title"] for run in runs],
-            ["Recover from a changed tool contract"] * 2,
-        )
-        self.assertEqual([run["run"] for run in runs], results["scenarios"][0]["runs"])
+        # The test card travels with every run, under these names.
+        scenario = results["scenarios"][0]
+        for run in runs:
+            self.assertEqual(run["scenario_title"], scenario["title"])
+            self.assertEqual(run["scenario_summary"], scenario["summary"])
+            self.assertEqual(run["scenario_protects"], scenario["protects"])
+        self.assertEqual([run["run"] for run in runs], scenario["runs"])
 
-        del results["scenarios"][0]["title"]
-        self.assertTrue(all("scenario_title" not in run for run in report_execution.runs_from_results(results)))
+        # Results written before a field existed leave it out, not null.
+        for field in ("title", "summary", "protects"):
+            del scenario[field]
+        for run in report_execution.runs_from_results(results):
+            self.assertFalse({"scenario_title", "scenario_summary", "scenario_protects"} & run.keys())
+
+    def test_a_shard_carries_the_card_and_each_criterion_with_its_gate(self):
+        artifacts = self.tmp / "artifacts"
+        artifacts.mkdir()
+        criteria = [
+            {"id": "exact_migrated_state", "description": "Does the stored value match?", "possible": 50,
+             "awarded": 50, "reason": "exact", "gate": True},
+            {"id": "concise_migration_confirmation", "description": "Is the reply concise?", "possible": 10,
+             "awarded": 0, "reason": "long", "gate": False},
+        ]
+        (artifacts / "results.json").write_text(json.dumps({"scenarios": [{
+            "scenario_id": "persistent_state",
+            "title": "Safe update of saved data",
+            "summary": "Read a saved record at revision 1 and migrate it to revision 2.",
+            "protects": "An agent can update a record. If it fails, data is lost.",
+            "case_id": "persistent_state@1",
+            "case": {"seed": 1, "inputs_sha256": "sha256:" + "1" * 64},
+            "runs": [{"run_id": "run-a", "criteria": criteria}],
+        }]}))
+        payload = report_execution.shard_payload(
+            Args(
+                artifacts=artifacts,
+                campaign_id="regression-r01",
+                group_id="case-persistent-state",
+                outcome="success",
+                plan=self.plan,
+                profile_snapshot=self.snapshot,
+            )
+        )
+        [run] = payload["runs"]
+        self.assertEqual(run["scenario_title"], "Safe update of saved data")
+        self.assertEqual(run["scenario_summary"], "Read a saved record at revision 1 and migrate it to revision 2.")
+        self.assertEqual(run["scenario_protects"], "An agent can update a record. If it fails, data is lost.")
+        # "Completed when" and "Score also counts" are read from the criteria.
+        self.assertEqual(
+            [(item["description"], item["gate"]) for item in run["run"]["criteria"]],
+            [("Does the stored value match?", True), ("Is the reply concise?", False)],
+        )
 
     def test_a_group_that_died_still_reports_its_committed_runs(self):
         artifacts = self.tmp / "artifacts"
