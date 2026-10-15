@@ -194,7 +194,7 @@
     {
       "id": "regression",
       "label": "Core runtime regression",
-      "purpose": "Check core execution and recovery through state persistence, tool contracts, timer wake-ups, database migrations, coordination, and validation. Also test context handling, Python code repair, and prompt injection protection.",
+      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Nine short, deterministic tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, and instructions hidden in tool output. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -219,7 +219,7 @@
     {
       "id": "software-engineering",
       "label": "Application builds and changes",
-      "purpose": "Build and verify Kanban, Registry version comparison, a trending-topics blog, and interactive chess, issue-form, and CI state-machine applications. Refactor Alertmanager routing while preserving its results.",
+      "purpose": "Can an agent running on iii build and change real software end to end, and does it still work when an independent checker runs it? The suite has a seven-chapter Kanban app (iii functions, Compose, browser); a feature in iii's own Registry, then an independent check of that delivery by a second agent; a website built from a written spec; Alertmanager's Go routing moved into an iii function; and three Workers with their own Console pages (chess, issue form, CI simulator). Not covered: isolated runtime primitives (Core runtime regression) and Registry planning or environment setup, which run only as diagnostics.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -250,7 +250,7 @@
     {
       "id": "linkly",
       "label": "Build Linkly from the tutorial",
-      "purpose": "Build the Linkly link shortener chapter by chapter, starting from a fresh project on the Linkly stack.",
+      "purpose": "Does the agentic tutorial we point users to still work? One long session builds the Linkly link shortener on a fresh linkly-agentic scaffold, chapter by chapter, adding workers through Compose. It then checks that a request to restart the whole project is refused. Not covered: other templates or tutorials. The seven chapters are one test with one score, so the result does not say which chapter broke unless you open the criteria.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -267,7 +267,7 @@
     {
       "id": "pr",
       "label": "Essential checks before merge",
-      "purpose": "Run four checks before merging a change: one precise state write, state persistence, adapting to a changed tool contract, and repairing Python code.",
+      "purpose": "Before merging a change to iii, do the four most basic agent paths still work? The four paths: one exact state write at minimal cost, a safe update of saved data, adapting to a replaced function, and fixing code with the shell and coder workers. Not covered: timers, subagents, databases, validators, long context and prompt injection (all in Core runtime regression), and anything visual.",
       "metrics": [
         "execution_reliability",
         "completion_rate",
