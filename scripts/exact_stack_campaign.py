@@ -776,6 +776,17 @@ def project_scaffold(
                 "control_database": "primary",
                 "control_namespace": namespace,
             }
+            # The system under test the results name: the stack the lock
+            # resolved and its digest. Without these the runner names the
+            # checkout it was built from, which is not what ran.
+            versions = {package: version for package, version in built_versions(locked, contract).items()
+                        if isinstance(version, str) and version.strip() not in ("", "unknown")}
+            if versions:
+                container.setdefault("environment", {}).update({
+                    "HARNESS_E2E_STACK_MODE": "registry",
+                    "HARNESS_E2E_STACK_VERSIONS": canonical(versions),
+                    "HARNESS_E2E_STACK_DIGEST": canonical_sha256(runtime["lock"]),
+                })
         elif worker == APPLICATION and harness_override:
             container["config_name"] = scoped_config_name(namespace, "harness")
             container.setdefault("config_override", {}).update(harness_override)

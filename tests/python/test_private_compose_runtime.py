@@ -305,6 +305,20 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         up = next(row for row in rows if row['kind'] == 'compose::up')
         self.assertEqual(json.loads(up['args'][up['args'].index('--json') + 1])['frozen'], True)
         self.assertEqual(up['lock'], self.env['FAKE_LOCK'])
+        # The runner it starts names the stack it measures by that lock: the
+        # results' system under test is the registry stack, not a checkout.
+        runner = yaml.safe_load(up['manifest'])['containers']['harness-e2e']['environment']
+        self.assertEqual(runner['HARNESS_E2E_STACK_MODE'], 'registry')
+        self.assertEqual(json.loads(runner['HARNESS_E2E_STACK_VERSIONS']),
+                         {'harness': '1.9.0', 'harness-e2e': '0.6.0-experimental', 'provider-deepseek': '1.0.0'})
+        self.assertEqual(runner['HARNESS_E2E_STACK_DIGEST'], MODULE.canonical_sha256(self.lock))
+
+    def test_a_stack_without_a_lock_leaves_the_runner_its_own_identity(self):
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        up = next(row for row in self.observed() if row['kind'] == 'compose::up')
+        runner = yaml.safe_load(up['manifest'])['containers']['harness-e2e']['environment']
+        self.assertNotIn('HARNESS_E2E_STACK_MODE', runner)
 
     def test_assemble_only_exports_manifest_and_lock_and_never_starts_groups(self):
         self.env['HARNESS_E2E_ASSEMBLE_ONLY'] = '1'

@@ -79,10 +79,26 @@ jobs:
           test "$GITHUB_TRIGGERING_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"
           [[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]
 
+      # The private fixture's head is resolved once, here, so every group
+      # checks out the same commit and the reports name it. Only the resolve
+      # step holds this token; without it the groups check out the branch
+      # head, as they did before, and resolve says so.
+      - name: Mint private fixture token
+        id: fixture_token
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+          owner: iii-hq
+          repositories: e2e-fixture
+          permission-contents: read
+
       # Every phase runs in the executor image (Dockerfile) with this
       # checkout's scripts; see scripts/executor.sh. This one reads the
-      # dispatch and resolves the iii release, the template and every
-      # `commit:` the stack pins, to its full commit.
+      # dispatch and resolves the iii release, the template, every
+      # `commit:` the stack pins, to its full commit, and the head of each
+      # fixture repository that follows a branch.
       - name: Resolve the dispatch
         id: resolved
         env:
@@ -92,6 +108,7 @@ jobs:
           DISPATCH_PROFILE: ${{ inputs.profile }}
           DISPATCH_EXECUTION_ID: ${{ inputs.execution_id }}
           GITHUB_TOKEN: ${{ github.token }}
+          FIXTURE_TOKEN: ${{ steps.fixture_token.outputs.token }}
         run: |
           set -euo pipefail
           scripts/run_in_image.sh prepare resolve

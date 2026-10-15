@@ -5,9 +5,11 @@
 # Docker executions run the same phases:
 #
 #   prepare resolve|build|materialize|assemble|fixtures
-#       resolve      read the dispatch (DISPATCH_*), resolve iii, the template
-#                    and every `commit:` the stack pins, with GITHUB_TOKEN
-#                    when there is one.
+#       resolve      read the dispatch (DISPATCH_*), resolve iii, the template,
+#                    every `commit:` the stack pins and the head of each
+#                    fixture repository that follows its branch, with
+#                    GITHUB_TOKEN when there is one (and FIXTURE_TOKEN for
+#                    the private fixture).
 #       build        build what the stack pins to a commit into the contract,
 #                    through the build cache HARNESS_E2E_WORKER_BUILDS
 #                    (default target/worker-builds). It runs the commits'
@@ -19,7 +21,8 @@
 #       fixtures     check out below target/ what the groups start from and
 #                    no package brings: the Kanban fixture, the stack's
 #                    template, the Registry sources and the trending topics
-#                    fixture. For the group
+#                    fixture, each at the commit resolve resolved, so every
+#                    group starts from the same one. For the group
 #                    HARNESS_E2E_CAMPAIGN_GROUP_ID names, else for every group
 #                    of the execution. The private ones read GITHUB_TOKEN.
 #       In that order; scripts/run_in_image.sh runs each in a container of
@@ -171,18 +174,27 @@ checkout() {
 }
 
 fixtures() {
-  local groups group template
+  local groups group template kanban fixture
   if [[ -n "${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}" ]]; then
     groups=$HARNESS_E2E_CAMPAIGN_GROUP_ID
   else
     groups=$(jq -r '[.matrix.include[].group_id] | unique | .[]' "$contracts/resolution.json")
   fi
+  # The heads of the fixture repositories that follow a branch, resolved once
+  # for the execution. A head preparation could not resolve leaves the group
+  # on the branch, as prepare_execution.py warned.
+  kanban=$(jq -r '.fixture_revisions["kanban-e2e-fixture"] // empty' "$contracts/resolution.json")
+  fixture=$(jq -r '.fixture_revisions["e2e-fixture"] // empty' "$contracts/resolution.json")
   for group in $groups; do
     case "$group" in
-      case-kanban-*) checkout iii-hq/kanban-e2e-fixture main target/kanban-fixture full ;;
+      case-kanban-*)
+        checkout iii-hq/kanban-e2e-fixture "${kanban:-main}" target/kanban-fixture full
+        # The bootstrap holds HEAD to main: main is the commit resolved.
+        [[ -z "$kanban" ]] || git -C target/kanban-fixture update-ref refs/heads/main HEAD
+        ;;
       case-registry-*)
         checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry
-        checkout iii-hq/e2e-fixture "" target/registry-sources/e2e-fixture
+        checkout iii-hq/e2e-fixture "$fixture" target/registry-sources/e2e-fixture
         ;;
       case-trending-topics-build)
         checkout iii-hq/e2e-fixture "$TRENDING_TOPICS_REVISION" target/trending-topics-fixture

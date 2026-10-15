@@ -9,9 +9,10 @@ reports go to. Everything else is resolved here, once for the whole execution:
                `stack.yaml`, and `plan.json`, the plan shape older Console
                imports and `report_execution.py` read.
     runtime    `iii: latest` becomes the newest iii release candidate, with
-               its archive digest, a template one commit, and every
-               container pinned to a `commit:` its repository, folder, full
-               commit and the dependency graph of its newest release.
+               its archive digest, a template one commit, every container
+               pinned to a `commit:` its repository, folder, full commit and
+               the dependency graph of its newest release, and each fixture
+               repository that follows a branch the commit at its head.
     commits    each of those built at its commit, once per (repository,
                commit, folder) in a build cache, and declared as the
                path:// worker it is now, with what a package would have
@@ -74,6 +75,13 @@ COMMIT = re.compile(r"^[0-9a-f]{4,40}$")
 RELEASE_ASSET = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/")
 #: A pinned container's keys that only say where its commit is.
 PIN_KEYS = ("version", "commit", "repository", "path")
+#: The fixture repositories groups check out at the head of a branch, by the
+#: name the reports give them: the repository, the branch (HEAD: its default)
+#: and the groups that check it out (scripts/executor.sh).
+FIXTURES = {
+    "kanban-e2e-fixture": ("iii-hq/kanban-e2e-fixture", "main", "case-kanban-"),
+    "e2e-fixture": ("iii-hq/e2e-fixture", "HEAD", "case-registry-"),
+}
 
 
 class ResolutionError(RuntimeError):
@@ -256,6 +264,21 @@ def resolve_template(value: Any, token: str | None) -> dict[str, str] | None:
     if not isinstance(revision, str) or not revision:
         raise ResolutionError(f"{TEMPLATES_REPOSITORY}@{ref} did not resolve to a commit")
     return {"id": template_id, "repository": TEMPLATES_REPOSITORY, "ref": ref, "revision": revision}
+
+
+def resolve_fixtures(token: str | None) -> dict[str, str]:
+    """The commit at the head of each fixture repository, resolved once so
+    every group starts from the same one and the reports name it. One that
+    does not resolve is said and left out: its groups check out the branch,
+    as they always did."""
+    revisions = {}
+    for name, (repository, ref, _) in FIXTURES.items():
+        try:
+            revisions[name] = str(get_json(f"{GITHUB_API_URL}/repos/{repository}/commits/{ref}", token=token)["sha"])
+        except (ResolutionError, KeyError, TypeError) as error:
+            print(f"::warning::{repository}@{ref} did not resolve ({error}); its groups check out the branch head",
+                  file=sys.stderr)
+    return revisions
 
 
 def release_graph(reference: str) -> dict[str, Any]:
@@ -679,10 +702,12 @@ def command_runtime(args: argparse.Namespace) -> None:
     cli = resolve_cli(requested, token, skipped)
     commits = resolve_commits(stack, token)
     # What was asked, what runs, and every newer candidate passed over and why.
+    # FIXTURE_TOKEN reads the private fixture; any token reads the public one.
+    fixtures = resolve_fixtures(os.environ.get("FIXTURE_TOKEN") or token)
     execution.update(iii=cli["version"], cli=cli,
                      iii_resolution={"requested": requested, "resolved": cli["version"], "skipped": skipped},
                      template=resolve_template(stack.get("template"), token),
-                     commits=commits, builds=builds_key(commits))
+                     commits=commits, builds=builds_key(commits), fixtures=fixtures)
     write_json(args.contract_dir / "execution.json", execution)
 
 
@@ -781,6 +806,11 @@ def command_contracts(args: argparse.Namespace) -> None:
                     **({"template_revision": template["revision"]} if template else {}),
                 }
             )
+    # The fixture heads the groups check out (scripts/executor.sh) and the
+    # reports name: only those of a fixture some group uses.
+    groups = [entry["group_id"] for entry in include]
+    fixtures = {name: revision for name, revision in (execution.get("fixtures") or {}).items()
+                if name in FIXTURES and any(group.startswith(FIXTURES[name][2]) for group in groups)}
     # The workflow and report_execution.py read this by name.
     image = os.environ.get("HARNESS_E2E_EXECUTOR_IMAGE")
     write_json(
@@ -793,6 +823,7 @@ def command_contracts(args: argparse.Namespace) -> None:
             # What a worker built from a commit reports is its Cargo version;
             # the reports name it by the commit.
             **({"stack_commits": stack_commits(execution["commits"])} if execution.get("commits") else {}),
+            **({"fixture_revisions": fixtures} if fixtures else {}),
             # The executor image the execution was prepared in, as
             # scripts/run_in_image.sh resolved it.
             **({"executor_image": image} if image else {}),

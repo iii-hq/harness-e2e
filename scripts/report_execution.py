@@ -149,26 +149,39 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
     resolution = obj(read_json(args.resolution)) if args.resolution else {}
     results = obj(read_json(artifacts / "results.json")) if artifacts else {}
     snapshot = obj(read_json(args.profile_snapshot)) if args.profile_snapshot else {}
-    # The versions that ran are the ones the engine installed, which the group
-    # records once the project is up. A declaration carries selectors, so this
-    # is the only place an exact version exists.
+    # The versions that ran are the ones the lock resolved: every group starts
+    # that project frozen, and the lock step writes them, exact, into the
+    # resolution. What each binary reports about itself (the engine's worker
+    # list, recorded once the project is up) is kept beside them, and where
+    # the two disagree it is said, never acted on: a binary can carry the
+    # version of the release before it.
+    lock = obj(resolution.get("stack_versions"))
     evidence = obj(read_json(artifacts / "compose-evidence.json")) if artifacts else {}
     observed = obj(obj(evidence.get("runtime")).get("observed_versions"))
-    versions = observed or resolution.get("stack_versions")
     # A worker built from a commit reports its Cargo version: it is named by
     # its commit, so no release series takes the build for a release.
     commits = obj(resolution.get("stack_commits"))
-    if versions and commits:
-        versions = {**versions, **{worker: f"@{str(obj(pin).get('commit'))[:7]}" for worker, pin in commits.items()}}
+    built = {worker: f"@{str(obj(pin).get('commit'))[:7]}" for worker, pin in commits.items()}
+    versions = {**lock, **built} if lock else None
+    warnings = [
+        f"{worker}: lock {version}, reported {observed[worker]}"
+        for worker, version in sorted(lock.items())
+        if worker not in built and worker in observed and observed[worker] != version
+    ]
     return prune(
         {
             "plan_sha256": plan.get("sha256"),
             "profile_sha256": snapshot.get("profile_sha256"),
             "definition_sha256": snapshot.get("definition_sha256"),
             "stack_versions": versions,
+            "stack_versions_observed": observed or None,
+            "stack_version_warnings": warnings or None,
             # The full commit of each, the repository and folder it was built
             # from, and whether that repository's default branch has it.
             "stack_commits": commits or None,
+            # The commit of each fixture repository the groups checked out,
+            # resolved once for the whole execution.
+            "fixture_revisions": obj(resolution.get("fixture_revisions")) or None,
             "stack_lock_sha256": args.stack_lock_sha256,
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,
@@ -377,6 +390,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     payload = {**BUILDERS[args.kind](args), "report_key": report_key(args.kind, args)}
+    if warnings := payload["identity"].get("stack_version_warnings"):
+        print(f"::warning::workers report a version other than the lock's: {'; '.join(warnings)}", file=sys.stderr)
     rendered = json.dumps(payload, indent=2) + "\n"
     if args.output:
         args.output.write_text(rendered)
