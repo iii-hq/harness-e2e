@@ -779,9 +779,12 @@ def project_scaffold(
             # The system under test the results name: the stack the lock
             # resolved and its digest. Without these the runner names the
             # checkout it was built from, which is not what ran.
+            # Only once the stack is locked: `prepare assemble` scaffolds
+            # before the lock exists, while a worker built from a commit
+            # already reports `@<sha7>`, and nothing has run yet to name.
             versions = {package: version for package, version in built_versions(locked, contract).items()
                         if isinstance(version, str) and version.strip() not in ("", "unknown")}
-            if versions:
+            if versions and runtime.get("lock"):
                 container.setdefault("environment", {}).update({
                     "HARNESS_E2E_STACK_MODE": "registry",
                     "HARNESS_E2E_STACK_VERSIONS": canonical(versions),

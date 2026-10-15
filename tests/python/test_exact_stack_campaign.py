@@ -1073,6 +1073,17 @@ fail() {
         self.assertEqual(app["config_name"], "project-one-harness")
         self.assertNotIn("harness", project["containers"])
 
+    def test_assembly_before_the_lock_names_no_stack_yet(self):
+        """`prepare assemble` scaffolds before the stack is locked: a worker
+        built from a commit already reports `@<sha7>`, but there is no lock to
+        digest, so the runner names nothing until the group starts it."""
+        contract, _ = self.pinned_contract()
+        del contract["runtime"]["lock"]
+        project = MODULE.project_scaffold(contract, "e2e-prepare", Path("/data"), None, {}, assembling=True)
+        runner = project["containers"]["harness-e2e"]
+        self.assertFalse({"HARNESS_E2E_STACK_MODE", "HARNESS_E2E_STACK_VERSIONS", "HARNESS_E2E_STACK_DIGEST"}
+                         & set(runner.get("environment") or {}))
+
     def test_a_template_runs_the_build_the_stack_pinned_with_its_held_dependencies(self):
         contract, built = self.pinned_contract()
         template = {"containers": {
