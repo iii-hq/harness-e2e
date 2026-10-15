@@ -773,6 +773,7 @@ pub(crate) mod tests {
             crate::report::CriterionReport {
                 id: "answer".into(),
                 description: None,
+                label: None,
                 possible: 90,
                 awarded: Some(90),
                 reason: "matches".into(),
@@ -782,6 +783,7 @@ pub(crate) mod tests {
             crate::report::CriterionReport {
                 id: "runtime_contract".into(),
                 description: None,
+                label: None,
                 possible: 10,
                 awarded: Some(0),
                 reason: "function_surface=false".into(),

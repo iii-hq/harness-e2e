@@ -25,6 +25,10 @@ use crate::report::{CompletionState, EvaluationDimension};
 const RUBRIC: &str = include_str!("../../../scripts/kanban_eval/rubric.json");
 const RUBRIC_VERSION: u8 = 2;
 const CATALOG: &str = include_str!("catalog.json");
+/// Short labels for readers, per case and criterion. Kept out of rubric.json:
+/// the rubric is hashed into the case and copied into the run, and a label
+/// must change neither.
+const LABELS: &str = include_str!("labels.json");
 const INSTRUCTIONS: &str = include_str!("../../../scripts/kanban_eval/instructions.md");
 const REPORT: &str = "kanban_evaluation";
 pub const IDS: [&str; 7] = [
@@ -232,11 +236,17 @@ fn rubric(index: usize) -> &'static [RubricCriterion] {
     &VALUE.get_or_init(|| serde_json::from_str(RUBRIC).expect("embedded Kanban rubric"))[IDS[index]]
 }
 
+fn labels(index: usize) -> &'static HashMap<String, String> {
+    static VALUE: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
+    &VALUE.get_or_init(|| serde_json::from_str(LABELS).expect("embedded Kanban labels"))[IDS[index]]
+}
+
 fn criteria(index: usize) -> Vec<CriterionSpec> {
     rubric(index)
         .iter()
-        .map(|criterion| {
-            CriterionSpec::scored(
+        .map(|criterion| CriterionSpec {
+            label: labels(index).get(&criterion.id).map(String::as_str),
+            ..CriterionSpec::scored(
                 criterion.id.as_str(),
                 criterion.weight,
                 criterion.description.as_str(),
@@ -981,6 +991,7 @@ mod tests {
             .map(|(criterion, award)| crate::report::CriterionReport {
                 id: award.id.clone(),
                 description: None,
+                label: None,
                 possible: criterion.weight,
                 awarded: award.awarded,
                 reason: award.reason.clone(),

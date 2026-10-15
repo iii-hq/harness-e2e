@@ -1,0 +1,93 @@
+{
+  "kanban_c1_foundation": {
+    "criterion_startup": "Compose starts the app and serves HTML",
+    "criterion_asset_paths": "Prototype asset paths return 404",
+    "criterion_initial_config": "Missing config creates the default directory",
+    "criterion_preserve_config": "Saving keeps unrelated config fields",
+    "criterion_direct_config": "Direct iii config changes take effect",
+    "criterion_invalid_config": "Empty data directory is rejected",
+    "criterion_config_restart": "Configuration survives a restart",
+    "criterion_settings_mobile": "Mobile settings form loads and saves",
+    "criterion_settings_desktop": "Desktop settings form fits without overflow",
+    "criterion_hot_reload": "Source changes apply without a rebuild"
+  },
+  "kanban_c2_persistence": {
+    "criterion_defaults": "New tickets get normalized titles and defaults",
+    "criterion_identity": "Ticket IDs, timestamps and keys are valid",
+    "criterion_lookup": "iii list and get return the right tickets",
+    "criterion_invalid": "Invalid tickets are rejected without writes",
+    "criterion_isolation": "Each data directory keeps its own store",
+    "criterion_restart": "Tickets survive a runtime restart",
+    "criterion_corruption": "Corrupt stores fail without being overwritten"
+  },
+  "kanban_c3_board": {
+    "criterion_loading": "Loading state shows no zero counts",
+    "criterion_empty": "Empty store shows zero and five columns",
+    "criterion_error": "Failed first load shows a recoverable error",
+    "criterion_retry": "Retry restores the board after a failure",
+    "criterion_total": "Summary shows the current ticket total",
+    "criterion_columns": "Five columns show the right cards and counts",
+    "criterion_metadata": "Cards show key, priority and assignee",
+    "criterion_refresh": "Refresh loads the current tickets",
+    "criterion_settings": "Returning from settings reloads the selected store",
+    "criterion_safe_text": "User markup renders as plain text",
+    "criterion_responsive": "Desktop and mobile have no page overflow"
+  },
+  "kanban_c4_ticket_flow": {
+    "criterion_cards": "Cards open details by keyboard and pointer",
+    "criterion_modal": "Creation modal is labelled and focuses title",
+    "criterion_create_error": "Failed creation shows an error, keeps the draft",
+    "criterion_creation": "Creating a ticket opens its details",
+    "criterion_lookup": "HTTP and iii lookups accept both IDs",
+    "criterion_details": "Details show the saved editable fields",
+    "criterion_mobile": "Detail reload and mobile layout work",
+    "criterion_delete_error": "Failed deletion keeps details and shows an error",
+    "criterion_delete_navigation": "Late deletion still removes the board card",
+    "criterion_durable_deletion": "Deletion survives restart and retires the key",
+    "criterion_content_type": "Non-JSON creation requests are rejected",
+    "criterion_utf8": "UTF-8 split across chunks stays intact"
+  },
+  "kanban_c5_edit_move": {
+    "criterion_partial": "Partial updates keep omitted fields",
+    "criterion_cancel": "Cancel restores saved fields without writing",
+    "criterion_save_failure": "Failed save keeps the draft and reports it",
+    "criterion_save": "Retry saves the edit, keeps immutable metadata",
+    "criterion_save_navigation": "Late save refreshes the right board",
+    "criterion_invalid": "Invalid updates fail without writing",
+    "criterion_drag_failure": "Failed drag leaves the card in place",
+    "criterion_drag": "Dragging saves only the status",
+    "criterion_move_navigation": "Late move refreshes the board",
+    "criterion_mobile": "Mobile status selector saves the edit",
+    "criterion_restart": "Edits survive a runtime restart"
+  },
+  "kanban_c6_discussion": {
+    "criterion_post": "Browser comment is saved and shown safely",
+    "criterion_comments": "Comments and replies persist in order",
+    "criterion_timeline": "Timeline shows text, author and time safely",
+    "criterion_parent_navigation": "Keyboard reaches the replied-to comment",
+    "criterion_invalid": "Invalid input and stored data fail safely",
+    "criterion_draft_failure": "Edits and failed posts keep drafts",
+    "criterion_draft_navigation": "Late post keeps other drafts and activity",
+    "criterion_preservation": "Edits and deletion keep the discussion",
+    "criterion_restart": "Discussions survive a restart"
+  },
+  "kanban_c7_live": {
+    "criterion_initial_event": "SSE connection gets an initial store event",
+    "criterion_mutation_event": "Ticket creation publishes an SSE event",
+    "criterion_failed_write": "Failed writes publish no SSE event",
+    "criterion_sessions": "Three sessions see iii-created tickets live",
+    "criterion_focus": "Updates keep focus on a board card",
+    "criterion_edit_merge": "Saving a title keeps a remote priority change",
+    "criterion_comment_draft": "Updates keep a comment draft and focus",
+    "criterion_replies": "Comments and replies reach other sessions",
+    "criterion_reconnect": "Sessions reconnect after restart, drafts kept",
+    "criterion_move": "Remote moves update lane and status",
+    "criterion_drag": "Updates keep an active drag going",
+    "criterion_store": "Store switch mid-drag loads the new store",
+    "criterion_deletion": "Remote deletion removes cards and stale actions",
+    "criterion_late_get": "Late GET responses keep newer state",
+    "criterion_late_mutation": "Late mutation responses keep newer state",
+    "criterion_cleanup": "Disconnected SSE clients are released",
+    "criterion_shutdown": "Shutdown and restart work with SSE clients"
+  }
+}

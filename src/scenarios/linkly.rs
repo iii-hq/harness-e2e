@@ -204,13 +204,16 @@ impl Scenario for LinklyTutorial {
                 .iter()
                 .map(|m| {
                     let id = m["id"].as_str().unwrap();
-                    CriterionSpec::scored(
-                        id,
-                        m["weight"].as_u64().unwrap() as u8,
-                        m["question"].as_str().unwrap(),
-                        EvaluationDimension::Deliverable,
-                    )
-                    .with_gate(GATES.contains(&id))
+                    CriterionSpec {
+                        label: m["label"].as_str(),
+                        ..CriterionSpec::scored(
+                            id,
+                            m["weight"].as_u64().unwrap() as u8,
+                            m["question"].as_str().unwrap(),
+                            EvaluationDimension::Deliverable,
+                        )
+                        .with_gate(GATES.contains(&id))
+                    }
                 })
                 .collect(),
         }

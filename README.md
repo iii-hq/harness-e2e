@@ -58,6 +58,13 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
+Each criterion has a `description`, the question the subject is scored on, and
+a `label`, a 3–8 word statement the test card shows ("Stored record matches
+the migration exactly"). The description is part of the behavior digest and
+reaches the subject in some scenarios; the label does neither, so it can be
+reworded without redefining anything. Kanban labels live in
+`src/scenarios/kanban/labels.json`, beside the rubric, not in it.
+
 ## Requirements
 
 `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog` prepare their

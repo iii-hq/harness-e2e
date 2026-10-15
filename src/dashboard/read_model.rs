@@ -398,6 +398,8 @@ pub(super) struct TestCriterionProjection {
     pub id: String,
     pub weight: u8,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub gate: bool,
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
@@ -1299,6 +1301,7 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
                 id: criterion.id.to_string(),
                 weight: criterion.weight,
                 description: criterion.description.to_string(),
+                label: criterion.label.map(str::to_string),
                 gate: criterion.gate,
                 kind: criterion.kind,
                 policy: criterion.policy,

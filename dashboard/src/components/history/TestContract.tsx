@@ -25,15 +25,16 @@ export function budgetLine(execution: TestSpec['execution']) {
 
 /** The test in plain words, top to bottom: what it protects, the task, when
  *  it counts as completed (the gate criteria) and what else the score counts.
- *  Without a gate the criteria only score. The id closes it, small. */
+ *  Without a gate the criteria only score. Each criterion reads as its label
+ *  and opens on its full question. The id closes it, small. */
 export function TestCard({ spec, testId }: { spec: TestSpec; testId: string }) {
   const gates = spec.criteria.filter((criterion) => criterion.gate)
   const others = spec.criteria.filter((criterion) => !criterion.gate)
   const rows: [string, ReactNode][] = [
     ['Protects', spec.protects],
     ['Task', spec.summary],
-    ['Completed when', descriptions(gates)],
-    [gates.length ? 'Score also counts' : 'Score counts', descriptions(others)],
+    ['Completed when', criteriaList(gates)],
+    [gates.length ? 'Score also counts' : 'Score counts', criteriaList(others)],
   ]
   return (
     <section className="th-brief" aria-label="What this test checks">
@@ -52,11 +53,21 @@ export function TestCard({ spec, testId }: { spec: TestSpec; testId: string }) {
   )
 }
 
-function descriptions(criteria: TestSpec['criteria']) {
+/** A criterion without a label (an older harness) shows its question. */
+function criteriaList(criteria: TestSpec['criteria']) {
   return criteria.length ? (
     <ul>
       {criteria.map((criterion) => (
-        <li key={criterion.id}>{criterion.description}</li>
+        <li key={criterion.id}>
+          {criterion.label ? (
+            <details>
+              <summary>{criterion.label}</summary>
+              <p className="th-faint">{criterion.description}</p>
+            </details>
+          ) : (
+            criterion.description
+          )}
+        </li>
       ))}
     </ul>
   ) : null

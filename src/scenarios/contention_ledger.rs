@@ -45,32 +45,38 @@ const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::gate_in(
     35,
     "Does the counter table hold one row reading exactly 15, and the audit table exactly the 15 rows writer 0-2 by step 1-5?",
     EvaluationDimension::Deliverable,
-);
+)
+.labeled("Ledger reads 15 with all 15 audit rows");
 const WRITERS_INCREMENTED: AssessmentSpec = AssessmentSpec::gate(
     "writers_incremented",
     15,
     "Did each of the three writer subagents run as a direct child of the root and send at least five atomic increments of the shared counter?",
-);
+)
+.labeled("Three writer subagents each incremented the counter");
 const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::scored(
     "contended_writes",
     10,
     "Did each writer send exactly five increments, log exactly its own five audit rows and write its own done key once after them, while the root made no increment and no other session ran?",
-);
+)
+.labeled("Each writer made exactly its five writes");
 const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::gate(
     "parent_woken",
     10,
     "Did the completion wake skip at least two done-key writes and then fire exactly once, so the root was woken only after all three writers had finished?",
-);
+)
+.labeled("Root woke once, after all writers finished");
 const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "quorum_free_fan_in",
     10,
     "Is one barrier-gated wake over the three done keys armed before the writers are spawned in one response, retiring on the third key after exactly three evaluations?",
-);
+)
+.labeled("One barrier wake armed before spawning writers");
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
     "Is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
-);
+)
+.labeled("Final answer is the short balanced line");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     BALANCED_LEDGER,
     WRITERS_INCREMENTED,

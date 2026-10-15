@@ -10,6 +10,7 @@ pub(super) struct AssessmentSpec {
     id: &'static str,
     weight: u8,
     description: &'static str,
+    label: Option<&'static str>,
     dimension: EvaluationDimension,
     gate: bool,
     gate_minimum: Option<u8>,
@@ -21,6 +22,7 @@ impl AssessmentSpec {
             id,
             weight,
             description,
+            label: None,
             dimension: EvaluationDimension::StructuralIntegrity,
             gate: false,
             gate_minimum: None,
@@ -37,6 +39,7 @@ impl AssessmentSpec {
             id,
             weight,
             description,
+            label: None,
             dimension,
             gate: false,
             gate_minimum: None,
@@ -69,6 +72,14 @@ impl AssessmentSpec {
         Self {
             gate: true,
             gate_minimum: Some(points),
+            ..self
+        }
+    }
+
+    /// See [`CriterionSpec::label`].
+    pub(super) const fn labeled(self, label: &'static str) -> Self {
+        Self {
+            label: Some(label),
             ..self
         }
     }
@@ -146,6 +157,7 @@ impl AssessmentSpec {
             id: self.id,
             weight: self.weight,
             description: self.description,
+            label: self.label,
             kind: declaration.kind,
             policy: declaration.policy,
             dimension: declaration.dimension,
@@ -281,6 +293,7 @@ pub(super) fn completion(
             .map(|spec| crate::report::CriterionReport {
                 id: spec.id.to_string(),
                 description: None,
+                label: None,
                 possible: spec.weight,
                 awarded: evaluation
                     .awards

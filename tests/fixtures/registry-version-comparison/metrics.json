@@ -214,6 +214,7 @@
         {
           "id": "implementation.same_version",
           "question": "Does comparing a version with itself return no changes?",
+          "label": "Same version compares with no changes",
           "expected": "Comparing orders-worker 1.0.0 to 1.0.0 returns an empty changes array.",
           "measurement": "binary",
           "evidence": [
@@ -225,6 +226,7 @@
         {
           "id": "implementation.function_removal",
           "question": "Does the API identify a removed function?",
+          "label": "API reports a removed function",
           "expected": "The 1.0.0 to 2.0.0 response contains an orders::get removal.",
           "measurement": "binary",
           "evidence": [
@@ -236,6 +238,7 @@
         {
           "id": "implementation.required_impact",
           "question": "Does a newly required input property receive the prescribed impact?",
+          "label": "New required input gets the prescribed impact",
           "expected": "Both currency-related entries in 1.0.0 to 2.0.0 have impact potentially_breaking.",
           "measurement": "binary",
           "evidence": [
@@ -246,6 +249,7 @@
         {
           "id": "implementation.object_order",
           "question": "Does changing only object-key order preserve equality?",
+          "label": "Object key order alone is no change",
           "expected": "A pure object-key permutation produces no comparison changes.",
           "measurement": "binary",
           "evidence": [
@@ -256,6 +260,7 @@
         {
           "id": "implementation.required_order",
           "question": "Does changing only schema required-array order preserve equality?",
+          "label": "Required-array order alone is no change",
           "expected": "A permutation of schema required produces no comparison changes.",
           "measurement": "binary",
           "evidence": [
@@ -266,6 +271,7 @@
         {
           "id": "implementation.enum_order",
           "question": "Does changing only schema enum-array order preserve equality?",
+          "label": "Enum order alone is no change",
           "expected": "A permutation of schema enum produces no comparison changes.",
           "measurement": "binary",
           "evidence": [
@@ -276,6 +282,7 @@
         {
           "id": "implementation.config_array_order",
           "question": "Does changing configuration-array order produce a difference?",
+          "label": "Config array order counts as a change",
           "expected": "Reversing a configuration array with distinct elements produces a configuration change.",
           "measurement": "binary",
           "evidence": [
@@ -286,6 +293,7 @@
         {
           "id": "implementation.missing_metadata",
           "question": "Does absent metadata produce an unavailable notice?",
+          "label": "Missing metadata shows an unavailable notice",
           "expected": "The 0.9.0 configuration is represented as unavailable metadata.",
           "measurement": "binary",
           "evidence": [
@@ -296,6 +304,7 @@
         {
           "id": "implementation.worker_lookup",
           "question": "Is a version resolved only within the requested worker?",
+          "label": "Versions resolve only within the worker",
           "expected": "orders-worker@9.9.9 remains missing even though second-worker@9.9.9 exists.",
           "measurement": "binary",
           "evidence": [
@@ -306,6 +315,7 @@
         {
           "id": "implementation.reverse_kinds",
           "question": "Does reversal swap addition and removal kinds?",
+          "label": "Reversal swaps additions and removals",
           "expected": "The forward addition of orders::list becomes a removal for the reversed pair.",
           "measurement": "binary",
           "evidence": [
@@ -316,6 +326,7 @@
         {
           "id": "implementation.reverse_values",
           "question": "Does reversal swap before and after values?",
+          "label": "Reversal swaps before and after values",
           "expected": "The timeout before/after values are exchanged when 1.0.0 to 2.0.0 is reversed.",
           "measurement": "binary",
           "evidence": [
@@ -326,6 +337,7 @@
         {
           "id": "implementation.reverse_impact",
           "question": "Does reversal recalculate impact?",
+          "label": "Reversal recalculates the impact",
           "expected": "The reversed reduction of the create input required set is additive.",
           "measurement": "binary",
           "evidence": [
@@ -336,6 +348,7 @@
         {
           "id": "implementation.shared_url",
           "question": "Does reopening a shared URL restore the selected pair?",
+          "label": "Shared URL restores the selected pair",
           "expected": "Reopening the Changelog URL restores its exact from and to selection.",
           "measurement": "binary",
           "evidence": [
@@ -346,6 +359,7 @@
         {
           "id": "implementation.stale_results",
           "question": "Does a failed request avoid displaying the previous result as current?",
+          "label": "Failed request hides the previous result",
           "expected": "After a pair change followed by a request failure, the old comparison is not presented under the new pair.",
           "measurement": "binary",
           "evidence": [
@@ -356,6 +370,7 @@
         {
           "id": "implementation.patch_application",
           "question": "Does the delivered patch apply to the pinned base?",
+          "label": "Patch applies to the pinned base",
           "expected": "An independent clean checkout of the required Registry SHA accepts the complete delivered patch.",
           "measurement": "binary",
           "evidence": [
@@ -366,6 +381,7 @@
         {
           "id": "implementation.invalid_version",
           "question": "Does invalid SemVer return the prescribed error?",
+          "label": "Invalid SemVer returns the prescribed error",
           "expected": "Invalid SemVer returns HTTP 400 with error.code invalid_version.",
           "measurement": "binary",
           "evidence": [
@@ -376,6 +392,7 @@
         {
           "id": "implementation.missing_worker",
           "question": "Does a missing worker return the prescribed error?",
+          "label": "Missing worker returns the prescribed error",
           "expected": "An absent worker returns HTTP 404 with error.code worker_not_found.",
           "measurement": "binary",
           "evidence": [
@@ -386,6 +403,7 @@
         {
           "id": "implementation.missing_version",
           "question": "Does a missing version return the prescribed error?",
+          "label": "Missing version returns the prescribed error",
           "expected": "The first missing version yields HTTP 404 with error.code version_not_found and its value in error.version.",
           "measurement": "binary",
           "evidence": [
@@ -396,6 +414,7 @@
         {
           "id": "implementation.history",
           "question": "Does Changelog history show the seeded releases?",
+          "label": "Changelog shows the seeded releases",
           "expected": "The history displays the four orders-worker releases from the public seed.",
           "measurement": "binary",
           "evidence": [
@@ -406,6 +425,7 @@
         {
           "id": "implementation.expanded_detail",
           "question": "Can a user expand the timeout change detail?",
+          "label": "Timeout change detail can be expanded",
           "expected": "Expanding the timeout change reveals its before and after values.",
           "measurement": "binary",
           "evidence": [
@@ -416,6 +436,7 @@
         {
           "id": "implementation.keyboard_selectors",
           "question": "Can the version selectors be operated using the keyboard?",
+          "label": "Version selectors work by keyboard",
           "expected": "A browser user can select the comparison pair without a pointer.",
           "measurement": "binary",
           "evidence": [
@@ -426,6 +447,7 @@
         {
           "id": "implementation.versions_regression",
           "question": "Does the existing Versions tab retain its baseline behavior?",
+          "label": "Versions tab still works as before",
           "expected": "The baseline Versions flow still displays the seeded versions.",
           "measurement": "binary",
           "evidence": [
@@ -436,6 +458,7 @@
         {
           "id": "implementation.readme_regression",
           "question": "Does the existing README view retain its baseline behavior?",
+          "label": "README view still works as before",
           "expected": "The baseline README view still displays the seeded worker README.",
           "measurement": "binary",
           "evidence": [
@@ -446,6 +469,7 @@
         {
           "id": "implementation.api_reference_regression",
           "question": "Does the existing API reference retain its baseline behavior?",
+          "label": "API reference still works as before",
           "expected": "The baseline API-reference flow still displays the selected version contract.",
           "measurement": "binary",
           "evidence": [
@@ -456,6 +480,7 @@
         {
           "id": "implementation.download_regression",
           "question": "Does the existing download flow retain its baseline behavior?",
+          "label": "Download flow still works as before",
           "expected": "The baseline download flow still returns the seeded artifact bytes.",
           "measurement": "binary",
           "evidence": [
@@ -620,6 +645,7 @@
         {
           "id": "verification.recall",
           "question": "What proportion of independently failing required checks did the tester report as failing?",
+          "label": "Tester reports the checks that really fail",
           "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1 when the tester delivered a readable report, 0 when it did not.",
           "measurement": "ratio",
           "weight": 35,
@@ -635,6 +661,7 @@
         {
           "id": "verification.precision",
           "question": "What proportion of reported failing checks are independently reproduced as failing?",
+          "label": "Reported failures reproduce independently",
           "expected": "Execute the contract probes independently and match each reported failing check by ID. If no failing checks are reported, retain 0/0 and mark precision as not applicable.",
           "measurement": "ratio",
           "weight": 20,
@@ -648,6 +675,7 @@
         {
           "id": "verification.execution_coverage",
           "question": "What proportion of required check IDs cite a recorded execution command and evidence file?",
+          "label": "Every check cites its command and evidence",
           "expected": "A non-blocked report entry cites an exact command present in the executor log and an existing evidence file.",
           "measurement": "ratio",
           "weight": 20,
@@ -661,6 +689,7 @@
         {
           "id": "verification.evidence_coverage",
           "question": "What proportion of reported outcomes cite an existing evidence file?",
+          "label": "Every outcome cites an existing evidence file",
           "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace. If no outcomes are reported, retain 0/0 and score coverage as value 0.",
           "measurement": "ratio",
           "weight": 20,
@@ -674,6 +703,7 @@
         {
           "id": "verification.source_preservation",
           "question": "Did the tester deliver a readable report and leave the product source unchanged?",
+          "label": "Readable report, product source unchanged",
           "expected": "A readable checks.json exists and the final product source equals the delivered implementation snapshot.",
           "measurement": "binary",
           "evidence": [

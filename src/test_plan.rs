@@ -621,6 +621,19 @@ mod tests {
                     scenario.protects().unwrap().contains(". If it fails, "),
                     "{suite}: {id} protects must say what breaks when it fails"
                 );
+                // The card lists each criterion by its label, a short
+                // statement; the full question stays one step away.
+                for criterion in scenario.spec("card").criteria {
+                    let words = criterion
+                        .label
+                        .map_or(0, |label| label.split_whitespace().count());
+                    assert!(
+                        (3..=8).contains(&words),
+                        "{suite}: {id} criterion {} needs a label of 3 to 8 words, has {:?}",
+                        criterion.id,
+                        criterion.label
+                    );
+                }
             }
         }
     }

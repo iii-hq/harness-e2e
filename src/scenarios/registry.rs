@@ -302,7 +302,7 @@ fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
         execution: ExecutionPolicy { max_turns: Some(128), max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
         denied_functions: &[],
         criteria: metrics(N).iter().map(|m| {
-            let criterion = CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable).with_gate(m["gate"] == true);
+            let criterion = CriterionSpec { label: m["label"].as_str(), ..CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable).with_gate(m["gate"] == true) };
             match m["gate_minimum"].as_u64() {
                 Some(points) => criterion.with_gate_minimum(points as u8),
                 None => criterion,

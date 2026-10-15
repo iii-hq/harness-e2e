@@ -181,6 +181,11 @@ pub struct CriterionSpec {
     pub id: &'static str,
     pub weight: u8,
     pub description: &'static str,
+    /// The criterion as a short statement for readers ("Stored record matches
+    /// the migration exactly"). Stays out of `behavior_sha256` and never
+    /// reaches the subject, so rewording it changes neither the definition nor
+    /// the task; `description` is what the subject and the digest see.
+    pub label: Option<&'static str>,
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: crate::report::EvaluationDimension,
@@ -204,6 +209,7 @@ impl CriterionSpec {
             id,
             weight,
             description,
+            label: None,
             kind: AssessmentKind::Signal,
             policy: AssessmentPolicy::Advisory,
             dimension,
@@ -214,6 +220,13 @@ impl CriterionSpec {
 
     pub const fn with_gate(self, gate: bool) -> Self {
         Self { gate, ..self }
+    }
+
+    pub const fn labeled(self, label: &'static str) -> Self {
+        Self {
+            label: Some(label),
+            ..self
+        }
     }
 
     /// A gate that already passes at `points`, below the criterion's weight.

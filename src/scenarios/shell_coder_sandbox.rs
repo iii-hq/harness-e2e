@@ -181,37 +181,44 @@ const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
     "worker_setup",
     5,
     "Does the subject use the shell and coder surfaces the assembled project exposes?",
-);
+)
+.labeled("Shell and coder workers were used");
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
     "Are the source and tests inspected and is the public failure reproduced before the first production edit?",
-);
+)
+.labeled("Failure reproduced before the first edit");
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded_diagnosis",
     5,
     "Is a durable diagnosis retained as the only additional workspace artifact?",
-);
+)
+.labeled("A diagnosis file is kept in the workspace");
 const PUBLIC_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
     "public_correctness",
     25,
     "Does the subject rerun the public suite after editing and does the runner independently observe it passing?",
-);
+)
+.labeled("Public tests rerun and pass");
 const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::gate(
     "hidden_correctness",
     30,
     "Do runner-owned probes accept generators, out-of-order revisions, account migration, conflicts, validation, idempotency, and input immutability?",
-);
+)
+.labeled("Hidden probes accept the repaired code");
 const HOST_EXECUTION: AssessmentSpec = AssessmentSpec::scored(
     "host_execution",
     10,
     "Does the repaired CLI run in the host workspace and emit the exact compact JSON contract?",
-);
+)
+.labeled("Repaired CLI prints the exact JSON");
 const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::scored(
     "scope_and_lifecycle",
     5,
     "Do protected files remain exact with only the production source and retained diagnosis changed?",
-);
+)
+.labeled("Only the source and diagnosis changed");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     WORKER_SETUP,
     INVESTIGATION,
