@@ -53,11 +53,19 @@ ENVIRONMENT_CREDENTIALS = ("DEEPSEEK_API_KEY", "ZAI_API_KEY", "TYPESAFE_API_KEY"
 #: Shorter values are not looked for in evidence: they would match anywhere
 #: and break the JSON they sit in.
 REDACTION_MIN_LENGTH = 8
-#: What the launcher captures from the processes it starts, below a bundle's
-#: root: nothing hashes it, so a credential found there is replaced. Every
-#: other file is bound by a digest (the runner's references, the aggregator's
-#: campaign bundle, Release Control's checks) and is never rewritten.
-REWRITABLE_ROOT = "logs"
+#: What the launcher captures from the processes it starts, and the whole
+#: tree of a group's attempt that failed before any run started, below a
+#: bundle's root: nothing hashes them, so a credential found there is
+#: replaced. Every other file is bound by a digest (the runner's references,
+#: the aggregator's campaign bundle, Release Control's checks) and is never
+#: rewritten.
+REWRITABLE_ROOTS = ("logs", "attempts")
+#: How much of the message iii answered a failure record keeps: the cause,
+#: not a log. The whole stderr stays in the group's logs.
+FAILURE_MESSAGE_LIMIT = 300
+#: Where `iii trigger` prints what the engine or a worker answered when a
+#: call fails: `Error: {"code": ..., "message": ...}`, or plain text.
+III_ERROR = re.compile(r"^Error: ", re.MULTILINE)
 #: The providers that sign in with a subscription login rather than a key:
 #: the variable a group receives its access token in (never a refresh or id
 #: token), the one that tells the provider where its login is, and the file
@@ -205,7 +213,7 @@ def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> di
                     payload = payload.replace(form.encode(), f"[redacted:{name}]".encode())
         if payload == original:
             continue
-        if Path(relative).parts[0] == REWRITABLE_ROOT:
+        if Path(relative).parts[0] in REWRITABLE_ROOTS:
             rewrites[path] = payload
         else:
             bound.append(f"{relative} ({', '.join(sorted(found))})")
@@ -1036,6 +1044,63 @@ def export_compose_files(
         shutil.copyfile(source, destination)
 
 
+def iii_error(stderr: str) -> dict[str, str]:
+    """The code and message of the last error `iii trigger` printed; an error
+    in plain text is its message. Nothing when it printed none."""
+    starts = [match.end() for match in III_ERROR.finditer(stderr)]
+    if not starts:
+        return {}
+    text = stderr[starts[-1]:].strip()
+    try:
+        answered, _ = json.JSONDecoder().raw_decode(text)
+    except ValueError:
+        answered = None
+    if not isinstance(answered, dict):
+        answered = {"message": text.splitlines()[0] if text else ""}
+    error = {}
+    if isinstance(answered.get("code"), str) and answered["code"]:
+        error["code"] = answered["code"]
+    message = answered.get("message")
+    if isinstance(message, str) and message.strip():
+        message = " ".join(message.split())
+        if len(message) > FAILURE_MESSAGE_LIMIT:
+            message = message[:FAILURE_MESSAGE_LIMIT - 1] + "…"
+        error["message"] = message
+    return error
+
+
+def failure_record(
+    phase: str,
+    exit_code: int,
+    attempt: int = 1,
+    reason: str | None = None,
+    line: int | None = None,
+    function: str | None = None,
+    stderr: str = "",
+    earlier: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """A group's `failure.json`: the phase it failed in and why. When the
+    call that failed was iii's, its code and message (`function` names the
+    call) are the cause, and the error says so unless the launcher gave a
+    reason of its own. Earlier attempts of the group come along."""
+    answered = iii_error(stderr) if function else {}
+    if not reason and function:
+        cause = ": ".join(answered[key] for key in ("code", "message") if key in answered)
+        reason = (f"{function} failed during {phase}: {cause}" if cause
+                  else f"{function} failed during {phase} (exit {exit_code})")
+    if not reason:
+        reason = (f"command failed during {phase} at line {line} (exit {exit_code})" if line
+                  else f"Compose execution failed during {phase} (exit {exit_code})")
+    record: dict[str, Any] = {
+        "phase": phase, "outcome": "infra_failed", "error": reason, "exit_code": exit_code, "attempt": attempt,
+    }
+    if function:
+        record.update(answered, function=function)
+    if earlier:
+        record["earlier_attempts"] = earlier
+    return record
+
+
 def _package_files(root: Path) -> list[dict[str, Any]]:
     """Hash regular files without ever traversing or dereferencing symlinks."""
     if root.is_symlink():
@@ -1165,9 +1230,33 @@ def main() -> int:
     export.add_argument("--artifact-root", type=Path, required=True)
     export.add_argument("--allowed-root", type=Path, required=True)
     export.add_argument("--final", action="store_true")
+    failure = commands.add_parser("failure", help="a group's failure.json")
+    failure.add_argument("--output", type=Path, required=True)
+    failure.add_argument("--phase", required=True)
+    failure.add_argument("--exit-code", type=int, required=True)
+    failure.add_argument("--attempt", type=int, default=1)
+    failure.add_argument("--reason")
+    failure.add_argument("--line", type=int)
+    failure.add_argument("--iii-function", help="the iii call that failed")
+    failure.add_argument("--iii-stderr", type=Path, help="what that call printed on stderr")
+    failure.add_argument("--earlier", type=Path, action="append", default=[],
+                         help="the failure.json of an earlier attempt")
     args = parser.parse_args()
 
     try:
+        if args.command == "failure":
+            # Whatever else went wrong, the group's failure is recorded.
+            stderr = args.iii_stderr.read_text(errors="replace") if args.iii_stderr and args.iii_stderr.is_file() else ""
+            earlier = []
+            for path in args.earlier:
+                try:
+                    earlier.append(load_object(path, "earlier failure"))
+                except (ValueError, OSError):
+                    earlier.append({"unreadable": path.name})
+            record = failure_record(args.phase, args.exit_code, args.attempt, args.reason, args.line,
+                                    args.iii_function, stderr, earlier)
+            args.output.write_text(json.dumps(record, indent=2) + "\n")
+            return 0
         if args.command == "export-compose":
             export_compose_files(args.compose, args.runtime_root, args.artifact_root, args.allowed_root, args.final)
             return 0

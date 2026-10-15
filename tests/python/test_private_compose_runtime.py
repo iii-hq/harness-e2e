@@ -3,11 +3,13 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 
 import yaml
@@ -47,6 +49,9 @@ if args[0] != 'trigger':
     while True:
         time.sleep(1)
 function = args[1]
+if os.environ.get('FAKE_HANG') == function:
+    # A call that never answers: only the launcher's own bound ends it.
+    time.sleep(3600)
 if function == 'engine::workers::list':
     answer({'workers': []})
 elif function == 'compose::list':
@@ -92,6 +97,14 @@ elif function.startswith('compose::'):
         # An actual add mutates the project: export must retain these bytes.
         content['assembled_by_fake'] = True
         path.write_text(yaml.safe_dump(content, sort_keys=False))
+    if function == 'compose::up' and os.environ.get('FAKE_FAIL') == 'up':
+        # What iii printed on 2026-10-14, when GitHub answered 500 for ade.
+        print('Error: ' + json.dumps({'code': 'PACKAGE_DOWNLOAD_FAILED', 'message': (
+            "container 'ade': could not download https://api.workers.iii.dev/download/ade/1.9.60/"
+            "x86_64-unknown-linux-gnu: HTTP status server error (500 Internal Server Error) for url "
+            "(https://github.com/iii-hq/workers/releases/download/build-881c3e0e19c38764747df73a9dc1e48aaa68e4ce/"
+            "ade-x86_64-unknown-linux-gnu.tar.gz)"), 'stacktrace': None}, indent=2), file=sys.stderr)
+        sys.exit(1)
     if function == 'compose::up' and json.loads(option('--json'))['frozen']:
         assert lock.read_text() == os.environ['FAKE_LOCK'], 'wrong adjacent frozen lock'
     if function == 'compose::down':
@@ -161,6 +174,11 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         curl.write_text('#!/usr/bin/env python3\nimport os, shutil, sys\n'
                         "shutil.copyfile(os.environ['FAKE_ARCHIVE'], sys.argv[sys.argv.index('-o') + 1])\n")
         curl.chmod(0o755)
+        # The launcher waits with sleep(1); this one only says how long.
+        self.sleeps = self.root / 'sleeps'
+        sleep = tools / 'sleep'
+        sleep.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_SLEEPS"\n')
+        sleep.chmod(0o755)
         self.contract = campaign_contract()
         self.contract['runtime']['cli']['sha256'] = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
         self.contract['runtime']['compose'] = {'containers': {
@@ -176,6 +194,7 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
             'HARNESS_E2E_CONTRACT':str(self.root / 'contract.json'),
             'HARNESS_E2E_ARTIFACTS_DIR':str(self.artifacts), 'HARNESS_E2E_CAMPAIGN_GROUP_ID':'daily-core',
             'HARNESS_E2E_WAIT_SECONDS':'5', 'FAKE_CALLS':str(self.calls), 'FAKE_ARCHIVE':str(archive),
+            'FAKE_SLEEPS':str(self.sleeps),
             'FAKE_VERSION':self.contract['runtime']['cli']['version'], 'FAKE_CATALOG':json.dumps(catalog()),
             'FAKE_LOCK':yaml.safe_dump(self.lock, sort_keys=False),
             'DEEPSEEK_API_KEY':'synthetic-secret-never-upload',
@@ -338,10 +357,13 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         result = self.launch()
         self.assertNotEqual(result.returncode, 0)
         rows = self.observed()
-        self.assertEqual(len([row for row in rows if row['kind'] == 'compose::down']), 1)
+        # Once for each attempt: nothing had run, so the group was tried again.
+        self.assertEqual(len([row for row in rows if row['kind'] == 'compose::down']), 2)
         self.assertFalse(any(row['kind'] == 'compose::up' for row in rows))
         failure = json.loads((self.artifacts / 'failure.json').read_text())
         self.assertEqual(failure['phase'], 'project_assembly')
+        self.assertEqual(failure['function'], 'compose::add')
+        self.assertEqual(failure['attempt'], 2)
         MODULE.package_bundle(self.artifacts, self.contract, {})
 
     def test_results_failure_preserves_committed_native_bytes_and_hidden_checkpoint(self):
@@ -475,6 +497,109 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         link.symlink_to(self.root)
         with self.assertRaisesRegex(ValueError, 'symlink'):
             MODULE.package_bundle(self.artifacts, self.contract, {})
+
+    def test_readiness_is_a_deadline_however_long_each_probe_hangs(self):
+        """Each probe is stopped after 6 s (`--timeout-ms 5000`, and the
+        process a second later), and the wait counts seconds, not probes: a
+        deadline of W seconds gives up within W + 6 + 1. With the default
+        300 s that is 307 s; counting probes, it once took 155 minutes."""
+        wait = 2
+        self.env['HARNESS_E2E_WAIT_SECONDS'] = str(wait)
+        # A second attempt only repeats this; see the test below.
+        self.env['HARNESS_E2E_GROUP_ATTEMPT'] = '2'
+        for hung, phase, what in (('engine::workers::list', 'engine_start', 'iii engine'),
+                                  ('compose::list', 'compose_start', 'iii compose'),
+                                  ('e2e::scenarios-list', 'runner_readiness', 'E2E runner')):
+            with self.subTest(hung=hung):
+                shutil.rmtree(self.artifacts)
+                self.artifacts.mkdir()
+                self.calls.unlink(missing_ok=True)
+                self.env['FAKE_HANG'] = hung
+                started = time.monotonic()
+                result = self.launch()
+                elapsed = time.monotonic() - started
+                self.assertNotEqual(result.returncode, 0)
+                failure = json.loads((self.artifacts / 'failure.json').read_text())
+                self.assertEqual(failure['phase'], phase)
+                self.assertTrue(failure['error'].startswith(what), failure['error'])
+                gave_up = int(re.search(rf'within {wait}s \(gave up after (\d+)s\)', failure['error'])[1])
+                self.assertGreaterEqual(gave_up, wait)
+                self.assertLessEqual(gave_up, wait + 6 + 1)
+                # The rest is the launcher starting and taking the stack down.
+                self.assertLess(elapsed, wait + 6 + 1 + 10)
+                self.assertEqual(failure['function'], hung)
+
+    def test_a_stack_that_cannot_start_is_tried_once_more_and_says_what_iii_answered(self):
+        self.env['FAKE_FAIL'] = 'up'
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        rows = self.observed()
+        # Three compose::up a try (#281), two tries, each taken down after.
+        self.assertEqual([row['kind'] for row in rows if row['kind'] in ('compose::up', 'compose::down')],
+                         ['compose::up'] * 3 + ['compose::down'] + ['compose::up'] * 3 + ['compose::down'])
+        self.assertIn('60', self.sleeps.read_text().splitlines())
+        self.assertIn('trying the group once more in 60s', result.stderr)
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        # What Release Control already reads, as it was.
+        self.assertEqual(failure['phase'], 'project_start')
+        self.assertEqual(failure['outcome'], 'infra_failed')
+        self.assertEqual(failure['exit_code'], 1)
+        self.assertIn('compose::up exhausted 3 attempts', failure['error'])
+        # And what iii answered, not the line of the launcher.
+        self.assertEqual(failure['code'], 'PACKAGE_DOWNLOAD_FAILED')
+        self.assertEqual(failure['function'], 'compose::up')
+        self.assertTrue(failure['message'].startswith("container 'ade': could not download"), failure['message'])
+        self.assertIn('ade/1.9.60', failure['message'])
+        self.assertIn('500 Internal Server Error', failure['message'])
+        self.assertLessEqual(len(failure['message']), 300)
+        self.assertEqual(failure['attempt'], 2)
+        [earlier] = failure['earlier_attempts']
+        self.assertEqual((earlier['attempt'], earlier['phase'], earlier['code']),
+                         (1, 'project_start', 'PACKAGE_DOWNLOAD_FAILED'))
+        # The first attempt's evidence stays, apart; the bundle takes both.
+        self.assertEqual(json.loads((self.artifacts / 'attempts/1/failure.json').read_text()), earlier)
+        self.assertTrue((self.artifacts / 'attempts/1/logs/compose-up-attempt-3.log').is_file())
+        self.assertTrue((self.artifacts / 'logs/compose-up-attempt-3.log').is_file())
+        bundle = MODULE.package_bundle(self.artifacts, self.contract, {},
+                                       {'DEEPSEEK_API_KEY': self.env['DEEPSEEK_API_KEY']})
+        self.assertIn('attempts/1/failure.json', {entry['path'] for entry in bundle['files']})
+        self.assertNotIn(self.env['DEEPSEEK_API_KEY'], (self.artifacts / 'failure.json').read_text())
+
+    def test_a_group_whose_run_started_is_never_tried_again(self):
+        self.env['FAKE_FAIL'] = 'results'
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len([row for row in self.observed() if row['kind'] == 'compose::up']), 1)
+        self.assertFalse((self.artifacts / 'attempts').exists())
+        self.assertNotIn('once more', result.stderr)
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        self.assertEqual((failure['phase'], failure['attempt'], failure['function']),
+                         ('results', 1, 'e2e::results-get'))
+        self.assertNotIn('earlier_attempts', failure)
+
+    def test_the_failure_record_keeps_what_iii_answered_and_never_more_than_its_start(self):
+        progress = 'resolving ade@1.9.60\nError: {\n  "code": "X_FAILED",\n  "message": "first"\n}\n'
+        cases = (
+            (progress + 'Error: {"code": "PACKAGE_DOWNLOAD_FAILED", "message": "  two\\n  lines  "}\n',
+             {'code': 'PACKAGE_DOWNLOAD_FAILED', 'message': 'two lines'}),
+            ('Error: Timed out waiting for the engine (no response within the timeout).\nmore\n',
+             {'message': 'Timed out waiting for the engine (no response within the timeout).'}),
+            ('Error: {"code": "D310", "message": "' + 'x' * 400 + '"}', {'code': 'D310', 'message': 'x' * 299 + '…'}),
+            ('nothing iii said', {}),
+            ('', {}),
+        )
+        for stderr, expected in cases:
+            with self.subTest(stderr=stderr[:30]):
+                self.assertEqual(MODULE.iii_error(stderr), expected)
+        record = MODULE.failure_record('project_start', 1, 1, None, 128, 'compose::status', cases[0][0])
+        self.assertEqual(record['error'],
+                         'compose::status failed during project_start: PACKAGE_DOWNLOAD_FAILED: two lines')
+        record = MODULE.failure_record('project_start', 1, 1, 'compose::up exhausted 3 attempts', 128, 'compose::up')
+        self.assertEqual((record['error'], record['function']), ('compose::up exhausted 3 attempts', 'compose::up'))
+        self.assertNotIn('code', record)
+        record = MODULE.failure_record('materialization', 2, 1, None, 561)
+        self.assertEqual(record, {'phase': 'materialization', 'outcome': 'infra_failed', 'attempt': 1, 'exit_code': 2,
+                                  'error': 'command failed during materialization at line 561 (exit 2)'})
 
 
 if __name__ == '__main__':

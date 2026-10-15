@@ -167,23 +167,23 @@ def newest_release_candidate(versions: list[str]) -> str | None:
     tags, the rule Release Control dispatches with
     (`resolveNewestCliReleaseCandidate`). Stable releases and other
     pre-releases are not candidates; candidates order by core, then N."""
-    ranked = [
-        (tuple(int(part) for part in match.groups()), version)
-        for version in versions
-        if (match := RELEASE_CANDIDATE.fullmatch(version))
-    ]
-    return max(ranked)[1] if ranked else None
+    return next(iter(release_candidates(versions)), None)
 
 
-def resolve_cli(selector: str, token: str | None) -> dict[str, str]:
-    """The iii release every group installs, with its archive's digest."""
-    version = str(selector).strip()
-    if version == "latest":
-        refs = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/git/matching-refs/tags/iii/v", token=token)
-        tags = [str(ref.get("ref", "")).removeprefix("refs/tags/iii/v") for ref in refs]
-        version = newest_release_candidate(tags) or ""
-        if not version:
-            raise ResolutionError(f"{III_REPOSITORY} has no release candidate")
+def release_candidates(versions: list[str]) -> list[str]:
+    """Every release candidate among `versions`, newest first."""
+    ranked = sorted(
+        ((tuple(int(part) for part in match.groups()), version)
+         for version in versions
+         if (match := RELEASE_CANDIDATE.fullmatch(version))),
+        reverse=True,
+    )
+    return [version for _, version in ranked]
+
+
+def cli_release(version: str, token: str | None) -> dict[str, str] | None:
+    """iii/v<version>'s archive for the groups, with its digest; None while
+    the release publishes no such archive."""
     release = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/releases/tags/iii/v{version}", token=token)
     for asset in release.get("assets") or []:
         if asset.get("name") == CLI_ASSET:
@@ -193,7 +193,39 @@ def resolve_cli(selector: str, token: str | None) -> dict[str, str]:
                 raise ResolutionError(f"iii/v{version} {CLI_ASSET} has no SHA-256 digest")
             digest = digest if digest.startswith("sha256:") else f"sha256:{digest}"
             return {"version": version, "target": CLI_TARGET, "asset": CLI_ASSET, "sha256": digest}
-    raise ResolutionError(f"release iii/v{version} publishes no {CLI_ASSET}")
+    return None
+
+
+def resolve_cli(selector: str, token: str | None) -> dict[str, str]:
+    """The iii release every group installs, with its archive's digest.
+
+    `latest` is the newest release candidate that publishes the archive: one
+    tagged a moment ago may not have it yet (its release still building, or
+    not created), and then the one before it runs, said out loud."""
+    version = str(selector).strip()
+    if version != "latest":
+        cli = cli_release(version, token)
+        if cli is None:
+            raise ResolutionError(f"release iii/v{version} publishes no {CLI_ASSET}")
+        return cli
+    refs = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/git/matching-refs/tags/iii/v", token=token)
+    candidates = release_candidates([str(ref.get("ref", "")).removeprefix("refs/tags/iii/v") for ref in refs])
+    if not candidates:
+        raise ResolutionError(f"{III_REPOSITORY} has no release candidate")
+    for version in candidates:
+        try:
+            cli = cli_release(version, token)
+        except ResolutionError as error:
+            cause = error.__cause__
+            if not (isinstance(cause, urllib.error.HTTPError) and cause.code == 404):
+                raise
+            cli = None
+        if cli is not None:
+            if version != candidates[0]:
+                print(f"::warning::iii/v{candidates[0]} publishes no {CLI_ASSET} yet; iii: latest runs "
+                      f"iii/v{version}, the newest release candidate that does", flush=True)
+            return cli
+    raise ResolutionError(f"no {III_REPOSITORY} release candidate publishes {CLI_ASSET}")
 
 
 def resolve_template(value: Any, token: str | None) -> dict[str, str] | None:
