@@ -116,11 +116,15 @@ impl Scenario for TrendingTopicsBuild {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Build a Trending Topics App")
+        Some("Build a trending-topics website")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Build and push a responsive application that presents six ranked topics and complete article routes from frozen input data.")
+        Some("Clone the app skeleton and build the site described in TASK.md: six ranked topics on the home page and a full article page for each, from a frozen feed; commit and push to the build branch. The runner rebuilds it and checks it with the original feed and a reshuffled one, so hardcoded content fails.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent on the Harness can take a written spec to a working web app: built, tested, committed and pushed with Git from a private container. If it fails, agents can't be trusted to deliver a working app from a spec.")
     }
 
     fn canonical_seed_only(&self) -> bool {

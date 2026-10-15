@@ -589,6 +589,32 @@ mod tests {
         assert_eq!(snapshot.profile.technical_retries, 0);
     }
 
+    /// Every test a scheduled suite runs reads as a card: a title, what it
+    /// protects (and what breaks when it fails), and the task in plain words.
+    #[test]
+    fn every_scheduled_test_states_its_card() {
+        let plan = embedded().unwrap();
+        for suite in ["regression", "pr", "software-engineering", "linkly"] {
+            for id in plan.materialize(suite).unwrap().scenario_ids {
+                let scenario = id.parse::<ScenarioId>().unwrap();
+                for (field, text) in [
+                    ("title", scenario.title()),
+                    ("summary", scenario.summary()),
+                    ("protects", scenario.protects()),
+                ] {
+                    assert!(
+                        text.is_some_and(|text| !text.trim().is_empty()),
+                        "{suite}: {id} states no {field}"
+                    );
+                }
+                assert!(
+                    scenario.protects().unwrap().contains(". If it fails, "),
+                    "{suite}: {id} protects must say what breaks when it fails"
+                );
+            }
+        }
+    }
+
     #[test]
     fn linkly_runs_alone_in_its_own_suite() {
         let snapshot = embedded().unwrap().materialize("linkly").unwrap();

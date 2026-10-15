@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { plural } from '@/lib/format'
 import type { TestSpec } from '@/lib/test-catalog'
 import { copyText } from '@/lib/test-history'
@@ -21,6 +21,45 @@ export function budgetLine(execution: TestSpec['execution']) {
       : null,
   ].filter(Boolean)
   return parts.length ? `Budget per run: ${parts.join(' · ')}.` : ''
+}
+
+/** The test in plain words, top to bottom: what it protects, the task, when
+ *  it counts as completed (the gate criteria) and what else the score counts.
+ *  Without a gate the criteria only score. The id closes it, small. */
+export function TestCard({ spec, testId }: { spec: TestSpec; testId: string }) {
+  const gates = spec.criteria.filter((criterion) => criterion.gate)
+  const others = spec.criteria.filter((criterion) => !criterion.gate)
+  const rows: [string, ReactNode][] = [
+    ['Protects', spec.protects],
+    ['Task', spec.summary],
+    ['Completed when', descriptions(gates)],
+    [gates.length ? 'Score also counts' : 'Score counts', descriptions(others)],
+  ]
+  return (
+    <section className="th-brief" aria-label="What this test checks">
+      <dl>
+        {rows.map(([label, value]) =>
+          value ? (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ) : null,
+        )}
+      </dl>
+      <p className="th-mono th-faint">{testId}</p>
+    </section>
+  )
+}
+
+function descriptions(criteria: TestSpec['criteria']) {
+  return criteria.length ? (
+    <ul>
+      {criteria.map((criterion) => (
+        <li key={criterion.id}>{criterion.description}</li>
+      ))}
+    </ul>
+  ) : null
 }
 
 /** What the subject receives and how it is scored, side by side. */

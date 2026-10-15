@@ -114,8 +114,14 @@ pub trait Scenario: Send + Sync {
     fn characterization(&self) -> Result<ScenarioCharacterization> {
         Ok(ScenarioCharacterization::synthetic())
     }
-    /// A one-paragraph summary for the Console, when the module states one.
+    /// The task the subject receives, in one plain paragraph for a reader.
     fn summary(&self) -> Option<&'static str> {
+        None
+    }
+    /// The product capability the test protects and what breaks for users
+    /// of iii when it fails ("If it fails, ..."). Presentation only: like the
+    /// title and the summary, it stays out of `behavior_sha256`.
+    fn protects(&self) -> Option<&'static str> {
         None
     }
     /// Functions the run registers itself and therefore needs available.
@@ -546,6 +552,10 @@ impl ScenarioId {
 
     pub fn title(self) -> Option<&'static str> {
         self.module().title()
+    }
+
+    pub fn protects(self) -> Option<&'static str> {
+        self.module().protects()
     }
 }
 

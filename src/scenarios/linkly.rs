@@ -127,11 +127,15 @@ impl Scenario for LinklyTutorial {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Linkly Full-Stack Tutorial")
+        Some("Build Linkly from the tutorial")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Builds and validates a production-style link service across API, persistence, observability, streaming, import, and access control chapters.")
+        Some("In one session, follow the seven tutorial chapters in order (links API and redirects, tracing, SQLite and cache, analytics and queues, a live click stream, bulk import over channels, a browser worker behind access control), then handle a request to restart the whole project.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("The agentic tutorial for new users works end to end: on a fresh linkly-agentic scaffold, an agent adds workers through Compose and builds the Linkly link shortener chapter by chapter. If it fails, new users following our tutorial with an agent get stuck or end up with a broken app.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {

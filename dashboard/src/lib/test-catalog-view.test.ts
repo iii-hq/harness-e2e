@@ -274,6 +274,23 @@ describe('tests catalog', () => {
         now,
       ).sub,
     ).toBe('Build a worker.')
+    // What the test protects comes first, and search reads it.
+    const carded = catalogRowView(
+      test('chess_engine_build', {
+        spec: current.spec && {
+          ...current.spec,
+          summary: 'Build a worker.',
+          protects: ' Workers ship pages. If it fails, nobody sees them. ',
+        },
+      }),
+      [],
+      now,
+    )
+    expect(carded.sub).toBe(
+      'Workers ship pages. If it fails, nobody sees them.',
+    )
+    expect(carded.search).toContain('nobody sees them')
+    expect(carded.search).toContain('build a worker')
   })
 
   it('counts each lifecycle over the whole catalog and says so', () => {

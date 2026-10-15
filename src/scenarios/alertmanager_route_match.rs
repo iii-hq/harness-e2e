@@ -32,7 +32,6 @@ use super::{
 
 pub const ID: &str = "alertmanager_route_match";
 pub const CANONICAL_SEED: u64 = 0x616c_7274_0001;
-pub const SUMMARY: &str = "Move Alertmanager route matching into an iii function while preserving receivers and grouping. Verify that matching succeeds with the Engine running and fails when it is unavailable.";
 
 const UPSTREAM_REPOSITORY: &str = "prometheus/alertmanager";
 const UPSTREAM_URL: &str = "https://github.com/prometheus/alertmanager";
@@ -167,11 +166,15 @@ impl Scenario for AlertmanagerRouteMatch {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Refactor Alertmanager routing without changing results")
+        Some("Move Alertmanager routing into iii")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some(SUMMARY)
+        Some("Clone Alertmanager at a pinned commit, implement route matching as the iii function route::match, and make Alertmanager's Go code call it. The runner calls route::match on 18 frozen alert cases and runs Alertmanager's own TestRouteMatch with the engine up (must pass) and down (must fail).")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent can move logic out of an existing Go codebase into an iii function and wire the original code to call it, adopting iii incrementally without changing behaviour. If it fails, the \"bring iii into your existing code\" story breaks, or silently changes how alerts are routed.")
     }
 
     fn canonical_seed(&self) -> u64 {

@@ -282,6 +282,7 @@ export function catalogRowView(
   const last = row.last_run
   const criteria = row.spec?.criteria.length
   const summary = row.spec?.summary?.trim()
+  const protects = row.spec?.protects?.trim()
   const kind = catalogKind(row)
   const retired = kind === 'retired'
   const older = retired || last?.definition === 'previous'
@@ -290,7 +291,9 @@ export function catalogRowView(
     id: row.test_id,
     title: row.spec?.title?.trim() || row.test_id,
     kind,
+    // The card's first line after the title: what the test protects.
     sub:
+      protects ||
       summary ||
       [
         criteria === undefined
@@ -323,6 +326,7 @@ export function catalogRowView(
     search: [
       row.spec?.title,
       row.test_id,
+      protects,
       summary,
       ...suites.map((suite) => suite.label),
     ]

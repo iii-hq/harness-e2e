@@ -121,11 +121,15 @@ impl Scenario for ValidationSelfRepair {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Validation-Guided Self-Repair")
+        Some("Fix data a validator rejected")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Diagnoses factual data defects from validator feedback and chooses a bounded repair independently.")
+        Some("Install the provided auditor on your own turns, seed a small table exactly as given (it has a negative amount and a duplicated name), and when the auditor rejects the turn, choose and apply your own repair.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("A validator attached to an agent's turns (a Harness post-turn hook) can reject a turn with a list of what is wrong, and the agent works out and applies its own fix. If it fails, agents ignore or loop on validator feedback, and bad data stays.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

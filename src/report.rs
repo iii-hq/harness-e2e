@@ -1257,6 +1257,9 @@ pub struct E2eScenarioReport {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// What the test protects and what breaks when it fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protects: Option<String>,
     #[serde(default)]
     pub case_id: String,
     /// Digest of the definition the case was materialized from. Absent only
@@ -1415,6 +1418,7 @@ impl E2eScenarioReport {
             scenario_id,
             title: metadata.and_then(ScenarioId::title).map(str::to_owned),
             summary: metadata.and_then(ScenarioId::summary).map(str::to_owned),
+            protects: metadata.and_then(ScenarioId::protects).map(str::to_owned),
             behavior_sha256,
             case,
             deferral_reason: None,
@@ -1458,6 +1462,7 @@ impl E2eScenarioReport {
         self.validate_deferral()?;
         let title = self.title.take();
         let summary = self.summary.take();
+        let protects = self.protects.take();
         let case = self.case.take();
         let runs = std::mem::take(&mut self.runs);
         let deferral_reason = self.deferral_reason.take();
@@ -1472,6 +1477,7 @@ impl E2eScenarioReport {
         );
         self.title = title;
         self.summary = summary;
+        self.protects = protects;
         self.deferral_reason = deferral_reason;
         Ok(())
     }
@@ -3469,6 +3475,32 @@ mod tests {
         deferred.runs.clear();
         deferred.deferral_reason = None;
         assert!(deferred.refresh_aggregate().is_err());
+    }
+
+    #[test]
+    fn a_scenario_result_carries_its_card_and_older_results_still_read() {
+        let mut scenario = E2eScenarioReport::deferred(
+            "persistent_state".into(),
+            "persistent_state@1".into(),
+            aggregate(Vec::new()).execution_policy,
+            1,
+            "not run".into(),
+        );
+        scenario.refresh_aggregate().unwrap();
+        let written = serde_json::to_value(&scenario).unwrap();
+        for (field, text) in [
+            ("title", ScenarioId::PersistentState.title()),
+            ("summary", ScenarioId::PersistentState.summary()),
+            ("protects", ScenarioId::PersistentState.protects()),
+        ] {
+            assert!(text.is_some(), "{field}");
+            assert_eq!(written[field].as_str(), text, "{field}");
+        }
+
+        let mut older = written;
+        older.as_object_mut().unwrap().remove("protects");
+        let older: E2eScenarioReport = serde_json::from_value(older).unwrap();
+        assert_eq!(older.protects, None);
     }
 
     #[test]

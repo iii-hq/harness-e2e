@@ -171,11 +171,15 @@ impl Scenario for ContextPressure {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Context Pressure Recall")
+        Some("Remember early facts in long sessions")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Recovers early charter facts and ordered markers after ingesting a large distractor corpus.")
+        Some("Read a short charter of four values first, then 48 noise documents of about 8 KB each, one call per document in order, each hiding one marker. Finish with a report that repeats the charter values and lists the 48 markers in order.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("In a long session that reads far more text than the agent can keep verbatim, the Harness context manager keeps the facts the agent needs from the start. If it fails, agents forget instructions and facts from early in long tasks.")
     }
 
     fn canonical_seed(&self) -> u64 {

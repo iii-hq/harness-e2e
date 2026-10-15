@@ -26,7 +26,6 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-pub const SUMMARY: &str = "Build a run-scoped chess Worker with correct rules and a playable iii Console page, then verify its runtime, behavior, UI, and evidence independently.";
 
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
 const CHESS_SUBTREE: &str = "chess";
@@ -123,11 +122,15 @@ impl Scenario for ChessEngineBuild {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Build a Playable Chess Worker")
+        Some("Build a chess game in Console")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some(SUMMARY)
+        Some("Turn a command-line chess fixture into a Worker with legal-move, move-count and play functions, without chess libraries, plus a Console page with a 64-square board. The Harness starts it through Compose and plays moves in the real Console.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("An agent can build an iii Worker that adds its own page to the iii Console and drives its own functions from that page. If it fails, agents can't ship visual Workers people can actually use in the Console.")
     }
 
     fn case(&self, seed: u64) -> Result<ScenarioCase> {

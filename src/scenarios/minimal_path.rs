@@ -81,11 +81,15 @@ impl Scenario for MinimalPath {
     }
 
     fn title(&self) -> Option<&'static str> {
-        Some("Minimal State Write")
+        Some("Save one value, no wasted steps")
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("Writes one exact state value while minimizing turns, calls, and errors.")
+        Some("Store an exact JSON value under a given key with a single state write, then reply with one line containing MIN-DONE.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("The simplest request, storing one value in iii state, finishes in one call and one turn with no errors; overhead added to every agent turn shows up here first. If it fails, even trivial requests get slower and costlier, or don't land at all.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {

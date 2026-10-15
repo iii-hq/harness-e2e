@@ -27,15 +27,21 @@ const IDS: [&str; 4] = [
 ];
 const TITLES: [&str; 4] = [
     "Registry: Plan version comparison",
-    "Registry: Implement version comparison",
+    "Add version comparison to Registry",
     "Registry: Reproduce the test environment",
-    "Registry: Verify the version comparison delivery",
+    "Find bugs in the Registry feature",
 ];
 const SUMMARIES: [&str; 4] = [
     "Create an evidence-based plan for adding version comparison to a pinned Registry codebase.",
-    "Implement version comparison and demonstrate its behavior in a pinned Registry codebase.",
+    "In a private container with the Registry code at a pinned commit, implement version comparison from the requirements and a reference plan: a compare API, a Changelog tab with version pickers, and shareable URLs. Test it against the running app and write a report with real screenshots.",
     "Reproduce the Registry test environment, including build, startup, isolation, restart, and cleanup.",
-    "Verify the version comparison delivery and support each result with execution evidence.",
+    "Run the feature that registry_implementation just delivered, check its 24 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
+];
+const PROTECTS: [Option<&str>; 4] = [
+    None,
+    Some("An agent can deliver a full-stack feature (API, UI and tests) in iii's own worker Registry, working against the real running app. If it fails, agents can't be trusted to ship a complete feature in our own products."),
+    None,
+    Some("An agent can act as an independent tester: exercise a delivered feature through the real API and browser and report real failures with evidence, without touching the code. If it fails, agent-written test reports can't be trusted to catch real bugs."),
 ];
 const REQUIREMENTS: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/requirements.md");
@@ -186,6 +192,10 @@ impl Scenario for Registry {
 
     fn summary(&self) -> Option<&'static str> {
         Some(SUMMARIES[self.index()])
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        PROTECTS[self.index()]
     }
 
     fn canonical_seed_only(&self) -> bool {

@@ -6,7 +6,11 @@ import {
   RunsTable,
 } from '@/components/history/RunsTable'
 import { SessionTree } from '@/components/history/SessionTree'
-import { budgetLine, TestContract } from '@/components/history/TestContract'
+import {
+  budgetLine,
+  TestCard,
+  TestContract,
+} from '@/components/history/TestContract'
 import { runKey } from '@/lib/test-history'
 import { formFlow, formFlowRow, run } from '@/test-fixtures/test-history'
 
@@ -126,6 +130,53 @@ describe('the contract', () => {
     const html = renderToStaticMarkup(<TestContract spec={spec} />)
     expect(html).toContain('9 criteria · 100 points')
     expect(html).toContain('buildWorkerUi')
+  })
+
+  it('reads as a card: protects, task, completed when, the rest, the id', () => {
+    const base = formFlowRow.spec ?? never()
+    const gates = new Set(['domain_primary', 'console_delivery'])
+    const spec = {
+      ...base,
+      protects:
+        'An agent can build a Console Worker. If it fails, agents cannot ship one.',
+      summary: 'Build a Worker whose Console page designs an issue form.',
+      criteria: base.criteria.map((criterion) => ({
+        ...criterion,
+        gate: gates.has(criterion.id),
+      })),
+    }
+    const description = (id: string) =>
+      base.criteria.find((criterion) => criterion.id === id)?.description ??
+      never()
+    const html = renderToStaticMarkup(
+      <TestCard spec={spec} testId="form_flow_build" />,
+    )
+    const at = (text: string) => {
+      const index = html.indexOf(text)
+      expect(index, text).toBeGreaterThan(-1)
+      return index
+    }
+    const order = [
+      at('<dt>Protects</dt><dd>An agent can build a Console Worker.'),
+      at('<dt>Task</dt><dd>Build a Worker whose Console page'),
+      at('<dt>Completed when</dt>'),
+      at(`<li>${description('domain_primary')}</li>`),
+      at(`<li>${description('console_delivery')}</li>`),
+      at('<dt>Score also counts</dt>'),
+      at(`<li>${description('runtime_contract')}</li>`),
+      at(`<li>${description('evidence_complete')}</li>`),
+      at('>form_flow_build</p>'),
+    ]
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect((html.match(/<li>/g) ?? []).length).toBe(base.criteria.length)
+
+    // Without a gate nothing says when it completes; the criteria only score.
+    const ungated = renderToStaticMarkup(
+      <TestCard spec={{ ...base }} testId="form_flow_build" />,
+    )
+    expect(ungated).not.toContain('Completed when')
+    expect(ungated).not.toContain('Protects')
+    expect(ungated).toContain('<dt>Score counts</dt>')
   })
 })
 

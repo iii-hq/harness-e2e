@@ -25,8 +25,10 @@ use super::{
 
 pub const FORM_FLOW_ID: &str = "form_flow_build";
 pub const STATE_MACHINE_ID: &str = "state_machine_canvas_build";
-pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with feature and bug fields, live editing and preview, keyboard and theme support, and a flowchart saved in Canvas.";
-pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with an interactive simulator, live transition editing, keyboard and theme support, and a state diagram saved in Canvas.";
+pub const FORM_FLOW_SUMMARY: &str = "Build a Worker whose Console page designs a software-issue form: bug or feature fields, a live preview with missing-field checks, and an \"add environment\" rule edit. It saves the form's flowchart in Canvas under one stable id.";
+pub const STATE_MACHINE_SUMMARY: &str = "Build a Worker whose Console page simulates a CI job (queued, running, passed or failed, retry) and lets the user add a \"cancel\" step live. It saves the state diagram in Canvas under one stable id.";
+/// Both visual Workers protect the same capability.
+const VISUAL_PROTECTS: &str = "An agent can build a Console Worker that owns its business logic and saves a diagram of it in iii Canvas. If it fails, agents can't ship visual Workers people can actually use in the Console.";
 
 const EVIDENCE_LIMIT: u64 = 24 * 1024 * 1024;
 
@@ -128,8 +130,8 @@ impl Kind {
 
     fn title(self) -> &'static str {
         match self {
-            Self::Form => "Build an issue form with live preview",
-            Self::Machine => "Build an interactive CI state machine",
+            Self::Form => "Build an issue-form editor in Console",
+            Self::Machine => "Build a CI pipeline simulator",
         }
     }
 
@@ -186,6 +188,10 @@ macro_rules! scenario_impl {
 
             fn summary(&self) -> Option<&'static str> {
                 Some($kind.summary())
+            }
+
+            fn protects(&self) -> Option<&'static str> {
+                Some(VISUAL_PROTECTS)
             }
 
             fn case(&self, seed: u64) -> Result<ScenarioCase> {
@@ -1340,10 +1346,10 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         && keyboard_and_theme_passed(&keyboard, &mobile["result"])
         && interaction["result"].get("error").is_none();
     let captures = json!([
-        {"id":"before","caption":format!("{} alone in the Console before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
-        {"id":"after","caption":format!("{} alone in the Console after editing",kind.summary()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
+        {"id":"before","caption":format!("The {} page alone in the Console before editing",kind.page_id()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
+        {"id":"after","caption":format!("The {} page alone in the Console after editing",kind.page_id()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
         {"id":"canvas","caption":"The edited graph rendered by the Canvas page the Worker opened","url":canvas_url,"status":"captured","screenshot":"canvas.png","session_id":session,"identity":identity,"sha256":canvas["sha256"]},
-        {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
+        {"id":"narrow_dark","caption":format!("The {} page after reload in a narrow dark Console",kind.page_id()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
         json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page, persisted edit, keyboard action, both themes, and the Canvas graph it opened rendered in the Console"} else {"Console layout, Worker interaction, keyboard action, reload persistence, Canvas graph, or narrow theme check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"keyboard":keyboard,"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
