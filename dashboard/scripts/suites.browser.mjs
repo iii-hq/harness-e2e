@@ -294,8 +294,12 @@ try {
   )
   assert.equal(await detail.getByText('Choose the model').count(), 0)
   await suiteName.fill('Regression, fast')
-  while (Number(await page.locator('#st-runs').textContent()) < 2)
+  // Two runs, whatever the copied suite starts with.
+  const runs = async () => Number(await page.locator('#st-runs').textContent())
+  while ((await runs()) < 2)
     await detail.getByRole('button', { name: 'More runs' }).click()
+  while ((await runs()) > 2)
+    await detail.getByRole('button', { name: 'Fewer runs' }).click()
   await detail.getByText('Unsaved changes', { exact: true }).waitFor()
   // An unticked test stays listed until the suite is saved.
   const dropped = regression.scenarios[0]
