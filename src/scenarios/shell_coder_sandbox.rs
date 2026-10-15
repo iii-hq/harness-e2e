@@ -180,9 +180,9 @@ if __name__ == "__main__":
 const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
     "worker_setup",
     5,
-    "Does the assembled project expose the required shell and coder surfaces?",
+    "Does the subject use the shell and coder surfaces the assembled project exposes?",
 )
-.labeled("Shell and coder workers are available");
+.labeled("Shell and coder workers were used");
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
@@ -443,7 +443,15 @@ baseline, green public suite, and host demo results."#,
         let workflow = workflow_audit(observation, &root);
         let shell_ready = context.function_exists("shell::exec").await?;
         let coder_ready = context.function_exists("coder::update-file").await?;
-        let worker_setup = shell_ready && coder_ready;
+        // The stack exposing both surfaces is not the subject's doing; using them is.
+        let invocations = common::function_invocations(&observation.transcript);
+        let used = |id: &str| {
+            invocations
+                .iter()
+                .any(|invocation| invocation.call.function_id == id)
+        };
+        let (shell_used, coder_used) = (used("shell::exec"), used("coder::update-file"));
+        let worker_setup = shell_ready && coder_ready && shell_used && coder_used;
         let public_correctness =
             workflow.red_before_edit && workflow.green_public.is_some() && fixture.public.success;
         let host_execution = workflow.host_demo.is_some()
@@ -454,7 +462,9 @@ baseline, green public suite, and host demo results."#,
         Ok(assessment::build_evaluation([
             WORKER_SETUP.full_or_zero(
                 worker_setup,
-                format!("shell={shell_ready}, coder={coder_ready}"),
+                format!(
+                    "shell={shell_ready} (used={shell_used}), coder={coder_ready} (used={coder_used})"
+                ),
             ),
             INVESTIGATION.award(
                 workflow.investigation_points(),
