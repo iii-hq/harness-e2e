@@ -268,6 +268,34 @@ fn failed_evaluation(
     evaluation
 }
 
+/// The completion the runner derives for `evaluation`: the scenario's own
+/// override, else its gate criteria (`crate::report::gate_completion`).
+#[cfg(test)]
+pub(super) fn completion(
+    specs: &[AssessmentSpec],
+    evaluation: &ObjectiveEvaluation,
+) -> CompletionState {
+    evaluation.completion.unwrap_or_else(|| {
+        let reports = specs
+            .iter()
+            .map(|spec| crate::report::CriterionReport {
+                id: spec.id.to_string(),
+                description: None,
+                possible: spec.weight,
+                awarded: evaluation
+                    .awards
+                    .iter()
+                    .find(|award| award.id == spec.id)
+                    .and_then(|award| award.awarded),
+                reason: String::new(),
+                gate: spec.gate,
+                gate_minimum: spec.gate_minimum,
+            })
+            .collect::<Vec<_>>();
+        crate::report::gate_completion(&reports)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

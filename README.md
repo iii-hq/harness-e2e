@@ -42,7 +42,10 @@ model to judge the first.
 Completed means the subject met the task's purpose. Every scenario marks the
 criteria that are that purpose, usually one or two, as gates. Exactness,
 discipline, efficiency, and polish never gate: they only move the score, so two
-runs can both complete and still differ in points.
+runs can both complete and still differ in points. A gate also checks that the
+run exercised the capability the scenario protects, not only the final
+artifact: a timer test completes only when the write came after the timer woke
+the session, however clumsily the rest was done.
 
 - Every gate passed: completed, whatever the other criteria scored. A gate
   passes at full points, or at its `gate_minimum` when fewer points already

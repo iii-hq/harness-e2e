@@ -55,9 +55,9 @@ const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::gate(
 const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::gate(
     "idempotent_replay",
     20,
-    "Does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
+    "Did at least two database::transaction calls succeed, and does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
 );
-const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
+const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::gate(
     "source_and_sentinel_preserved",
     25,
     "Does at least one database::transaction succeed while the six legacy rows and the sentinel row remain unchanged?",
@@ -331,113 +331,118 @@ impl Scenario for DatabaseMigrationRecovery {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<ObjectiveEvaluation> {
-        if !observation.metrics.complete {
-            return Ok(assessment::prerequisite_failure(
-                ASSESSMENTS,
-                "metrics_complete",
-                "subject metrics are incomplete",
-            ));
-        }
-        let relations = Relations::new(run_id);
-        // `capture` read every owned relation with these exact statements
-        // immediately before this evaluation, so the record is the read: a
-        // second round trip could only observe the same rows.
-        let captured = captured_relations(&observation.deliverables);
-        let mut notes = Vec::new();
-        let mut read = |label: &'static str| match relation_rows(&captured, label) {
-            Ok(rows) => rows,
-            Err(error) => {
-                notes.push(format!("{label} unreadable: {error}"));
-                Vec::new()
-            }
-        };
-        let target = read("target");
-        let quarantine = read("quarantine");
-        let compat = read("compat");
-        let journal = read("journal");
-        let legacy = read("legacy");
-        let sentinel = read("sentinel");
-
-        let target_ok = target_rows_exact(&target);
-        let quarantine_ok = quarantine_rows_exact(&quarantine);
-        let compat_ok = compat_rows_exact(&compat);
-        let journal_ok = journal_rows_exact(&journal);
-        let legacy_ok = legacy_rows_exact(&legacy);
-        let sentinel_ok = sentinel_rows_exact(&sentinel);
-
-        let calls: Vec<_> = common::function_outcomes(&observation.transcript)
-            .into_iter()
-            .filter(|call| !common::is_contract_discovery(&call.function_id))
-            .collect();
-        let writes: Vec<_> = calls
-            .iter()
-            .filter(|call| WRITE_FUNCTIONS.contains(&call.function_id.as_str()))
-            .collect();
-        let transactions = writes
-            .iter()
-            .filter(|call| call.function_id == "database::transaction")
-            .count();
-        let successful_transactions = writes
-            .iter()
-            .filter(|call| {
-                call.function_id == "database::transaction" && call.is_error == Some(false)
-            })
-            .count();
-        let non_transaction_writes = writes.len() - transactions;
-        let foreign: Vec<String> = writes
-            .iter()
-            .flat_map(|call| write_statements(&call.arguments))
-            .flat_map(|sql| foreign_relations(&sql, &relations.prefix))
-            .collect();
-        let reply = observation.response.trim();
-        let reported = reply == EXPECTED_REPORT;
-
-        let exact_migration = target_ok && quarantine_ok && compat_ok;
-        let idempotent = journal_ok && target_ok && quarantine_ok;
-        let preserved = source_preserved(legacy_ok, sentinel_ok, successful_transactions);
-        let disciplined = !writes.is_empty()
-            && non_transaction_writes == 0
-            && transactions == 2
-            && successful_transactions == 2
-            && foreign.is_empty()
-            && reported;
-
-        Ok(assessment::build_evaluation(
-            [
-                EXACT_MIGRATION_RESULT.full_or_zero(
-                    exact_migration,
-                    format!(
-                        "target_rows={target_ok}, quarantine_row={quarantine_ok}, compat_rows={compat_ok}; {}",
-                        notes.join("; ")
-                    ),
-                ),
-                IDEMPOTENT_REPLAY.full_or_zero(
-                    idempotent,
-                    format!(
-                        "journal_complete_replay_2={journal_ok}, successful_transactions={successful_transactions}, target_rows={target_ok}, quarantine_row={quarantine_ok}"
-                    ),
-                ),
-                SOURCE_AND_SENTINEL_PRESERVED.full_or_zero(
-                    preserved,
-                    format!(
-                        "successful_transactions={successful_transactions} (need at least 1), legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"
-                    ),
-                ),
-                TRANSACTION_SCOPE_AND_REPORT.full_or_zero(
-                    disciplined,
-                    format!(
-                        "write_calls={}, transactions={transactions}, successful_transactions={successful_transactions}, non_transaction_writes={non_transaction_writes}, foreign_relations={foreign:?}, exact_report={reported}",
-                        writes.len()
-                    ),
-                ),
-            ],
-        ))
+        Ok(evaluate_observation(observation, run_id))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         execute_batch(context, Relations::new(run_id).drop_statements()).await?;
         Ok(())
     }
+}
+
+/// Scores the run from the relations `capture` read and the subject's calls.
+fn evaluate_observation(observation: &ScenarioObservation, run_id: &str) -> ObjectiveEvaluation {
+    if !observation.metrics.complete {
+        return assessment::prerequisite_failure(
+            ASSESSMENTS,
+            "metrics_complete",
+            "subject metrics are incomplete",
+        );
+    }
+    let relations = Relations::new(run_id);
+    // `capture` read every owned relation with these exact statements
+    // immediately before this evaluation, so the record is the read: a
+    // second round trip could only observe the same rows.
+    let captured = captured_relations(&observation.deliverables);
+    let mut notes = Vec::new();
+    let mut read = |label: &'static str| match relation_rows(&captured, label) {
+        Ok(rows) => rows,
+        Err(error) => {
+            notes.push(format!("{label} unreadable: {error}"));
+            Vec::new()
+        }
+    };
+    let target = read("target");
+    let quarantine = read("quarantine");
+    let compat = read("compat");
+    let journal = read("journal");
+    let legacy = read("legacy");
+    let sentinel = read("sentinel");
+
+    let target_ok = target_rows_exact(&target);
+    let quarantine_ok = quarantine_rows_exact(&quarantine);
+    let compat_ok = compat_rows_exact(&compat);
+    let journal_ok = journal_rows_exact(&journal);
+    let legacy_ok = legacy_rows_exact(&legacy);
+    let sentinel_ok = sentinel_rows_exact(&sentinel);
+
+    let calls: Vec<_> = common::function_outcomes(&observation.transcript)
+        .into_iter()
+        .filter(|call| !common::is_contract_discovery(&call.function_id))
+        .collect();
+    let writes: Vec<_> = calls
+        .iter()
+        .filter(|call| WRITE_FUNCTIONS.contains(&call.function_id.as_str()))
+        .collect();
+    let transactions = writes
+        .iter()
+        .filter(|call| call.function_id == "database::transaction")
+        .count();
+    let successful_transactions = writes
+        .iter()
+        .filter(|call| call.function_id == "database::transaction" && call.is_error == Some(false))
+        .count();
+    let non_transaction_writes = writes.len() - transactions;
+    let foreign: Vec<String> = writes
+        .iter()
+        .flat_map(|call| write_statements(&call.arguments))
+        .flat_map(|sql| foreign_relations(&sql, &relations.prefix))
+        .collect();
+    let reply = observation.response.trim();
+    let reported = reply == EXPECTED_REPORT;
+
+    let exact_migration = target_ok && quarantine_ok && compat_ok;
+    // The replay is the capability: a journal that says replay_count=2 only
+    // counts when the transaction really ran twice.
+    let idempotent = journal_ok && target_ok && quarantine_ok && successful_transactions >= 2;
+    let preserved = source_preserved(legacy_ok, sentinel_ok, successful_transactions);
+    let disciplined = !writes.is_empty()
+        && non_transaction_writes == 0
+        && transactions == 2
+        && successful_transactions == 2
+        && foreign.is_empty()
+        && reported;
+
+    assessment::build_evaluation(
+        [
+            EXACT_MIGRATION_RESULT.full_or_zero(
+                exact_migration,
+                format!(
+                    "target_rows={target_ok}, quarantine_row={quarantine_ok}, compat_rows={compat_ok}; {}",
+                    notes.join("; ")
+                ),
+            ),
+            IDEMPOTENT_REPLAY.full_or_zero(
+                idempotent,
+                format!(
+                    "journal_complete_replay_2={journal_ok}, successful_transactions={successful_transactions} (need at least 2), target_rows={target_ok}, quarantine_row={quarantine_ok}"
+                ),
+            ),
+            SOURCE_AND_SENTINEL_PRESERVED.full_or_zero(
+                preserved,
+                format!(
+                    "successful_transactions={successful_transactions} (need at least 1), legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"
+                ),
+            ),
+            TRANSACTION_SCOPE_AND_REPORT.full_or_zero(
+                disciplined,
+                format!(
+                    "write_calls={}, transactions={transactions}, successful_transactions={successful_transactions}, non_transaction_writes={non_transaction_writes}, foreign_relations={foreign:?}, exact_report={reported}",
+                    writes.len()
+                ),
+            ),
+        ],
+    )
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -726,6 +731,7 @@ fn relation_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::CompletionState;
 
     #[test]
     fn setup_statements_cover_every_owned_relation() {
@@ -807,6 +813,118 @@ mod tests {
         assert!(!source_preserved(true, true, 0));
         assert!(source_preserved(true, true, 1));
         assert!(!source_preserved(false, true, 2));
+    }
+
+    fn migrated_record(sentinel_value: &str) -> CapturedDeliverable {
+        let legacy = LEGACY_ROWS
+            .iter()
+            .map(|(id, customer, total, status)| {
+                json!({ "id": id, "customer": customer, "total_text": total, "status": status })
+            })
+            .collect::<Vec<_>>();
+        let compat = LEGACY_ROWS
+            .iter()
+            .map(|(id, customer, total, status)| {
+                let migration_status = if *id == QUARANTINED_LEGACY_ID {
+                    "quarantined"
+                } else {
+                    "migrated"
+                };
+                json!({
+                    "id": id, "customer": customer, "total_text": total, "status": status,
+                    "migration_status": migration_status,
+                })
+            })
+            .collect::<Vec<_>>();
+        let target = TARGET_ROWS
+            .iter()
+            .map(|(id, customer, cents, status, source)| {
+                json!({
+                    "id": id, "customer": customer, "amount_cents": cents, "status": status,
+                    "source_legacy_id": source,
+                })
+            })
+            .collect::<Vec<_>>();
+        CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_record".to_string(),
+            content: json!({
+                "target": target,
+                "quarantine": [{
+                    "legacy_id": QUARANTINED_LEGACY_ID, "customer": "gamma", "raw_total": "N/A",
+                    "status": "open", "reason": "invalid_total",
+                }],
+                "compat": compat,
+                "journal": [{
+                    "migration_id": MIGRATION_ID, "status": "complete", "applied_rows": 5,
+                    "quarantined_rows": 1, "replay_count": 2,
+                }],
+                "legacy": legacy,
+                "sentinel": [{ "key": "control", "value": sentinel_value }],
+                "response": EXPECTED_REPORT,
+            })
+            .into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    /// One assistant call per `(function_id, failed)` with its result.
+    fn completion_of(writes: &[(&str, bool)], sentinel_value: &str) -> CompletionState {
+        let run_id = "run";
+        let mut messages = Vec::new();
+        for (index, (function_id, failed)) in writes.iter().enumerate() {
+            let call_id = format!("call-{index}");
+            messages.push(json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": call_id, "function_id": function_id,
+                "arguments": { "db": DATABASE, "statements": [] },
+            }] } }));
+            messages.push(json!({ "message": {
+                "role": "function_result", "function_call_id": call_id,
+                "function_id": function_id, "is_error": failed,
+            } }));
+        }
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::DatabaseMigrationRecovery,
+            run_id,
+            json!({ "messages": messages }),
+            EXPECTED_REPORT,
+            vec![migrated_record(sentinel_value)],
+        );
+        assessment::completion(ASSESSMENTS, &evaluate_observation(&observation, run_id))
+    }
+
+    #[test]
+    fn completion_needs_a_real_replay_and_untouched_source() {
+        const TX: &str = "database::transaction";
+        assert_eq!(
+            completion_of(&[(TX, false), (TX, false)], "do-not-touch"),
+            CompletionState::Completed
+        );
+        // Shortcut: one transaction that writes replay_count=2 directly.
+        assert_eq!(
+            completion_of(&[(TX, false)], "do-not-touch"),
+            CompletionState::TaskIncomplete
+        );
+        // A migration that changed a table it did not own.
+        assert_eq!(
+            completion_of(&[(TX, false), (TX, false)], "changed"),
+            CompletionState::TaskIncomplete
+        );
+        // Less elegant, still a replay: a failed first attempt, a stray
+        // write outside a transaction, then two good runs. Only points drop.
+        assert_eq!(
+            completion_of(
+                &[
+                    (TX, true),
+                    ("database::execute", false),
+                    (TX, false),
+                    (TX, false)
+                ],
+                "do-not-touch"
+            ),
+            CompletionState::Completed
+        );
     }
 
     #[test]

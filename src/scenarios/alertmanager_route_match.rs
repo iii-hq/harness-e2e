@@ -60,14 +60,14 @@ const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     10,
     "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
 );
+// Points scale with the oracle cases that match; the gate needs all of them,
+// because the refactor must not change how any alert is routed.
 const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
     "match_equivalent",
     70,
-    "What proportion of route::match test cases match the expected receivers, group-by labels, and group-by-all flags?",
+    "Does route::match return the oracle's receivers, group-by labels and group-by-all flags for all 18 frozen alert cases, with points in proportion to the cases that match?",
     EvaluationDimension::Deliverable,
-)
-// Four in five oracle cases (56 of 70 points) already delegate route matching.
-.at_least(56);
+);
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,
@@ -323,13 +323,7 @@ and process started from this workspace."#,
         _observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<ObjectiveEvaluation> {
-        let snapshot = collect_snapshot(context, &workspace_root(run_id)).await?;
-        Ok(assessment::build_evaluation([
-            REVISION_PINNED.full_or_zero(snapshot.revision_pinned(), revision_reason(&snapshot)),
-            MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(&snapshot))?,
-            DELEGATION_WIRED.full_or_zero(snapshot.delegation_wired, delegation_reason(&snapshot)),
-            SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(&snapshot)),
-        ]))
+        evaluate_snapshot(&collect_snapshot(context, &workspace_root(run_id)).await?)
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -338,6 +332,15 @@ and process started from this workspace."#,
         let removed = common::remove_directory(&root);
         stopped.and(removed)
     }
+}
+
+fn evaluate_snapshot(snapshot: &Snapshot) -> Result<ObjectiveEvaluation> {
+    Ok(assessment::build_evaluation([
+        REVISION_PINNED.full_or_zero(snapshot.revision_pinned(), revision_reason(snapshot)),
+        MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(snapshot))?,
+        DELEGATION_WIRED.full_or_zero(snapshot.delegation_wired, delegation_reason(snapshot)),
+        SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(snapshot)),
+    ]))
 }
 
 fn oracle() -> Result<Oracle> {
@@ -1084,6 +1087,41 @@ mod tests {
                 "oracle match".into(),
             )],
         }
+    }
+
+    #[test]
+    fn completion_needs_every_oracle_case_and_the_wired_delegation() {
+        use crate::report::CompletionState;
+        let completion = |snapshot: &Snapshot| {
+            assessment::completion(ASSESSMENTS, &evaluate_snapshot(snapshot).unwrap())
+        };
+        let cases = |failing: usize| {
+            (0..18)
+                .map(|index| (format!("case-{index}"), index >= failing, String::new()))
+                .collect::<Vec<_>>()
+        };
+        let mut snapshot = valid_snapshot();
+        snapshot.match_cases = cases(0);
+        assert_eq!(completion(&snapshot), CompletionState::Completed);
+
+        // One alert routed differently is a behaviour change: points, no completion.
+        snapshot.match_cases = cases(1);
+        assert_eq!(snapshot.match_awarded(), 66);
+        assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
+        snapshot.match_cases = cases(3);
+        assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
+
+        // Every case matches, but Alertmanager does not call route::match.
+        snapshot.match_cases = cases(0);
+        snapshot.delegation_wired = false;
+        assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
+
+        // Less tidy, same delivery: the checkout left the pinned revision and
+        // touched protected files. Only those points are lost.
+        snapshot.delegation_wired = true;
+        snapshot.pinned_reachable = false;
+        snapshot.protected_unchanged = false;
+        assert_eq!(completion(&snapshot), CompletionState::Completed);
     }
 
     #[test]

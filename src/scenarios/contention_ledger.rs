@@ -43,18 +43,28 @@ const DATABASE_WRITES: [&str; 3] = [
 const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::gate_in(
     "balanced_ledger",
     35,
-    "Does the accumulator read exactly 15 with exactly fifteen per-writer sequence rows in the audit?",
+    "Does the counter table hold one row reading exactly 15, and the audit table exactly the 15 rows writer 0-2 by step 1-5?",
     EvaluationDimension::Deliverable,
+);
+const WRITERS_INCREMENTED: AssessmentSpec = AssessmentSpec::gate(
+    "writers_incremented",
+    15,
+    "Did each of the three writer subagents run as a direct child of the root and send at least five atomic increments of the shared counter?",
 );
 const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::scored(
     "contended_writes",
-    25,
-    "Do three direct writer children each perform five atomic increments and a done-key write while the root performs no increment?",
+    10,
+    "Did each writer send exactly five increments, log exactly its own five audit rows and write its own done key once after them, while the root made no increment and no other session ran?",
+);
+const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::gate(
+    "parent_woken",
+    10,
+    "Did the completion wake skip at least two done-key writes and then fire exactly once, so the root was woken only after all three writers had finished?",
 );
 const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "quorum_free_fan_in",
-    20,
-    "Is one barrier-gated wake over the three done keys armed before the writers are spawned in one response, and does it retire on the third key?",
+    10,
+    "Is one barrier-gated wake over the three done keys armed before the writers are spawned in one response, retiring on the third key after exactly three evaluations?",
 );
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
@@ -63,7 +73,9 @@ const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     BALANCED_LEDGER,
+    WRITERS_INCREMENTED,
     CONTENDED_WRITES,
+    PARENT_WOKEN,
     QUORUM_FREE_FAN_IN,
     VERIFIED_REPORT,
 ];
@@ -185,7 +197,8 @@ impl Scenario for ContentionLedger {
         };
         let balanced = snapshot.balanced();
 
-        let audit = writer_audit(context, observation, &names).await?;
+        let writers = writer_transcripts(context, observation, &names).await?;
+        let audit = writer_audit(observation, &writers, &names);
         let root_calls = common::function_calls(&observation.transcript);
         let root_clean = root_avoids_increments(&root_calls, &names);
         let contended = audit.all_children_contended && audit.no_extra_sessions && root_clean;
@@ -254,111 +267,13 @@ impl Scenario for ContentionLedger {
 
         let names = Names::new(run_id);
         let snapshot = ledger_snapshot(context, &names).await?;
-        let sequences_exact = sequences_balanced(&snapshot.audit_pairs);
-        let balanced = snapshot.balanced();
-
-        let calls = common::function_calls(&observation.transcript);
-        let audit = writer_audit(context, observation, &names).await?;
-        let root_clean = root_avoids_increments(&calls, &names);
-        let contended = audit.all_children_contended && audit.no_extra_sessions && root_clean;
-
-        let registrations: Vec<_> = calls
-            .iter()
-            .enumerate()
-            .filter(|(_, call)| call.function_id == "engine::register_trigger")
-            .collect();
-        let barrier_watch = registrations
-            .iter()
-            .find(|(_, call)| is_completion_watch(call, &names))
-            .map(|(position, _)| *position);
-        let spawns: Vec<_> = calls
-            .iter()
-            .enumerate()
-            .filter(|(_, call)| call.function_id == "harness::spawn")
-            .collect();
-        let armed_before_spawns = barrier_watch.is_some_and(|watch| {
-            registrations.len() == 1 && spawns.iter().all(|(position, _)| *position > watch)
-        });
-        let spawn_sessions: BTreeSet<&str> = spawns
-            .iter()
-            .filter_map(|(_, call)| call.arguments.get("session_id").and_then(Value::as_str))
-            .collect();
-        let expected_sessions: BTreeSet<&str> =
-            names.writer_sessions.iter().map(String::as_str).collect();
-        let single_response_spawns =
-            common::max_parallel_spawns(&observation.transcript) == usize::from(WRITERS);
-
-        let records = common::trigger_fired_records(&observation.transcript);
-        let completion_records: Vec<_> = records
-            .iter()
-            .filter(|record| {
-                record.get("label").and_then(Value::as_str) == Some(names.complete_label.as_str())
-            })
-            .collect();
-        let retired = completion_records
-            .iter()
-            .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(true))
-            .count();
-        let pending = completion_records
-            .iter()
-            .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(false))
-            .count();
-        let barrier_woke = completion_records.len() == usize::from(WRITERS)
-            && retired == 1
-            && pending == usize::from(WRITERS) - 1;
-        let fan_in = armed_before_spawns
-            && spawns.len() == usize::from(WRITERS)
-            && spawn_sessions == expected_sessions
-            && single_response_spawns
-            && barrier_woke;
-
-        let report_verified = report_is_verified(&observation.response);
-        let discovery_errors =
-            common::identified_discovery_errors(&observation.transcript) + audit.discovery_errors;
-        let operational_errors = common::operational_function_errors(
-            observation.metrics.totals.function_call_errors,
-            discovery_errors,
-        );
-
-        Ok(assessment::build_evaluation([
-            BALANCED_LEDGER.full_or_zero(
-                balanced,
-                format!(
-                    "accumulator_rows={}, accumulator={}, audit_rows={}, \
-                 sequences_exact={sequences_exact}",
-                    snapshot.accumulator_rows,
-                    snapshot.accumulator,
-                    snapshot.audit_rows(),
-                ),
-            ),
-            CONTENDED_WRITES.full_or_zero(
-                contended,
-                format!(
-                    "children_in_tree={}/{WRITERS}, contended_children={}, \
-                 no_extra_sessions={}, root_clean={root_clean}",
-                    audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
-                ),
-            ),
-            QUORUM_FREE_FAN_IN.full_or_zero(
-                fan_in,
-                format!(
-                    "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
-                 single_response_spawns={single_response_spawns}, completion_records={}, \
-                 barrier_woke={barrier_woke}",
-                    registrations.len(),
-                    spawns.len(),
-                    completion_records.len(),
-                ),
-            ),
-            VERIFIED_REPORT.full_or_zero(
-                report_verified && operational_errors == 0,
-                format!(
-                    "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
-                    observation.response.chars().count(),
-                    observation.metrics.totals.function_call_errors,
-                ),
-            ),
-        ]))
+        let writers = writer_transcripts(context, observation, &names).await?;
+        Ok(evaluate_observation(
+            observation,
+            &names,
+            &snapshot,
+            &writers,
+        ))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -531,6 +446,138 @@ fn deliverable_contract() -> DeliverableContract {
     }
 }
 
+/// Scores the run from the final tables, the root transcript and the
+/// transcripts of the writers that ran as direct children of the root.
+fn evaluate_observation(
+    observation: &ScenarioObservation,
+    names: &Names,
+    snapshot: &LedgerSnapshot,
+    writers: &[(u8, Value)],
+) -> ObjectiveEvaluation {
+    let sequences_exact = sequences_balanced(&snapshot.audit_pairs);
+    let balanced = snapshot.balanced();
+
+    let calls = common::function_calls(&observation.transcript);
+    let audit = writer_audit(observation, writers, names);
+    let root_clean = root_avoids_increments(&calls, names);
+    let contended = audit.all_children_contended && audit.no_extra_sessions && root_clean;
+
+    let registrations: Vec<_> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.function_id == "engine::register_trigger")
+        .collect();
+    let barrier_watch = registrations
+        .iter()
+        .find(|(_, call)| is_completion_watch(call, names))
+        .map(|(position, _)| *position);
+    let spawns: Vec<_> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.function_id == "harness::spawn")
+        .collect();
+    let armed_before_spawns = barrier_watch.is_some_and(|watch| {
+        registrations.len() == 1 && spawns.iter().all(|(position, _)| *position > watch)
+    });
+    let spawn_sessions: BTreeSet<&str> = spawns
+        .iter()
+        .filter_map(|(_, call)| call.arguments.get("session_id").and_then(Value::as_str))
+        .collect();
+    let expected_sessions: BTreeSet<&str> =
+        names.writer_sessions.iter().map(String::as_str).collect();
+    let single_response_spawns =
+        common::max_parallel_spawns(&observation.transcript) == usize::from(WRITERS);
+
+    let records = common::trigger_fired_records(&observation.transcript);
+    let completion_records: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.get("label").and_then(Value::as_str) == Some(names.complete_label.as_str())
+        })
+        .collect();
+    let retired = completion_records
+        .iter()
+        .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(true))
+        .count();
+    let pending = completion_records
+        .iter()
+        .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(false))
+        .count();
+    // The wake the parent depends on: it waited through the first writers'
+    // done keys and fired once. How it was armed is scored separately.
+    let parent_woken = retired == 1 && pending >= usize::from(WRITERS) - 1;
+    let barrier_woke = completion_records.len() == usize::from(WRITERS)
+        && retired == 1
+        && pending == usize::from(WRITERS) - 1;
+    let fan_in = armed_before_spawns
+        && spawns.len() == usize::from(WRITERS)
+        && spawn_sessions == expected_sessions
+        && single_response_spawns
+        && barrier_woke;
+
+    let report_verified = report_is_verified(&observation.response);
+    let discovery_errors =
+        common::identified_discovery_errors(&observation.transcript) + audit.discovery_errors;
+    let operational_errors = common::operational_function_errors(
+        observation.metrics.totals.function_call_errors,
+        discovery_errors,
+    );
+
+    assessment::build_evaluation([
+        BALANCED_LEDGER.full_or_zero(
+            balanced,
+            format!(
+                "accumulator_rows={}, accumulator={}, audit_rows={}, \
+             sequences_exact={sequences_exact}",
+                snapshot.accumulator_rows,
+                snapshot.accumulator,
+                snapshot.audit_rows(),
+            ),
+        ),
+        WRITERS_INCREMENTED.full_or_zero(
+            audit.all_children_incremented,
+            format!(
+                "children_in_tree={}/{WRITERS}, children_with_five_increments={}",
+                audit.children_in_tree, audit.incrementing_children,
+            ),
+        ),
+        CONTENDED_WRITES.full_or_zero(
+            contended,
+            format!(
+                "children_in_tree={}/{WRITERS}, contended_children={}, \
+             no_extra_sessions={}, root_clean={root_clean}",
+                audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
+            ),
+        ),
+        PARENT_WOKEN.full_or_zero(
+            parent_woken,
+            format!(
+                "completion_records={}, skipped_while_waiting={pending}, fired={retired}",
+                completion_records.len(),
+            ),
+        ),
+        QUORUM_FREE_FAN_IN.full_or_zero(
+            fan_in,
+            format!(
+                "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
+             single_response_spawns={single_response_spawns}, completion_records={}, \
+             barrier_woke={barrier_woke}",
+                registrations.len(),
+                spawns.len(),
+                completion_records.len(),
+            ),
+        ),
+        VERIFIED_REPORT.full_or_zero(
+            report_verified && operational_errors == 0,
+            format!(
+                "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                observation.response.chars().count(),
+                observation.metrics.totals.function_call_errors,
+            ),
+        ),
+    ])
+}
+
 fn missing_database() -> ObjectiveEvaluation {
     assessment::prerequisite_failure(
         ASSESSMENTS,
@@ -629,7 +676,9 @@ fn per_writer_values(pairs: &[(i64, i64)]) -> Vec<Value> {
 struct ContentionAudit {
     children_in_tree: usize,
     contended_children: usize,
+    incrementing_children: usize,
     all_children_contended: bool,
+    all_children_incremented: bool,
     no_extra_sessions: bool,
     discovery_errors: u64,
 }
@@ -638,39 +687,68 @@ struct ContentionAudit {
 /// must be a direct depth-1 session, and its calls must show exactly its own
 /// five increments, its own five audit rows, and its own done key — nothing
 /// belonging to another writer.
-async fn writer_audit(
+async fn writer_transcripts(
     context: &E2eContext,
     observation: &ScenarioObservation,
     names: &Names,
-) -> anyhow::Result<ContentionAudit> {
-    let mut children_in_tree = 0usize;
-    let mut contended_children = 0usize;
-    let mut discovery_errors = 0;
+) -> anyhow::Result<Vec<(u8, Value)>> {
+    let mut writers = Vec::new();
     for (writer, session_id) in (0..WRITERS).zip(names.writer_sessions.iter()) {
-        let in_tree = observation.metrics.by_session.iter().any(|session| {
-            session.session_id == *session_id
-                && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
-                && session.depth == 1
-        });
-        if !in_tree {
-            continue;
+        if writer_in_tree(observation, names, session_id) {
+            writers.push((writer, context.transcript(session_id).await?));
         }
-        children_in_tree += 1;
-        let transcript = context.transcript(session_id).await?;
-        discovery_errors += common::identified_discovery_errors(&transcript);
-        let calls = common::function_calls(&transcript);
-        if writer_calls_contended(&calls, names, writer) {
+    }
+    Ok(writers)
+}
+
+fn writer_in_tree(observation: &ScenarioObservation, names: &Names, session_id: &str) -> bool {
+    observation.metrics.by_session.iter().any(|session| {
+        session.session_id == session_id
+            && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
+            && session.depth == 1
+    })
+}
+
+/// `writers` holds the transcript of each prescribed writer that ran as a
+/// direct child of the root, by writer index.
+fn writer_audit(
+    observation: &ScenarioObservation,
+    writers: &[(u8, Value)],
+    names: &Names,
+) -> ContentionAudit {
+    let mut contended_children = 0usize;
+    let mut incrementing_children = 0usize;
+    let mut discovery_errors = 0;
+    for (writer, transcript) in writers {
+        discovery_errors += common::identified_discovery_errors(transcript);
+        let calls = common::function_calls(transcript);
+        if increments(&calls, names) >= usize::from(INCREMENTS_PER_WRITER) {
+            incrementing_children += 1;
+        }
+        if writer_calls_contended(&calls, names, *writer) {
             contended_children += 1;
         }
     }
-    Ok(ContentionAudit {
-        all_children_contended: children_in_tree == usize::from(WRITERS)
-            && contended_children == usize::from(WRITERS),
+    let all = |count: usize| writers.len() == usize::from(WRITERS) && count == usize::from(WRITERS);
+    ContentionAudit {
+        all_children_contended: all(contended_children),
+        all_children_incremented: all(incrementing_children),
         no_extra_sessions: observation.metrics.by_session.len() == usize::from(WRITERS) + 1,
         discovery_errors,
-        children_in_tree,
+        children_in_tree: writers.len(),
         contended_children,
-    })
+        incrementing_children,
+    }
+}
+
+/// Atomic increments of the shared counter among `calls`, failed or not.
+fn increments(calls: &[common::ObservedFunctionCall], names: &Names) -> usize {
+    calls
+        .iter()
+        .filter(|call| DATABASE_WRITES.contains(&call.function_id.as_str()))
+        .flat_map(|call| common::sql_statements(&call.arguments))
+        .filter(|sql| is_increment(sql, &names.ledger))
+        .count()
 }
 
 /// Pure per-child check over an ordered call list: exactly five atomic
@@ -966,6 +1044,138 @@ mod tests {
         }
         calls.push(done_call(names, writer));
         calls
+    }
+
+    fn transcript(calls: &[common::ObservedFunctionCall], wakes: &[(&str, bool)]) -> Value {
+        let names = Names::new("run");
+        let blocks = calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "type": "function_call", "id": "call",
+                    "function_id": call.function_id, "arguments": call.arguments,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut messages = vec![json!({ "message": { "role": "assistant", "content": blocks } })];
+        messages.extend(wakes.iter().map(|(outcome, retired)| {
+            json!({ "custom": { "custom_type": "trigger_fired", "data": {
+                "label": names.complete_label, "outcome": outcome, "retired": retired, "once": true,
+            } } })
+        }));
+        json!({ "messages": messages })
+    }
+
+    /// `children` writers ran under the root; `writers` are their transcripts.
+    fn completion_of(
+        root: Value,
+        children: u8,
+        writers: Vec<(u8, Vec<common::ObservedFunctionCall>)>,
+    ) -> crate::report::CompletionState {
+        let names = Names::new("run");
+        let mut observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::ContentionLedger,
+            "run",
+            root,
+            REPORT_MARKER,
+            Vec::new(),
+        );
+        let mut sessions = vec![json!({
+            "session_id": names.root_session, "depth": 0,
+            "turns": 1, "function_calls": 0, "function_call_errors": 0,
+        })];
+        sessions.extend(
+            names.writer_sessions[..usize::from(children)]
+                .iter()
+                .map(|id| {
+                    json!({
+                        "session_id": id, "parent_session_id": names.root_session, "depth": 1,
+                        "turns": 1, "function_calls": 0, "function_call_errors": 0,
+                    })
+                }),
+        );
+        observation.metrics = crate::wire::SessionMetricsResponse::from_normalized(
+            serde_json::from_value(json!({
+                "root_session_id": names.root_session, "complete": true,
+                "totals": { "sessions": sessions.len(), "turns": 1, "function_calls": 0,
+                            "function_call_errors": 0 },
+                "by_session": sessions,
+            }))
+            .unwrap(),
+        );
+        let balanced = LedgerSnapshot {
+            accumulator_rows: 1,
+            accumulator: EXPECTED_TOTAL,
+            audit_pairs: expected_sequences()
+                .into_iter()
+                .flat_map(|(writer, seqs)| seqs.into_iter().map(move |seq| (writer, seq)))
+                .collect(),
+        };
+        let writers = writers
+            .into_iter()
+            .map(|(writer, calls)| (writer, transcript(&calls, &[])))
+            .collect::<Vec<_>>();
+        assessment::completion(
+            ASSESSMENTS,
+            &evaluate_observation(&observation, &names, &balanced, &writers),
+        )
+    }
+
+    #[test]
+    fn completion_needs_three_writers_and_one_wake_after_them() {
+        use crate::report::CompletionState;
+        let names = Names::new("run");
+        let barrier = [("skipped", false), ("skipped", false), ("delivered", true)];
+        let three_writers = || {
+            (0..WRITERS)
+                .map(|writer| (writer, contended_writer_calls(&names, writer)))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            completion_of(transcript(&[], &barrier), WRITERS, three_writers()),
+            CompletionState::Completed
+        );
+
+        // Shortcut: the coordinator makes all fifteen increments itself.
+        let solo = (0..WRITERS)
+            .flat_map(|writer| contended_writer_calls(&names, writer))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completion_of(transcript(&solo, &barrier), 0, Vec::new()),
+            CompletionState::TaskIncomplete
+        );
+        // The writers did the work, but nothing woke the parent.
+        assert_eq!(
+            completion_of(transcript(&[], &[]), WRITERS, three_writers()),
+            CompletionState::TaskIncomplete
+        );
+        // A wake that fired on the first done key did not wait for the rest.
+        assert_eq!(
+            completion_of(
+                transcript(&[], &[("delivered", true)]),
+                WRITERS,
+                three_writers()
+            ),
+            CompletionState::TaskIncomplete
+        );
+
+        // Less elegant, same capability: one writer retries an increment and
+        // writes its done key twice, so the wake skips three times. Only the
+        // discipline points are lost.
+        let mut clumsy = three_writers();
+        clumsy[0].1.insert(0, update_call(&names));
+        clumsy[0].1.push(done_call(&names, 0));
+        let barrier = [
+            ("skipped", false),
+            ("skipped", false),
+            ("skipped", false),
+            ("delivered", true),
+        ];
+        assert_eq!(
+            completion_of(transcript(&[], &barrier), WRITERS, clumsy),
+            CompletionState::Completed
+        );
     }
 
     #[test]

@@ -399,6 +399,39 @@ pub struct ScenarioObservation {
     pub deliverables: Vec<CapturedDeliverable>,
 }
 
+impl ScenarioObservation {
+    /// A complete single-session run of `scenario`'s canonical case, for
+    /// evaluator tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        scenario: ScenarioId,
+        run_id: &str,
+        transcript: Value,
+        response: &str,
+        deliverables: Vec<CapturedDeliverable>,
+    ) -> Self {
+        Self {
+            case: scenario
+                .materialize(run_id, scenario.canonical_seed())
+                .expect("materialize the canonical case")
+                .case,
+            metrics: SessionMetricsResponse::from_normalized(crate::wire::SessionMetricsPayload {
+                root_session_id: format!("e2e_{run_id}"),
+                complete: true,
+                totals: crate::wire::SessionUsageTotals {
+                    sessions: 1,
+                    ..Default::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            }),
+            transcript,
+            response: response.to_string(),
+            deliverables,
+        }
+    }
+}
+
 pub struct ObjectiveEvaluation {
     /// Whether the subject delivered the task's primary flow. `None` derives
     /// it from the gate criteria (`crate::report::gate_completion`); a
