@@ -3124,7 +3124,10 @@ fn validate_objective_evaluation(
     Ok(())
 }
 
-fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<CriterionReport> {
+pub(crate) fn criterion_reports(
+    spec: &ScenarioSpec,
+    awards: Vec<CriterionAward>,
+) -> Vec<CriterionReport> {
     let mut awards: HashMap<_, _> = awards
         .into_iter()
         .map(|award| (award.id, (award.awarded, award.reason)))
