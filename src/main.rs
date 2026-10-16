@@ -54,6 +54,8 @@ enum TestPlanCommand {
     List,
     /// Print native execution kinds and weights for campaign admission.
     Catalog,
+    /// Print which scheduled tests protect each worker, area and discipline.
+    Coverage,
     /// Print the immutable snapshot of one suite: its digests, cases and campaigns.
     Materialize {
         /// Suite id from the master test plan, or one whole suite as JSON.
@@ -67,6 +69,7 @@ fn test_plan(command: TestPlanCommand) -> Result<()> {
     let value = match command {
         TestPlanCommand::List => plan.catalog()?,
         TestPlanCommand::Catalog => plan.campaign_catalog()?,
+        TestPlanCommand::Coverage => plan.coverage()?,
         // The composition of a campaign is the runner's: a dispatch names a
         // suite (or states one), this prints exactly what it expands to at
         // this commit, digests included, and the workflow reports it back.

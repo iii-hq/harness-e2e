@@ -170,6 +170,8 @@ class ReportPayloadTests(unittest.TestCase):
                     "title": "Adapt to a replaced tool",
                     "summary": "A runbook names a calendar function that no longer exists.",
                     "protects": "Agents find a retired function's replacement. If it fails, agents break.",
+                    "workers": ["engine"],
+                    "area": "tool-adaptation",
                     "case_id": "tool_contract_recovery@1",
                     "behavior_sha256": "sha256:" + "b" * 64,
                     "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64},
@@ -190,10 +192,13 @@ class ReportPayloadTests(unittest.TestCase):
                 "definition_sha256",
                 "repetition",
                 "run",
+                "scenario_area",
+                "scenario_disciplines",
                 "scenario_id",
                 "scenario_protects",
                 "scenario_summary",
                 "scenario_title",
+                "scenario_workers",
                 "seed",
             ],
         )
@@ -205,13 +210,19 @@ class ReportPayloadTests(unittest.TestCase):
             self.assertEqual(run["scenario_title"], scenario["title"])
             self.assertEqual(run["scenario_summary"], scenario["summary"])
             self.assertEqual(run["scenario_protects"], scenario["protects"])
+            # Tags travel too; a tagged test's empty list is stated, not left out.
+            self.assertEqual(run["scenario_workers"], ["engine"])
+            self.assertEqual(run["scenario_area"], "tool-adaptation")
+            self.assertEqual(run["scenario_disciplines"], [])
         self.assertEqual([run["run"] for run in runs], scenario["runs"])
 
         # Results written before a field existed leave it out, not null.
-        for field in ("title", "summary", "protects"):
+        for field in ("title", "summary", "protects", "workers", "area"):
             del scenario[field]
+        card = {"scenario_title", "scenario_summary", "scenario_protects"}
+        tags = {"scenario_workers", "scenario_area", "scenario_disciplines"}
         for run in report_execution.runs_from_results(results):
-            self.assertFalse({"scenario_title", "scenario_summary", "scenario_protects"} & run.keys())
+            self.assertFalse((card | tags) & run.keys())
 
     def test_a_shard_carries_the_card_and_each_criterion_with_its_gate(self):
         artifacts = self.tmp / "artifacts"

@@ -185,6 +185,23 @@ describe('the contract', () => {
     expect(ungated).not.toContain('Completed when')
     expect(ungated).not.toContain('Protects')
     expect(ungated).toContain('<dt>Score counts</dt>')
+    expect(ungated).not.toContain('<dt>Tags</dt>')
+
+    // Tags close the card: the area, the workers in mono, the disciplines.
+    const tagged = renderToStaticMarkup(
+      <TestCard
+        spec={{
+          ...base,
+          area: 'app-building',
+          workers: ['ade', 'canvas'],
+          disciplines: ['frontend'],
+        }}
+        testId="form_flow_build"
+      />,
+    )
+    expect(tagged).toContain(
+      '<dt>Tags</dt><dd><span class="th-tags"><span class="th-tag">Building applications</span><span class="th-tag th-mono" data-tone="plain">ade</span><span class="th-tag th-mono" data-tone="plain">canvas</span><span class="th-tag" data-tone="plain">Frontend</span></span></dd>',
+    )
   })
 })
 

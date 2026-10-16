@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 
 use crate::artifact;
 use crate::control::{scenarios_list, ScenarioDescriptor, ScenariosListRequest};
+use crate::scenarios::tags::{Area, Discipline, ScenarioTags, Worker};
 use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
@@ -374,6 +375,59 @@ impl MasterPlan {
         })
     }
 
+    /// Every test some suite runs: the base of selection by tag.
+    pub fn scheduled(&self) -> Result<BTreeSet<String>> {
+        let mut ids = BTreeSet::new();
+        for suite in &self.suites {
+            ids.extend(self.select(suite)?);
+        }
+        Ok(ids)
+    }
+
+    /// Which scheduled tests protect each worker, area and discipline. Every
+    /// value of the vocabularies is listed, so an uncovered one reads empty.
+    pub fn coverage(&self) -> Result<Value> {
+        let scheduled = self
+            .scheduled()?
+            .into_iter()
+            .map(|id| Ok((id.parse::<ScenarioId>()?.tags(), id)))
+            .collect::<Result<Vec<_>>>()?;
+        let tests = |protects: &dyn Fn(&ScenarioTags) -> bool| {
+            scheduled
+                .iter()
+                .filter(|(tags, _)| protects(tags))
+                .map(|(_, id)| id.as_str())
+                .collect::<Vec<_>>()
+        };
+        let workers = Worker::ALL
+            .iter()
+            .map(|worker| {
+                (
+                    worker.as_str(),
+                    tests(&|tags| tags.workers.contains(worker)),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let areas = Area::ALL
+            .iter()
+            .map(|area| (area.as_str(), tests(&|tags| tags.area == Some(*area))))
+            .collect::<BTreeMap<_, _>>();
+        let disciplines = Discipline::ALL
+            .iter()
+            .map(|discipline| {
+                let protects = |tags: &ScenarioTags| tags.disciplines.contains(discipline);
+                (discipline.as_str(), tests(&protects))
+            })
+            .collect::<BTreeMap<_, _>>();
+        Ok(json!({
+            "scheduled": scheduled.len(),
+            "harness_only": tests(&|tags| tags.workers.is_empty()),
+            "workers": workers,
+            "areas": areas,
+            "disciplines": disciplines,
+        }))
+    }
+
     pub fn catalog(&self) -> Result<Value> {
         let mut suites = Vec::new();
         for suite in &self.suites {
@@ -594,6 +648,39 @@ mod tests {
         );
         assert_eq!(snapshot.profile.repetitions, 1);
         assert_eq!(snapshot.profile.technical_retries, 0);
+    }
+
+    #[test]
+    fn coverage_lists_every_tag_with_the_tests_behind_it() {
+        let plan = embedded().unwrap();
+        let coverage = plan.coverage().unwrap();
+        assert_eq!(
+            coverage["scheduled"],
+            json!(plan.scheduled().unwrap().len())
+        );
+        assert_eq!(
+            coverage["workers"].as_object().unwrap().len(),
+            Worker::ALL.len()
+        );
+        assert_eq!(coverage["workers"]["browser"], json!([]));
+        assert_eq!(
+            coverage["workers"]["state"],
+            json!([
+                "contention_ledger",
+                "linkly_tutorial",
+                "minimal_path",
+                "persistent_state",
+                "timer_wake"
+            ])
+        );
+        assert_eq!(
+            coverage["areas"]["verification"],
+            json!(["registry_verification"])
+        );
+        assert_eq!(
+            coverage["disciplines"]["data"],
+            json!(["database_migration_recovery", "linkly_tutorial"])
+        );
     }
 
     /// Every test a scheduled suite runs reads as a card: a title, what it

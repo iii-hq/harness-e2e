@@ -75,6 +75,16 @@
   color: var(--color-ink-faint);
 }
 
+.th-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--spacing) * 1);
+}
+
+.th-tags .th-tag {
+  margin-inline-start: 0;
+}
+
 /* 28 px text actions: sentence case, sans, a fill on hover. */
 .th-act {
   display: inline-flex;

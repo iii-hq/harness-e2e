@@ -204,6 +204,13 @@ export type TestSpec = {
   summary?: string
   /** What the test protects, then "If it fails, …". */
   protects?: string
+  /** The iii workers it protects; left out when it protects the harness
+   *  alone. Tags are absent on untagged tests and older harnesses. */
+  workers?: string[]
+  /** Its one product area; present on every tagged test. */
+  area?: string
+  /** The kinds of software the subject writes. */
+  disciplines?: string[]
   prompt: string
   criteria: TestCriterion[]
   execution: {
@@ -214,6 +221,29 @@ export type TestSpec = {
     max_validation_retries?: number
   }
   denied_functions: string[]
+}
+
+/** The names the harness gives each area and discipline (`src/scenarios/tags.rs`). */
+export const AREA_LABELS: Record<string, string> = {
+  'core-loop': 'Basic agent loop',
+  'data-safety': 'Safe data changes',
+  'tool-adaptation': 'Adapting to changed tools',
+  scheduling: 'Timers and resumption',
+  coding: 'Code changes in a workspace',
+  coordination: 'Agents working together',
+  'self-repair': 'Fixing work from feedback',
+  'long-context': 'Long sessions',
+  security: 'Resisting untrusted input',
+  'app-building': 'Building applications',
+  verification: 'Verifying a change',
+}
+
+export const DISCIPLINE_LABELS: Record<string, string> = {
+  frontend: 'Frontend',
+  backend: 'Backend',
+  data: 'Data',
+  infra: 'Infra',
+  testing: 'Testing',
 }
 
 export type TestCatalogRow = {
