@@ -1499,6 +1499,9 @@ fn materialize_known(
         repetitions: runs,
         technical_retries,
         lane: format!("local-{id}"),
+        workers: Vec::new(),
+        areas: Vec::new(),
+        disciplines: Vec::new(),
     };
     Ok((Some(master.materialize_scope(suite, None)?), unknown))
 }

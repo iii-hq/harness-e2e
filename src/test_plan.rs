@@ -63,11 +63,112 @@ pub struct Suite {
     /// Internal: the admission budget, always `local-<id>`.
     #[serde(default)]
     pub lane: String,
+    /// Selection by tag, for a suite a dispatch states (deploy impact, a
+    /// workers PR): the `pr` suite plus every scheduled test carrying one of
+    /// these tags. Names, not the vocabulary itself: one the tags do not know
+    /// warns under `impact.uncovered` instead of failing the suite. Never
+    /// serialized, so never in a digest or in the snapshot's schema: the
+    /// snapshot records them under `impact`, and the plan may not declare them.
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub workers: Vec<String>,
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub areas: Vec<String>,
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub disciplines: Vec<String>,
+}
+
+impl Suite {
+    fn tags(&self) -> TagSet {
+        TagSet {
+            workers: self.workers.clone(),
+            areas: self.areas.clone(),
+            disciplines: self.disciplines.clone(),
+        }
+    }
 }
 
 fn one_repetition() -> u32 {
     1
 }
+
+/// Tag names by dimension, as a dispatch states them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TagSet {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disciplines: Vec<String>,
+}
+
+impl TagSet {
+    /// Each name with its dimension: `("worker", "state")`.
+    fn entries(&self) -> Vec<(&'static str, &str)> {
+        let workers = self.workers.iter().map(|name| ("worker", name.as_str()));
+        let areas = self.areas.iter().map(|name| ("area", name.as_str()));
+        let disciplines = (self.disciplines.iter()).map(|name| ("discipline", name.as_str()));
+        workers.chain(areas).chain(disciplines).collect()
+    }
+}
+
+/// A test's tags, each with its dimension.
+fn tag_entries(tags: &ScenarioTags) -> BTreeSet<(&'static str, &'static str)> {
+    let workers = tags
+        .workers
+        .iter()
+        .map(|worker| ("worker", worker.as_str()));
+    let area = tags.area.map(|area| ("area", area.as_str()));
+    let disciplines =
+        (tags.disciplines.iter()).map(|discipline| ("discipline", discipline.as_str()));
+    workers.chain(area).chain(disciplines).collect()
+}
+
+/// Every tag a selection can name.
+fn vocabulary() -> BTreeSet<(&'static str, &'static str)> {
+    let workers = Worker::ALL.iter().map(|worker| ("worker", worker.as_str()));
+    let areas = Area::ALL.iter().map(|area| ("area", area.as_str()));
+    let disciplines =
+        (Discipline::ALL.iter()).map(|discipline| ("discipline", discipline.as_str()));
+    workers.chain(areas).chain(disciplines).collect()
+}
+
+/// What a suite selecting by tag asked for and what it found among the
+/// scheduled tests.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Impact {
+    pub requested: TagSet,
+    /// Scheduled tests carrying a requested tag, run on top of `pr`.
+    pub matched: Vec<String>,
+    /// Tests carrying a requested tag that a selection by tag leaves out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<String>,
+    /// Requested tags no selected test carries, each with why: nothing in
+    /// this suite protects them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncovered: Vec<UncoveredTag>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UncoveredTag {
+    /// `worker`, `area` or `discipline`.
+    pub dimension: String,
+    pub name: String,
+    pub reason: String,
+}
+
+/// Left out of every selection by tag: the registry pair runs 17 to 34 min
+/// a test, and Linkly needs a stack of its own.
+// ponytail: a fixed list; a ceiling from run durations belongs where the
+// durations are (Release Control's deploy check).
+const IMPACT_EXCLUDED: [ScenarioId; 3] = [
+    ScenarioId::RegistryImplementation,
+    ScenarioId::RegistryVerification,
+    ScenarioId::LinklyTutorial,
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileSnapshot {
@@ -81,6 +182,9 @@ pub struct ProfileSnapshot {
     pub campaigns: Vec<Value>,
     pub budget: Value,
     pub interpretation: String,
+    /// Present when the suite selects by tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<Impact>,
 }
 
 pub fn embedded() -> Result<MasterPlan> {
@@ -176,6 +280,11 @@ impl MasterPlan {
                 !suite.metrics.is_empty() && !suite.purpose.trim().is_empty(),
                 "suite must declare purpose and metrics"
             );
+            ensure!(
+                suite.tags().entries().is_empty(),
+                "suite {} selects by tag; only a dispatched suite may",
+                suite.id
+            );
             self.selected_scenarios(suite, &native)?;
         }
         ensure!(
@@ -217,6 +326,18 @@ impl MasterPlan {
         for id in &suite.scenarios {
             ensure!(seen.insert(id.clone()), "duplicate suite scenario {id}");
             selected.push(id.clone());
+        }
+        if let Some(impact) = self.impact(suite)? {
+            let pr = self
+                .suites
+                .iter()
+                .find(|candidate| candidate.id == "pr")
+                .context("selection by tag needs the plan's pr suite")?;
+            for id in self.select(pr)?.into_iter().chain(impact.matched) {
+                if seen.insert(id.clone()) {
+                    selected.push(id);
+                }
+            }
         }
         let mut grouped = BTreeSet::new();
         for group in &suite.scenario_groups {
@@ -372,7 +493,58 @@ impl MasterPlan {
                 "unbounded_turn_cases": unbounded_turn_cases,
                 "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, capture and cleanup are additional"}),
             interpretation: "descriptive_only".into(),
+            impact: self.impact(&profile)?,
         })
+    }
+
+    /// The scheduled tests a suite's tags match; `None` when it names none.
+    fn impact(&self, suite: &Suite) -> Result<Option<Impact>> {
+        let requested = suite.tags();
+        let wanted = requested.entries();
+        if wanted.is_empty() {
+            return Ok(None);
+        }
+        let (mut matched, mut excluded) = (Vec::new(), Vec::new());
+        let (mut covered, mut left_out) = (BTreeSet::new(), BTreeSet::new());
+        for id in self.scheduled()? {
+            let scenario = id.parse::<ScenarioId>()?;
+            let carries = tag_entries(&scenario.tags());
+            let carried = (wanted.iter().copied())
+                .filter(|tag| carries.contains(tag))
+                .collect::<Vec<_>>();
+            if carried.is_empty() {
+                continue;
+            }
+            if IMPACT_EXCLUDED.contains(&scenario) {
+                left_out.extend(carried);
+                excluded.push(id);
+            } else {
+                covered.extend(carried);
+                matched.push(id);
+            }
+        }
+        let known = vocabulary();
+        let uncovered = (wanted.iter())
+            .filter(|tag| !covered.contains(*tag))
+            .map(|&(dimension, name)| UncoveredTag {
+                dimension: dimension.into(),
+                name: name.into(),
+                reason: if !known.contains(&(dimension, name)) {
+                    "not in the tag vocabulary"
+                } else if left_out.contains(&(dimension, name)) {
+                    "only tests a selection by tag leaves out carry it"
+                } else {
+                    "no scheduled test carries it"
+                }
+                .into(),
+            })
+            .collect();
+        Ok(Some(Impact {
+            requested,
+            matched,
+            excluded,
+            uncovered,
+        }))
     }
 
     /// Every test some suite runs: the base of selection by tag.
@@ -648,6 +820,105 @@ mod tests {
         );
         assert_eq!(snapshot.profile.repetitions, 1);
         assert_eq!(snapshot.profile.technical_retries, 0);
+    }
+
+    #[test]
+    fn a_dispatched_suite_selects_pr_plus_the_scheduled_tests_with_its_tags() {
+        let plan = embedded().unwrap();
+        let suite = |value: Value| plan.materialize_suite(serde_json::from_value(value).unwrap());
+        let pr = [
+            "minimal_path",
+            "persistent_state",
+            "tool_contract_recovery",
+            "shell_coder_sandbox",
+        ];
+
+        let state = suite(json!({"id": "impact", "workers": ["state"]})).unwrap();
+        assert_eq!(
+            state.scenario_ids,
+            [&pr[..], &["contention_ledger", "timer_wake"]].concat()
+        );
+        let impact = state.impact.as_ref().unwrap();
+        assert_eq!(
+            impact.matched,
+            [
+                "contention_ledger",
+                "minimal_path",
+                "persistent_state",
+                "timer_wake"
+            ]
+        );
+        // Linkly carries state but needs a stack of its own.
+        assert_eq!(impact.excluded, ["linkly_tutorial"]);
+        assert!(impact.uncovered.is_empty());
+        // The tags stay out of the profile, and so out of every digest.
+        let profile = serde_json::to_value(&state.profile).unwrap();
+        assert!(profile.get("workers").is_none());
+
+        let thin =
+            suite(json!({"id": "impact", "workers": ["cron"], "areas": ["coding"]})).unwrap();
+        assert_eq!(
+            thin.scenario_ids,
+            [&pr[..], &["alertmanager_route_match"]].concat()
+        );
+        let impact = thin.impact.unwrap();
+        assert_eq!(impact.excluded, ["registry_implementation"]);
+        let gap = |dimension: &str, name: &str, reason: &str| UncoveredTag {
+            dimension: dimension.into(),
+            name: name.into(),
+            reason: reason.into(),
+        };
+        assert_eq!(
+            impact.uncovered,
+            [gap("worker", "cron", "no scheduled test carries it")]
+        );
+
+        // A name the tags do not know warns instead of failing the suite,
+        // and a tag only an excluded test carries says so.
+        let unknown = suite(json!({
+            "id": "impact",
+            "workers": ["provider-anthropic", "queue"],
+            "areas": ["harness"],
+        }))
+        .unwrap();
+        assert_eq!(unknown.scenario_ids, pr);
+        assert_eq!(
+            unknown.impact.unwrap().uncovered,
+            [
+                gap("worker", "provider-anthropic", "not in the tag vocabulary"),
+                gap(
+                    "worker",
+                    "queue",
+                    "only tests a selection by tag leaves out carry it"
+                ),
+                gap("area", "harness", "not in the tag vocabulary"),
+            ]
+        );
+
+        // A suite naming no tag has no impact.
+        assert!(plan.materialize("pr").unwrap().impact.is_none());
+    }
+
+    /// Tags never reach the plan's digest: the cohort key Release Control
+    /// groups every execution by. A reviewed change to the plan updates this.
+    #[test]
+    fn the_plan_digest_is_pinned() {
+        assert_eq!(
+            embedded().unwrap().digest().unwrap(),
+            "sha256:bbf812ecaf9c629811c9494cb206f71e88afc256ad97db422ebb1f0e17997bae"
+        );
+    }
+
+    #[test]
+    fn the_plan_never_selects_by_tag() {
+        let mut document: Value = serde_json::from_str(SOURCE).unwrap();
+        document["suites"][0]["workers"] = json!(["state"]);
+        let plan: MasterPlan = serde_json::from_value(document).unwrap();
+        assert!(plan
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("selects by tag"));
     }
 
     #[test]

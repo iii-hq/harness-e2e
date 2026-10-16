@@ -95,6 +95,9 @@ materialize() {
   suite=$(jq -r '.suite | if type == "string" then . else tojson end' "$contract_dir/execution.json")
   "$runner" test-plan materialize --profile "$suite" >"$contract_dir/suite.json"
   jq -e '.campaigns | length > 0' "$contract_dir/suite.json" >/dev/null
+  # A suite selected by tag names every tag no selected test protects.
+  jq -r '.impact.uncovered[]? | "::warning title=Uncovered tag::No selected test protects \(.dimension) \(.name): \(.reason)"' \
+    "$contract_dir/suite.json" >&2
   cp "$contract_dir/suite.json" "$contract_dir/profile.json"
 }
 

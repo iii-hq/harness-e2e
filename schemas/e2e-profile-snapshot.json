@@ -1,6 +1,40 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "Impact": {
+      "description": "What a suite selecting by tag asked for and what it found among the scheduled tests.",
+      "properties": {
+        "excluded": {
+          "description": "Tests carrying a requested tag that a selection by tag leaves out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "matched": {
+          "description": "Scheduled tests carrying a requested tag, run on top of `pr`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requested": {
+          "$ref": "#/definitions/TagSet"
+        },
+        "uncovered": {
+          "description": "Requested tags no selected test carries, each with why: nothing in this suite protects them.",
+          "items": {
+            "$ref": "#/definitions/UncoveredTag"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "matched",
+        "requested"
+      ],
+      "type": "object"
+    },
     "Suite": {
       "additionalProperties": false,
       "description": "What a campaign tests: its scenarios and how often. Where it runs (the stack) and with whom (model, agent profile) are named per execution.",
@@ -68,6 +102,50 @@
         "id"
       ],
       "type": "object"
+    },
+    "TagSet": {
+      "description": "Tag names by dimension, as a dispatch states them.",
+      "properties": {
+        "areas": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disciplines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "UncoveredTag": {
+      "properties": {
+        "dimension": {
+          "description": "`worker`, `area` or `discipline`.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dimension",
+        "name",
+        "reason"
+      ],
+      "type": "object"
     }
   },
   "properties": {
@@ -82,6 +160,17 @@
     },
     "definition_sha256": {
       "type": "string"
+    },
+    "impact": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Impact"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Present when the suite selects by tag."
     },
     "interpretation": {
       "type": "string"
