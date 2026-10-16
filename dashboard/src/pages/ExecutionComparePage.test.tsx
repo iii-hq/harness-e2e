@@ -10,7 +10,7 @@ import {
   RowDetail,
   ScreenshotFigure,
 } from '@/components/compare/ComparisonView'
-import { compareExecutions } from '@/lib/execution-comparison'
+import { compareExecutions, comparisonGroup } from '@/lib/execution-comparison'
 import { type ScreenshotEntry, screenshotsOf } from '@/lib/screenshots'
 import {
   CandidateList,
@@ -21,10 +21,17 @@ import {
   comparisonInvestigation,
   ExecutionComparePage,
   loadCandidates,
-  loadExecutionPair,
+  loadExecutions,
+  loadOlderCandidates,
+  pickSides,
+  selectionOf,
   viewParams,
 } from '@/pages/ExecutionComparePage'
-import { imported, local } from '@/test-fixtures/execution-comparison'
+import {
+  execution,
+  imported,
+  local,
+} from '@/test-fixtures/execution-comparison'
 import { LEDGER_EXECUTIONS } from '@/test-fixtures/executions-ledger'
 
 function withRunners(a = imported(), b = local()) {
@@ -302,7 +309,7 @@ describe('execution comparison page', () => {
     )
   })
 
-  it('loads both executions and names the side that failed', async () => {
+  it('loads every execution in order and names each one that failed', async () => {
     const a = imported()
     const b = local()
     const get = (id: string) =>
@@ -311,39 +318,83 @@ describe('execution comparison page', () => {
         : id === b.id
           ? Promise.resolve(b)
           : Promise.reject(new Error('Execution not found'))
-    await expect(loadExecutionPair(get, a.id, b.id)).resolves.toEqual({ a, b })
-    await expect(loadExecutionPair(get, a.id, 'gone')).rejects.toThrow(
-      'B (gone) could not be loaded: Execution not found',
+    await expect(loadExecutions(get, [a.id, b.id])).resolves.toEqual([a, b])
+    await expect(loadExecutions(get, [a.id, 'gone'])).rejects.toThrow(
+      'gone could not be loaded: Execution not found',
     )
-    await expect(loadExecutionPair(get, 'gone', 'lost')).rejects.toThrow(
-      'A (gone) could not be loaded: Execution not found · B (lost) could not be loaded: Execution not found',
+    await expect(loadExecutions(get, ['gone', b.id, 'lost'])).rejects.toThrow(
+      'gone could not be loaded: Execution not found · lost could not be loaded: Execution not found',
     )
   })
 
-  it('asks for two executions, shows loading, then the error', () => {
-    const empty = renderToStaticMarkup(
-      <ExecutionComparePage left={null} right={null} />,
+  it('reads the reference and the one in detail from the hash, and refuses a pick outside the group', () => {
+    const ids = ['a', 'b', 'c']
+    expect(pickSides(ids, null, null)).toEqual({ a: 'a', b: 'b', error: null })
+    // The one in detail made the reference: the next one takes its place.
+    expect(pickSides(ids, 'b', null)).toEqual({ a: 'b', b: 'a', error: null })
+    expect(pickSides(ids, null, 'c')).toEqual({ a: 'a', b: 'c', error: null })
+    expect(pickSides(ids, 'x', null).error).toBe(
+      'The reference x is not one of the executions compared.',
     )
-    expect(empty).toContain('Choose two executions')
+    expect(pickSides(ids, 'a', 'y').error).toBe(
+      'y is not one of the executions compared.',
+    )
+    expect(pickSides(ids, 'b', 'b').error).toBe(
+      'The execution read in detail cannot be the reference.',
+    )
+    // Only a pick that is not the default goes in the hash.
+    expect(selectionOf(ids, 'a', 'b')).toEqual({
+      reference: null,
+      compared: null,
+    })
+    expect(selectionOf(ids, 'b', 'a')).toEqual({
+      reference: 'b',
+      compared: null,
+    })
+    expect(selectionOf(ids, 'a', 'c')).toEqual({
+      reference: null,
+      compared: 'c',
+    })
+    expect(
+      viewParams(
+        { include: [], exclude: ['t'] },
+        null,
+        selectionOf(ids, 'b', 'c'),
+      ).toString(),
+    ).toBe('exclude=t&reference=b&compared=c')
+  })
+
+  it('asks for executions, shows loading, then the error', () => {
+    const empty = renderToStaticMarkup(
+      <ExecutionComparePage executionIds={[]} />,
+    )
+    expect(empty).toContain('Choose executions to compare')
     expect(empty).toContain('Back to Executions')
     const loading = renderToStaticMarkup(
-      <ExecutionComparePage left="a" right="b" />,
+      <ExecutionComparePage executionIds={['a', 'b', 'c']} />,
     )
     expect(loading).toContain('aria-busy="true"')
-    expect(loading).toContain('Loading both executions')
+    expect(loading).toContain('Loading the executions')
+    // A pick outside the group is said, never guessed.
+    const outside = renderToStaticMarkup(
+      <ExecutionComparePage executionIds={['a', 'b']} reference="z" />,
+    )
+    expect(outside).toContain(
+      'The reference z is not one of the executions compared.',
+    )
     const failed = renderToStaticMarkup(
       <ComparisonPlaceholder
         missing={false}
-        error="B (gone) could not be loaded: Execution not found"
+        error="gone could not be loaded: Execution not found"
         onRetry={() => undefined}
       />,
     )
     expect(failed).toContain('The comparison could not be loaded')
-    expect(failed).toContain('B (gone) could not be loaded')
+    expect(failed).toContain('gone could not be loaded')
     expect(failed).toContain('Retry')
   })
 
-  it('Compare with… lists the latest executions but A, each opening A × B', async () => {
+  it('Compare with… lists the latest executions but A, each opening A × B, several ticked together', async () => {
     const [a, ...others] = LEDGER_EXECUTIONS
     const asked: unknown[] = []
     const candidates = await loadCandidates(
@@ -352,6 +403,7 @@ describe('execution comparison page', () => {
           asked.push(input)
           return {
             executions: input.ids ? [a] : LEDGER_EXECUTIONS,
+            next_cursor: input.ids ? null : 'older',
           }
         },
       },
@@ -359,11 +411,12 @@ describe('execution comparison page', () => {
     )
     expect(asked).toEqual([{ limit: 50 }, { ids: [a.id], limit: 1 }])
     expect(candidates.a?.id).toBe(a.id)
+    expect(candidates.cursor).toBe('older')
     expect(candidates.rows.map((row) => row.id)).toEqual(
       others.map((other) => other.id),
     )
     const html = renderToStaticMarkup(
-      <CandidateList left={a.id} {...candidates} />,
+      <CandidateList left={a.id} {...candidates} onMore={() => undefined} />,
     )
     expect(html).toContain('Compare with…')
     expect(html).toContain(candidates.a?.title)
@@ -371,9 +424,104 @@ describe('execution comparison page', () => {
       `href="#/ext/harness-e2e/compare/${a.id}/${others[0].id}"`,
     )
     expect(html).not.toContain(`data-candidate="${a.id}"`)
+    // Several can be ticked; nothing ticked, nothing to compare yet.
+    expect(html).toContain(`aria-label="Select ${candidates.rows[0].title}"`)
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-compare-picked/)
+    expect(html).toContain('data-candidates-more')
+    // An older page adds what is not listed yet, A and the rows kept apart.
+    const older = await loadOlderCandidates(
+      {
+        listExecutions: async (input = {}) => {
+          asked.push(input)
+          return {
+            executions: [a, others[0], { ...others[0], id: 'older-1' }],
+            next_cursor: null,
+          }
+        },
+      },
+      a.id,
+      candidates,
+    )
+    expect(asked.at(-1)).toEqual({ limit: 50, cursor: 'older' })
+    expect(older.rows.map((row) => row.id)).toEqual([
+      ...others.map((other) => other.id),
+      'older-1',
+    ])
+    expect(older.cursor).toBeNull()
+    expect(
+      renderToStaticMarkup(
+        <CandidateList left={a.id} {...older} onMore={() => undefined} />,
+      ),
+    ).not.toContain('data-candidates-more')
     expect(
       renderToStaticMarkup(<CandidateList left={a.id} a={null} rows={[]} />),
     ).toContain('No other execution to compare with')
+  })
+
+  it('shows a group side by side, each against the reference, over the same tests', () => {
+    const a = execution('a', [{ score: 60 }, { score: 80 }, { score: 100 }])
+    const b = execution('b', [{ score: 70 }, { score: 90 }, { score: 90 }])
+    const c = execution('c', [
+      { score: 50 },
+      { technical: 'technical_invalid', score: null },
+      { score: 100 },
+    ])
+    const group = comparisonGroup([a, b, c])
+    const pairs = [b, c].map((one) => compareExecutions(a, one, { group }))
+    const html = renderToStaticMarkup(
+      <ComparisonView
+        comparison={pairs[0]}
+        sides={{ a, b }}
+        group={{
+          executions: [a, b, c],
+          pairs,
+          group,
+          scoring: new Map(),
+          compareHref: (id) => `#compare-${id}`,
+          referenceHref: (id) => `#reference-${id}`,
+          withoutHref: (ids) => `#without-${ids.join('-')}`,
+          onAdd: () => undefined,
+        }}
+        swap="#swap"
+        onCount={() => undefined}
+      />,
+    )
+    // The group first: what differs, the tests, highlights, the matrix.
+    expect(html.indexOf('data-group-changes')).toBeLessThan(
+      html.indexOf('data-comparison-matrix'),
+    )
+    expect(html).toContain('Highlights · 3 executions against A')
+    expect(html).toContain('3 executions side by side')
+    expect(html).toContain('data-add-executions')
+    expect(
+      [...html.matchAll(/data-matrix-execution="([^"]+)"/g)].map(
+        (match) => match[1],
+      ),
+    ).toEqual(['a', 'b', 'c'])
+    expect(html).toMatch(/data-matrix-execution="a" data-role="reference"/)
+    // The one in detail is a selection: neutral, marked as such.
+    expect(html).toMatch(
+      /data-matrix-execution="b" data-role="compared" data-selected="true"/,
+    )
+    // Each column's menu: C can be read in detail, B already is.
+    expect(html).toContain('data-column-menu="c"')
+    expect(html.match(/Read against A in detail/g)).toHaveLength(1)
+    expect(html).toContain('data-remove="c"')
+    expect(html).toContain('B becomes the reference')
+    expect(html).toContain('data-matrix-metric="score"')
+    expect(html).toContain('data-matrix-version="runner"')
+    // C's invalid run takes test_1 out of every total, B's included.
+    expect(html).toContain('data-matrix-scenario="test_1" data-counted="false"')
+    expect(html).toContain('technically invalid in C')
+    // The pair below says the gap by the group's letters too.
+    expect(html).toContain('technical invalid in C')
+    expect(html).not.toContain('technical_invalid in ')
+    expect(html).toContain('data-matrix-cell="c"')
+    expect(html).toContain('A against B')
+    // The test picker reads the whole group.
+    expect(html).toContain('Score varies')
+    // Two executions keep the page as it was.
+    expect(view()).not.toContain('data-comparison-group')
   })
 
   it('says a side is still running and its figures are partial', () => {

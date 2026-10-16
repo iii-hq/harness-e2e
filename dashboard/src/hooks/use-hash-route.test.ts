@@ -37,6 +37,9 @@ describe('a run page opened from a comparison', () => {
     expect(routeFromHash(linked)).toEqual(routeFromHash(run))
     expect(comparisonOrigin(linked)).toBe(comparison)
     expect(comparisonOrigin(run)).toBeNull()
+    // A group, its picks included, is taken back too.
+    const group = `${hashForComparison('plan-a', 'plan-b', 'plan-c')}?reference=plan-c`
+    expect(comparisonOrigin(hashFrom(run, group))).toBe(group)
   })
 
   it('accepts only a comparison of this dashboard, never any hash or URL', () => {
@@ -110,13 +113,32 @@ describe('dashboard hash routes', () => {
     )
     expect(routeFromHash(comparison)).toEqual({
       page: 'compare',
-      left: 'execution/a',
-      right: 'execution b',
+      executionIds: ['execution/a', 'execution b'],
+      reference: null,
+      compared: null,
     })
     expect(
       routeFromHash(hashForVersionComparison('version/a', 'version b')),
     ).toEqual({ page: 'versions', left: 'version/a', right: 'version b' })
     expect(routeFromHash('#main')).toBeNull()
+  })
+
+  it('routes any number of executions, once each, the picks in the params', () => {
+    const hash = hashForComparison('a', 'b', 'c')
+    expect(hash).toBe('#/ext/harness-e2e/compare/a/b/c')
+    expect(hashForComparison('a')).toBe('#/ext/harness-e2e/compare/a')
+    const route = routeFromHash(`${hash}?reference=c&compared=a`)
+    expect(route).toEqual({
+      page: 'compare',
+      executionIds: ['a', 'b', 'c'],
+      reference: 'c',
+      compared: 'a',
+    })
+    // Another reference is the same page, not a new one.
+    expect(route && routeRenderIdentity(route)).toBe('compare:a:b:c')
+    expect(routeFromHash('#/ext/harness-e2e/compare/a/b/a')).toMatchObject({
+      executionIds: ['a', 'b'],
+    })
   })
 
   it('keeps suites, stacks and test metric history as independent routes', () => {

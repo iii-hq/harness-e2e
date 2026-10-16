@@ -8,9 +8,11 @@ import {
   comparedValue,
   compareExecutions,
   compareRuns,
+  comparisonGroup,
   comparisonHighlights,
   comparisonMarkdown,
   exclusionPhrase,
+  groupMarkdown,
   rerunPhrase,
   runnerWarning,
   scenarioScore,
@@ -1085,5 +1087,165 @@ describe('comparison summary', () => {
     expect(comparisonMarkdown(comparison).split('\n')[0]).toBe(
       '### smoke · deepseek/flash',
     )
+  })
+})
+
+describe('comparing a group', () => {
+  const three = () => [
+    execution('a', [{ score: 60 }, { score: 80 }, { score: 100 }]),
+    execution('b', [{ score: 70 }, { score: 90 }, { score: 90 }]),
+    execution('c', [
+      { score: 50 },
+      { technical: 'technical_invalid', score: null },
+      { score: 100 },
+    ]),
+  ]
+  const against = (
+    details: DashboardExecutionDetail[],
+    reference: number,
+    choice = {},
+  ) => {
+    const group = comparisonGroup(details)
+    const base = details[reference]
+    return details
+      .filter((detail) => detail !== base)
+      .map((detail) => compareExecutions(base, detail, { ...choice, group }))
+  }
+  const counted = (comparison: ReturnType<typeof compareExecutions>) =>
+    comparison.scenarios
+      .filter((scenario) => scenario.counted)
+      .map((scenario) => scenario.id)
+
+  it('takes out of every pair a test that only a third execution could not measure', () => {
+    const [a, b, c] = three()
+    const group = comparisonGroup([a, b, c])
+    expect([...group.exclusions]).toEqual([
+      ['test_1', { reason: 'technical_invalid', executions: ['c'] }],
+    ])
+    // Alone, A and B would have counted it.
+    expect(compareExecutions(a, b).exclusions).toEqual([])
+    const ab = compareExecutions(a, b, { group })
+    expect(ab.exclusions).toEqual([
+      {
+        scenario_id: 'test_1',
+        reason: 'technical_invalid',
+        sides: [],
+        others: [group.names.get('c')],
+        applied: true,
+      },
+    ])
+    expect(counted(ab)).toEqual(['test_0', 'test_2'])
+    expect(total(ab, 'score', 'baseline')).toBe(80)
+    expect(total(ab, 'score')).toBe(80)
+    const [, test1] = ab.scenarios
+    expect(exclusionPhrase(test1)).toBe(
+      `technical_invalid in ${group.names.get('c')}`,
+    )
+    // The pair that holds the gap names its own side.
+    const ac = compareExecutions(a, c, { group })
+    expect(ac.exclusions[0]).toMatchObject({ sides: ['b'] })
+    expect(ac.exclusions[0].others).toBeUndefined()
+  })
+
+  it('gives every execution the same figures and tests whichever is the reference', () => {
+    const details = three()
+    const figures = (reference: number) => {
+      const pairs = against(details, reference)
+      return Object.fromEntries([
+        [pairs[0].a.id, pairs[0].totals.map((metric) => metric.baseline)],
+        ...pairs.map((pair) => [
+          pair.b.id,
+          pair.totals.map((metric) => metric.candidate),
+        ]),
+      ])
+    }
+    expect(figures(1)).toEqual(figures(0))
+    expect(figures(2)).toEqual(figures(0))
+    for (const reference of [0, 1, 2])
+      for (const pair of against(details, reference))
+        expect(counted(pair)).toEqual(['test_0', 'test_2'])
+    expect(
+      against(details, 0).map((pair) => [
+        total(pair, 'score', 'baseline'),
+        total(pair, 'score'),
+      ]),
+    ).toEqual([
+      [80, 80],
+      [80, 75],
+    ])
+  })
+
+  it('brings a gap back into every pair and leaves a test out of all of them', () => {
+    const pairs = against(three(), 0, {
+      include: ['test_1'],
+      exclude: ['test_2'],
+    })
+    for (const pair of pairs)
+      expect(counted(pair)).toEqual(['test_0', 'test_1'])
+    expect(pairs[1].scenarios[2]).toMatchObject({ leftOut: true })
+    // C has no score for test_1, so it gives no score over what it counts.
+    expect(total(pairs[0], 'score')).toBe(80)
+    expect(total(pairs[1], 'score')).toBeNull()
+  })
+
+  it('names a changed definition and a missing test across five executions', () => {
+    const five = ['a', 'b', 'c', 'd', 'e'].map((id) =>
+      execution(id, [{}, {}, {}]),
+    )
+    five[3] = execution('d', [{}, { definition: 'changed' }, {}])
+    five[4].reports = five[4].reports.filter(
+      (record) => record.scenario_id !== 'test_2',
+    )
+    const group = comparisonGroup(five)
+    expect(group.exclusions.get('test_1')).toEqual({
+      reason: 'redefined',
+      executions: ['a', 'b', 'c', 'd', 'e'],
+    })
+    expect(group.exclusions.get('test_2')).toEqual({
+      reason: 'missing',
+      executions: ['e'],
+    })
+    const [ab] = against(five, 0)
+    expect(
+      ab.scenarios
+        .filter((scenario) => !scenario.counted)
+        .map((scenario) => [scenario.id, exclusionPhrase(scenario)]),
+    ).toEqual([
+      [
+        'test_1',
+        'redefined: the case inputs differ between the executions compared',
+      ],
+      ['test_2', `no run in ${group.names.get('e')}`],
+    ])
+  })
+
+  it('compares thirty executions, each against the reference', () => {
+    const many = Array.from({ length: 30 }, (_, index) =>
+      execution(`x${index}`, [{ score: index }, { score: index + 2 }]),
+    )
+    const pairs = against(many, 0)
+    expect(pairs).toHaveLength(29)
+    expect(pairs.map((pair) => total(pair, 'score'))).toEqual(
+      many.slice(1).map((_, index) => index + 2),
+    )
+    expect(
+      new Set(pairs.map((pair) => total(pair, 'score', 'baseline'))),
+    ).toEqual(new Set([1]))
+    expect(pairs.every((pair) => pair.exclusions.length === 0)).toBe(true)
+  })
+
+  it('summarises the whole group, every total against the reference', () => {
+    const markdown = groupMarkdown(against(three(), 0))
+    expect(markdown).toContain('### 3 executions against')
+    expect(markdown).toMatch(/\| Metric \| .+ \(reference\) \| .+ \| .+ \|/)
+    expect(markdown).toMatch(
+      /\| Score \| 80 \| 80 \([^)]*\) \| 75 \([^)]*\) \|/,
+    )
+    expect(markdown).toContain('Out of the totals, for every execution:')
+    expect(markdown).toContain('- test_1: technical_invalid in ')
+    // A single pair is that pair's summary.
+    const [a, b] = three()
+    const pair = compareExecutions(a, b)
+    expect(groupMarkdown([pair])).toBe(comparisonMarkdown(pair))
   })
 })

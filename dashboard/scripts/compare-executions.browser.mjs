@@ -170,7 +170,30 @@ const b = execution(
     },
   ],
 )
-const details = { [a.id]: a, [b.id]: b }
+// Only the group flow opens it: its invalid minimal_path takes that test out
+// of every total, A × B's too.
+const c = execution(
+  'plan-dddddddddddddddddddddddddddddddd',
+  'smoke third',
+  { kind: 'local' },
+  parameters(1, {
+    label: '',
+    sha256: 'sha256:fedcba9876543210fedcba9876543210',
+  }),
+  {
+    minimal_path: run('c1', {
+      technical: 'technical_invalid',
+      score: null,
+      failure: 'provider timed out',
+    }),
+    persistent_state: run('c2', { score: 90 }),
+    timer_wake: run('c3', { score: 60 }),
+    registry_implementation: run('c4', { score: 70 }),
+    registry_verification: run('c5', { score: 70 }),
+  },
+  [worker('harness-e2e', '0.11.27'), worker('state', '0.22.3')],
+)
+const details = { [a.id]: a, [b.id]: b, [c.id]: c }
 const started = []
 const read = []
 const renamed = []
@@ -222,7 +245,11 @@ const trigger = (name, request = {}) => {
       failB -= 1
       throw new Error('engine unavailable')
     }
-    return { detail: details[request.execution_id] }
+    return {
+      detail:
+        details[request.execution_id] ??
+        older.find((one) => one.id === request.execution_id),
+    }
   }
   if (id === 'evidence-read') {
     read.push(request)
@@ -249,6 +276,13 @@ const server = await createConsoleTestHost()
 const browser = await chromium.launch({ headless: true })
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  // Screenshots only when asked: COMPARE_SHOTS=<dir>.
+  const shot = async (name) => {
+    if (process.env.COMPARE_SHOTS)
+      await page.screenshot({
+        path: `${process.env.COMPARE_SHOTS}/${name}.png`,
+      })
+  }
   await server.install(page, trigger)
   page.setDefaultTimeout(10_000)
   const errors = []
@@ -574,6 +608,226 @@ try {
   await rename.waitFor({ state: 'detached' })
   await page.waitForTimeout(300)
   assert.equal(await page.locator(`[data-execution-id="${last}"]`).count(), 1)
+
+  // A group of three: every execution in a column against the reference,
+  // over the same tests, picked from the list with three ticked.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  for (const name of ['smoke rerun', 'older 0', 'older 1'])
+    await page
+      .getByRole('checkbox', { name: `Select ${name}`, exact: true })
+      .check()
+  const bar = page.getByRole('toolbar', { name: 'Selected executions' })
+  await bar.getByText('The first you ticked is the reference.').waitFor()
+  await bar
+    .getByRole('button', { name: 'Compare 3 executions', exact: true })
+    .click()
+  await page.locator('[data-comparison-matrix]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`/compare/${b.id}/${older[0].id}/${older[1].id}$`),
+  )
+
+  // A, B and C: C's invalid run takes minimal_path out of every total.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}/${c.id}`,
+  )
+  const matrix = page.locator('[data-comparison-matrix]')
+  await matrix.waitFor()
+  await page
+    .getByRole('heading', { name: 'smoke × 2 executions', level: 1 })
+    .waitFor()
+  assert.deepEqual(
+    await matrix
+      .locator('[data-matrix-execution]')
+      .evaluateAll((cells) =>
+        cells.map((cell) => cell.dataset.matrixExecution),
+      ),
+    [a.id, b.id, c.id],
+  )
+  assert.equal(
+    await matrix
+      .locator('[data-matrix-scenario="minimal_path"]')
+      .getAttribute('data-counted'),
+    'false',
+  )
+  await page
+    .locator('[data-comparison-scenarios] [data-scenario="minimal_path"]')
+    .and(page.locator('[data-counted="false"]'))
+    .waitFor()
+  const figures = () =>
+    matrix
+      .locator('[data-matrix-metric="score"] td')
+      .evaluateAll((cells) =>
+        cells.map(
+          (cell) =>
+            cell.querySelector('.cmp-matrix-figure > span')?.textContent ??
+            cell.textContent,
+        ),
+      )
+  const before = await figures()
+  // The group is read first: what differs, then highlights against A.
+  await page.locator('[data-group-changes]').waitFor()
+  await page
+    .locator('[data-comparison-highlights]')
+    .getByRole('heading', { name: 'Highlights · 3 executions against A' })
+    .waitFor()
+  await shot('compare-3-1280')
+
+  // A figure of C opens that test of C against the reference, below.
+  await matrix
+    .locator(
+      `[data-matrix-scenario="persistent_state"] [data-matrix-cell="${c.id}"]`,
+    )
+    .click()
+  await page.waitForFunction(
+    (id) => location.hash.includes(`compared=${id}`),
+    c.id,
+  )
+  await page
+    .getByRole('heading', { name: 'A against C · smoke third' })
+    .waitFor()
+  await page.locator('[data-scenario-detail="persistent_state"]').waitFor()
+  // The column in detail is a selection, marked as one.
+  await matrix
+    .locator(`[data-matrix-execution="${c.id}"][data-selected="true"]`)
+    .waitFor()
+
+  // B made the reference from its column's menu: every figure stays, only
+  // the differences move.
+  await matrix.locator(`[data-column-menu="${b.id}"]`).click()
+  await page.getByRole('menuitem', { name: /^Make reference/ }).click()
+  await matrix
+    .locator(`[data-matrix-execution="${b.id}"][data-role="reference"]`)
+    .waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`\\?reference=${b.id}&compared=${c.id}$`),
+  )
+  assert.deepEqual(await figures(), before)
+  await page.locator('[data-scenario-detail="persistent_state"]').waitFor()
+
+  // A run's page opened from here comes back to the same group and picks.
+  const runLink = page
+    .locator('[data-scenario-detail="persistent_state"] a[href*="/run/"]')
+    .first()
+  assert.ok(
+    decodeURIComponent(await runLink.getAttribute('href')).includes(
+      `/compare/${a.id}/${b.id}/${c.id}?reference=${b.id}&compared=${c.id}`,
+    ),
+  )
+  await runLink.click()
+  await page.waitForFunction(() => location.hash.includes('/run/'))
+  await page.goBack()
+  await matrix
+    .locator(`[data-matrix-execution="${b.id}"][data-role="reference"]`)
+    .waitFor()
+
+  // By keyboard: A's figure, Enter, and A is the one in detail.
+  await matrix
+    .locator(`[data-matrix-scenario="timer_wake"] [data-matrix-cell="${a.id}"]`)
+    .focus()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => !location.hash.includes('compared='))
+  await page.getByRole('heading', { name: 'B against A · smoke' }).waitFor()
+  // Another figure for the tests.
+  await matrix.getByRole('radio', { name: 'Tokens', exact: true }).click()
+  await matrix
+    .getByRole('radio', { name: 'Tokens', exact: true })
+    .and(page.locator('[aria-checked="true"]'))
+    .waitFor()
+  // Another pair in detail by its letter.
+  await page
+    .getByRole('radiogroup', { name: 'Execution read against B' })
+    .getByRole('radio', { name: 'C', exact: true })
+    .click()
+  await page
+    .getByRole('heading', { name: 'B against C · smoke third' })
+    .waitFor()
+
+  // Narrow: the executions scroll sideways, the test column stays in view.
+  await page.setViewportSize({ width: 390, height: 844 })
+  const scroll = page.locator('.cmp-matrix-scroll')
+  const widths = await scroll.evaluate((element) => ({
+    scroll: element.scrollWidth,
+    client: element.clientWidth,
+  }))
+  assert.ok(widths.scroll > widths.client, 'the matrix scrolls at 390 px')
+  await scroll.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth
+  })
+  const pinned = await matrix
+    .locator('[data-matrix-scenario="persistent_state"] th')
+    .boundingBox()
+  const frame = await scroll.boundingBox()
+  assert.ok(Math.abs(pinned.x - frame.x) < 2, 'the test column stays pinned')
+  assert.ok(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    ),
+    'the page itself does not scroll sideways',
+  )
+  await matrix.scrollIntoViewIfNeeded()
+  await shot('compare-3-390')
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  // Add executions: the ones ticked take the next letters, in order.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}/${c.id}`,
+  )
+  await matrix.waitFor()
+  await page.locator('[data-add-executions]').click()
+  const dialog = page.locator('[data-add-dialog]')
+  await dialog.getByRole('radio', { name: 'All executions' }).click()
+  await dialog.getByRole('checkbox', { name: /^Add older 0,/ }).check()
+  await dialog.getByText('1 execution ticked · it becomes D').waitFor()
+  await shot('compare-add-1280')
+  await dialog.getByRole('button', { name: 'Add 1 execution' }).click()
+  await page.waitForFunction(
+    (tail) => location.hash.split('?')[0].endsWith(tail),
+    `/compare/${a.id}/${b.id}/${c.id}/${older[0].id}`,
+  )
+  await matrix.locator(`[data-matrix-execution="${older[0].id}"]`).waitFor()
+
+  // Removing a column leaves the others; two left is the pair page.
+  for (const id of [older[0].id, c.id]) {
+    await matrix.locator(`[data-column-menu="${id}"]`).click()
+    await page
+      .getByRole('menuitem', { name: /^Remove from comparison/ })
+      .click()
+    await page.waitForFunction(
+      (gone) => !location.hash.split('?')[0].includes(gone),
+      id,
+    )
+  }
+  // The pair's cards are on the group page too: wait for the matrix to go.
+  await page.locator('[data-comparison-matrix]').waitFor({ state: 'detached' })
+  await page.locator('[data-comparison-side="b"]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`/compare/${a.id}/${b.id}(\\?|$)`),
+  )
+
+  // Compare with…: several ticked, one from an older page, compared together.
+  await page.goto(`${server.url}#/ext/harness-e2e/compare/${b.id}`)
+  await page.getByRole('heading', { name: 'Compare with…', level: 1 }).waitFor()
+  const tick = (name) =>
+    page.getByRole('checkbox', { name: `Select ${name}`, exact: true })
+  await tick('older 0').check()
+  await page.getByRole('button', { name: /^Load older executions/ }).click()
+  await tick('older 49').check()
+  assert.equal(await tick('older 0').isChecked(), true)
+  await page
+    .getByRole('button', { name: 'Compare 3 executions', exact: true })
+    .click()
+  await page.locator('[data-comparison-matrix]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    new RegExp(`/compare/${b.id}/${older[0].id}/${older.at(-1).id}$`),
+  )
+  console.log(
+    'Group compare browser flow passed: three ticked in the list, A, B and C side by side in order, what differs and highlights against A, a test out of every total because of C, a figure of C opened in detail as a neutral selection, B made the reference from its menu with every figure kept, a run page back to the same group and picks, a figure by keyboard, another figure for the tests, another pair by its letter, 390 px with the executions scrolling and the tests pinned, one execution added as D, two removed down to the pair page, Compare with several ticked across an older page.',
+  )
 
   assert.deepEqual(errors, [])
   console.log(
