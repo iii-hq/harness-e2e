@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Validate, collect, and package a harness-e2e Registry release.
 
-The workflow owns network publication. This helper deliberately never reads the
-Registry API key so release metadata can be inspected and tested without
-secrets.
+promote_registry.py owns network publication. This helper deliberately never
+reads the Registry API key so release metadata can be inspected and tested
+without secrets.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -289,7 +290,6 @@ def build_payload(
     tag: str,
     repo_url: str,
     interface: dict[str, Any],
-    checksums_dir: pathlib.Path,
 ) -> dict[str, Any]:
     if tag != f"harness-e2e/v{version}":
         raise ValueError("tag and version do not identify the same release")
@@ -297,19 +297,6 @@ def build_payload(
     config = read_yaml(root / "config.yaml")
     if not isinstance(manifest, dict) or not isinstance(config, dict):
         raise ValueError("worker manifest and config must be objects")
-
-    binaries: dict[str, dict[str, str]] = {}
-    for target in TARGETS:
-        checksum_path = checksums_dir / f"{WORKER_NAME}-{target}.sha256"
-        if not checksum_path.is_file():
-            raise ValueError(f"missing checksum asset {checksum_path.name}")
-        digest = checksum_path.read_text(encoding="utf-8").split()[0].lower()
-        if not SHA256_RE.fullmatch(digest):
-            raise ValueError(f"invalid SHA-256 in {checksum_path.name}")
-        binaries[target] = {
-            "url": f"{repo_url}/releases/download/{tag}/{WORKER_NAME}-{target}.tar.gz",
-            "sha256": digest,
-        }
 
     functions = interface.get("functions")
     if not isinstance(functions, list) or not functions:
@@ -339,8 +326,32 @@ def build_payload(
         "triggers": interface.get("triggers") or [],
         "experimental": release_is_experimental(version),
         "tags": manifest.get("tags") or [],
-        "binaries": binaries,
     }
+
+
+def release_assets(assets_dir: pathlib.Path) -> list[dict[str, Any]]:
+    """Declare every target's archive for a Registry-hosted release.
+
+    The Registry serves exactly the bytes uploaded from here, so each archive
+    must match the digest the build published next to it.
+    """
+    assets: list[dict[str, Any]] = []
+    for target in TARGETS:
+        name = f"{WORKER_NAME}-{target}.tar.gz"
+        checksum_path = assets_dir / f"{WORKER_NAME}-{target}.sha256"
+        if not checksum_path.is_file():
+            raise ValueError(f"missing checksum asset {checksum_path.name}")
+        digest = checksum_path.read_text(encoding="utf-8").split()[0].lower()
+        if not SHA256_RE.fullmatch(digest):
+            raise ValueError(f"invalid SHA-256 in {checksum_path.name}")
+        archive = assets_dir / name
+        if not archive.is_file():
+            raise ValueError(f"missing release archive {name}")
+        data = archive.read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError(f"{name} does not match {checksum_path.name}")
+        assets.append({"name": name, "target": target, "sha256": digest, "size_bytes": len(data)})
+    return assets
 
 
 def main() -> int:
@@ -366,8 +377,9 @@ def main() -> int:
     payload.add_argument("--tag", required=True)
     payload.add_argument("--repo-url", required=True)
     payload.add_argument("--interface", required=True)
-    payload.add_argument("--checksums-dir", required=True)
+    payload.add_argument("--assets-dir", required=True)
     payload.add_argument("--out", required=True)
+    payload.add_argument("--assets-out", required=True)
 
     args = parser.parse_args()
     try:
@@ -390,9 +402,10 @@ def main() -> int:
                 tag=args.tag,
                 repo_url=args.repo_url,
                 interface=read_json(args.interface),
-                checksums_dir=pathlib.Path(args.checksums_dir),
             )
+            assets = release_assets(pathlib.Path(args.assets_dir))
             pathlib.Path(args.out).write_text(json.dumps(release_payload, indent=2) + "\n", encoding="utf-8")
+            pathlib.Path(args.assets_out).write_text(json.dumps(assets, indent=2) + "\n", encoding="utf-8")
             print(json.dumps({"worker_name": WORKER_NAME, "version": args.version, "tag": "next", "targets": list(TARGETS)}, indent=2))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"error: {error}", file=sys.stderr)

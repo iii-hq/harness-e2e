@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Promote an exact harness-e2e Registry candidate to the latest channel.
+"""Publish a harness-e2e release to the Registry and promote it to latest.
 
-The candidate is identified by the Registry ``next`` tag. Promotion uses the
-raw tag pointer for compare-and-swap so an incompatible dependency graph on an
-existing ``latest`` release cannot be mistaken for an absent pointer.
+``publish`` stages the build's archives in a Registry-hosted release, so the
+Registry serves them from its CDN (iii-hq/registry docs/ASSET_UPLOADS.md), and
+publishes the version on ``next``. ``promote`` moves ``latest`` onto that
+candidate, using the raw tag pointer for compare-and-swap so an incompatible
+dependency graph on an existing ``latest`` release cannot be mistaken for an
+absent pointer.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ def request_json(
     payload: dict[str, Any] | None = None,
     *,
     api_key: str | None = None,
+    timeout: float = 60,
 ) -> tuple[int, dict[str, Any]]:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"}
@@ -41,7 +45,7 @@ def request_json(
         headers["X-API-Key"] = api_key
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, _decode_object(response.read())
     except urllib.error.HTTPError as error:
         try:
@@ -127,6 +131,87 @@ def release_tag_version(
     raise RegistryError(
         f"list versions for {worker} failed with HTTP {status}: {json.dumps(response, sort_keys=True)}"
     )
+
+
+def upload_file(url: str, headers: dict[str, str], path: Path) -> None:
+    # urllib derives Content-Length from the body; a second one is rejected.
+    headers = {name: value for name, value in headers.items() if name.lower() != "content-length"}
+    request = urllib.request.Request(url, data=path.read_bytes(), headers=headers, method="PUT")
+    try:
+        with urllib.request.urlopen(request, timeout=300):
+            return
+    except urllib.error.HTTPError as error:
+        raise RegistryError(f"upload of {path.name} failed with HTTP {error.code}: {error.read()[:300]!r}") from error
+    except OSError as error:
+        raise RegistryError(f"upload of {path.name} failed: {error}") from error
+
+
+def publish(
+    api_url: str,
+    api_key: str,
+    payload: dict[str, Any],
+    assets: list[dict[str, Any]],
+    assets_dir: Path,
+) -> dict[str, Any]:
+    """Open a Registry-hosted release, upload ``assets`` and publish on next.
+
+    Every step repeats safely: an open release resumes, registering an asset
+    again re-issues its upload URL, and a version that already exists is a
+    replay when next resolves to it.
+    """
+    worker, version = payload.get("worker_name"), payload.get("version")
+    if worker != WORKER_NAME:
+        raise RegistryError(f"this pipeline only publishes {WORKER_NAME}")
+    validate_version(version)
+    releases = f"{api_url.rstrip('/')}/w/{urllib.parse.quote(worker, safe='')}/releases"
+    start = {"version": version, "type": payload.get("type")}
+    status, response = request_json("POST", releases, start, api_key=api_key)
+    if status == 410:
+        # That call closed an expired release left by an earlier attempt.
+        status, response = request_json("POST", releases, start, api_key=api_key)
+    if status == 409 and response.get("code") == "version_already_published":
+        resolved = resolve_version(api_url, worker, "next")
+        if resolved != version:
+            raise RegistryError(f"{worker}@{version} is already published but next resolves to {resolved}")
+        return {"worker": worker, "version": version, "release_id": None, "changed": False}
+    release = response.get("release")
+    release_id = release.get("id") if isinstance(release, dict) else None
+    if status != 200 or not isinstance(release_id, str):
+        raise RegistryError(f"release start failed with HTTP {status}: {json.dumps(response, sort_keys=True)}")
+
+    status, response = request_json(
+        "POST", f"{releases}/{urllib.parse.quote(release_id, safe='')}/assets", {"assets": assets}, api_key=api_key
+    )
+    if status != 200:
+        raise RegistryError(f"asset registration failed with HTTP {status}: {json.dumps(response, sort_keys=True)}")
+    uploads = {
+        entry.get("name"): entry.get("upload")
+        for entry in response.get("assets") or []
+        if isinstance(entry, dict)
+    }
+    for asset in assets:
+        upload = uploads.get(asset["name"])
+        if not isinstance(upload, dict) or not isinstance(upload.get("url"), str):
+            raise RegistryError(f"Registry returned no upload URL for {asset['name']}")
+        upload_file(upload["url"], upload.get("headers") or {}, assets_dir / asset["name"])
+
+    # Publishing copies every staged archive to the CDN before it answers.
+    status, response = request_json(
+        "POST",
+        f"{api_url.rstrip('/')}/publish",
+        {**payload, "release_id": release_id},
+        api_key=api_key,
+        timeout=300,
+    )
+    if status != 200:
+        raise RegistryError(f"publish failed with HTTP {status}: {json.dumps(response, sort_keys=True)}")
+    return {
+        "worker": worker,
+        "version": version,
+        "release_id": release_id,
+        "changed": response.get("changed") is not False,
+        "registry_response": response,
+    }
 
 
 def promotion_payload(version: str, current_latest: str | None) -> dict[str, str]:
@@ -251,30 +336,46 @@ def main() -> int:
         subparser.add_argument("--expected-latest-version", required=True)
         subparser.add_argument("--output", type=Path, required=True)
 
+    publish_parser = subparsers.add_parser("publish")
+    publish_parser.add_argument("--api-url", required=True)
+    publish_parser.add_argument("--payload", type=Path, required=True)
+    publish_parser.add_argument("--assets", type=Path, required=True)
+    publish_parser.add_argument("--assets-dir", type=Path, required=True)
+    publish_parser.add_argument("--output", type=Path, required=True)
+
     args = parser.parse_args()
     try:
-        if args.worker != WORKER_NAME:
-            raise RegistryError(f"this pipeline only promotes {WORKER_NAME}")
-        expected_latest = None if args.expected_latest_version == "none" else args.expected_latest_version
-        if args.command == "verify":
-            result = inspect_candidate(
-                args.api_url,
-                args.worker,
-                args.expected_next_version,
-                expected_latest,
-            )
-        else:
-            api_key = os.environ.get("WORKERS_REGISTRY_API_KEY", "")
-            if not api_key:
-                raise RegistryError("WORKERS_REGISTRY_API_KEY is required")
-            result = promote(
+        api_key = os.environ.get("WORKERS_REGISTRY_API_KEY", "")
+        if args.command != "verify" and not api_key:
+            raise RegistryError("WORKERS_REGISTRY_API_KEY is required")
+        if args.command == "publish":
+            result = publish(
                 args.api_url,
                 api_key,
-                args.worker,
-                args.version,
-                args.expected_next_version,
-                expected_latest,
+                json.loads(args.payload.read_text(encoding="utf-8")),
+                json.loads(args.assets.read_text(encoding="utf-8")),
+                args.assets_dir,
             )
+        elif args.worker != WORKER_NAME:
+            raise RegistryError(f"this pipeline only promotes {WORKER_NAME}")
+        else:
+            expected_latest = None if args.expected_latest_version == "none" else args.expected_latest_version
+            if args.command == "verify":
+                result = inspect_candidate(
+                    args.api_url,
+                    args.worker,
+                    args.expected_next_version,
+                    expected_latest,
+                )
+            else:
+                result = promote(
+                    args.api_url,
+                    api_key,
+                    args.worker,
+                    args.version,
+                    args.expected_next_version,
+                    expected_latest,
+                )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(result, sort_keys=True))

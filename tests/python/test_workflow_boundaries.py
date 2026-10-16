@@ -684,6 +684,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("promote-latest.yml", workflows)
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/release_worker.py build-payload", release)
+        # Binaries are hosted by the Registry's CDN, not linked to GitHub.
+        self.assertIn("scripts/promote_registry.py publish", release)
+        self.assertNotIn("$API_URL/publish", release)
         self.assertIn("scripts/promote_registry.py promote", release)
         self.assertNotIn("inputs.expected_latest_version", release)
         cut = (ROOT / ".github/workflows/cut-release.yml").read_text(encoding="utf-8")

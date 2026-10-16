@@ -204,7 +204,7 @@ jobs:
             --pattern 'harness-e2e-*.sha256' \
             --dir release-assets
           gh release download "$RELEASE_TAG" \
-            --pattern 'harness-e2e-x86_64-unknown-linux-gnu.tar.gz' \
+            --pattern 'harness-e2e-*.tar.gz' \
             --dir release-assets
           tar -xzf release-assets/harness-e2e-x86_64-unknown-linux-gnu.tar.gz \
             -C release-worker
@@ -348,40 +348,21 @@ jobs:
             --tag "$RELEASE_TAG" \
             --repo-url "$REPOSITORY_URL" \
             --interface worker-interface.json \
-            --checksums-dir release-assets \
-            --out registry-payload.json
-      - name: POST immutable release to Registry next
+            --assets-dir release-assets \
+            --out registry-payload.json \
+            --assets-out registry-assets.json
+      - name: Publish immutable release to Registry next, hosted on its CDN
         env:
+          WORKERS_REGISTRY_API_KEY: ${{ secrets.WORKERS_REGISTRY_API_KEY }}
           API_URL: https://api.workers.iii.dev
-          API_KEY: ${{ secrets.WORKERS_REGISTRY_API_KEY }}
-          WORKER: harness-e2e
-          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          if [[ -z "$API_KEY" ]]; then
-            echo "::error::WORKERS_REGISTRY_API_KEY is not configured"
-            exit 1
-          fi
-          http=$(curl -sS -o registry-response.json -w '%{http_code}' \
-            -H "X-API-Key: $API_KEY" \
-            -H 'Content-Type: application/json' \
-            -X POST "$API_URL/publish" \
-            --data-binary @registry-payload.json)
-          if [[ "$http" == '409' ]]; then
-            resolve_http=$(curl -sS -o registry-resolve.json -w '%{http_code}' \
-              -H 'Content-Type: application/json' \
-              -X POST "$API_URL/resolve" \
-              --data "$(jq -cn --arg worker "$WORKER" '{worker: $worker, version: "next"}')")
-            resolved=$(jq -r '.root.version // empty' registry-resolve.json)
-            if [[ "$resolve_http" != '200' || "$resolved" != "$VERSION" ]]; then
-              echo "::error::HTTP 409 was not an idempotent retry; next does not resolve to $VERSION"
-              exit 1
-            fi
-            echo "::notice::$WORKER@$VERSION already published on next"
-          elif [[ "$http" != '200' ]]; then
-            echo "::error::Registry publish failed with HTTP $http"
-            exit 1
-          fi
+          python3 scripts/promote_registry.py publish \
+            --api-url "$API_URL" \
+            --payload registry-payload.json \
+            --assets registry-assets.json \
+            --assets-dir release-assets \
+            --output registry-publish.json
       - name: Read the current Registry latest
         id: current_latest
         env:
