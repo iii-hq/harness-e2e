@@ -74,11 +74,19 @@ fn test_plan(command: TestPlanCommand) -> Result<()> {
         // suite (or states one), this prints exactly what it expands to at
         // this commit, digests included, and the workflow reports it back.
         TestPlanCommand::Materialize { suite } => {
-            serde_json::to_value(if suite.trim_start().starts_with('{') {
+            let snapshot = if suite.trim_start().starts_with('{') {
                 plan.materialize_suite(serde_json::from_str(&suite)?)?
             } else {
                 plan.materialize(&suite)?
-            })?
+            };
+            // Stderr, so the snapshot on stdout stays one JSON document.
+            for tag in snapshot.impact.iter().flat_map(|impact| &impact.uncovered) {
+                eprintln!(
+                    "warning: no selected test protects {} {}: {}",
+                    tag.dimension, tag.name, tag.reason
+                );
+            }
+            serde_json::to_value(snapshot)?
         }
     };
     println!("{}", serde_json::to_string(&value)?);

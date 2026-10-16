@@ -1533,6 +1533,9 @@ pub(super) fn dispatch_suite(
         repetitions: parameters.runs,
         technical_retries: parameters.technical_retries,
         lane: String::new(),
+        workers: Vec::new(),
+        areas: Vec::new(),
+        disciplines: Vec::new(),
     })?)
 }
 
