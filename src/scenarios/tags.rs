@@ -1,0 +1,279 @@
+//! What each scheduled test protects, in closed vocabularies: the iii workers,
+//! one product area and the kinds of software the subject writes. Tags select
+//! tests on demand (deploy impact, a workers PR, a manual run) and feed the
+//! coverage view; scheduled suites stay fixed lists. Like `protects`, tags stay
+//! out of `behavior_sha256`, so retagging never makes Release Control drop a
+//! test as a changed definition.
+//!
+//! A worker counts when the subject calls its functions (by prefix: `state::`
+//! is state, `shell::`/`coder::` is ide, the engine's built-in discovery,
+//! triggers, timers and configuration are engine) or when it hosts what the
+//! subject delivers (compose when the app runs under iii compose, ade when the
+//! deliverable is a Console page). What only the evaluator uses to measure (the
+//! browser behind screenshots, compose in cleanup) does not count. The harness
+//! is never a tag: every test exercises it, and a test with no worker protects
+//! the harness alone.
+
+use crate::scenarios::ScenarioId;
+
+macro_rules! vocabulary {
+    ($(#[$meta:meta])* $name:ident { $($variant:ident = $id:literal,)+ }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum $name {
+            $($variant,)+
+        }
+
+        impl $name {
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $id,)+
+                }
+            }
+        }
+    };
+}
+
+vocabulary! {
+    /// A product worker of the stack, named as in the Registry. `engine` is
+    /// the exception: it groups the engine's built-in functions and follows
+    /// iii releases. harness, harness-e2e, fp and provider-* are left out.
+    Worker {
+        Ade = "ade",
+        Auth = "auth",
+        Browser = "browser",
+        Canvas = "canvas",
+        Compose = "compose",
+        ContextManager = "context-manager",
+        Cron = "cron",
+        Database = "database",
+        Engine = "engine",
+        Http = "http",
+        Ide = "ide",
+        IiiDirectory = "iii-directory",
+        Judge = "judge",
+        LlmRouter = "llm-router",
+        Pubsub = "pubsub",
+        Queue = "queue",
+        RbacProxy = "rbac-proxy",
+        Secrets = "secrets",
+        SessionManager = "session-manager",
+        State = "state",
+        Storage = "storage",
+        Stream = "stream",
+    }
+}
+
+vocabulary! {
+    /// The product capability a test protects; exactly one per test, so a
+    /// report by capability never counts a test twice.
+    Area {
+        CoreLoop = "core-loop",
+        DataSafety = "data-safety",
+        ToolAdaptation = "tool-adaptation",
+        Scheduling = "scheduling",
+        Coding = "coding",
+        Coordination = "coordination",
+        SelfRepair = "self-repair",
+        LongContext = "long-context",
+        Security = "security",
+        AppBuilding = "app-building",
+        Verification = "verification",
+    }
+}
+
+vocabulary! {
+    /// The kind of software the subject delivers: a question about the model
+    /// and the agent, not about iii. `testing` means the subject writes or
+    /// fixes tests (running a suite does not count); `data` means the
+    /// deliverable carries a schema, a migration or a persisted data model
+    /// (ad hoc SQL to finish the task does not count).
+    Discipline {
+        Frontend = "frontend",
+        Backend = "backend",
+        Data = "data",
+        Infra = "infra",
+        Testing = "testing",
+    }
+}
+
+impl Area {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CoreLoop => "Basic agent loop",
+            Self::DataSafety => "Safe data changes",
+            Self::ToolAdaptation => "Adapting to changed tools",
+            Self::Scheduling => "Timers and resumption",
+            Self::Coding => "Code changes in a workspace",
+            Self::Coordination => "Agents working together",
+            Self::SelfRepair => "Fixing work from feedback",
+            Self::LongContext => "Long sessions",
+            Self::Security => "Resisting untrusted input",
+            Self::AppBuilding => "Building applications",
+            Self::Verification => "Verifying a change",
+        }
+    }
+}
+
+impl Discipline {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Frontend => "Frontend",
+            Self::Backend => "Backend",
+            Self::Data => "Data",
+            Self::Infra => "Infra",
+            Self::Testing => "Testing",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScenarioTags {
+    pub workers: &'static [Worker],
+    pub area: Area,
+    pub disciplines: &'static [Discipline],
+}
+
+impl ScenarioId {
+    /// The tags of a test some suite runs; `None` for the others. Values are
+    /// listed in declaration order.
+    pub fn tags(self) -> Option<ScenarioTags> {
+        use Area as A;
+        use Discipline as D;
+        use Worker as W;
+        let (workers, area, disciplines): (&'static [Worker], Area, &'static [Discipline]) =
+            match self {
+                Self::MinimalPath => (&[W::State], A::CoreLoop, &[]),
+                Self::PersistentState => (&[W::State], A::DataSafety, &[]),
+                Self::ToolContractRecovery => (&[W::Engine], A::ToolAdaptation, &[]),
+                Self::ShellCoderSandbox => (&[W::Ide], A::Coding, &[D::Backend]),
+                Self::TimerWake => (&[W::Engine, W::State], A::Scheduling, &[]),
+                Self::DatabaseMigrationRecovery => (&[W::Database], A::DataSafety, &[D::Data]),
+                Self::ContentionLedger => {
+                    (&[W::Database, W::Engine, W::State], A::Coordination, &[])
+                }
+                Self::ValidationSelfRepair => (&[W::Database, W::Engine], A::SelfRepair, &[]),
+                Self::ContextPressure => (&[], A::LongContext, &[]),
+                // state only holds the canary the evaluator reads: obeying the
+                // injected instruction is the failure, not a call to protect.
+                Self::PromptInjectionResilience => (&[], A::Security, &[]),
+                Self::RegistryImplementation => {
+                    (&[], A::Coding, &[D::Frontend, D::Backend, D::Testing])
+                }
+                Self::RegistryVerification => (&[], A::Verification, &[D::Testing]),
+                Self::TrendingTopicsBuild => (&[], A::AppBuilding, &[D::Frontend]),
+                Self::AlertmanagerRouteMatch => (&[W::Ide], A::Coding, &[D::Backend]),
+                Self::ChessEngineBuild => (
+                    &[W::Ade, W::Compose, W::Ide],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend],
+                ),
+                Self::FormFlowBuild | Self::StateMachineCanvasBuild => (
+                    &[W::Ade, W::Canvas, W::Compose, W::Ide],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend, D::Testing],
+                ),
+                Self::KanbanC1Foundation => (
+                    &[W::Compose, W::Engine],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend, D::Infra, D::Testing],
+                ),
+                Self::KanbanC2Persistence
+                | Self::KanbanC3Board
+                | Self::KanbanC4TicketFlow
+                | Self::KanbanC5EditMove
+                | Self::KanbanC6Discussion
+                | Self::KanbanC7Live => (
+                    &[W::Compose, W::Engine],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend, D::Testing],
+                ),
+                Self::LinklyTutorial => (
+                    &[
+                        W::Auth,
+                        W::Compose,
+                        W::Database,
+                        W::Engine,
+                        W::Http,
+                        W::Ide,
+                        W::Pubsub,
+                        W::Queue,
+                        W::State,
+                        W::Stream,
+                    ],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend, D::Data, D::Infra],
+                ),
+                _ => return None,
+            };
+        Some(ScenarioTags {
+            workers,
+            area,
+            disciplines,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    /// Every test some suite of the bundled plan runs.
+    fn scheduled() -> Vec<ScenarioId> {
+        let plan = crate::test_plan::embedded().unwrap();
+        let ids = plan
+            .suites
+            .iter()
+            .flat_map(|suite| {
+                suite
+                    .modules
+                    .iter()
+                    .flat_map(|module| {
+                        &plan
+                            .modules
+                            .iter()
+                            .find(|candidate| &candidate.id == module)
+                            .unwrap()
+                            .scenarios
+                    })
+                    .chain(&suite.scenarios)
+            })
+            .collect::<BTreeSet<_>>();
+        ids.into_iter().map(|id| id.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn every_scheduled_test_is_tagged_in_order() {
+        for id in scheduled() {
+            let tags = id
+                .tags()
+                .unwrap_or_else(|| panic!("{id} runs in a suite and has no tags"));
+            assert!(tags.workers.is_sorted_by(|a, b| a < b), "{id} workers");
+            assert!(
+                tags.disciplines.is_sorted_by(|a, b| a < b),
+                "{id} disciplines"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_harness_only_tests_have_no_worker() {
+        let harness_only = scheduled()
+            .into_iter()
+            .filter(|id| id.tags().unwrap().workers.is_empty())
+            .map(ScenarioId::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            harness_only,
+            BTreeSet::from([
+                "context_pressure",
+                "prompt_injection_resilience",
+                "registry_implementation",
+                "registry_verification",
+                "trending_topics_build",
+            ])
+        );
+    }
+}

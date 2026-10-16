@@ -55,6 +55,7 @@ pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
+pub mod tags;
 pub mod timer_wake;
 pub mod todo_worker;
 pub mod tool_contract_recovery;
