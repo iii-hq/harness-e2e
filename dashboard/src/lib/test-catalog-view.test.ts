@@ -7,6 +7,7 @@ import {
   catalogRowView,
   catalogSegments,
   catalogSummary,
+  catalogTagOptions,
   comparisonUtility,
   comparisonWarnings,
   filterCatalog,
@@ -331,6 +332,62 @@ describe('tests catalog', () => {
     ])
   })
 
+  it('tags each test and filters by one tag', () => {
+    const tagged = (
+      id: string,
+      tags: Partial<NonNullable<TestCatalogRow['spec']>>,
+    ) =>
+      catalogRowView(
+        test(id, { spec: current.spec && { ...current.spec, ...tags } }),
+        [],
+        now,
+      )
+    const rows = [
+      tagged('minimal_path', { area: 'core-loop', workers: ['state'] }),
+      tagged('context_pressure', { area: 'long-context' }),
+      tagged('kanban_c1_foundation', {
+        area: 'app-building',
+        workers: ['compose', 'engine'],
+        disciplines: ['frontend', 'infra'],
+      }),
+      views[1],
+    ]
+    expect(rows[2].tags.map((tag) => tag.label)).toEqual([
+      'Building applications',
+      'compose',
+      'engine',
+      'Frontend',
+      'Infra',
+    ])
+    // A tagged test with no worker protects the harness alone.
+    expect(rows[1].tags.map((tag) => tag.key)).toEqual([
+      'area:long-context',
+      'worker:harness',
+    ])
+    // An older harness states no tags.
+    expect(rows[3].tags).toEqual([])
+    const ids = (tag: string) =>
+      filterCatalog(rows, { ...CATALOG_DEFAULT_FILTERS, tag }).map(
+        (view) => view.id,
+      )
+    expect(ids('worker:state')).toEqual(['minimal_path'])
+    expect(ids('worker:harness')).toEqual(['context_pressure'])
+    expect(ids('discipline:infra')).toEqual(['kanban_c1_foundation'])
+    expect(
+      catalogTagOptions(rows).map((group) => [
+        group.label,
+        group.tags.map((tag) => `${tag.label} ${tag.count}`),
+      ]),
+    ).toEqual([
+      [
+        'Area',
+        ['Basic agent loop 1', 'Building applications 1', 'Long sessions 1'],
+      ],
+      ['Worker', ['compose 1', 'engine 1', 'harness only 1', 'state 1']],
+      ['Discipline', ['Frontend 1', 'Infra 1']],
+    ])
+  })
+
   it('groups by family, Standalone last, noting how much of it is current', () => {
     const groups = groupCatalog(views, views)
     expect(
@@ -355,16 +412,19 @@ describe('tests catalog', () => {
 
   it('reads the filters from the hash and writes back only what differs', () => {
     const filters = catalogFiltersFromParams(
-      new URLSearchParams('q=chess&filter=changed&suite=pr&sort=runs&x=1'),
+      new URLSearchParams(
+        'q=chess&filter=changed&suite=pr&tag=worker:state&sort=runs&x=1',
+      ),
     )
     expect(filters).toEqual({
       query: 'chess',
       filter: 'changed',
       suite: 'pr',
+      tag: 'worker:state',
       sort: 'runs',
     })
     expect(catalogFiltersToParams(filters).toString()).toBe(
-      'q=chess&filter=changed&suite=pr&sort=runs',
+      'q=chess&filter=changed&suite=pr&tag=worker%3Astate&sort=runs',
     )
     expect(
       catalogFiltersFromParams(new URLSearchParams('filter=toString&sort=x')),

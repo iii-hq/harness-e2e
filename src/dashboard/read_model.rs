@@ -385,6 +385,8 @@ pub(super) struct TestSpecProjection {
     /// What the test protects and what breaks when it fails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protects: Option<String>,
+    #[serde(flatten)]
+    pub tags: crate::scenarios::tags::ScenarioTags,
     /// The prompt as materialized for a representative run: run-scoped paths
     /// resolve against a catalog namespace, never a real execution.
     pub prompt: String,
@@ -1293,6 +1295,7 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
         title: id.title().map(str::to_string),
         summary: id.summary().map(str::to_string),
         protects: id.protects().map(str::to_string),
+        tags: id.tags(),
         prompt: spec.prompt.clone(),
         criteria: spec
             .criteria

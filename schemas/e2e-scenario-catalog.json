@@ -26,6 +26,23 @@
     }
   },
   "definitions": {
+    "Area": {
+      "description": "The product capability a test protects; exactly one per test, so a report by capability never counts a test twice.",
+      "type": "string",
+      "enum": [
+        "core-loop",
+        "data-safety",
+        "tool-adaptation",
+        "scheduling",
+        "coding",
+        "coordination",
+        "self-repair",
+        "long-context",
+        "security",
+        "app-building",
+        "verification"
+      ]
+    },
     "ArtifactExpectation": {
       "type": "object",
       "required": [
@@ -123,6 +140,17 @@
           "type": "boolean"
         }
       }
+    },
+    "Discipline": {
+      "description": "The kind of software the subject delivers: a question about the model and the agent, not about iii. `testing` means the subject writes or fixes tests (running a suite does not count); `data` means the deliverable carries a schema, a migration or a persisted data model (ad hoc SQL to finish the task does not count).",
+      "type": "string",
+      "enum": [
+        "frontend",
+        "backend",
+        "data",
+        "infra",
+        "testing"
+      ]
     },
     "ExecutionPolicy": {
       "type": "object",
@@ -294,6 +322,16 @@
         "seed"
       ],
       "properties": {
+        "area": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Area"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "behavior_sha256": {
           "type": "string"
         },
@@ -308,6 +346,12 @@
         },
         "deliverable_contract": {
           "$ref": "#/definitions/DeliverableContract"
+        },
+        "disciplines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Discipline"
+          }
         },
         "inputs_sha256": {
           "type": "string"
@@ -346,6 +390,13 @@
             "string",
             "null"
           ]
+        },
+        "workers": {
+          "description": "The iii workers the test protects; empty when it protects the harness alone.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Worker"
+          }
         }
       }
     },
@@ -460,6 +511,34 @@
       "enum": [
         "none",
         "read_only"
+      ]
+    },
+    "Worker": {
+      "description": "A product worker of the stack, named as in the Registry. `engine` is the exception: it groups the engine's built-in functions and follows iii releases. harness, harness-e2e, fp and provider-* are left out.",
+      "type": "string",
+      "enum": [
+        "ade",
+        "auth",
+        "browser",
+        "canvas",
+        "compose",
+        "context-manager",
+        "cron",
+        "database",
+        "engine",
+        "http",
+        "ide",
+        "iii-directory",
+        "judge",
+        "llm-router",
+        "pubsub",
+        "queue",
+        "rbac-proxy",
+        "secrets",
+        "session-manager",
+        "state",
+        "storage",
+        "stream"
       ]
     },
     "WorkflowResourceEnvelope": {

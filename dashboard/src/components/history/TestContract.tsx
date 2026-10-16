@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from 'react'
 import { plural } from '@/lib/format'
 import type { TestSpec } from '@/lib/test-catalog'
+import { specTags } from '@/lib/test-catalog-view'
 import { copyText } from '@/lib/test-history'
 import '@/pages/test-history.css'
 
@@ -35,6 +36,7 @@ export function TestCard({ spec, testId }: { spec: TestSpec; testId: string }) {
     ['Task', spec.summary],
     ['Completed when', criteriaList(gates)],
     [gates.length ? 'Score also counts' : 'Score counts', criteriaList(others)],
+    ['Tags', tagList(spec)],
   ]
   return (
     <section className="th-brief" aria-label="What this test checks">
@@ -51,6 +53,24 @@ export function TestCard({ spec, testId }: { spec: TestSpec; testId: string }) {
       <p className="th-mono th-faint">{testId}</p>
     </section>
   )
+}
+
+/** The area first, then the workers in mono, then the disciplines. */
+function tagList(spec: TestSpec) {
+  const tags = specTags(spec)
+  return tags.length ? (
+    <span className="th-tags">
+      {tags.map((tag) => (
+        <span
+          key={tag.key}
+          className={tag.dimension === 'worker' ? 'th-tag th-mono' : 'th-tag'}
+          data-tone={tag.dimension === 'area' ? undefined : 'plain'}
+        >
+          {tag.label}
+        </span>
+      ))}
+    </span>
+  ) : null
 }
 
 /** A criterion without a label (an older harness) shows its question. */

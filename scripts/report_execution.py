@@ -84,6 +84,9 @@ def runs_from_results(results: dict[str, Any], offset: int = 0) -> list[dict[str
             continue
         case = obj(scenario.get("case"))
         seed = case.get("seed")
+        # A tagged test always states its area; it leaves out an empty worker
+        # or discipline list, which reads as "none" (the harness alone).
+        area = scenario.get("area")
         for repetition, run in enumerate(scenario.get("runs") or []):
             if not isinstance(run, dict):
                 continue
@@ -94,6 +97,9 @@ def runs_from_results(results: dict[str, Any], offset: int = 0) -> list[dict[str
                         "scenario_title": scenario.get("title"),
                         "scenario_summary": scenario.get("summary"),
                         "scenario_protects": scenario.get("protects"),
+                        "scenario_workers": scenario.get("workers", []) if area else None,
+                        "scenario_area": area,
+                        "scenario_disciplines": scenario.get("disciplines", []) if area else None,
                         "behavior_sha256": scenario.get("behavior_sha256"),
                         "case_id": scenario.get("case_id"),
                         "seed": None if seed is None else str(seed),

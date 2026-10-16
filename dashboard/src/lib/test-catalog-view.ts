@@ -1,6 +1,12 @@
 import { formatDateTime, formatDay, NOT_REPORTED, plural } from '@/lib/format'
 import { type ResultState, runResultState } from '@/lib/result-status'
-import type { TestCatalogRow, TestVersionResult } from '@/lib/test-catalog'
+import {
+  AREA_LABELS,
+  DISCIPLINE_LABELS,
+  type TestCatalogRow,
+  type TestSpec,
+  type TestVersionResult,
+} from '@/lib/test-catalog'
 
 export type ResultFilter = 'all' | 'passed' | 'issues' | 'missing' | 'changed'
 
@@ -181,6 +187,45 @@ export function catalogKind(row: TestCatalogRow): CatalogKind {
   return row.runs_total > 0 ? 'changed' : 'never'
 }
 
+export type TestTag = {
+  /** `area:coding`, `worker:state`, `discipline:frontend`: the filter value. */
+  key: string
+  dimension: 'area' | 'worker' | 'discipline'
+  label: string
+}
+
+/** What a test protects: its area, its workers (`harness only` when it
+ *  names none) and its disciplines. Empty for an untagged test. */
+export function specTags(spec: TestSpec | null | undefined): TestTag[] {
+  if (!spec?.area) return []
+  const workers = spec.workers ?? []
+  return [
+    {
+      key: `area:${spec.area}`,
+      dimension: 'area',
+      label: AREA_LABELS[spec.area] ?? spec.area,
+    },
+    ...(workers.length
+      ? workers.map((worker) => ({
+          key: `worker:${worker}`,
+          dimension: 'worker' as const,
+          label: worker,
+        }))
+      : [
+          {
+            key: 'worker:harness',
+            dimension: 'worker' as const,
+            label: 'harness only',
+          },
+        ]),
+    ...(spec.disciplines ?? []).map((discipline) => ({
+      key: `discipline:${discipline}`,
+      dimension: 'discipline' as const,
+      label: DISCIPLINE_LABELS[discipline] ?? discipline,
+    })),
+  ]
+}
+
 /** Retired tests show only under All. */
 export type CatalogFilter = 'all' | 'current' | 'changed' | 'never'
 export type CatalogSort = 'name' | 'last_run' | 'runs'
@@ -190,6 +235,8 @@ export type CatalogFilters = {
   filter: CatalogFilter
   /** `all` or a suite id. */
   suite: string
+  /** `all` or a tag key (`worker:state`). */
+  tag: string
   sort: CatalogSort
 }
 
@@ -197,6 +244,7 @@ export const CATALOG_DEFAULT_FILTERS: CatalogFilters = {
   query: '',
   filter: 'all',
   suite: 'all',
+  tag: 'all',
   sort: 'name',
 }
 
@@ -217,6 +265,7 @@ export function catalogFiltersFromParams(
     query: params.get('q') ?? '',
     filter: FILTERS.find((entry) => entry === filter) ?? 'all',
     suite: params.get('suite') || 'all',
+    tag: params.get('tag') || 'all',
     sort: CATALOG_SORTS.find((entry) => entry.value === sort)?.value ?? 'name',
   }
 }
@@ -228,6 +277,7 @@ export function catalogFiltersToParams(
   if (filters.query.trim()) params.set('q', filters.query.trim())
   if (filters.filter !== 'all') params.set('filter', filters.filter)
   if (filters.suite !== 'all') params.set('suite', filters.suite)
+  if (filters.tag !== 'all') params.set('tag', filters.tag)
   if (filters.sort !== 'name') params.set('sort', filters.sort)
   return params
 }
@@ -258,6 +308,7 @@ export type CatalogRowView = {
   runsTitle: string
   lastAt: string | null
   suites: CatalogSuite[]
+  tags: TestTag[]
   search: string
 }
 
@@ -323,6 +374,7 @@ export function catalogRowView(
     runsTitle: `${row.runs_current} on the current definition · ${row.runs_total} retained in all`,
     lastAt: last?.at ?? null,
     suites,
+    tags: specTags(row.spec),
     search: [
       row.spec?.title,
       row.test_id,
@@ -347,6 +399,8 @@ export function filterCatalog(
       (filters.filter === 'all' || view.kind === filters.filter) &&
       (filters.suite === 'all' ||
         view.suites.some((suite) => suite.id === filters.suite)) &&
+      (filters.tag === 'all' ||
+        view.tags.some((tag) => tag.key === filters.tag)) &&
       (!query || view.search.includes(query)),
   )
   const byName = (a: CatalogRowView, b: CatalogRowView) =>
@@ -415,6 +469,28 @@ export function groupCatalog(
     rows: views.filter(single),
   })
   return groups.filter((group) => group.rows.length > 0)
+}
+
+const TAG_GROUPS = [
+  { dimension: 'area', label: 'Area' },
+  { dimension: 'worker', label: 'Worker' },
+  { dimension: 'discipline', label: 'Discipline' },
+] as const
+
+/** The tag filter's options: every tag a listed test carries, grouped by
+ *  dimension and sorted by name, each with how many tests carry it. */
+export function catalogTagOptions(views: CatalogRowView[]) {
+  const tags = new Map<string, TestTag & { count: number }>()
+  for (const tag of views.flatMap((view) => view.tags)) {
+    const seen = tags.get(tag.key)
+    tags.set(tag.key, { ...tag, count: (seen?.count ?? 0) + 1 })
+  }
+  return TAG_GROUPS.map((group) => ({
+    label: group.label,
+    tags: [...tags.values()]
+      .filter((tag) => tag.dimension === group.dimension)
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  })).filter((group) => group.tags.length > 0)
 }
 
 /** The lifecycle filter: All, Current, Definition changed, Never run, each

@@ -62,6 +62,7 @@ import {
   catalogRowView,
   catalogSegments,
   catalogSummary,
+  catalogTagOptions,
   filterCatalog,
   groupCatalog,
   suitesByTest,
@@ -567,6 +568,7 @@ export function TestsCatalogPage() {
     [rows, bySuite],
   )
   const shown = useMemo(() => filterCatalog(views, filters), [views, filters])
+  const tagOptions = useMemo(() => catalogTagOptions(views), [views])
 
   // Back from a test's history: its row, in view and marked for a moment.
   useEffect(() => {
@@ -701,6 +703,29 @@ export function TestsCatalogPage() {
             {filters.suite !== 'all' &&
             !suiteOptions.some((suite) => suite.id === filters.suite) ? (
               <option value={filters.suite}>{filters.suite}</option>
+            ) : null}
+          </Select>
+          <Select
+            aria-label="Filter by tag"
+            className="ex-sort"
+            value={filters.tag}
+            onChange={(event) => setFilter('tag', event.target.value)}
+          >
+            <option value="all">All tags</option>
+            {tagOptions.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.tags.map((tag) => (
+                  <option key={tag.key} value={tag.key}>
+                    {tag.label} ({tag.count})
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+            {filters.tag !== 'all' &&
+            !tagOptions.some((group) =>
+              group.tags.some((tag) => tag.key === filters.tag),
+            ) ? (
+              <option value={filters.tag}>{filters.tag}</option>
             ) : null}
           </Select>
           <Select

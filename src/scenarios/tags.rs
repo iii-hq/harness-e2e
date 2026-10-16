@@ -14,17 +14,24 @@
 //! is never a tag: every test exercises it, and a test with no worker protects
 //! the harness alone.
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::scenarios::ScenarioId;
 
 macro_rules! vocabulary {
     ($(#[$meta:meta])* $name:ident { $($variant:ident = $id:literal,)+ }) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+        )]
         pub enum $name {
-            $($variant,)+
+            $(#[serde(rename = $id)] $variant,)+
         }
 
         impl $name {
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $id,)+
@@ -127,17 +134,26 @@ impl Discipline {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The tags of one test as results, the catalog and the Console carry them.
+// Every field is optional on the wire: an older result has none, and an
+// untagged test has no area. A plain comment, not a doc comment: schemars
+// would copy it onto every struct that flattens this one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ScenarioTags {
-    pub workers: &'static [Worker],
-    pub area: Area,
-    pub disciplines: &'static [Discipline],
+    /// The iii workers the test protects; empty when it protects the harness
+    /// alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<Worker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<Area>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disciplines: Vec<Discipline>,
 }
 
 impl ScenarioId {
-    /// The tags of a test some suite runs; `None` for the others. Values are
+    /// The tags of a test some suite runs; empty for the others. Values are
     /// listed in declaration order.
-    pub fn tags(self) -> Option<ScenarioTags> {
+    pub fn tags(self) -> ScenarioTags {
         use Area as A;
         use Discipline as D;
         use Worker as W;
@@ -204,13 +220,13 @@ impl ScenarioId {
                     A::AppBuilding,
                     &[D::Frontend, D::Backend, D::Data, D::Infra],
                 ),
-                _ => return None,
+                _ => return ScenarioTags::default(),
             };
-        Some(ScenarioTags {
-            workers,
-            area,
-            disciplines,
-        })
+        ScenarioTags {
+            workers: workers.to_vec(),
+            area: Some(area),
+            disciplines: disciplines.to_vec(),
+        }
     }
 }
 
@@ -220,36 +236,17 @@ mod tests {
 
     use super::*;
 
-    /// Every test some suite of the bundled plan runs.
     fn scheduled() -> Vec<ScenarioId> {
         let plan = crate::test_plan::embedded().unwrap();
-        let ids = plan
-            .suites
-            .iter()
-            .flat_map(|suite| {
-                suite
-                    .modules
-                    .iter()
-                    .flat_map(|module| {
-                        &plan
-                            .modules
-                            .iter()
-                            .find(|candidate| &candidate.id == module)
-                            .unwrap()
-                            .scenarios
-                    })
-                    .chain(&suite.scenarios)
-            })
-            .collect::<BTreeSet<_>>();
-        ids.into_iter().map(|id| id.parse().unwrap()).collect()
+        let ids = plan.scheduled().unwrap();
+        ids.iter().map(|id| id.parse().unwrap()).collect()
     }
 
     #[test]
     fn every_scheduled_test_is_tagged_in_order() {
         for id in scheduled() {
-            let tags = id
-                .tags()
-                .unwrap_or_else(|| panic!("{id} runs in a suite and has no tags"));
+            let tags = id.tags();
+            assert!(tags.area.is_some(), "{id} runs in a suite and has no area");
             assert!(tags.workers.is_sorted_by(|a, b| a < b), "{id} workers");
             assert!(
                 tags.disciplines.is_sorted_by(|a, b| a < b),
@@ -262,7 +259,7 @@ mod tests {
     fn only_the_harness_only_tests_have_no_worker() {
         let harness_only = scheduled()
             .into_iter()
-            .filter(|id| id.tags().unwrap().workers.is_empty())
+            .filter(|id| id.tags().workers.is_empty())
             .map(ScenarioId::as_str)
             .collect::<BTreeSet<_>>();
         assert_eq!(

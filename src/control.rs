@@ -308,6 +308,8 @@ pub struct ScenarioDescriptor {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protects: Option<String>,
+    #[serde(flatten)]
+    pub tags: crate::scenarios::tags::ScenarioTags,
     pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
@@ -2034,6 +2036,7 @@ fn materialize_scenario_descriptor(
         title: scenario_id.title().map(str::to_owned),
         summary: scenario_id.summary().map(str::to_owned),
         protects: scenario_id.protects().map(str::to_owned),
+        tags: scenario_id.tags(),
         behavior_sha256: materialized.case.behavior_sha256.clone(),
         case_id: materialized.case.case_id,
         seed: materialized.case.seed,

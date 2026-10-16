@@ -1304,6 +1304,9 @@ pub struct E2eScenarioReport {
     /// What the test protects and what breaks when it fails.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protects: Option<String>,
+    /// Workers, area and disciplines; presentation like `protects`.
+    #[serde(flatten)]
+    pub tags: crate::scenarios::tags::ScenarioTags,
     #[serde(default)]
     pub case_id: String,
     /// Digest of the definition the case was materialized from. Absent only
@@ -1463,6 +1466,7 @@ impl E2eScenarioReport {
             title: metadata.and_then(ScenarioId::title).map(str::to_owned),
             summary: metadata.and_then(ScenarioId::summary).map(str::to_owned),
             protects: metadata.and_then(ScenarioId::protects).map(str::to_owned),
+            tags: metadata.map(ScenarioId::tags).unwrap_or_default(),
             behavior_sha256,
             case,
             deferral_reason: None,
@@ -1507,6 +1511,7 @@ impl E2eScenarioReport {
         let title = self.title.take();
         let summary = self.summary.take();
         let protects = self.protects.take();
+        let tags = std::mem::take(&mut self.tags);
         let case = self.case.take();
         let runs = std::mem::take(&mut self.runs);
         let deferral_reason = self.deferral_reason.take();
@@ -1522,6 +1527,7 @@ impl E2eScenarioReport {
         self.title = title;
         self.summary = summary;
         self.protects = protects;
+        self.tags = tags;
         self.deferral_reason = deferral_reason;
         Ok(())
     }
@@ -3540,11 +3546,17 @@ mod tests {
             assert!(text.is_some(), "{field}");
             assert_eq!(written[field].as_str(), text, "{field}");
         }
+        assert_eq!(written["workers"], serde_json::json!(["state"]));
+        assert_eq!(written["area"], "data-safety");
+        assert!(written.get("disciplines").is_none());
 
         let mut older = written;
-        older.as_object_mut().unwrap().remove("protects");
+        for field in ["protects", "workers", "area"] {
+            older.as_object_mut().unwrap().remove(field);
+        }
         let older: E2eScenarioReport = serde_json::from_value(older).unwrap();
         assert_eq!(older.protects, None);
+        assert_eq!(older.tags, Default::default());
     }
 
     #[test]
