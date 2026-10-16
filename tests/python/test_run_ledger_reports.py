@@ -288,10 +288,44 @@ class ReportPayloadTests(unittest.TestCase):
 
         runs, source = report_execution.collect_runs(artifacts)
         self.assertEqual(source, "journal")
-        self.assertEqual(runs[0]["slot_id"], "slot-2420557511cf4c76c9a21421")
+        # The journal's slot leaves the round out; Release Control derives
+        # the slot from scenario, seed and repetition instead.
+        self.assertNotIn("slot_id", runs[0])
+        self.assertEqual(runs[0]["repetition"], 0)
         self.assertEqual(runs[0]["scenario_id"], "tool_contract_recovery")
         self.assertEqual(runs[0]["seed"], "4404")
         self.assertEqual(runs[0]["run"]["status"], "failed")
+        # In the third round the same journal is the third repetition.
+        runs, _ = report_execution.collect_runs(artifacts, offset=2)
+        self.assertEqual(runs[0]["repetition"], 2)
+
+    def test_each_round_of_a_profile_is_its_own_repetition(self):
+        # A profile of 3 repetitions is 3 identical campaigns of runs=1
+        # groups; each group's runner numbers its one run 0.
+        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
+        snapshot["profile"]["repetitions"] = 3
+        campaign = snapshot["campaigns"][0]
+        snapshot["campaigns"] = [{**campaign, "campaign_id": f"regression-r0{n}"} for n in (1, 2, 3)]
+        self.snapshot.write_text(json.dumps(snapshot))
+        artifacts = self.tmp / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "results.json").write_text(json.dumps({"scenarios": [{
+            "scenario_id": "minimal_path", "case_id": "minimal_path@1",
+            "case": {"seed": 7}, "runs": [{"run_id": "run-a"}],
+        }]}))
+
+        def repetitions(campaign_id):
+            payload = report_execution.shard_payload(Args(
+                artifacts=artifacts, campaign_id=campaign_id, group_id="case-minimal-path",
+                outcome="success", plan=self.plan, profile_snapshot=self.snapshot,
+            ))
+            return [run["repetition"] for run in payload["runs"]]
+
+        self.assertEqual(
+            [repetitions(f"regression-r0{n}") for n in (1, 2, 3)], [[0], [1], [2]]
+        )
+        # A campaign the snapshot does not name starts at the first round.
+        self.assertEqual(repetitions("adhoc"), [0])
 
     def test_a_group_that_produced_nothing_still_reports_a_shard(self):
         artifacts = self.tmp / "empty"

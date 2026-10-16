@@ -27,7 +27,6 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from typing import Any
 
-from result_contract import RESULT_CONTRACT_SHA256
 
 CAMPAIGN_KIND = "harness-e2e-campaign"
 ROOT_FIELDS = {
@@ -87,13 +86,33 @@ DEFAULT_E2E_BIN = pathlib.Path(os.environ.get("HARNESS_E2E_BIN", "target/release
 
 
 @cache
+def runner_catalog(binary: pathlib.Path = DEFAULT_E2E_BIN) -> dict:
+    """The campaign catalog of the native runner that executes the suite."""
+    try:
+        catalog = json.loads(subprocess.check_output([str(binary), "test-plan", "catalog"], text=True))
+        if not isinstance(catalog.get("scenarios"), dict):
+            raise ValueError("it names no scenarios")
+        return catalog
+    except (OSError, subprocess.CalledProcessError, ValueError, AttributeError) as error:
+        raise CampaignError(f"cannot read native campaign catalog from {binary}: {error}") from error
+
+
 def scenario_catalog(binary: pathlib.Path = DEFAULT_E2E_BIN) -> dict:
     """Read admission rules from the same native runner that executes the suite."""
-    try:
-        result = subprocess.check_output([str(binary), "test-plan", "catalog"], text=True)
-        return json.loads(result)["scenarios"]
-    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
-        raise CampaignError(f"cannot read native campaign catalog from {binary}: {error}") from error
+    return runner_catalog(binary)["scenarios"]
+
+
+def runner_result_contract(binary: pathlib.Path = DEFAULT_E2E_BIN) -> str | None:
+    """The result contract the runner writes, as it states it.
+
+    The finalizer runs this checkout's scripts but aggregates with the runner
+    the stack locked, which may be another revision: only that runner can say
+    which contract its groups were written under. One that does not state it
+    (0.18.0 and before) is not compared against this checkout's, which is not
+    the one it ran.
+    """
+    value = runner_catalog(binary).get("result_contract_sha256")
+    return value if isinstance(value, str) and value else None
 
 
 def _warn(message: str) -> None:
@@ -417,7 +436,7 @@ def _optional_nonnegative_number(value: Any, label: str) -> float | None:
 
 
 def _regular_group_measurement(
-    group: CampaignGroup, output: pathlib.Path
+    group: CampaignGroup, output: pathlib.Path, result_contract: str | None = None
 ) -> dict[str, Any]:
     results_path = output / "results.json"
     if not results_path.is_file():
@@ -440,10 +459,10 @@ def _regular_group_measurement(
         report.get("result_contract_sha256"),
         f"{results_path}.result_contract_sha256",
     )
-    if result_contract_sha256 != RESULT_CONTRACT_SHA256:
+    if result_contract is not None and result_contract_sha256 != result_contract:
         warnings.append(
             f"{results_path}: written under result contract {result_contract_sha256}, "
-            f"this campaign expects {RESULT_CONTRACT_SHA256}"
+            f"the campaign's runner writes {result_contract}"
         )
     for warning in warnings:
         _warn(warning)
@@ -567,7 +586,9 @@ def _regular_group_measurement(
 
 
 def score_campaign(
-    campaign: Campaign, group_results: Sequence[dict[str, Any]]
+    campaign: Campaign,
+    group_results: Sequence[dict[str, Any]],
+    result_contract: str | None = None,
 ) -> dict[str, Any]:
     by_id = {result["group_id"]: result for result in group_results}
     scored_groups = 0
@@ -585,7 +606,7 @@ def score_campaign(
     for group in campaign.groups:
         result = by_id[group.id]
         output = pathlib.Path(result["output"])
-        measurement = _regular_group_measurement(group, output)
+        measurement = _regular_group_measurement(group, output, result_contract)
         result.update(measurement)
         score = measurement["score"]
         if isinstance(score, (int, float)):
@@ -678,6 +699,7 @@ def execute_campaign(
     provider: str | None = None,
     url: str | None = None,
     progress_interval_seconds: int | None = None,
+    result_contract: str | None = None,
     environ: Mapping[str, str] | None = None,
     run_process: Callable[..., Any] = subprocess.run,
     monotonic: Callable[[], float] = time.monotonic,
@@ -773,7 +795,7 @@ def execute_campaign(
             result["error"] = error_message
         group_results.append(result)
 
-    scoring = score_campaign(campaign, group_results)
+    scoring = score_campaign(campaign, group_results, result_contract)
     process_exit_code = (
         0
         if dry_run or advisory or (
@@ -803,6 +825,7 @@ def aggregate_existing_campaign(
     *,
     group_root: pathlib.Path,
     execution_id: str,
+    result_contract: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate group artifacts produced by isolated workflow jobs."""
     if not SAFE_EXECUTION_ID.fullmatch(execution_id):
@@ -829,7 +852,7 @@ def aggregate_existing_campaign(
                 "duration_ms": None,
             }
         )
-    scoring = score_campaign(campaign, group_results)
+    scoring = score_campaign(campaign, group_results, result_contract)
     return {
         "kind": "harness-e2e-campaign-summary",
 
@@ -1044,6 +1067,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.progress_interval_seconds is not None and args.progress_interval_seconds < 0:
             raise CampaignError("progress_interval_seconds must be non-negative")
         execution_id = args.execution_id or uuid.uuid4().hex
+        result_contract = runner_result_contract(args.e2e_bin)
         advisory = (
             True
             if args.advisory
@@ -1058,6 +1082,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 campaign,
                 group_root=args.aggregate_existing_root,
                 execution_id=execution_id,
+                result_contract=result_contract,
             )
         else:
             summary = execute_campaign(
@@ -1071,6 +1096,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 provider=args.provider,
                 url=args.url,
                 progress_interval_seconds=args.progress_interval_seconds,
+                result_contract=result_contract,
             )
         summary["manifest_sha256"] = _canonical_sha256(
             json.loads(args.manifest.read_text(encoding="utf-8"))

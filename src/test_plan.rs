@@ -395,9 +395,13 @@ impl MasterPlan {
                 json!({"execution_kind": execution_kind(&case.scenario_id)}),
             );
         }
-        Ok(
-            json!({"schema": "harness-e2e-campaign-catalog", "definition_sha256": self.digest()?, "scenarios": scenarios}),
-        )
+        // The finalizer runs the checkout's scripts with this runner: the
+        // contract it writes Results under is stated here, not assumed.
+        Ok(json!({
+            "schema": "harness-e2e-campaign-catalog", "definition_sha256": self.digest()?,
+            "result_contract_sha256": crate::report::RESULT_CONTRACT_SHA256,
+            "scenarios": scenarios,
+        }))
     }
 }
 
