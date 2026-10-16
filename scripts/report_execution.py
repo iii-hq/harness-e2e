@@ -55,7 +55,26 @@ def prune(value: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def runs_from_results(results: dict[str, Any]) -> list[dict[str, Any]]:
+def round_offset(snapshot: dict[str, Any], campaign_id: str | None, group_id: str | None) -> int:
+    """How many repetitions of this group came before this campaign.
+
+    A profile of n repetitions materializes n identical campaigns, one per
+    round, and each group runs as a fresh invocation that numbers its runs
+    from 0. Only here do the rounds meet, so the round is counted here: the
+    campaign's place in the snapshot times the group's runs. Round 1 keeps
+    the repetitions, and so the slots, it always had.
+    """
+    for index, campaign in enumerate(snapshot.get("campaigns") or []):
+        campaign = obj(campaign)
+        if campaign.get("campaign_id") != campaign_id:
+            continue
+        group = next((obj(g) for g in campaign.get("groups") or [] if obj(g).get("id") == group_id), {})
+        runs = group.get("runs")
+        return index * (runs if isinstance(runs, int) and runs > 0 else 1)
+    return 0
+
+
+def runs_from_results(results: dict[str, Any], offset: int = 0) -> list[dict[str, Any]]:
     """One reported run per ``scenarios[].runs[]`` entry of a runner report."""
     runs = []
     for scenario in results.get("scenarios") or []:
@@ -78,7 +97,7 @@ def runs_from_results(results: dict[str, Any]) -> list[dict[str, Any]]:
                         "behavior_sha256": scenario.get("behavior_sha256"),
                         "case_id": scenario.get("case_id"),
                         "seed": None if seed is None else str(seed),
-                        "repetition": repetition,
+                        "repetition": offset + repetition,
                         "definition_sha256": case.get("inputs_sha256"),
                         "run": run,
                     }
@@ -99,8 +118,13 @@ def journal_slots(artifacts: Path) -> dict[str, dict[str, Any]]:
     return slots
 
 
-def runs_from_journal(artifacts: Path) -> list[dict[str, Any]]:
-    """Every run the journal committed, for a group that never wrote results."""
+def runs_from_journal(artifacts: Path, offset: int = 0) -> list[dict[str, Any]]:
+    """Every run the journal committed, for a group that never wrote results.
+
+    The journal's slot id leaves the round out (see ``round_offset``), so it is
+    not sent: Release Control derives the slot from the scenario, the seed and
+    the repetition, the round counted in.
+    """
     slots = journal_slots(artifacts)
     runs = []
     for checkpoint_path in sorted((artifacts / "journal" / "runs").glob("*/*.json")):
@@ -109,6 +133,7 @@ def runs_from_journal(artifacts: Path) -> list[dict[str, Any]]:
         slot_id = checkpoint.get("slot_id") or checkpoint_path.parent.name
         slot = obj(slots.get(slot_id))
         scenario_id = slot.get("scenario_id") or run.get("scenario_id")
+        repetition = slot.get("repetition")
         if not isinstance(scenario_id, str) or not scenario_id:
             # Release Control cannot attribute a run with no scenario; the
             # checkpoint stays in the uploaded evidence either way.
@@ -116,11 +141,10 @@ def runs_from_journal(artifacts: Path) -> list[dict[str, Any]]:
         runs.append(
             prune(
                 {
-                    "slot_id": slot_id,
                     "scenario_id": scenario_id,
                     "case_id": slot.get("case_id"),
                     "seed": slot.get("seed"),
-                    "repetition": slot.get("repetition"),
+                    "repetition": offset + repetition if isinstance(repetition, int) else None,
                     "run": run,
                 }
             )
@@ -128,11 +152,11 @@ def runs_from_journal(artifacts: Path) -> list[dict[str, Any]]:
     return runs
 
 
-def collect_runs(artifacts: Path) -> tuple[list[dict[str, Any]], str]:
+def collect_runs(artifacts: Path, offset: int = 0) -> tuple[list[dict[str, Any]], str]:
     results = obj(read_json(artifacts / "results.json"))
     if results.get("scenarios"):
-        return runs_from_results(results), "results"
-    runs = runs_from_journal(artifacts)
+        return runs_from_results(results, offset), "results"
+    runs = runs_from_journal(artifacts, offset)
     return runs, "journal" if runs else "none"
 
 
@@ -261,7 +285,9 @@ def bundle_reference(args: argparse.Namespace) -> dict[str, Any] | None:
 
 def shard_payload(args: argparse.Namespace) -> dict[str, Any]:
     artifacts = args.artifacts
-    runs, source = collect_runs(artifacts) if artifacts and artifacts.is_dir() else ([], "none")
+    snapshot = obj(read_json(args.profile_snapshot)) if args.profile_snapshot else {}
+    offset = round_offset(snapshot, args.campaign_id, args.group_id)
+    runs, source = collect_runs(artifacts, offset) if artifacts and artifacts.is_dir() else ([], "none")
     failure = obj(read_json(artifacts / "failure.json")) if artifacts else {}
     # A group the launcher tried twice before its run started: which attempt
     # this is, and why the earlier one failed.

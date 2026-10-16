@@ -12,9 +12,9 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from result_contract import RESULT_CONTRACT_SHA256
 from run_e2e_campaign import (
     CampaignError,
-    RESULT_CONTRACT_SHA256,
     RESULT_AGGREGATE_COUNT_FIELDS,
     RESULT_AGGREGATE_RATE_FIELDS,
     RESULT_AGGREGATE_TOKEN_FIELDS,
@@ -26,6 +26,7 @@ from run_e2e_campaign import (
     execute_campaign,
     main,
     parse_campaign,
+    runner_result_contract,
     score_campaign,
     validate_campaign_bundle,
 )
@@ -632,6 +633,36 @@ class CampaignRunnerTests(unittest.TestCase):
         self.assertEqual(group[0]["score_coverage"], 0.5)
         self.assertEqual(group[0]["score_availability"], "partial")
         self.assertEqual(scoring["harness_score"], 70.0)
+
+    def test_results_are_checked_against_the_contract_of_the_runner_that_ran(self):
+        campaign = parse_campaign(manifest([{
+            "id": "core", "execution_kind": "harness_turn", "runs": 1,
+            "technical_retries": 0, "scenarios": ["tool_contract_recovery"],
+        }]))
+        runner_contract = "sha256:" + "f" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            report = native_report([native_scenario("tool_contract_recovery")])
+            report["result_contract_sha256"] = runner_contract
+            (output / "results.json").write_text(json.dumps(report), encoding="utf-8")
+
+            def warnings(expected):
+                group = [{"group_id": "core", "output": str(output)}]
+                with contextlib.redirect_stderr(io.StringIO()):
+                    return score_campaign(campaign, group, expected)["warnings"]
+
+            # Written by the runner that ran, under its own contract: no
+            # warning, whatever this checkout's contract is.
+            self.assertNotEqual(runner_contract, RESULT_CONTRACT_SHA256)
+            self.assertEqual(warnings(runner_contract), [])
+            # A runner that does not state its contract is not compared.
+            self.assertEqual(warnings(None), [])
+            # A group written under another contract than the runner's is said.
+            [warning] = warnings(RESULT_CONTRACT_SHA256)
+            self.assertIn(f"written under result contract {runner_contract}", warning)
+
+    def test_the_runner_states_the_result_contract_it_writes(self):
+        self.assertEqual(runner_result_contract(), RESULT_CONTRACT_SHA256)
 
     def test_a_group_without_a_score_leaves_the_mean_and_makes_it_partial(self):
         campaign = parse_campaign(
