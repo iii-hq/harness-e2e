@@ -506,13 +506,33 @@ class StackResolutionTests(unittest.TestCase):
 
         with patch.object(prepare_execution, "get_json", side_effect=get), \
                 patch("sys.stderr", new_callable=io.StringIO) as stderr:
-            revisions = prepare_execution.resolve_fixtures("ghs_fixture")
+            revisions, fallbacks = prepare_execution.resolve_fixtures("ghs_fixture")
         self.assertEqual(asked, [("/repos/iii-hq/kanban-e2e-fixture/commits/main", "ghs_fixture"),
                                  ("/repos/iii-hq/e2e-fixture/commits/HEAD", "ghs_fixture")])
-        # Unresolved, the groups check out the branch, as they did before.
+        # Unresolved and unpinned, the groups check out the branch, and the
+        # execution says so.
         self.assertEqual(revisions, {"kanban-e2e-fixture": "c" * 40})
+        self.assertEqual(fallbacks, {"e2e-fixture": {
+            "ref": "HEAD", "checked_out": "branch head",
+            "error": f"{prepare_execution.GITHUB_API_URL}/repos/iii-hq/e2e-fixture/commits/HEAD answered HTTP 404"}})
         self.assertIn("::warning::", stderr.getvalue())
         self.assertIn("iii-hq/e2e-fixture", stderr.getvalue())
+
+    def test_a_pinned_fixture_whose_head_does_not_resolve_falls_back_to_its_pin(self):
+        pin = prepare_execution.FIXTURES["kanban-e2e-fixture"][3]
+        self.assertRegex(pin, r"^[0-9a-f]{40}$")
+
+        def get(url, token=None):
+            raise prepare_execution.ResolutionError(f"{url} did not answer")
+
+        with patch.object(prepare_execution, "get_json", side_effect=get), \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            revisions, fallbacks = prepare_execution.resolve_fixtures(None)
+        # Identity holds: the groups check out a named commit, never the head.
+        self.assertEqual(revisions, {"kanban-e2e-fixture": pin})
+        self.assertEqual(fallbacks["kanban-e2e-fixture"]["checked_out"], pin)
+        self.assertEqual(fallbacks["kanban-e2e-fixture"]["ref"], "main")
+        self.assertIn(f"check out {pin}", stderr.getvalue())
 
     def test_the_resolution_names_only_the_fixtures_its_groups_check_out(self):
         fixtures = {"kanban-e2e-fixture": "c" * 40, "e2e-fixture": "d" * 40}
@@ -522,7 +542,9 @@ class StackResolutionTests(unittest.TestCase):
             root = pathlib.Path(directory)
             (root / "execution.json").write_text(json.dumps({
                 "model": "deepseek/deepseek-v4-flash", "cli": {"version": "0.24.2"}, "template": None,
-                "fixtures": fixtures}))
+                "fixtures": fixtures, "fixture_fallbacks": {
+                    "kanban-e2e-fixture": {"ref": "main", "checked_out": "c" * 40, "error": "HTTP 503"},
+                    "e2e-fixture": {"ref": "HEAD", "checked_out": "branch head", "error": "HTTP 404"}}}))
             (root / "stack.yaml").write_text("containers: {}\n")
             args = SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e")
             (root / "suite.json").write_text(json.dumps(PROFILE_SNAPSHOT))
@@ -532,7 +554,10 @@ class StackResolutionTests(unittest.TestCase):
             prepare_execution.command_contracts(args)
             used = json.loads((root / "contracts/resolution.json").read_text())
         self.assertNotIn("fixture_revisions", unused)
+        self.assertNotIn("fixture_fallbacks", unused)
         self.assertEqual(used["fixture_revisions"], {"kanban-e2e-fixture": "c" * 40})
+        self.assertEqual(used["fixture_fallbacks"], {
+            "kanban-e2e-fixture": {"ref": "main", "checked_out": "c" * 40, "error": "HTTP 503"}})
 
     def test_the_suite_is_materialized_by_the_runner_the_stack_resolves_and_pins(self):
         """`iii compose build` resolves the stack's own runner declaration; its
@@ -1039,7 +1064,8 @@ class CommitPinTests(unittest.TestCase):
             resolution = root / "resolution.json"
             resolution.write_text(json.dumps({
                 "stack_versions": {"harness": "1.8.53", "harness-e2e": "0.17.7", "state": "0.22.18"},
-                "fixture_revisions": {"kanban-e2e-fixture": "a" * 40, "e2e-fixture": "b" * 40}}))
+                "fixture_revisions": {"kanban-e2e-fixture": "a" * 40, "e2e-fixture": "b" * 40},
+                "fixture_fallbacks": {"kanban-e2e-fixture": {"ref": "main", "checked_out": "a" * 40, "error": "x"}}}))
             # What each binary says about itself; `compose` is the engine's
             # own and no lock names it.
             (root / "compose-evidence.json").write_text(json.dumps({"runtime": {"observed_versions": {
@@ -1054,6 +1080,8 @@ class CommitPinTests(unittest.TestCase):
         self.assertEqual(identity["stack_version_warnings"], [
             "harness: lock 1.8.53, reported 1.8.52", "state: lock 0.22.18, reported 0.22.17"])
         self.assertEqual(identity["fixture_revisions"], {"kanban-e2e-fixture": "a" * 40, "e2e-fixture": "b" * 40})
+        self.assertEqual(identity["fixture_fallbacks"], {
+            "kanban-e2e-fixture": {"ref": "main", "checked_out": "a" * 40, "error": "x"}})
         self.assertEqual(prepared["stack_versions"], identity["stack_versions"])
         self.assertNotIn("stack_versions_observed", prepared)
         self.assertNotIn("stack_version_warnings", prepared)

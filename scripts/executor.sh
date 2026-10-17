@@ -184,16 +184,19 @@ fixtures() {
     groups=$(jq -r '[.matrix.include[].group_id] | unique | .[]' "$contracts/resolution.json")
   fi
   # The heads of the fixture repositories that follow a branch, resolved once
-  # for the execution. A head preparation could not resolve leaves the group
-  # on the branch, as prepare_execution.py warned.
+  # for the execution. A head preparation could not resolve falls back to the
+  # fixture's pin, or, without one, leaves the group on the branch, as
+  # prepare_execution.py recorded in fixture_fallbacks.
   kanban=$(jq -r '.fixture_revisions["kanban-e2e-fixture"] // empty' "$contracts/resolution.json")
   fixture=$(jq -r '.fixture_revisions["e2e-fixture"] // empty' "$contracts/resolution.json")
   for group in $groups; do
     case "$group" in
       case-kanban-*)
-        checkout iii-hq/kanban-e2e-fixture "${kanban:-main}" target/kanban-fixture full
-        # The bootstrap holds HEAD to main: main is the commit resolved.
-        [[ -z "$kanban" ]] || git -C target/kanban-fixture update-ref refs/heads/main HEAD
+        # Identity holds: never a branch head nobody named.
+        checkout iii-hq/kanban-e2e-fixture "${kanban:?preparation named no kanban-e2e-fixture commit}" \
+          target/kanban-fixture full
+        # The bootstrap holds HEAD to main: main is the commit named.
+        git -C target/kanban-fixture update-ref refs/heads/main HEAD
         ;;
       case-registry-*)
         checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry

@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -11,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('kanban_bootstrap', ROOT / 'scripts/kanban_eval/bootstrap.py')
 bootstrap = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bootstrap)
+sys.path.insert(0, str(ROOT / 'scripts'))
+import check_kanban_catalog  # noqa: E402
 
 
 class KanbanBootstrapTest(unittest.TestCase):
@@ -33,8 +36,10 @@ class KanbanBootstrapTest(unittest.TestCase):
         executor = (ROOT / 'scripts/executor.sh').read_text()
         group = (ROOT / 'scripts/run_exact_stack_group.sh').read_text()
         # Checked out in full, anonymously, only for a Kanban group, at the
-        # head preparation resolved, which the bootstrap knows as main.
-        self.assertIn('checkout iii-hq/kanban-e2e-fixture "${kanban:-main}" target/kanban-fixture full', executor)
+        # commit preparation named, which the bootstrap knows as main.
+        self.assertIn('checkout iii-hq/kanban-e2e-fixture "${kanban:?preparation named no kanban-e2e-fixture commit}"',
+                      executor)
+        self.assertNotIn('${kanban:-main}', executor)
         self.assertIn('git -C target/kanban-fixture update-ref refs/heads/main HEAD', executor)
         self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow + executor)
         self.assertIn('scripts/run_in_image.sh prepare fixtures', workflow)
@@ -122,6 +127,46 @@ class KanbanBootstrapTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'fixture revision mismatch'):
                     bootstrap.main()
                 run.assert_not_called()
+
+
+class KanbanCatalogCheckTest(unittest.TestCase):
+    def check(self, catalogs):
+        """Runs the check with the fixture answering `catalogs` by commit."""
+        heads = {'main': 'c' * 40}
+
+        def get(url, token=None):
+            return {'sha': heads.get(url.rsplit('/', 1)[1], url.rsplit('/', 1)[1])}
+
+        def fetch(repository, revision):
+            return catalogs[revision]
+
+        with mock.patch.object(check_kanban_catalog.prepare, 'get_json', side_effect=get), \
+                mock.patch.object(check_kanban_catalog, 'fetch', side_effect=fetch), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as stdout:
+            drifted = check_kanban_catalog.main()
+        return drifted, stdout.getvalue()
+
+    def test_the_head_and_the_pin_are_compared_byte_for_byte_and_a_drift_is_only_a_warning(self):
+        embedded = (ROOT / 'src/scenarios/kanban/catalog.json').read_bytes()
+        pin = check_kanban_catalog.prepare.FIXTURES['kanban-e2e-fixture'][3]
+        drifted, output = self.check({'c' * 40: embedded, pin: embedded})
+        self.assertEqual(drifted, 0)
+        self.assertNotIn('::warning', output)
+        # The same JSON, reserialized, is still a drift: the bootstrap
+        # compares bytes.
+        reserialized = json.dumps(json.loads(embedded), indent=2).encode()
+        drifted, output = self.check({'c' * 40: reserialized, pin: embedded})
+        self.assertEqual(drifted, 1)
+        self.assertIn('::warning file=src/scenarios/kanban/catalog.json,title=Kanban catalog drift::', output)
+        self.assertIn(f'iii-hq/kanban-e2e-fixture@{"c" * 40} (the head of main)', output)
+        self.assertIn(f'{pin} (the pinned fallback): catalog matches', output)
+
+    def test_a_fixture_it_cannot_read_is_a_warning_too(self):
+        with mock.patch.object(check_kanban_catalog.prepare, 'get_json',
+                               side_effect=check_kanban_catalog.prepare.ResolutionError('HTTP 503')), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as stdout:
+            self.assertEqual(check_kanban_catalog.main(), 0)
+        self.assertEqual(stdout.getvalue().count('could not be read: HTTP 503'), 2)
 
 
 if __name__ == '__main__':
