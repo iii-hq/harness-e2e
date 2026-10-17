@@ -398,8 +398,13 @@ resolve|build|materialize|assemble|fixtures`, `group`, `package` or `finalize
 start from and no package brings (the Kanban fixture, the stack's template,
 the Registry sources and the trending topics fixture) below `target/`, three
 tries each: the Kanban fixture and the Registry's `iii-hq/e2e-fixture` at the
-head `prepare resolve` resolved once for every group (else, with a warning,
-the branch), which the reports name in `identity.fixture_revisions`. `group` routes the fixture repositories
+head `prepare resolve` resolved once for every group, which the reports name
+in `identity.fixture_revisions`. A head that does not resolve is a warning and
+lands in `identity.fixture_fallbacks`: the Kanban fixture then checks out its
+pin (`FIXTURES` in `scripts/prepare_execution.py`), never an unnamed branch
+head; `iii-hq/e2e-fixture` the branch. CI and `cut-release.yml` warn, without
+failing, when the Kanban fixture's catalog at its head or its pin differs from
+`src/scenarios/kanban/catalog.json` (`scripts/check_kanban_catalog.py`). `group` routes the fixture repositories
 a scenario clones to those checkouts; `finalize` lays each campaign's groups
 out from the group bundles the execution selected (linked, not copied) before
 aggregating them. Only `prepare resolve` and `prepare fixtures` get a

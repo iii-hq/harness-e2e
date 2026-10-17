@@ -70,6 +70,13 @@ jobs:
             --expected-current "$EXPECTED_CURRENT" \
             --github-output "$GITHUB_OUTPUT"
 
+      # A warning only: the release still cuts, and the run says which
+      # fixture commit its Kanban groups would stop on.
+      - name: Compare the Kanban catalog with the fixture's
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_kanban_catalog.py
+
       - name: Stamp the version into the manifest and the lock
         env:
           VERSION: ${{ steps.version.outputs.version }}

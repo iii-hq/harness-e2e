@@ -212,6 +212,9 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             # The commit of each fixture repository the groups checked out,
             # resolved once for the whole execution.
             "fixture_revisions": obj(resolution.get("fixture_revisions")) or None,
+            # Each of those whose head did not resolve: its pin, or the
+            # branch head, went in its place.
+            "fixture_fallbacks": obj(resolution.get("fixture_fallbacks")) or None,
             "stack_lock_sha256": args.stack_lock_sha256,
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,

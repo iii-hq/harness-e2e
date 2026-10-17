@@ -498,7 +498,7 @@ class ExecutorTests(unittest.TestCase):
             "git init -q target/kanban-fixture|",
             f"git -C target/kanban-fixture fetch -q https://github.com/iii-hq/kanban-e2e-fixture.git {kanban}|",
             "git -C target/kanban-fixture checkout -q --detach FETCH_HEAD|",
-            # The bootstrap holds HEAD to main: main is the commit resolved.
+            # The bootstrap holds HEAD to main: main is the commit named.
             "git -C target/kanban-fixture update-ref refs/heads/main HEAD|",
             "git init -q target/registry-sources/registry|" + header,
             f"git -C target/registry-sources/registry fetch -q --depth 1 https://github.com/iii-hq/registry.git {registry}|{header}",
@@ -520,17 +520,25 @@ class ExecutorTests(unittest.TestCase):
             **environment, "HARNESS_E2E_CAMPAIGN_GROUP_ID": "case-registry-implementation"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([line for line in self.log.read_text().splitlines() if "rev-parse" not in line], [])
-        # A head preparation could not resolve leaves the group on the
-        # branch, checked out anew, as before.
+        # A head preparation could not resolve and no pin replaced leaves the
+        # group on the branch, checked out anew, as before.
         (contracts / "resolution.json").write_text(json.dumps({
-            "matrix": {"include": [{"group_id": "case-kanban-board"}, {"group_id": "case-registry-implementation"}]}}))
+            "matrix": {"include": [{"group_id": "case-registry-implementation"}]}}))
         self.log.write_text("")
         result = self.executor("prepare", "fixtures", env=environment)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([line for line in self.log.read_text().splitlines() if "rev-parse" not in line], [
-            "git clone -q --branch main https://github.com/iii-hq/kanban-e2e-fixture.git target/kanban-fixture|",
             "git clone -q --depth 1 https://github.com/iii-hq/e2e-fixture.git target/registry-sources/e2e-fixture|" + header,
         ])
+        # A Kanban group never does: preparation names its commit, the head
+        # or the pin, and without one there is nothing to check out.
+        (contracts / "resolution.json").write_text(json.dumps({
+            "matrix": {"include": [{"group_id": "case-kanban-board"}]}}))
+        self.log.write_text("")
+        result = self.executor("prepare", "fixtures", env=environment)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preparation named no kanban-e2e-fixture commit", result.stderr)
+        self.assertNotIn("kanban-e2e-fixture.git", self.log.read_text())
 
     def test_a_checkout_that_fails_is_tried_again(self):
         contracts = self.root / "target/harness-e2e-contract/contracts"

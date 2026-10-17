@@ -69,6 +69,20 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 -m unittest discover -s tests/python -p 'test_*.py'
 
+  # Every Kanban group stops when the fixture's catalog differs from the
+  # runner's. This says so ahead of time, as a warning on the catalog, never a
+  # failure: the fixture follows by its own pull request.
+  kanban-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Compare the Kanban catalog with the fixture's
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_kanban_catalog.py
+
   # The packaged install pulls real dependencies from the production Registry.
   # It runs apart from `validate` so an outage cannot hold back the other
   # checks; the smoke itself turns an unreachable Registry into a warning.
