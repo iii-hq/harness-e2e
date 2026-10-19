@@ -290,6 +290,15 @@ release, and `identity.stack_commits` gives its full commit, repository,
 folder and whether the default branch has it; the Console shows and
 compares it as `@<sha7>`.
 
+A stack may also pin a worker's dependencies itself: a declared worker that
+another one lists in `start_after` is held the same way, so the graph that
+brings it keeps the stack's version instead of today's. The
+stacks in [`stacks/harness-ab/`](stacks/harness-ab/) do this to change only
+`harness` between two executions. They pin `iii` and the runner too, so they
+stay out of the Console's list and are dispatched as YAML
+(`-f stack="$(cat stacks/harness-ab/1.8.50.yaml)"`);
+`scripts/harness_ab.py` compares what each arm observed.
+
 Known limit: the default config arrives as `config_override`, which Compose
 ranks above what is saved (default < saved < override), so on a worker built
 from a commit a value saved with `configuration::set` goes back to the

@@ -1,0 +1,113 @@
+# Harness A/B arm: every worker at the version execution
+# 98147b79-823c-4cc6-80d1-ffc64842b9c2 (regression, 2026-10-19 05:17 UTC,
+# harness 1.8.56) resolved, from its worker-compose.lock; only `harness`
+# changes between arms. The dependencies are declared with the edges Compose
+# wrote, so the executor holds them at these versions (see the README).
+#
+# Pair 1.8.19/1.8.22: those releases want `ide` ^0.11 (0.11.14) and no
+# `judge`. 1.8.19 asks for `console` and `shell`, aliases Compose maps to
+# `ade` and `ide` (same binaries), but an alias does not take the held pin, so
+# `ade` stays at what the Registry resolves today (1.9.66): a newer `ade`
+# release breaks the 1.8.19 assembly, loudly: then move both arms to it.
+
+iii: 0.24.6-rc.5
+containers:
+  harness:
+    worker: package://harness
+    version: 1.8.19
+    start_after:
+    - ade
+    - context-manager
+    - cron
+    - ide
+    - iii-directory
+    - llm-router
+    - provider-anthropic
+    - provider-openai
+    - provider-openai-codex
+    - queue
+    - session-manager
+    - state
+  harness-e2e:
+    worker: package://harness-e2e
+    version: 0.19.0
+    start_after:
+    - browser
+    - database
+    - storage
+  fp:
+    worker: package://fp
+    version: 0.2.21
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: 0.1.20
+  provider-zai:
+    worker: package://provider-zai
+    version: 0.5.16
+    start_after:
+    - llm-router
+    - state
+  ade:
+    worker: package://ade
+    version: 1.9.66
+  cron:
+    worker: package://cron
+    version: 0.21.25
+  ide:
+    worker: package://ide
+    version: 0.11.14
+  iii-directory:
+    worker: package://iii-directory
+    version: 1.2.40
+  queue:
+    worker: package://queue
+    version: 0.21.21
+  secrets:
+    worker: package://secrets
+    version: 0.1.4
+  session-manager:
+    worker: package://session-manager
+    version: 1.0.34
+  state:
+    worker: package://state
+    version: 0.22.19
+  llm-router:
+    worker: package://llm-router
+    version: 1.4.36
+    start_after:
+    - secrets
+    - state
+  context-manager:
+    worker: package://context-manager
+    version: 1.1.21
+    start_after:
+    - llm-router
+  provider-anthropic:
+    worker: package://provider-anthropic
+    version: 1.2.27
+    start_after:
+    - llm-router
+    - state
+  provider-openai:
+    worker: package://provider-openai
+    version: 1.2.26
+    start_after:
+    - llm-router
+    - state
+  provider-openai-codex:
+    worker: package://provider-openai-codex
+    version: 0.4.26
+    start_after:
+    - llm-router
+    - state
+  browser:
+    worker: package://browser
+    version: 0.2.31
+  database:
+    worker: package://database
+    version: 0.5.21
+  storage:
+    worker: package://storage
+    version: 0.1.24
+startup_timeout: 5m
+stop_timeout: 30s

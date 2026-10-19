@@ -1669,6 +1669,9 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
             (False, "1", "", False, False, "false", ["compose::add file="], "harness"),
             # Unless nothing else is left: then at the versions it holds.
             (False, "1", "", False, False, "false", ["compose::add file="], "everything"),
+            # A dependency the stack pins itself (another worker starts after
+            # it) is held as well, so only the roots are asked for.
+            (False, "1", "", False, False, "false", ["compose::add file="], "dependencies"),
         )
         for locked, assemble_only, template, profile, brought, frozen, calls, *pinned in cases:
             with self.subTest(locked=locked, assemble_only=assemble_only, template=template,
@@ -1691,6 +1694,10 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
                     if pinned == ["everything"]:
                         declared["containers"]["harness-e2e"] = {"worker": "path:///built/harness-e2e"}
                         commits["harness-e2e"] = {"worker": "harness-e2e", "dependencies": []}
+                elif pinned == ["dependencies"]:
+                    declared["containers"]["harness"] = {"worker": "package://harness", "version": "1.8.44",
+                                                         "start_after": ["llm-router"]}
+                    declared["containers"]["llm-router"] = {"worker": "package://llm-router", "version": "1.4.36"}
                 (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(declared))
                 (root / "brings.yaml").write_text(
                     yaml.safe_dump({"containers": {"iii-directory": directory_from_graph}}).split("\n", 1)[1]
@@ -1727,6 +1734,9 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
                     self.assertIn("worker=harness-e2e@0.12.3", made[0])
                     self.assertNotIn("worker=harness@", made[0])
                     self.assertNotIn("worker=llm-router", made[0])
+                elif pinned == ["dependencies"]:
+                    self.assertIn("worker=harness@1.8.44", made[0])
+                    self.assertNotIn("llm-router", made[0])
                 elif project == "project":
                     self.assertIn("worker=harness-e2e@0.12.3", made[0])
                     self.assertNotIn("worker=harness@", made[0])
