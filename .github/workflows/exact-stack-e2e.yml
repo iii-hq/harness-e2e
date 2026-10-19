@@ -1,5 +1,5 @@
 name: Execute exact-stack Harness E2E campaign
-run-name: ${{ inputs.execution_id && format('E2E · {0}', inputs.execution_id) || format('E2E run · {0} · {1}', startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite, inputs.model) }}
+run-name: ${{ inputs.execution_id && format('E2E · {0}', inputs.execution_id) || format('E2E run · {0} · {1}{2}', startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite, inputs.model, inputs.request && format(' · {0}', inputs.request) || '') }}
 
 # A dispatch names what to test (a suite of config/test-plan.json), where (a
 # stack of stacks/), with whom (a provider/model and optionally an agent
@@ -28,6 +28,10 @@ on:
         type: string
       execution_id:
         description: Release Control execution UUID; without one the run only produces artifacts
+        required: false
+        type: string
+      request:
+        description: Token the run title carries, so whoever dispatched it can find it when GitHub fails to answer the dispatch (optional)
         required: false
         type: string
 

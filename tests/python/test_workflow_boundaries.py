@@ -312,7 +312,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         inputs = yaml.safe_load(workflow)[True]["workflow_dispatch"]["inputs"]
         self.assertEqual(
             list(inputs),
-            ["suite", "stack", "model", "profile", "execution_id"],
+            ["suite", "stack", "model", "profile", "execution_id", "request"],
         )
         self.assertFalse(any(spec["required"] for spec in inputs.values()))
         # Every input reaches a shell through the environment, never
@@ -323,6 +323,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
                     self.assertNotIn(expression, step.get("run", ""), step.get("name"))
         # A suite stated whole is named "custom suite" in the run title.
         self.assertIn("startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite", workflow)
+        # So does the token whoever dispatched it looks for the run by.
+        self.assertIn("inputs.request && format(' · {0}', inputs.request)", workflow)
         # The runner the stack runs materializes the suite, with the flag every
         # release of it knows.
         executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
