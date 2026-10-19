@@ -568,7 +568,11 @@ else
     # So do the dependencies of a worker built from a commit, declared at the
     # versions of its newest release.
     held=" $(jq -r '[.runtime.commits // {} | .[].dependencies[]?] | join(" ")' "$contract_path") "
-    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory $held"
+    # A dependency the stack pins itself (another declared worker starts
+    # after it) is held too: asked for, it is a second spec that conflicts
+    # with the version the graph that brings it resolves today.
+    pinned=" $(python3 "$contract_tool" roots --compose "$compose_file" --dependencies | paste -sd' ' -) "
+    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory $held $pinned"
     roots=$(python3 "$contract_tool" roots --compose "$compose_file")
     while IFS= read -r root; do
       [[ -z "$root" || "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")

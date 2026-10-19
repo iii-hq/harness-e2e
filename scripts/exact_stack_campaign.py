@@ -568,6 +568,17 @@ def project_roots(compose_path: Path) -> list[str]:
     return [f"{worker}@{selector}" for worker, selector in declared_workers(compose_path).items()]
 
 
+def project_dependencies(compose_path: Path) -> list[str]:
+    """The package workers another declared container starts after: the
+    dependencies a stack pins itself, which `compose::add` keeps only unasked."""
+    containers = load_yaml(compose_path.read_text()).get("containers") or {}
+    after = {name for container in containers.values() for name in container.get("start_after") or []}
+    return sorted(
+        worker_name(containers[name]["worker"]) for name in after
+        if str((containers.get(name) or {}).get("worker", "")).startswith("package://")
+    )
+
+
 def project_engine_config(project: dict[str, Any], port: int) -> dict[str, Any]:
     workers = [{"name": "iii" + "-worker-manager", "config": {"host": "127.0.0.1", "port": port}}]
     workers.extend({"name": name, "config": config}
@@ -1240,6 +1251,7 @@ def main() -> int:
     materialize.add_argument("--group-id")
     roots = commands.add_parser("roots")
     roots.add_argument("--compose", type=Path, required=True)
+    roots.add_argument("--dependencies", action="store_true", help="only the workers another declared one starts after")
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
     project.add_argument("--group-id", help="omit to scaffold the stack the whole suite shares")
@@ -1326,7 +1338,7 @@ def main() -> int:
             return 0
         if args.command == "roots":
             # The declaration answers this one; there is no contract to read.
-            for root in project_roots(args.compose):
+            for root in (project_dependencies if args.dependencies else project_roots)(args.compose):
                 print(root)
             return 0
         if args.command == "credentials-file":
