@@ -205,11 +205,15 @@ are not subject filesystem artifacts.
 
 To enable this in Release Control's exact-stack workflow:
 
-1. Checkout `main` with full history from the public
-   `iii-hq/kanban-e2e-fixture` repository. The bootstrap verifies HEAD against
-   the locally resolved `main` commit and requires the fixture catalog to match
-   the runner's embedded catalog. Each scenario still starts from its catalog's
-   exact `base_commit` or `reference_commit`, not the checkout's HEAD.
+1. Checkout, with full history, the commit of the public
+   `iii-hq/kanban-e2e-fixture` repository that preparation named: the head of
+   `main`, or the pin in `scripts/prepare_execution.py` when the head does not
+   resolve. The bootstrap verifies HEAD against the local `main` the executor
+   points at it and requires the fixture catalog to match the runner's
+   embedded catalog byte for byte; `scripts/check_kanban_catalog.py` warns
+   about a drift in CI and in `cut-release.yml` before a group meets it.
+   Each scenario still starts from its catalog's exact `base_commit` or
+   `reference_commit`, not the checkout's HEAD.
    Checkout uses the workflow's default token and never persists credentials.
 2. Merge the native scenarios and publish a compatible immutable `harness-e2e`
    worker release. Select that release in the Release Control stack; changing

@@ -86,7 +86,7 @@ class LatestCliTests(unittest.TestCase):
             (contract_dir / "execution.json").write_text("{}")
             (contract_dir / "stack.yaml").write_text("containers: {}\n")
             with patch.object(prepare_execution, "get_json", side_effect=self.get), \
-                    patch.object(prepare_execution, "resolve_fixtures", return_value={}), \
+                    patch.object(prepare_execution, "resolve_fixtures", return_value=({}, {})), \
                     contextlib.redirect_stdout(io.StringIO()):
                 prepare_execution.command_runtime(SimpleNamespace(contract_dir=contract_dir))
             execution = json.loads((contract_dir / "execution.json").read_text())
