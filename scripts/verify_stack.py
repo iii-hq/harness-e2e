@@ -53,13 +53,15 @@ DEADLINE_SECONDS = 45 * 60
 #: The API's bad moments (5xx, a dropped connection): worth another try.
 #: Anything else (a 4xx: inputs, credentials, permissions) is not going to
 #: pass and still fails the measurement at once.
-UNAVAILABLE = re.compile(r"HTTP 5\d\d\b|error connecting|connection reset|timed? ?out", re.IGNORECASE)
+UNAVAILABLE = re.compile(r"HTTP 5\d\d\b|error connecting|connection reset|\bEOF\b|timed? ?out", re.IGNORECASE)
 #: A failed `gh run view` worth another poll: those, and a run GitHub has only
 #: just created, which is not readable for a moment (404).
 TRANSIENT = re.compile(rf"HTTP 404\b|{UNAVAILABLE.pattern}", re.IGNORECASE)
 #: How long to wait, after a dispatch GitHub did not answer, before looking
 #: for its run and dispatching again: two minutes in all.
-DISPATCH_WAITS = (10, 20, 30, 60)
+#: ponytail: a run GitHub lists more than 20 s after its 5xx is dispatched
+#: twice; cancel the other runs with the same request if that shows up.
+DISPATCH_WAITS = (20, 40, 60)
 ICONS = {"passed": "🟢", "failed": "🔴", "not_measured": "🟡", "skipped": "⚪"}
 
 
@@ -123,13 +125,15 @@ def find_run(request: str, token: str | None) -> int | None:
     return next((run["databaseId"] for run in runs if run["displayTitle"].endswith(f" · {request}")), None)
 
 
-def dispatch(stack: dict[str, Any], suite: str, model: str, token: str | None) -> int:
+def dispatch(stack: dict[str, Any], suite: str, model: str, token: str | None, stop: list[bool]) -> int:
     """Start the run and say its id, through the API's bad moments.
 
     A 5xx does not say the run was not created, and dispatching again blind
     would pay for the suite twice. So before another dispatch the run is
     looked for by `request`, which its title carries, and while that lookup
-    cannot answer either, nothing is dispatched.
+    cannot answer either, nothing is dispatched. Once the job is cancelled
+    (`stop`), nothing more is dispatched either: the run is only looked for,
+    so that it can be cancelled too.
     """
     import yaml
 
@@ -143,9 +147,10 @@ def dispatch(stack: dict[str, Any], suite: str, model: str, token: str | None) -
         try:
             if failure and (found := find_run(request, token)):
                 return found
-            # The last round only looks: a dispatch nobody looks for after
-            # would leave a run nobody reads.
-            if attempt < len(DISPATCH_WAITS):
+            # The last round only looks, and so does every round once the job
+            # is cancelled: a dispatch nobody looks for after would leave a run
+            # nobody reads.
+            if attempt < len(DISPATCH_WAITS) and not (failure and stop):
                 return run_id_of(gh(*args, token=token, merged=True))
         except VerifyError as error:
             if not UNAVAILABLE.search(str(error)):
@@ -259,7 +264,7 @@ def measure(stack: dict[str, Any], suite: str, model: str, token: str | None) ->
     signal.signal(signal.SIGTERM, cancelled)
     signal.signal(signal.SIGINT, cancelled)
 
-    run_id = dispatch(stack, suite, model, token)
+    run_id = dispatch(stack, suite, model, token, stop)
     dispatched.append(run_id)
     run_url = f"https://github.com/{EXECUTOR_REPOSITORY}/actions/runs/{run_id}"
     if stop:

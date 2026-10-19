@@ -199,7 +199,7 @@ class RunTests(unittest.TestCase):
         self.assertIn("did not finish", result["reason"])
         self.assertIn("HTTP 404", result["reason"])
 
-    def dispatch_with(self, dispatches, lookups=()):
+    def dispatch_with(self, dispatches, lookups=(), stop=()):
         """Run `dispatch` against a fake `gh`: `dispatches` answers each `gh
         workflow run` and `lookups` each `gh run list` in turn (an exception is
         raised, a URL printed, a list of run ids listed with the run title the
@@ -221,7 +221,7 @@ class RunTests(unittest.TestCase):
             return answer
 
         with patch.object(verify_stack, "gh", side_effect=fake_gh), patch.object(verify_stack.time, "sleep"):
-            run_id = verify_stack.dispatch({"containers": {}}, "pr", "deepseek/deepseek-flash", None)
+            run_id = verify_stack.dispatch({"containers": {}}, "pr", "deepseek/deepseek-flash", None, list(stop))
         return run_id, calls
 
     def test_a_5xx_that_created_no_run_is_dispatched_again(self):
@@ -241,6 +241,14 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run_id, 42)
         self.assertEqual(calls, [("workflow", "run"), ("run", "list"), ("run", "list")])
 
+    def test_a_cancelled_job_only_looks_for_the_run_it_may_have_created(self):
+        unavailable = verify_stack.VerifyError("gh workflow run exact-stack-e2e.yml failed: unexpected EOF")
+        rounds = len(verify_stack.DISPATCH_WAITS)
+        with patch.object(verify_stack, "gh", side_effect=[unavailable, *["[]"] * rounds]) as gh, \
+                patch.object(verify_stack.time, "sleep"), self.assertRaises(verify_stack.VerifyError):
+            verify_stack.dispatch({"containers": {}}, "pr", "deepseek/deepseek-flash", None, [True])
+        self.assertEqual([call.args[:2] for call in gh.call_args_list], [("workflow", "run")] + [("run", "list")] * rounds)
+
     def test_a_4xx_fails_the_dispatch_at_once(self):
         rejected = verify_stack.VerifyError(
             "gh workflow run exact-stack-e2e.yml failed: could not create workflow dispatch event: "
@@ -255,7 +263,7 @@ class RunTests(unittest.TestCase):
         with patch.object(verify_stack, "gh") as gh, patch.object(verify_stack.time, "sleep") as sleep:
             gh.side_effect = [unavailable, "[]"] * rounds
             with self.assertRaises(verify_stack.VerifyError):
-                verify_stack.dispatch({"containers": {}}, "pr", "deepseek/deepseek-flash", None)
+                verify_stack.dispatch({"containers": {}}, "pr", "deepseek/deepseek-flash", None, [])
         # Every dispatch is looked for after, the last one too, in two minutes.
         self.assertEqual([call.args[:2] for call in gh.call_args_list], [("workflow", "run"), ("run", "list")] * rounds)
         self.assertEqual(sum(call.args[0] for call in sleep.call_args_list), 120)
