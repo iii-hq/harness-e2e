@@ -2996,7 +2996,39 @@ fn is_retryable_technical_failure(report: &E2eRunReport) -> bool {
         })
 }
 
+/// The harness fails a turn with fixed public copy per router error code
+/// (`failure_presentation` in the harness turn loop), never the raw provider
+/// text. These are the copies for a provider that was rate limited, overloaded,
+/// unreachable or dropped the stream, plus the router call itself failing.
+// ponytail: matches the harness's copy; read the code of the transcript's
+// error entry instead if that copy starts changing.
+const PROVIDER_TRANSPORT_FAILURES: &[&str] = &[
+    "The selected provider is temporarily unavailable.",
+    "The provider is busy right now.",
+    "The response stream could not be started.",
+    "The provider stopped responding before the answer completed.",
+    "The provider disconnected before completing the response.",
+    "The provider temporarily failed while generating a response.",
+    "The model request could not be completed.",
+];
+
+fn is_provider_transport_failure(message: &str) -> bool {
+    message
+        .strip_prefix("turn ended as Failed: ")
+        .is_some_and(|reason| PROVIDER_TRANSPORT_FAILURES.contains(&reason))
+}
+
 fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
+    if is_provider_transport_failure(&message) {
+        // Not retried here: the Release Control re-runs the slot once.
+        let mut failure = RunFailure::new(
+            RunStatus::InfrastructureError,
+            phase,
+            format!("provider transport failed, not the subject: {message}"),
+        );
+        failure.code = "provider_transport_failed".into();
+        return failure;
+    }
     let status = if is_resource_limit(&message) {
         RunStatus::ResourceLimit
     } else {
@@ -4635,6 +4667,53 @@ mod tests {
             "scenario exceeded 600s while waiting for the complete session tree".into(),
         );
         assert_eq!(collection.status, RunStatus::ResourceLimit);
+    }
+
+    #[test]
+    fn provider_transport_failures_are_infrastructure_not_subject() {
+        for reason in PROVIDER_TRANSPORT_FAILURES {
+            let failure = subject_failure(
+                FailurePhase::Execute,
+                format!("turn ended as Failed: {reason}"),
+            );
+            assert_eq!(failure.status, RunStatus::InfrastructureError, "{reason}");
+            assert_eq!(failure.code, "provider_transport_failed");
+            assert_eq!(failure.retry_scope, crate::report::RetryScope::None);
+            assert!(failure.message.contains(reason));
+        }
+
+        for (message, status) in [
+            // The agent's own failures stay with the subject.
+            (
+                "turn ended as Failed: pre_generate hook denied: tool budget",
+                RunStatus::SubjectError,
+            ),
+            (
+                "turn ended as Failed: The provider rejected this request.",
+                RunStatus::SubjectError,
+            ),
+            (
+                "turn ended as Failed: The provider authentication needs attention.",
+                RunStatus::SubjectError,
+            ),
+            // Ambiguous: transport words without the harness's provider copy.
+            (
+                "turn ended as Failed: curl: (7) Failed to connect: Connection refused (HTTP 503)",
+                RunStatus::SubjectError,
+            ),
+            (
+                "turn ended as Failed: The provider is busy right now. Rate limit 429",
+                RunStatus::SubjectError,
+            ),
+            (
+                "turn ended as Cancelled: The provider is busy right now.",
+                RunStatus::SubjectError,
+            ),
+        ] {
+            let failure = subject_failure(FailurePhase::Execute, message.into());
+            assert_eq!(failure.status, status, "{message}");
+            assert_eq!(failure.code, "subject_execution_failed", "{message}");
+        }
     }
 
     #[test]

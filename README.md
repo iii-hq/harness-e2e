@@ -30,9 +30,12 @@ A run's score is the sum of the points its evaluated criteria awarded.
 
 Native criteria keep awards that were already measured when a later check
 cannot run. That later check has no award and stays `not_evaluated`. An
-incomplete criterion set has no total score. A product failure remains
-technically valid. An infrastructure failure invalidates the run and keeps the
-observations already recorded.
+incomplete criterion set has no total score. A product that fails its checks,
+or a run that hits its budget, stays technically valid. A turn that errors
+invalidates the run and keeps the observations already recorded: it is a subject
+error when the agent failed, and an infrastructure error
+(`provider_transport_failed`) when the harness reports that the provider was
+rate limited, overloaded, unreachable or dropped the stream.
 
 Every score and every audit flag is deterministic. No scenario calls a second
 model to judge the first.

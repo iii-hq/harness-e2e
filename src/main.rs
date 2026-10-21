@@ -143,7 +143,8 @@ struct RunArgs {
     #[arg(long = "rotating-seed")]
     rotating_seeds: Vec<u64>,
 
-    /// Retry transient provider and transport failures, never hard-gate or resource failures.
+    /// Retry an attempt whose message never reached the harness. Subject, provider,
+    /// hard-gate and resource failures are never retried here.
     #[arg(long, env = "HARNESS_E2E_TECHNICAL_RETRIES")]
     technical_retries: Option<u8>,
 
