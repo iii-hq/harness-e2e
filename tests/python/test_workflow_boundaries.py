@@ -21,6 +21,12 @@ build failed [PACKAGE_DOWNLOAD_FAILED] after 32.5s
 error[PACKAGE_DOWNLOAD_FAILED]: container 'harness-e2e': could not download https://api.workers.iii.dev/download/harness-e2e/0.17.7/x86_64-unknown-linux-gnu: HTTP status server error (504 Gateway Timeout) for url (https://api.workers.iii.dev/download/harness-e2e/0.17.7/x86_64-unknown-linux-gnu)
 error: Command '['/tmp/tmp.rkuwuOGuyQ/bin/iii', 'compose', 'build', '-f', '/tmp/tmp.rkuwuOGuyQ/worker-compose.yaml']' returned non-zero exit status 1.
 """
+PREFLIGHT_STDERR = """\
+provider deepseek: DEEPSEEK_API_KEY accepted
+::warning::not ready, asking again in 10s: cannot reach the registry at https://api.workers.iii.dev: HTTP 503
+::warning::not ready, asking again in 150s: cannot reach the registry at https://api.workers.iii.dev: HTTP 503
+[FAIL] cannot reach the registry at https://api.workers.iii.dev: HTTP 503, for 300s
+"""
 ASSEMBLE_STDERR = """\
 
 [05:41:46] Downloading exact iii CLI 0.24.6-rc.5
@@ -312,7 +318,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         inputs = yaml.safe_load(workflow)[True]["workflow_dispatch"]["inputs"]
         self.assertEqual(
             list(inputs),
-            ["suite", "stack", "model", "profile", "execution_id", "request"],
+            ["suite", "stack", "model", "profile", "execution_id", "request", "slots"],
         )
         self.assertFalse(any(spec["required"] for spec in inputs.values()))
         # Every input reaches a shell through the environment, never
@@ -348,7 +354,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
         steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
         step = steps["Resolve the dispatch"]
-        names = ("suite", "stack", "model", "profile", "execution_id")
+        names = ("suite", "stack", "model", "profile", "execution_id", "slots")
         self.assertEqual({name: step["env"][f"DISPATCH_{name.upper()}"] for name in names},
                          {name: "${{ inputs." + name + " }}" for name in names})
         self.assertIn("scripts/run_in_image.sh prepare resolve", step["run"])
@@ -422,6 +428,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual([name for name in prepare if name in order], order)
         steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
         self.assertIn("scripts/run_in_image.sh prepare materialize", steps[order[0]]["run"])
+        # Checked before the stack is assembled, with the credentials, for
+        # as long as the repository variable says.
+        order = ["Write the provider credentials", "Check the provider key, the Kanban fixture and the Registry",
+                 "Assemble the stack and lock every contract to it"]
+        self.assertEqual([name for name in prepare if name in order], order)
+        check = steps[order[1]]
+        self.assertEqual(check["run"], 'scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" '
+                                       'prepare preflight')
+        self.assertEqual(check["env"], {"HARNESS_E2E_PREFLIGHT_SECONDS": "${{ vars.HARNESS_E2E_PREFLIGHT_SECONDS || '300' }}"})
+        self.assertIn('python3 scripts/preflight.py --contract-dir "$contract_dir"',
+                      (ROOT / "scripts/executor.sh").read_text())
         # Assembled with the credentials the groups get, and tried twice.
         assemble = steps["Assemble the stack and lock every contract to it"]
         self.assertIn('scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" prepare assemble',
@@ -514,6 +531,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
                            "https://api.workers.iii.dev: error sending request for url (https://api.workers.iii.dev/resolve)",
             }),
         }
+        cases["preflight"] = ("Check the provider key, the Kanban fixture and the Registry", PREFLIGHT_STDERR, "true", {
+            "phase": "preflight",
+            "step": "Check the provider key, the Kanban fixture and the Registry",
+            "code": None,
+            "message": "cannot reach the registry at https://api.workers.iii.dev: HTTP 503, for 300s",
+        })
         for phase, (step, stderr, materialized, failure) in cases.items():
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
                 root = pathlib.Path(directory)

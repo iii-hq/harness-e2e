@@ -4,7 +4,7 @@
 # below target/, as the workflow always has; GitHub's jobs and the Console's
 # Docker executions run the same phases:
 #
-#   prepare resolve|build|materialize|assemble|fixtures
+#   prepare resolve|build|materialize|preflight|assemble|fixtures
 #       resolve      read the dispatch (DISPATCH_*), resolve iii, the template,
 #                    every `commit:` the stack pins and the head of each
 #                    fixture repository that follows its branch, with
@@ -15,7 +15,11 @@
 #                    (default target/worker-builds). It runs the commits'
 #                    code: never with a token or credentials, and on its own,
 #                    so what else the execution runs cannot reach the cache.
-#       materialize  fetch the stack's runner and materialize the suite with it.
+#       materialize  fetch the stack's runner and materialize the suite with it,
+#                    cut down to the slots DISPATCH_SLOTS named, if any.
+#       preflight    check that the model's provider takes its key, the Kanban
+#                    fixture's catalog reads and the Registry answers, asking
+#                    again for a few minutes (scripts/preflight.py).
 #       assemble     write one contract per campaign (EXECUTION_KEY), assemble
 #                    and lock the stack once, and lock every contract to it.
 #       fixtures     check out below target/ what the groups start from and
@@ -58,7 +62,7 @@ set -Eeuo pipefail
 export III_TELEMETRY_ENABLED=false
 
 usage() {
-  echo "usage: executor.sh prepare resolve|build|materialize|assemble|fixtures | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
+  echo "usage: executor.sh prepare resolve|build|materialize|preflight|assemble|fixtures | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
   exit 2
 }
 
@@ -94,11 +98,16 @@ materialize() {
   runner=$(python3 scripts/prepare_execution.py runner --contract-dir "$contract_dir" --work-dir "$(mktemp -d)")
   suite=$(jq -r '.suite | if type == "string" then . else tojson end' "$contract_dir/execution.json")
   "$runner" test-plan materialize --profile "$suite" >"$contract_dir/suite.json"
+  python3 scripts/prepare_execution.py slots --contract-dir "$contract_dir"
   jq -e '.campaigns | length > 0' "$contract_dir/suite.json" >/dev/null
   # A suite selected by tag names every tag no selected test protects.
   jq -r '.impact.uncovered[]? | "::warning title=Uncovered tag::No selected test protects \(.dimension) \(.name): \(.reason)"' \
     "$contract_dir/suite.json" >&2
   cp "$contract_dir/suite.json" "$contract_dir/profile.json"
+}
+
+preflight() {
+  python3 scripts/preflight.py --contract-dir "$contract_dir"
 }
 
 assemble() {
@@ -381,6 +390,7 @@ case "${1:-}" in
       resolve) resolve ;;
       build) build ;;
       materialize) materialize ;;
+      preflight) preflight ;;
       assemble) assemble ;;
       fixtures) fixtures ;;
       *) usage ;;
