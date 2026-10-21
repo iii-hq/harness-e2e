@@ -6,13 +6,14 @@
 //! test as a changed definition.
 //!
 //! A worker counts when the subject calls its functions (by prefix: `state::`
-//! is state, `shell::`/`coder::` is ide, the engine's built-in discovery,
-//! triggers, timers and configuration are engine) or when it hosts what the
-//! subject delivers (compose when the app runs under iii compose, ade when the
-//! deliverable is a Console page). What only the evaluator uses to measure (the
-//! browser behind screenshots, compose in cleanup) does not count. The harness
-//! is never a tag: every test exercises it, and a test with no worker protects
-//! the harness alone.
+//! is state, `shell::`/`coder::` is ide, the engine's built-in triggers, timers
+//! and configuration are engine, and so is discovery when the task depends on
+//! it, as in finding a replaced tool; looking a function up before calling it
+//! does not count) or when it hosts what the subject delivers (compose when the
+//! app runs under iii compose, ade when the deliverable is a Console page).
+//! What only the evaluator uses to measure (the browser behind screenshots,
+//! compose in cleanup) does not count. The harness is never a tag: every test
+//! exercises it, and a test with no worker protects the harness alone.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -176,13 +177,17 @@ impl ScenarioId {
                 Self::RegistryImplementation => {
                     (&[], A::Coding, &[D::Frontend, D::Backend, D::Testing])
                 }
-                Self::RegistryVerification => (&[], A::Verification, &[D::Testing]),
+                // The subject checks the delivery by hand and reports; it
+                // writes no test code.
+                Self::RegistryVerification => (&[], A::Verification, &[]),
                 Self::TrendingTopicsBuild => (&[], A::AppBuilding, &[D::Frontend]),
                 Self::AlertmanagerRouteMatch => (&[W::Ide], A::Coding, &[D::Backend]),
+                // Unlike the other Console builds, the subject writes its own
+                // worker-compose.yaml.
                 Self::ChessEngineBuild => (
                     &[W::Ade, W::Compose, W::Ide],
                     A::AppBuilding,
-                    &[D::Frontend, D::Backend],
+                    &[D::Frontend, D::Backend, D::Infra],
                 ),
                 Self::FormFlowBuild | Self::StateMachineCanvasBuild => (
                     &[W::Ade, W::Canvas, W::Compose, W::Ide],
@@ -194,12 +199,19 @@ impl ScenarioId {
                     A::AppBuilding,
                     &[D::Frontend, D::Backend, D::Infra, D::Testing],
                 ),
-                Self::KanbanC2Persistence
-                | Self::KanbanC3Board
-                | Self::KanbanC4TicketFlow
-                | Self::KanbanC5EditMove
-                | Self::KanbanC6Discussion
-                | Self::KanbanC7Live => (
+                // The ticket store, with no board UI yet.
+                Self::KanbanC2Persistence => (
+                    &[W::Compose, W::Engine],
+                    A::AppBuilding,
+                    &[D::Backend, D::Data, D::Testing],
+                ),
+                // c4 adds `deleted_at` to the stored ticket, c6 its comments.
+                Self::KanbanC4TicketFlow | Self::KanbanC6Discussion => (
+                    &[W::Compose, W::Engine],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend, D::Data, D::Testing],
+                ),
+                Self::KanbanC3Board | Self::KanbanC5EditMove | Self::KanbanC7Live => (
                     &[W::Compose, W::Engine],
                     A::AppBuilding,
                     &[D::Frontend, D::Backend, D::Testing],

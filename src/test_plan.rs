@@ -950,7 +950,13 @@ mod tests {
         );
         assert_eq!(
             coverage["disciplines"]["data"],
-            json!(["database_migration_recovery", "linkly_tutorial"])
+            json!([
+                "database_migration_recovery",
+                "kanban_c2_persistence",
+                "kanban_c4_ticket_flow",
+                "kanban_c6_discussion",
+                "linkly_tutorial"
+            ])
         );
     }
 
