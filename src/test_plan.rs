@@ -161,13 +161,14 @@ pub struct UncoveredTag {
 }
 
 /// Left out of every selection by tag: the registry pair runs 17 to 34 min
-/// a test, and Linkly needs a stack of its own.
+/// a test, and Linkly and the onboarding tour need a stack of their own.
 // ponytail: a fixed list; a ceiling from run durations belongs where the
 // durations are (Release Control's deploy check).
-const IMPACT_EXCLUDED: [ScenarioId; 3] = [
+const IMPACT_EXCLUDED: [ScenarioId; 4] = [
     ScenarioId::RegistryImplementation,
     ScenarioId::RegistryVerification,
     ScenarioId::LinklyTutorial,
+    ScenarioId::OnboardingTour,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -713,13 +714,14 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 7);
+        assert_eq!(plan.suites.len(), 8);
         for (id, cases, runs) in [
             ("regression", 9, 27),
             ("null-canary", 9, 9),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
             ("linkly", 1, 1),
+            ("onboarding", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {
@@ -848,8 +850,9 @@ mod tests {
                 "timer_wake"
             ]
         );
-        // Linkly carries state but needs a stack of its own.
-        assert_eq!(impact.excluded, ["linkly_tutorial"]);
+        // Linkly and the onboarding tour carry state but need a stack of
+        // their own.
+        assert_eq!(impact.excluded, ["linkly_tutorial", "onboarding_tour"]);
         assert!(impact.uncovered.is_empty());
         // The tags stay out of the profile, and so out of every digest.
         let profile = serde_json::to_value(&state.profile).unwrap();
@@ -905,7 +908,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:bbf812ecaf9c629811c9494cb206f71e88afc256ad97db422ebb1f0e17997bae"
+            "sha256:e050e0fb08735ae991581651e91e98282d678c8270142ee3fa2fa8c214b96f63"
         );
     }
 
@@ -940,6 +943,7 @@ mod tests {
                 "contention_ledger",
                 "linkly_tutorial",
                 "minimal_path",
+                "onboarding_tour",
                 "persistent_state",
                 "timer_wake"
             ])
@@ -955,7 +959,8 @@ mod tests {
                 "kanban_c2_persistence",
                 "kanban_c4_ticket_flow",
                 "kanban_c6_discussion",
-                "linkly_tutorial"
+                "linkly_tutorial",
+                "onboarding_tour"
             ])
         );
     }

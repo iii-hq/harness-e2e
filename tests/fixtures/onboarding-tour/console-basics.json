@@ -1,0 +1,74 @@
+{
+  "id": "console-basics",
+  "agent": "ade-worker-builder",
+  "steps": [
+    {
+      "id": "message",
+      "ask": "hello",
+      "condition": {
+        "type": "harness::turn-completed",
+        "config": {}
+      }
+    },
+    {
+      "id": "tabs"
+    },
+    {
+      "id": "coder"
+    },
+    {
+      "id": "composability",
+      "ask": "Add a database worker to this project, then tell me what it can do. When you are ending your turn, write step_composability_completed: true to state, scope \"onboarding\".",
+      "condition": {
+        "type": "state",
+        "config": {
+          "scope": "onboarding",
+          "key": "step_composability_completed"
+        }
+      }
+    },
+    {
+      "id": "stay-in-touch"
+    },
+    {
+      "id": "observability"
+    },
+    {
+      "id": "discoverability",
+      "ask": "What can this system do right now? List the workers that are registered and the functions each one exposes. When you are ending your turn, write step_discoverability_completed: true to state, scope \"onboarding\".",
+      "condition": {
+        "type": "state",
+        "config": {
+          "scope": "onboarding",
+          "key": "step_discoverability_completed"
+        }
+      }
+    },
+    {
+      "id": "extensibility",
+      "ask": "Using the database worker, build me a TODO list: a CRUD app with an injectable console UI on the browser SDK. Make it reactive with triggers: a database::row-changed trigger on the todo table. Ensure the TODO application is reactive to triggers (ie. database changes) and that emits Triggers when a change happens (ie. register trigger type). Do not navigate the user away from the current workspace. Do not use screenshots or other UI based checks. Verify via functions. This is an onboarding demo. Open the TODO page for me when it is done. When you are ending your turn, write step_extensibility_completed: true to state, scope \"onboarding\".",
+      "condition": {
+        "type": "state",
+        "config": {
+          "scope": "onboarding",
+          "key": "step_extensibility_completed"
+        }
+      }
+    },
+    {
+      "id": "reactivity",
+      "ask": "Add 3 items to the TODO list, and set a Trigger that fires when each one is checked off by the user, not you the agent. Pre-existing triggers should work, and were tested in the last step. When you are ending your turn, write step_reactivity_completed: true to state, scope \"onboarding\".",
+      "condition": {
+        "type": "state",
+        "config": {
+          "scope": "onboarding",
+          "key": "step_reactivity_completed"
+        }
+      }
+    },
+    {
+      "id": "clean-up",
+      "ask": "Remove the onboarding worker from this project, then close the onboarding pane."
+    }
+  ]
+}

@@ -122,7 +122,8 @@
     "registry_implementation",
     "registry_environment",
     "registry_verification",
-    "linkly_tutorial"
+    "linkly_tutorial",
+    "onboarding_tour"
   ],
   "requirements": {
     "shell_coder_sandbox": [
@@ -188,6 +189,10 @@
     "linkly_tutorial": [
       "The linkly stack: a fresh linkly-agentic scaffold as the Compose project that hosts the Harness, with the model's provider and its key",
       "Node 22+, npm and curl on the executor"
+    ],
+    "onboarding_tour": [
+      "The onboarding stack: a fresh harness template project with the tour's onboarding worker, as iii project init --learn-iii creates it, with the model's provider and its key",
+      "The Onboarding agent profile (ade-worker-builder) the harness template ships, served by the Directory"
     ]
   },
   "suites": [
@@ -263,6 +268,23 @@
       "repetitions": 1,
       "technical_retries": 0,
       "lane": "local-linkly"
+    },
+    {
+      "id": "onboarding",
+      "label": "Complete the onboarding tour",
+      "purpose": "Can a new user still finish the onboarding we hand them? One session on a fresh harness project with the tour's worker, as iii project init --learn-iii creates it, sends each tour step's prompt under the tour's Onboarding profile: say hello, add a database, list what the system can do, build a reactive TODO worker with a Console page, then remove the tour. The test plays the tour page: it closes the button steps, closes each agent step when its trigger fires, and checks the TODO items off as the user would. Not covered: the setup wizard and the tour's on-screen guidance (the page, the spotlight and the panels it opens).",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [],
+      "scenarios": [
+        "onboarding_tour"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-onboarding"
     },
     {
       "id": "pr",

@@ -557,7 +557,7 @@ impl E2eContext {
     }
 }
 
-fn inspection_routing(
+pub(crate) fn inspection_routing(
     function_id: &str,
     namespace: Option<String>,
     mut payload: Value,

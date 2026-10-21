@@ -398,17 +398,19 @@ try {
   const mine = page.locator('[data-stack-group="local"]')
   await repo.waitFor()
   await page
-    .getByText(/^3 in the repository, read-only · none in this Console\. /)
+    .getByText(/^4 in the repository, read-only · none in this Console\. /)
     .waitFor()
   assert.deepEqual(
     repository.map((stack) => stack.id),
-    ['default', 'harness-template', 'linkly'],
+    ['default', 'harness-template', 'linkly', 'onboarding'],
   )
   for (const stack of repository) {
     const row = repo.locator(`[data-stack="${stack.id}"]`)
     await row.getByText(`stacks/${stack.id}.yaml`, { exact: true }).waitFor()
     await row.getByRole('listitem', { name: 'iii: latest' }).waitFor()
-    await row.getByRole('listitem', { name: 'workers: 5' }).waitFor()
+    await row
+      .getByRole('listitem', { name: `workers: ${stack.containers.length}` })
+      .waitFor()
     await row
       .getByRole('listitem', { name: `template: ${stack.template ?? 'none'}` })
       .waitFor()
@@ -665,7 +667,7 @@ try {
   for (const warning of warnings)
     await copy.getByText(warning, { exact: true }).waitFor()
   await page
-    .getByText(/^3 in the repository, read-only · 1 in this Console\. /)
+    .getByText(/^4 in the repository, read-only · 1 in this Console\. /)
     .waitFor()
 
   // Edit opens it again, as saved, on the tab last used.
