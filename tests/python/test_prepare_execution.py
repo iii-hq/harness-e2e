@@ -96,6 +96,16 @@ class LatestCliTests(unittest.TestCase):
             "skipped": [{"version": "0.24.4-rc.2", "reason": f"publishes no {prepare_execution.CLI_ASSET}"}],
         })
 
+    def test_the_cli_brings_the_vm_companions_its_release_publishes(self):
+        worker, init = prepare_execution.CLI_COMPANIONS
+        other = "sha256:" + "d" * 64
+        cli, _, _ = self.resolve({"0.24.4-rc.1": [ARCHIVE], "0.24.4-rc.2": [
+            ARCHIVE, {"name": worker, "digest": other}, {"name": "iii-worker-x86_64-unknown-linux-musl.tar.gz"},
+        ]})
+        self.assertEqual(cli["companions"], [{"asset": worker, "sha256": other}])
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, f"{init} has no SHA-256 digest"):
+            self.resolve({"0.24.4-rc.1": [ARCHIVE], "0.24.4-rc.2": [ARCHIVE, {"name": init}]})
+
     def test_integrity_and_a_named_version_still_fail(self):
         with self.assertRaisesRegex(prepare_execution.ResolutionError, "nor does any candidate"):
             self.resolve({"0.24.4-rc.1": [], "0.24.4-rc.2": []})

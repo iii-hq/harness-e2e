@@ -657,9 +657,11 @@ class ExecutorTests(unittest.TestCase):
         for owner in ("dockerd", "group", "group child"):
             ignored = next(line for line in lines if line.startswith(f"{owner} SigIgn:"))
             self.assertEqual(int(ignored.split()[-1], 16) & 0x6, 0, ignored)
+        # The group keeps no supplementary group but KVM's, where the host has it.
+        groups = f"--groups {os.stat('/dev/kvm').st_gid}" if os.path.exists("/dev/kvm") else "--clear-groups"
         self.assertEqual([line for line in lines if "SigIgn" not in line], [
             f"dockerd --group 1234 as {os.getuid()} telemetry=false",
-            "setpriv --reuid 4321 --regid 1234 --clear-groups env --default-signal=INT,QUIT "
+            f"setpriv --reuid 4321 --regid 1234 {groups} env --default-signal=INT,QUIT "
             "HARNESS_E2E_OWN_DOCKER=1 bash scripts/run_exact_stack_group.sh",
             # Its launcher knows every container of that daemon is the group's.
             "group ran as the user telemetry=false own docker=1",

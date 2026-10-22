@@ -62,6 +62,9 @@ TEMPLATES_REPOSITORY = "iii-hq/templates"
 CONTRACT_SCHEMA = "rc-e2e/v2"
 CLI_TARGET = "x86_64-unknown-linux-gnu"
 CLI_ASSET = f"iii-{CLI_TARGET}.tar.gz"
+#: What Compose boots a VM worker with, from the CLI's own release; the
+#: installer puts them beside iii, the worker for glibc and the init static.
+CLI_COMPANIONS = (f"iii-worker-{CLI_TARGET}.tar.gz", "iii-init-x86_64-unknown-linux-musl.tar.gz")
 #: Stack keys the executor reads; the rest of a stack is the Compose project.
 EXECUTOR_KEYS = ("iii", "template")
 #: The runner executing the scenarios inside the declared stack.
@@ -195,19 +198,23 @@ def release_candidates(versions: list[str]) -> list[str]:
     return [version for _, version in ranked]
 
 
-def cli_release(version: str, token: str | None) -> dict[str, str] | None:
-    """iii/v<version>'s archive for the groups, with its digest; None while
-    the release publishes no such archive."""
+def cli_release(version: str, token: str | None) -> dict[str, Any] | None:
+    """iii/v<version>'s archive for the groups, with its digest and the
+    companions the release publishes; None while it publishes no archive."""
     release = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/releases/tags/iii/v{version}", token=token)
-    for asset in release.get("assets") or []:
-        if asset.get("name") == CLI_ASSET:
-            digest = asset.get("digest")
-            # The digest is what the groups check the download against.
-            if not isinstance(digest, str) or not SHA256.fullmatch(digest):
-                raise ResolutionError(f"iii/v{version} {CLI_ASSET} has no SHA-256 digest")
-            digest = digest if digest.startswith("sha256:") else f"sha256:{digest}"
-            return {"version": version, "target": CLI_TARGET, "asset": CLI_ASSET, "sha256": digest}
-    return None
+    assets = {asset.get("name"): asset for asset in release.get("assets") or []}
+    if CLI_ASSET not in assets:
+        return None
+
+    def digest(name: str) -> str:
+        value = assets[name].get("digest")
+        # The digest is what the groups check the download against.
+        if not isinstance(value, str) or not SHA256.fullmatch(value):
+            raise ResolutionError(f"iii/v{version} {name} has no SHA-256 digest")
+        return value if value.startswith("sha256:") else f"sha256:{value}"
+
+    return {"version": version, "target": CLI_TARGET, "asset": CLI_ASSET, "sha256": digest(CLI_ASSET),
+            "companions": [{"asset": name, "sha256": digest(name)} for name in CLI_COMPANIONS if name in assets]}
 
 
 def resolve_cli(selector: str, token: str | None, skipped: list[dict[str, str]] | None = None) -> dict[str, str]:

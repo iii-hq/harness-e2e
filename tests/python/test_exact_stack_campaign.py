@@ -979,6 +979,17 @@ fail() {
         value["reporting"] = {"channel": "#releases"}
         MODULE.validate_contract(value)
 
+    def test_cli_companions_are_archives_of_the_release_with_digests(self):
+        value = campaign_contract()
+        companion = {"asset": "iii-init-x86_64-unknown-linux-musl.tar.gz", "sha256": "sha256:" + "a" * 64}
+        value["runtime"]["cli"]["companions"] = [companion]
+        MODULE.validate_contract(value)
+        for broken, error in (({"asset": "../iii.tar.gz"}, "must name an archive"),
+                              ({"sha256": "a" * 12}, "sha256")):
+            value["runtime"]["cli"]["companions"] = [{**companion, **broken}]
+            with self.subTest(broken=broken), self.assertRaisesRegex(ValueError, error):
+                MODULE.validate_contract(value)
+
     def test_rejects_a_suite_the_pinned_runner_cannot_execute(self):
         contract = campaign_contract()
         contract["suite"]["groups"][0]["scenarios"] = ["a_scenario_that_never_shipped"]
@@ -1234,29 +1245,38 @@ fail() {
                 self.assertEqual(evidence["runtime"]["version_report_warnings"], warnings)
                 self.assertEqual(evidence["runtime"]["observed_versions"]["harness"], "1.9.0")
 
-    def test_compose_evidence_rejects_the_removed_lifecycle_executable(self):
+    def test_compose_evidence_rejects_the_lifecycle_executable_unless_iii_started_it(self):
+        """Compose boots a VM worker through the helper; the executor running
+        it is lifecycle outside Compose."""
         contract = campaign_contract()
         expected = {
             node["worker"]: node["version"]
             for node in contract["orchestration"]["nodes"]
             if node["kind"] == "binary"
         }
+        helper = "iii-" + "worker"
+        compose = {"pid": 10, "ppid": 1, "comm": "iii", "args": "/run/bin/iii compose --namespace project-one"}
+        vm = {"pid": 11, "ppid": 10, "comm": helper, "args": f"/run/bin/{helper} __vm-boot"}
         with tempfile.TemporaryDirectory() as directory:
             compose_path = Path(directory) / "worker-compose.yaml"
             compose_path.write_text("namespace: project-one\ncontainers: {}\n")
-            with self.assertRaisesRegex(ValueError, "forbidden lifecycle executable"):
-                MODULE.compose_evidence(
+
+            def evidence(during):
+                return MODULE.compose_evidence(
                     contract,
                     compose_path,
                     "project-one",
                     {name: {} for name in ("add", "up", "status", "down")},
                     {"workers": [{"name": worker, "version": version} for worker, version in expected.items()]},
-                    {
-                        "before": [],
-                        "during": [{"comm": "iii-" + "worker", "args": "iii-" + "worker"}],
-                        "after": [],
-                    },
+                    {"before": [], "during": during, "after": []},
                 )
+
+            evidence([compose, vm, {"pid": 12, "ppid": 11, "comm": helper, "args": helper}])
+            for during in ([{"comm": helper, "args": helper}],
+                           [{"pid": 11, "ppid": 5, "comm": "bash", "args": f"{helper} start"}],
+                           [compose, {**vm, "ppid": 1}]):
+                with self.subTest(during=during), self.assertRaisesRegex(ValueError, "forbidden lifecycle executable"):
+                    evidence(during)
 
     def test_packages_raw_file_digests(self):
         with tempfile.TemporaryDirectory() as directory:
