@@ -697,16 +697,28 @@ def project_scaffold(
         # tour's worker does on the `harness` template. Only what the stack
         # declares, the lock's roots: the rest of the assembled graph arrives
         # through the template's own workers.
+        # The runner keeps its own way in, `compose::add` with its
+        # dependencies, which the template does not declare.
         roots = set((runtime.get("lock") or {}).get("graphs") or {}) or {
             package_of(container) for container in assembled.values()
         }
+        added = []
         for name, container in assembled.items():
             package = package_of(container)
-            if package not in roots or declares((template_packages or {}).get(package, package)):
+            if (package not in roots or package == RUNNER
+                    or declares((template_packages or {}).get(package, package))):
                 continue
             if name in containers:
                 raise ValueError(f"container {name} is already used by another worker")
             containers[name] = copy.deepcopy(container)
+            added.append(name)
+        # The assembled order names graph workers the template may not declare;
+        # Compose refuses a `start_after` on one it does not.
+        for name in added:
+            if "start_after" in containers[name]:
+                containers[name]["start_after"] = [
+                    dependency for dependency in containers[name]["start_after"] if dependency in containers
+                ]
 
     if not declares(RUNNER):
         containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
