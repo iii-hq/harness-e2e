@@ -571,7 +571,10 @@ pub(crate) fn inspection_routing(
         ("default".into(), payload)
     } else if matches!(
         function_id,
-        "engine::health::check" | "engine::workers::list" | "engine::triggers::list"
+        "engine::health::check"
+            | "engine::workers::list"
+            | "engine::triggers::list"
+            | "engine::registered-triggers::list"
     ) || function_id.starts_with("engine::traces::")
         || function_id.starts_with("stream::")
     {
@@ -826,6 +829,7 @@ mod tests {
             "engine::health::check",
             "engine::workers::list",
             "engine::triggers::list",
+            "engine::registered-triggers::list",
             "engine::traces::list",
             "engine::traces::tree",
             "stream::list",
