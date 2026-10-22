@@ -252,7 +252,16 @@ each other step's condition. When a condition fires, the step is closed with
 `learn-iii::steps::complete`. After the dialogue the test adds two expenses
 through the agent's expense tracker, one still to be reimbursed and one
 already reimbursed, as the tracker's page would. It listens for the tracker's
-own trigger and reads its totals before and after.
+own trigger after each and reads its totals before, between and after.
+The objectives, gates in bold: **every tour step closed**, **the database
+worker runs**, the Discoverability answer saying what each worker can do, **a new
+worker with at least two functions**, its Console page, an expense's four
+fields, a total still to be reimbursed that counts only the unreimbursed
+expense, the tracker's own trigger type, **that trigger firing for each added
+expense**, **a trigger the chat bound on it**, **the onboarding worker
+removed**, and the tour served matching the fixture. Between prompts the test
+waits, as the tour's card does, while the agent is still on a step: a turn
+running or a wake it armed, up to twenty minutes.
 [tests/fixtures/onboarding-tour/learn-iii.json](tests/fixtures/onboarding-tour/learn-iii.json)
 is the tour the test was written against. If the worker serves a different
 tour, the run loses the `tour.current` criterion and nothing else. When the

@@ -9,7 +9,19 @@
 //! other step's condition the way the card binds it, and closes that step with
 //! `learn-iii::steps::complete` when its trigger fires. `capture` then checks
 //! what each step should have left behind, and adds two expenses through the
-//! agent's tracker as the user would.
+//! agent's tracker as the user would. The objectives, gates marked:
+//!
+//! - Tour: every step closed (gate); the tour served is the fixture's.
+//! - Composability: the `database` worker runs (gate).
+//! - Discoverability: the answer says what `database`, `state` and
+//!   `harness` can do, in words of the functions they registered.
+//! - Extensibility: a new worker with at least two functions (gate), its
+//!   Console page, an expense's four fields, and a total still to be
+//!   reimbursed that counts the unreimbursed expense and not the other.
+//! - Reactivity: the tracker's own trigger type, that trigger firing for
+//!   each expense the runner adds (gate), and a trigger the chat bound on it
+//!   (gate).
+//! - Clean up: the `onboarding` worker gone (gate).
 //!
 //! `tests/fixtures/onboarding-tour/learn-iii.json` is the tour this test was
 //! written against: its steps, prompts, conditions and profile, projected from
@@ -50,6 +62,9 @@ const FIXTURE: &str = include_str!("../../tests/fixtures/onboarding-tour/learn-i
 const DISCOVERED: [&str; 3] = ["database", "state", "harness"];
 /// How long an added expense may take to ring the tracker's trigger.
 const FIRE_WAIT: Duration = Duration::from_secs(10);
+/// How long the user waits on a step the agent is still working on before
+/// clicking on to the next one.
+const STEP_WAIT: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Tour {
@@ -126,6 +141,25 @@ fn exchange_of(step_id: &str) -> Option<usize> {
         .position(|step| step.id == step_id)
 }
 
+/// The step whose prompt opens an exchange.
+fn step_of(exchange: usize) -> Option<&'static Step> {
+    tour()
+        .steps
+        .iter()
+        .filter(|step| step.ask.is_some())
+        .nth(exchange)
+}
+
+/// Whether the agent is still on its last prompt: a turn running or queued,
+/// or a wake it armed still to come.
+fn still_working(status: &Value) -> (bool, bool) {
+    let running = matches!(
+        status["status"].as_str(),
+        Some("running" | "awaiting_functions")
+    ) || items(status, "queued").next().is_some();
+    (running, status["expects_wake"] == true)
+}
+
 struct Metric {
     id: &'static str,
     weight: u8,
@@ -142,32 +176,32 @@ const METRICS: [Metric; 12] = [
         weight: 20,
         ratio: true,
         gate: Some(20),
-        label: "Every tour step closed",
-        question: "Does the tour's own progress show every step of the tour complete?",
+        label: "Every step of the tour closed",
+        question: "When the dialogue ends, does learn-iii::progress::get show all ten steps of the tour complete?",
     },
     Metric {
         id: "composability.database",
         weight: 8,
         ratio: false,
         gate: Some(8),
-        label: "The database worker runs",
-        question: "Did the Composability step add a database worker that is running?",
+        label: "The database worker is running",
+        question: "Is a `database` worker running in the project: a ready container or a connected worker?",
     },
     Metric {
         id: "discoverability.functions",
         weight: 8,
         ratio: true,
         gate: None,
-        label: "The answer names each worker's real functions",
-        question: "For each of the database, state and harness workers, does the Discoverability answer name a function that worker had registered when it was given?",
+        label: "The answer says what each worker can do",
+        question: "For each of `database`, `state` and `harness`, does a line of the Discoverability answer that names the worker describe something it can do: a word starting as one of the functions it had registered does (`query` for queries, `update` for updates)?",
     },
     Metric {
         id: "extensibility.worker",
         weight: 12,
         ratio: false,
         gate: Some(12),
-        label: "An expense tracker worker runs",
-        question: "Did the Extensibility step add a worker of its own, running with at least two functions?",
+        label: "A new worker runs with at least two functions",
+        question: "Is a worker the dialogue added, other than the database and the tour, connected with at least two functions? The expense tracker is the new worker whose functions take an expense.",
     },
     Metric {
         id: "extensibility.page",
@@ -175,7 +209,7 @@ const METRICS: [Metric; 12] = [
         ratio: false,
         gate: None,
         label: "The tracker has a Console page",
-        question: "Does that worker inject a page into the Console?",
+        question: "Does the expense tracker inject a page into the Console (a console:script trigger)?",
     },
     Metric {
         id: "extensibility.fields",
@@ -183,7 +217,7 @@ const METRICS: [Metric; 12] = [
         ratio: true,
         gate: None,
         label: "An expense has the four fields asked for",
-        question: "Does the tracker's function that adds an expense take a description, an amount, a category and whether it was reimbursed?",
+        question: "Of description, amount, category and whether it was reimbursed, how many does the tracker take for an expense or give back for the one the runner added?",
     },
     Metric {
         id: "extensibility.total",
@@ -191,7 +225,7 @@ const METRICS: [Metric; 12] = [
         ratio: false,
         gate: None,
         label: "The total still to be reimbursed is right",
-        question: "When one expense still to be reimbursed and one already reimbursed are added, does a total the tracker reports grow by the first one's amount alone?",
+        question: "Does a total the tracker reports grow by the amount of an expense not yet reimbursed, and hold when an expense already reimbursed is added?",
     },
     Metric {
         id: "reactivity.trigger_type",
@@ -199,31 +233,31 @@ const METRICS: [Metric; 12] = [
         ratio: false,
         gate: None,
         label: "The tracker registers a trigger type",
-        question: "Did the tracker register a trigger type of its own?",
+        question: "Did the expense tracker register a trigger type of its own?",
     },
     Metric {
         id: "reactivity.fires",
         weight: 14,
         ratio: true,
         gate: Some(14),
-        label: "Adding an expense rings a trigger",
-        question: "When the user adds each of two expenses through the tracker, does the tracker's trigger fire?",
+        label: "Each new expense fires the tracker's trigger",
+        question: "When the runner adds each of two expenses through the tracker, as its page would, does one of the tracker's trigger types fire within ten seconds?",
     },
     Metric {
         id: "reactivity.chat_trigger",
         weight: 6,
         ratio: false,
         gate: Some(6),
-        label: "A trigger in the chat waits on new expenses",
-        question: "Is a trigger, bound by something other than the tracker, waiting on the tracker's trigger type?",
+        label: "The chat bound a trigger on new expenses",
+        question: "Did the chat register a trigger on one of the tracker's trigger types (an accepted engine::register_trigger in the transcript), or is such a binding, by anything but the tracker, still live?",
     },
     Metric {
         id: "cleanup.removed",
         weight: 8,
         ratio: false,
         gate: Some(8),
-        label: "The onboarding worker is removed",
-        question: "Did the Clean up step remove the onboarding worker from the project?",
+        label: "The onboarding worker is gone",
+        question: "After Clean up, is the `onboarding` container out of the project and its worker disconnected?",
     },
     Metric {
         id: "tour.current",
@@ -231,7 +265,7 @@ const METRICS: [Metric; 12] = [
         ratio: false,
         gate: None,
         label: "The tour is the one this test knows",
-        question: "Does the worker serve the tour this test was written against: same steps, prompts, conditions and profile?",
+        question: "Does the worker serve the tour in tests/fixtures/onboarding-tour/learn-iii.json: same steps, prompts, conditions and profile?",
     },
 ];
 
@@ -467,25 +501,25 @@ fn declared_containers(status: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The assistant's text in each exchange: everything it wrote from one
-/// runner message up to the next. Wake notifications open turns, not
-/// exchanges.
-fn exchange_texts(transcript: &Value) -> Vec<String> {
+/// The assistant's text in each exchange: everything it wrote from one of
+/// the runner's prompts up to the next. Only those open an exchange: a wake
+/// notification or the Harness's own skill update is a user message too.
+fn exchange_texts(transcript: &Value, prompts: &[String]) -> Vec<String> {
     let mut texts: Vec<String> = Vec::new();
     for entry in items(transcript, "messages") {
         let message = &entry["message"];
+        // What it wrote, not what it thought: a thinking block echoes the
+        // prompt it is answering.
         let text = message["content"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|block| block["type"] == "text")
             .filter_map(|block| block["text"].as_str())
             .collect::<Vec<_>>()
             .join("\n");
         match message["role"].as_str() {
-            Some("user")
-                if entry["origin"]["notification"] != true
-                    && !text.trim_start().starts_with("[notification]") =>
-            {
+            Some("user") if prompts.iter().any(|prompt| text.trim() == prompt.trim()) => {
                 texts.push(String::new())
             }
             Some("assistant") => {
@@ -500,15 +534,10 @@ fn exchange_texts(transcript: &Value) -> Vec<String> {
     texts
 }
 
-/// The expense tracker the Extensibility step added: a worker that was not
-/// there before the dialogue, is not the database or the tour, and has a
-/// Console page, else the one with the most functions.
-fn tracker_worker(baseline: &Value, workers: &Value, registered: &Value) -> Option<String> {
+/// The workers the dialogue added: connected now, not there before, and
+/// neither the database, the tour nor the runner. (name, function count)
+fn new_workers(baseline: &Value, workers: &Value) -> Vec<(String, u64)> {
     let before = connected_workers(&baseline["workers"]);
-    let with_page: HashSet<&str> = items(registered, "registered_triggers")
-        .filter(|trigger| trigger["trigger_type"] == "console:script")
-        .filter_map(|trigger| trigger["worker_name"].as_str())
-        .collect();
     items(workers, "workers")
         .filter(|worker| worker["status"] == "connected")
         .filter_map(|worker| {
@@ -517,20 +546,86 @@ fn tracker_worker(baseline: &Value, workers: &Value, registered: &Value) -> Opti
                 && ![TOUR_WORKER, "database", RUNNER_WORKER].contains(&name))
             .then(|| {
                 (
-                    with_page.contains(name),
-                    worker["function_count"].as_u64().unwrap_or(0),
                     name.to_string(),
+                    worker["function_count"].as_u64().unwrap_or(0),
                 )
             })
         })
-        .max()
-        .map(|(_, _, name)| name)
+        .collect()
+}
+
+/// The expense tracker among the new workers, each with its described
+/// functions: the one whose functions take an expense best, then the one
+/// with a Console page, then the one with the most functions.
+fn tracker_of<'a>(
+    candidates: &'a [(String, u64, Value)],
+    registered: &Value,
+) -> Option<&'a (String, u64, Value)> {
+    let with_page: HashSet<&str> = items(registered, "registered_triggers")
+        .filter(|trigger| trigger["trigger_type"] == "console:script")
+        .filter_map(|trigger| trigger["worker_name"].as_str())
+        .collect();
+    candidates
+        .iter()
+        .max_by_key(|(name, functions, described)| {
+            let takes = adder(described).map_or(0, |(_, schema)| 1 + expense_fields(&schema).len());
+            (
+                takes,
+                with_page.contains(name.as_str()),
+                *functions,
+                name.clone(),
+            )
+        })
 }
 
 fn function_ids(listed: &Value, worker: &str) -> Vec<String> {
     items(listed, "functions")
         .filter(|function| function["worker_name"] == worker)
         .filter_map(|function| function["function_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The words of a function's name, its camelCase split too: `listTables`
+/// is `list` and `tables`.
+fn name_words(name: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for c in name.chars() {
+        if (!c.is_ascii_alphanumeric() || c.is_ascii_uppercase()) && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        if c.is_ascii_alphanumeric() {
+            word.push(c.to_ascii_lowercase());
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// The functions of `worker` an answer speaks of: on a line that names the
+/// worker, a word that starts as a word of the function's name does, four
+/// letters or more (`query` in "queries", `update` in "partial updates").
+/// The prompt asks what the workers do, not for their ids.
+fn named_functions(answer: &str, worker: &str, ids: &[String]) -> Vec<String> {
+    // The worker named as a word: `state` is not in "statements".
+    let words: HashSet<String> = answer
+        .lines()
+        .map(name_words)
+        .filter(|line| line.iter().any(|word| word == worker))
+        .flatten()
+        .collect();
+    let prefix = format!("{worker}::");
+    ids.iter()
+        .filter(|id| {
+            name_words(id.strip_prefix(&prefix).unwrap_or(id))
+                .iter()
+                // `databases` starts as the worker's own name does: it says nothing.
+                .filter(|part| part.len() >= 4 && !part.starts_with(&worker[..worker.len().min(4)]))
+                .any(|part| words.iter().any(|word| word.starts_with(&part[..4])))
+        })
+        .cloned()
         .collect()
 }
 
@@ -566,38 +661,54 @@ const FIELDS: [(&str, &[&str]); 4] = [
 /// Which of the four fields each property of a request schema says, by its
 /// name: (field, property).
 fn expense_fields(schema: &Value) -> Vec<(&'static str, String)> {
+    fields_named(
+        schema["properties"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name.as_str()),
+    )
+}
+
+/// Which of the four fields each name says: (field, name).
+fn fields_named<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(&'static str, String)> {
     let mut found: Vec<(&'static str, String)> = Vec::new();
-    for property in schema["properties"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .map(|(name, _)| name)
-    {
+    for property in names {
         let name = property.to_ascii_lowercase();
         let field = FIELDS.iter().find(|(field, words)| {
             !found.iter().any(|(taken, _)| taken == field)
                 && words.iter().any(|word| name.contains(word))
         });
         if let Some((field, _)) = field {
-            found.push((field, property.clone()));
+            found.push((field, property.to_string()));
         }
     }
     found
 }
 
 /// The tracker's function that adds an expense: the one whose request names
-/// the most of the four fields, at least two, an add-like name breaking a tie.
+/// the most of the four fields, at least two, an add-like name breaking a
+/// tie. A tracker that declares no request schema is not held to one: its
+/// add-like function is taken by name.
 fn adder(described: &Value) -> Option<(String, Value)> {
+    const ADDS: [&str; 7] = ["add", "create", "insert", "record", "new", "log", "track"];
+    const OTHER_WRITES: [&str; 6] = ["update", "delete", "remove", "clear", "reset", "set"];
     items(described, "functions")
         .filter_map(|function| {
             let id = function["function_id"].as_str()?.to_string();
             let schema = function["request_schema"].clone();
             let fields = expense_fields(&schema).len();
-            let lowered = id.to_ascii_lowercase();
-            let add_like = ["add", "create", "insert", "record", "new", "log", "track"]
-                .iter()
-                .any(|word| lowered.contains(word));
-            (fields >= 2).then_some(((fields, add_like, id.clone()), id, schema))
+            let name = id.rsplit("::").next().unwrap_or(&id).to_ascii_lowercase();
+            let add_like = ADDS.iter().any(|word| name.contains(word))
+                && !OTHER_WRITES.iter().any(|word| name.contains(word));
+            let undeclared = schema["properties"]
+                .as_object()
+                .is_none_or(|properties| properties.is_empty());
+            (fields >= 2 || (add_like && undeclared)).then_some((
+                (fields, add_like, id.contains("expense"), id.clone()),
+                id,
+                schema,
+            ))
         })
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, id, schema)| (id, schema))
@@ -700,6 +811,21 @@ fn reimbursed_value(property: &Value, reimbursed: bool) -> Value {
 /// the four fields where the schema has them, in cents where the amount is a
 /// whole number, and a plain value for anything else the schema requires.
 fn expense_payload(schema: &Value, expense: &Expense) -> (Value, Option<f64>) {
+    if schema["properties"]
+        .as_object()
+        .is_none_or(|properties| properties.is_empty())
+    {
+        // Nothing declared: the four fields under the prompt's own words.
+        return (
+            json!({
+                "description": expense.description,
+                "amount": expense.amount,
+                "category": expense.category,
+                "reimbursed": expense.reimbursed,
+            }),
+            Some(expense.amount),
+        );
+    }
     let fields = expense_fields(schema);
     let required: Vec<&str> = items(schema, "required")
         .filter_map(Value::as_str)
@@ -765,9 +891,10 @@ fn numbers(value: &Value, path: &str, out: &mut HashMap<String, f64>) {
     }
 }
 
-/// The paths whose number grew by exactly `delta` from one answer to the
-/// next. A field the first answer did not have counts from zero, an array
-/// element never: a new expense in a list is not a total.
+/// The paths whose number grew by `delta` from one answer to the next, in the
+/// unit it was sent or a hundred times either way (an amount in units kept in
+/// cents, or the reverse). A field the first answer did not have counts from
+/// zero, an array element never: a new expense in a list is not a total.
 fn moved_by(before: &Value, after: &Value, delta: f64) -> Vec<String> {
     let (mut old, mut new) = (HashMap::new(), HashMap::new());
     numbers(before, "", &mut old);
@@ -779,7 +906,11 @@ fn moved_by(before: &Value, after: &Value, delta: f64) -> Vec<String> {
                 .get(path)
                 .copied()
                 .or_else(|| (!path.contains('[')).then_some(0.0));
-            start.is_some_and(|start| (value - start - delta).abs() < 1e-6)
+            start.is_some_and(|start| {
+                [delta, delta * 100.0, delta / 100.0]
+                    .iter()
+                    .any(|delta| (value - start - delta).abs() < 1e-6)
+            })
         })
         .map(|(path, _)| path)
         .collect();
@@ -787,15 +918,109 @@ fn moved_by(before: &Value, after: &Value, delta: f64) -> Vec<String> {
     moved
 }
 
-/// Add the two expenses through the tracker as its page would, count those
-/// its own trigger answered, and read its totals before and after.
+/// The paths whose number is the same in both answers.
+fn held(before: &Value, after: &Value) -> HashSet<String> {
+    let (mut old, mut new) = (HashMap::new(), HashMap::new());
+    numbers(before, "", &mut old);
+    numbers(after, "", &mut new);
+    new.into_iter()
+        .filter(|(path, value)| old.get(path).is_some_and(|old| (value - old).abs() < 1e-6))
+        .map(|(path, _)| path)
+        .collect()
+}
+
+/// The keys of the object in an answer that holds this description: the
+/// expense as the tracker kept it.
+fn record_keys(value: &Value, description: &str) -> Option<Vec<String>> {
+    match value {
+        Value::Object(fields) => {
+            if fields
+                .values()
+                .any(|field| field.as_str() == Some(description))
+            {
+                return Some(fields.keys().cloned().collect());
+            }
+            fields
+                .values()
+                .find_map(|field| record_keys(field, description))
+        }
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| record_keys(value, description)),
+        _ => None,
+    }
+}
+
+/// The triggers the chat bound on these types, from the transcript: an
+/// `engine::register_trigger` call the engine accepted. A wake armed `once`
+/// is gone once it fires, so the live bindings alone miss it.
+fn chat_bindings(transcript: &Value, types: &[String]) -> Vec<Value> {
+    let accepted: HashSet<&str> = items(transcript, "messages")
+        .map(|entry| &entry["message"])
+        .filter(|message| {
+            message["role"] == "function_result"
+                && message["function_id"] == "engine::register_trigger"
+                && message["is_error"] != true
+        })
+        .filter_map(|message| message["function_call_id"].as_str())
+        .collect();
+    items(transcript, "messages")
+        .flat_map(|entry| items(&entry["message"], "content"))
+        .filter(|block| block["type"] == "function_call")
+        .filter_map(|block| {
+            let arguments = &block["arguments"];
+            // Through the Harness's `agent_trigger`, or called directly.
+            let (function, payload) = if block["function_id"] == "agent_trigger" {
+                (&arguments["function"], &arguments["payload"])
+            } else {
+                (&block["function_id"], arguments)
+            };
+            let kind = payload["trigger_type"].as_str()?;
+            (function == "engine::register_trigger"
+                && types.iter().any(|own| own == kind)
+                && block["id"].as_str().is_some_and(|id| accepted.contains(id)))
+            .then(|| {
+                json!({
+                    "call": block["id"],
+                    "trigger_type": kind,
+                    "config": payload["config"],
+                    "once": payload["once"],
+                })
+            })
+        })
+        .collect()
+}
+
+async fn read_all(context: &E2eContext, readers: &[String]) -> Vec<Option<Value>> {
+    let mut answers = Vec::new();
+    for reader in readers {
+        answers.push(context.trigger_value(reader, json!({})).await.ok());
+    }
+    answers
+}
+
+/// What adding the two expenses showed.
+struct Added {
+    /// How many of them the tracker's own trigger answered.
+    fired: usize,
+    /// The totals that grew by the first one's amount and held for the second.
+    total: Vec<String>,
+    /// The names the tracker took or gave back for the first one.
+    names: Vec<String>,
+    evidence: Value,
+}
+
+/// Add the two expenses through the tracker as its page would, one at a
+/// time: listen for the tracker's trigger after each, and read its totals
+/// before, between and after, so each total is read seconds from the add it
+/// answers rather than after whatever the chat's trigger set off.
 async fn add_expenses(
     context: &E2eContext,
     run_id: &str,
     adder: &(String, Value),
     readers: &[String],
     trigger_types: &[String],
-) -> (usize, Vec<String>, Value) {
+) -> Added {
     let heard = Arc::new(Mutex::new(Vec::<u128>::new()));
     let function_id = format!("e2e::onboarding::{}::expense-added", &digest(run_id)[..12]);
     let sink = heard.clone();
@@ -824,11 +1049,9 @@ async fn add_expenses(
             }
         }
     }
-    let mut totals_before = Vec::new();
-    for reader in readers {
-        totals_before.push(context.trigger_value(reader, json!({})).await.ok());
-    }
+    let mut totals = vec![read_all(context, readers).await];
     let mut added = Vec::new();
+    let mut answers = Vec::new();
     let mut fired = 0;
     let mut owed = None;
     for expense in &EXPENSES {
@@ -847,35 +1070,68 @@ async fn add_expenses(
         }
         let answered = lock_unpoisoned(&heard).len() > before;
         fired += usize::from(answered);
+        totals.push(read_all(context, readers).await);
         added.push(json!({
             "payload": payload,
             "added": answer.is_ok(),
-            "error": answer.err().map(|error| format!("{error:#}")),
+            "error": answer.as_ref().err().map(|error| format!("{error:#}")),
             "fired": answered,
         }));
-    }
-    let mut moved = Vec::new();
-    let mut totals = Vec::new();
-    for (reader, before) in readers.iter().zip(totals_before) {
-        let after = context.trigger_value(reader, json!({})).await.ok();
-        if let (Some(before), Some(after), Some(owed)) = (&before, &after, owed) {
-            moved.extend(
-                moved_by(before, after, owed)
-                    .into_iter()
-                    .map(|path| format!("{reader}{path}")),
-            );
-        }
-        totals.push(json!({"function": reader, "before": before, "after": after}));
+        answers.push(answer.ok());
     }
     for binding in bindings {
         binding.unregister();
     }
     function.unregister();
-    (
+
+    let mut total = Vec::new();
+    for (index, reader) in readers.iter().enumerate() {
+        let read = |at: usize| totals.get(at).and_then(|answers| answers[index].as_ref());
+        if let (Some(start), Some(owing), Some(end), Some(owed)) = (read(0), read(1), read(2), owed)
+        {
+            let unmoved = held(owing, end);
+            total.extend(
+                moved_by(start, owing, owed)
+                    .into_iter()
+                    .filter(|path| unmoved.contains(path))
+                    .map(|path| format!("{reader}{path}")),
+            );
+        }
+    }
+    // The first expense as the tracker kept it: in its answer to the add, or
+    // in what a reader gives back after.
+    let description = EXPENSES[0].description;
+    let kept = answers
+        .first()
+        .and_then(|answer| answer.as_ref())
+        .and_then(|answer| record_keys(answer, description))
+        .or_else(|| {
+            totals
+                .last()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .find_map(|answer| record_keys(answer, description))
+        })
+        .unwrap_or_default();
+    let readings: Vec<Value> = readers
+        .iter()
+        .enumerate()
+        .map(|(index, reader)| {
+            json!({
+                "function": reader,
+                "before": totals[0][index],
+                "after_owed": totals.get(1).map(|answers| &answers[index]),
+                "after_reimbursed": totals.get(2).map(|answers| &answers[index]),
+            })
+        })
+        .collect();
+    Added {
         fired,
-        moved,
-        json!({"function": adder.0, "added": added, "owed": owed, "totals": totals}),
-    )
+        total,
+        names: kept,
+        evidence: json!({"function": adder.0, "added": added, "owed": owed, "totals": readings}),
+    }
 }
 
 pub struct OnboardingTour;
@@ -980,6 +1236,48 @@ impl Scenario for OnboardingTour {
     /// answer, as the user clicks down the tour.
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         prompts().into_iter().skip(1).collect()
+    }
+
+    /// The card moves on when a step closes. While the agent is still on it
+    /// (a turn running, or a wake it armed still to come), the user waits,
+    /// as the card's "Waiting for the agent to report this step done" asks;
+    /// once the agent is idle the next button is clicked, closed or not.
+    async fn before_followup(
+        &self,
+        context: &E2eContext,
+        run_id: &str,
+        session_id: &str,
+        exchange: usize,
+    ) {
+        let Some(step) = step_of(exchange).filter(|step| step.condition.is_some()) else {
+            return;
+        };
+        let Some(observed) = lock_unpoisoned(runs())
+            .get(run_id)
+            .map(|run| run.observed.clone())
+        else {
+            return;
+        };
+        let deadline = tokio::time::Instant::now() + STEP_WAIT;
+        loop {
+            let closed = lock_unpoisoned(&observed).closed_ids.contains(&step.id);
+            let status = context
+                .trigger_value("harness::status", json!({"session_id": session_id}))
+                .await;
+            let (running, waking) = match &status {
+                Ok(status) => still_working(status),
+                // Unread, it is not held against the agent: the user moves on.
+                Err(_) => (false, false),
+            };
+            if !running && (closed || !waking) {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(step = %step.id, "the agent was still on the step when the wait ran out");
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
     }
 
     /// The project folder, which a new chat in the ADE starts in.
@@ -1137,7 +1435,11 @@ impl Scenario for OnboardingTour {
         ));
 
         let answer = exchange_of("discoverability")
-            .and_then(|index| exchange_texts(&observation.transcript).get(index).cloned())
+            .and_then(|index| {
+                exchange_texts(&observation.transcript, &prompts())
+                    .get(index)
+                    .cloned()
+            })
             .unwrap_or_default()
             .to_ascii_lowercase();
         let snapshot = discoverability_functions.is_some();
@@ -1151,11 +1453,8 @@ impl Scenario for OnboardingTour {
         let named: Vec<Value> = DISCOVERED
             .iter()
             .map(|worker| {
-                let named: Vec<String> = function_ids(&functions_then, worker)
-                    .into_iter()
-                    .filter(|id| answer.contains(&id.to_ascii_lowercase()))
-                    .collect();
-                json!({"worker": worker, "named": named})
+                let ids = function_ids(&functions_then, worker);
+                json!({"worker": worker, "named": named_functions(&answer, worker, &ids)})
             })
             .collect();
         observations.push(ratio(
@@ -1172,22 +1471,27 @@ impl Scenario for OnboardingTour {
             json!({"workers": named, "snapshot": snapshot}),
         ));
 
-        let tracker = tracker_worker(&baseline, &workers, &registered);
+        let mut candidates = Vec::new();
+        for (name, functions) in new_workers(&baseline, &workers).into_iter().take(4) {
+            let described = described_functions(context, &name)
+                .await
+                .unwrap_or_else(|error| json!({"error": format!("{error:#}")}));
+            candidates.push((name, functions, described));
+        }
+        let tracker = tracker_of(&candidates, &registered);
+        let tracker_name = tracker.map(|(name, _, _)| name.clone());
         let by_tracker = |trigger: &&Value| {
-            tracker.is_some() && trigger["worker_name"].as_str() == tracker.as_deref()
+            tracker_name.is_some() && trigger["worker_name"].as_str() == tracker_name.as_deref()
         };
-        let function_count = tracker
-            .as_deref()
-            .and_then(|name| {
-                items(&workers, "workers")
-                    .find(|worker| worker["name"].as_str() == Some(name))
-                    .and_then(|worker| worker["function_count"].as_u64())
-            })
-            .unwrap_or(0);
+        let function_count = tracker.map_or(0, |(_, functions, _)| *functions);
         observations.push(binary(
             "extensibility.worker",
             function_count >= 2,
-            json!({"worker": tracker, "function_count": function_count}),
+            json!({
+                "worker": tracker_name,
+                "function_count": function_count,
+                "new_workers": candidates.iter().map(|(name, functions, _)| json!({"name": name, "functions": functions})).collect::<Vec<_>>(),
+            }),
         ));
         let page = items(&registered, "registered_triggers")
             .filter(by_tracker)
@@ -1195,30 +1499,13 @@ impl Scenario for OnboardingTour {
         observations.push(binary(
             "extensibility.page",
             page,
-            json!({"worker": tracker}),
+            json!({"worker": tracker_name}),
         ));
 
-        let described = match tracker.as_deref() {
-            Some(name) => described_functions(context, name)
-                .await
-                .unwrap_or_else(|error| json!({"error": format!("{error:#}")})),
-            None => json!({"functions": []}),
-        };
+        let described = tracker.map_or(json!({"functions": []}), |(_, _, described)| {
+            described.clone()
+        });
         let adds = adder(&described);
-        let fields = adds
-            .as_ref()
-            .map(|(_, schema)| expense_fields(schema))
-            .unwrap_or_default();
-        observations.push(ratio(
-            "extensibility.fields",
-            fields.len(),
-            FIELDS.len(),
-            json!({
-                "function": adds.as_ref().map(|(id, _)| id),
-                "fields": fields.iter().map(|(field, property)| json!({"field": field, "property": property})).collect::<Vec<_>>(),
-            }),
-        ));
-
         let own_types: Vec<String> = items(&trigger_types, "triggers")
             .filter(by_tracker)
             .filter_map(|trigger| trigger["id"].as_str().map(str::to_owned))
@@ -1229,26 +1516,52 @@ impl Scenario for OnboardingTour {
                 trigger["trigger_type"]
                     .as_str()
                     .is_some_and(|kind| own_types.iter().any(|own| own == kind))
-                    && trigger["worker_name"].as_str() != tracker.as_deref()
+                    && trigger["worker_name"].as_str() != tracker_name.as_deref()
             })
             .cloned()
             .collect();
-        let reimbursable = fields.iter().any(|(field, _)| *field == "reimbursed");
-        let (fired, moved, added) = match &adds {
+        let added = match &adds {
             Some(adds) => {
                 let readers = readers(&described, Some(adds.0.as_str()));
                 add_expenses(context, run_id, adds, &readers, &own_types).await
             }
-            None => (
-                0,
-                Vec::new(),
-                json!({"error": "the tracker has no function that adds an expense", "described": described}),
-            ),
+            None => Added {
+                fired: 0,
+                total: Vec::new(),
+                names: Vec::new(),
+                evidence: json!({"error": "the tracker has no function that adds an expense", "described": described}),
+            },
         };
+
+        // What the tracker takes for an expense, and what it gave back for the
+        // one the runner added.
+        let declared = adds
+            .as_ref()
+            .map(|(_, schema)| expense_fields(schema))
+            .unwrap_or_default();
+        let kept = fields_named(added.names.iter().map(String::as_str));
+        let mut fields: Vec<&str> = declared
+            .iter()
+            .chain(&kept)
+            .map(|(field, _)| *field)
+            .collect();
+        fields.sort_unstable();
+        fields.dedup();
+        observations.push(ratio(
+            "extensibility.fields",
+            fields.len(),
+            FIELDS.len(),
+            json!({
+                "function": adds.as_ref().map(|(id, _)| id),
+                "fields": fields,
+                "declared": declared.iter().map(|(field, name)| json!({"field": field, "name": name})).collect::<Vec<_>>(),
+                "kept": kept.iter().map(|(field, name)| json!({"field": field, "name": name})).collect::<Vec<_>>(),
+            }),
+        ));
         observations.push(binary(
             "extensibility.total",
-            reimbursable && !moved.is_empty(),
-            json!({"reimbursed_field": reimbursable, "moved": moved, "expenses": added}),
+            !added.total.is_empty(),
+            json!({"totals": added.total, "expenses": added.evidence}),
         ));
         observations.push(binary(
             "reactivity.trigger_type",
@@ -1257,14 +1570,15 @@ impl Scenario for OnboardingTour {
         ));
         observations.push(ratio(
             "reactivity.fires",
-            fired,
+            added.fired,
             EXPENSES.len(),
-            json!({"trigger_types": own_types, "expenses": added}),
+            json!({"trigger_types": own_types, "expenses": added.evidence}),
         ));
+        let from_chat = chat_bindings(&observation.transcript, &own_types);
         observations.push(binary(
             "reactivity.chat_trigger",
-            !waiting.is_empty(),
-            json!({"bindings": waiting}),
+            !waiting.is_empty() || !from_chat.is_empty(),
+            json!({"bindings": waiting, "from_chat": from_chat}),
         ));
 
         observations.push(binary(
@@ -1378,21 +1692,26 @@ mod tests {
     }
 
     #[test]
-    fn exchanges_split_on_runner_messages_not_notifications() {
+    fn exchanges_open_on_the_runner_s_prompts_only() {
         let say = |role: &str, text: &str| json!({"message": {"role": role, "content": [{"type": "text", "text": text}]}});
         let transcript = json!({"messages": [
             say("user", "hello"), say("assistant", "hi"),
             say("user", "list workers"), say("assistant", "state, database"),
             say("user", "[notification] wake"), say("assistant", "and http"),
+            // The Harness's own message, as the local run of the tour had one.
+            say("user", "The available skills have changed."), say("assistant", "noted"),
             say("user", "build"), say("assistant", "done"),
+            json!({"message": {"role": "assistant", "content": [{"type": "thinking", "text": "they asked for state"}]}}),
         ]});
-        let texts = exchange_texts(&transcript);
+        let prompts = ["hello", "list workers", "build"].map(String::from);
+        let texts = exchange_texts(&transcript, &prompts);
         assert_eq!(texts.len(), 3);
         assert!(texts[1].contains("database") && texts[1].contains("http"));
+        assert!(texts[2].starts_with("done") && !texts[2].contains("state"));
     }
 
     #[test]
-    fn the_tracker_is_the_new_worker_with_a_page() {
+    fn the_tracker_is_the_new_worker_whose_functions_take_an_expense() {
         let baseline = json!({"workers": {"workers": [{"name": "state", "status": "connected"}]}});
         let workers = json!({"workers": [
             {"name": "state", "status": "connected", "function_count": 9},
@@ -1400,13 +1719,102 @@ mod tests {
             {"name": "helper", "status": "connected", "function_count": 12},
             {"name": "expenses", "status": "connected", "function_count": 4},
         ]});
+        let new: Vec<String> = new_workers(&baseline, &workers)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(new, ["helper", "expenses"]);
+        // The helper has more functions and a page, but takes no expense.
         let registered = json!({"registered_triggers": [
-            {"trigger_type": "console:script", "worker_name": "expenses"},
+            {"trigger_type": "console:script", "worker_name": "helper"},
         ]});
+        let candidates = vec![
+            (
+                "helper".to_string(),
+                12,
+                json!({"functions": [{"function_id": "helper::ping"}]}),
+            ),
+            ("expenses".to_string(), 4, described()),
+        ];
         assert_eq!(
-            tracker_worker(&baseline, &workers, &registered).as_deref(),
+            tracker_of(&candidates, &registered).map(|c| c.0.as_str()),
             Some("expenses")
         );
+    }
+
+    #[test]
+    fn a_tracker_that_declares_no_schema_is_added_to_by_name() {
+        let described = json!({"functions": [
+            {"function_id": "expenses::list"},
+            {"function_id": "expenses::set-reimbursed"},
+            {"function_id": "expenses::create-expense"},
+        ]});
+        let (id, schema) = adder(&described).expect("an add-like function");
+        assert_eq!(id, "expenses::create-expense");
+        let (payload, sent) = expense_payload(&schema, &EXPENSES[0]);
+        assert_eq!(payload["description"], "E2E check: team lunch");
+        assert_eq!(payload["reimbursed"], false);
+        assert_eq!(sent, Some(12.5));
+    }
+
+    #[test]
+    fn an_answer_speaks_of_functions_on_the_worker_s_own_line() {
+        let ids = [
+            "database::query".to_string(),
+            "database::listTables".to_string(),
+            "database::get".to_string(),
+            "state::update".to_string(),
+            "harness::status".to_string(),
+        ];
+        // The local run's answer, in its table rows; each worker is held to
+        // its own functions, as `capture` holds it.
+        let answer = "| **database** | SQL access: queries, writes, transactions, schema inspection. |\n\
+                      | **state** | JSON values by scope and key: reads, writes, partial updates. |\n\
+                      | **harness** | The agent's turn loop: tracks turn status and usage. |";
+        let own = |worker: &str| -> Vec<String> {
+            ids.iter()
+                .filter(|id| id.starts_with(&format!("{worker}::")))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            named_functions(answer, "database", &own("database")),
+            ["database::query"]
+        );
+        assert_eq!(
+            named_functions(answer, "state", &own("state")),
+            ["state::update"]
+        );
+        assert_eq!(
+            named_functions(answer, "harness", &own("harness")),
+            ["harness::status"]
+        );
+        // The worker is named as a word.
+        assert!(named_functions(
+            "database runs statements and updates",
+            "state",
+            &own("state")
+        )
+        .is_empty());
+        // A name that starts as the worker's does says nothing.
+        let listed = ["database::listDatabases".to_string()];
+        assert!(
+            named_functions("| **database** | holds databases |", "database", &listed).is_empty()
+        );
+        // Three letters are not a word of the name: `get` is not "gets".
+        assert!(named_functions("database gets rows", "database", &own("database")).is_empty());
+        assert_eq!(name_words("listTables"), ["list", "tables"]);
+    }
+
+    #[test]
+    fn the_expense_as_kept_is_found_by_its_description() {
+        let answer = json!({"expense": {"id": "e1", "description": "E2E check: team lunch", "amount_cents": 1250, "category": "meals", "reimbursed": false}});
+        let keys = record_keys(&answer, "E2E check: team lunch").expect("the record");
+        let fields: Vec<&str> = fields_named(keys.iter().map(String::as_str))
+            .into_iter()
+            .map(|(field, _)| field)
+            .collect();
+        assert_eq!(fields.len(), 4);
     }
 
     fn described() -> Value {
@@ -1469,6 +1877,53 @@ mod tests {
     }
 
     #[test]
+    fn the_card_waits_on_a_running_turn_or_an_armed_wake() {
+        assert_eq!(
+            step_of(3).map(|step| step.id.as_str()),
+            Some("extensibility")
+        );
+        assert_eq!(step_of(5).map(|step| step.id.as_str()), Some("clean-up"));
+        assert_eq!(still_working(&json!({"status": "running"})), (true, false));
+        assert_eq!(
+            still_working(&json!({"status": "completed", "expects_wake": true})),
+            (false, true)
+        );
+        assert_eq!(
+            still_working(&json!({"status": "completed", "queued": [{"id": "q"}]})),
+            (true, false)
+        );
+        assert_eq!(
+            still_working(&json!({"status": "completed"})),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn a_trigger_the_chat_bound_counts_once_the_engine_accepted_it() {
+        let call = |id: &str, kind: &str| {
+            json!({"message": {"role": "assistant", "content": [{
+                "type": "function_call", "id": id, "function_id": "agent_trigger",
+                "arguments": {"function": "engine::register_trigger",
+                              "payload": {"trigger_type": kind, "config": {"event": "created"}, "once": true}},
+            }]}})
+        };
+        let result = |id: &str, error: bool| {
+            json!({"message": {
+                "role": "function_result", "function_call_id": id,
+                "function_id": "engine::register_trigger", "is_error": error,
+            }})
+        };
+        let transcript = json!({"messages": [
+            call("a", "expense-tracker:change"), result("a", false),
+            call("b", "expense-tracker:change"), result("b", true),
+            call("c", "state"), result("c", false),
+        ]});
+        let bound = chat_bindings(&transcript, &["expense-tracker:change".to_string()]);
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0]["call"], "a");
+    }
+
+    #[test]
     fn a_total_is_a_number_that_grew_by_the_amount_still_owed() {
         let before = json!({"total": "27.50", "expenses": [{"amount": 15}], "count": 1});
         let right = json!({"total": "40.00", "expenses": [{"amount": 12.5}, {"amount": 40}, {"amount": 15}], "count": 3});
@@ -1481,5 +1936,18 @@ mod tests {
             moved_by(&json!({}), &json!({"owed": 12.5}), 12.5),
             ["/owed"]
         );
+        // An amount sent in units and kept in cents, as execution 8951e88f's
+        // tracker did.
+        let before = json!({"totals": {"unreimbursed_cents": 6140}});
+        let after = json!({"totals": {"unreimbursed_cents": 7390}});
+        assert_eq!(
+            moved_by(&before, &after, 12.5),
+            ["/totals/unreimbursed_cents"]
+        );
+        let all = json!({"totals": {"unreimbursed_cents": 11390}});
+        assert!(moved_by(&before, &all, 12.5).is_empty());
+        // Adding the reimbursed one after must leave it where it was.
+        assert!(held(&after, &after).contains("/totals/unreimbursed_cents"));
+        assert!(!held(&after, &all).contains("/totals/unreimbursed_cents"));
     }
 }
