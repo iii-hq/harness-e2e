@@ -2,19 +2,21 @@
 //! as one scripted dialogue under the `harness` template's Onboarding profile.
 //!
 //! The `onboarding` stack is that project: the `harness` template plus the
-//! tour's worker. The dialogue sends each step's prompt as the tour page's
-//! button does, in tour order, and this module plays the page itself: `setup`
-//! closes the button-only steps as their buttons would (`stay-in-touch` is
-//! skipped, never subscribed), binds every other step's condition the way the
-//! page binds it, and closes that step with `onboarding::steps::complete` when
-//! its trigger fires. `capture` then checks what each step should have left
-//! behind, and checks off the agent's TODO items as the user would.
+//! tour's worker, which serves the `learn-iii` tour. The dialogue sends each
+//! step's prompt as the tour card's button does, in tour order, and this
+//! module plays the card itself: `setup` closes the button-only steps as their
+//! buttons would (`stay-in-touch` is skipped, never subscribed), binds every
+//! other step's condition the way the card binds it, and closes that step with
+//! `learn-iii::steps::complete` when its trigger fires. `capture` then checks
+//! what each step should have left behind, and adds two expenses through the
+//! agent's tracker as the user would.
 //!
-//! `tests/fixtures/onboarding-tour/console-basics.json` is the tour this test
-//! was written against: its steps, prompts, conditions and profile, projected
-//! from `onboarding::tours::get`. A tour the worker serves differently costs
-//! `tour.current` and nothing else; regenerate the fixture from the worker's
-//! `src/tours.mjs` when the tour changes on purpose.
+//! `tests/fixtures/onboarding-tour/learn-iii.json` is the tour this test was
+//! written against: its steps, prompts, conditions and profile, projected from
+//! `learn-iii::tours::get`. A tour the worker serves differently costs
+//! `tour.current` and nothing else; when the tour changes on purpose,
+//! regenerate the fixture from the worker's `src/tours.mjs` with
+//! `scripts/onboarding_tour_fixture.mjs`.
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -35,23 +37,23 @@ use crate::report::EvaluationDimension;
 
 pub const ID: &str = "onboarding_tour";
 const EVIDENCE_ID: &str = "onboarding_evidence";
-const TOUR_ID: &str = "console-basics";
+const TOUR_ID: &str = "learn-iii";
 /// The profile the test fixes: "Onboarding" in the `harness` template, hidden
-/// from the new-chat gallery, which the wizard's build examples run. The tour
-/// itself names none yet; it writes into whatever chat is open.
+/// from the new-chat gallery. The tour's first step starts its chat under it,
+/// and every later prompt goes to that chat.
 const PROFILE: &str = "ade-worker-builder";
 const TOUR_WORKER: &str = "onboarding";
 /// Measurement, not part of the system the agent is asked to describe.
 const RUNNER_WORKER: &str = "harness-e2e";
-const FIXTURE: &str = include_str!("../../tests/fixtures/onboarding-tour/console-basics.json");
-/// How long a checked-off item may take to ring the TODO worker's trigger.
-const CHECK_OFF_WAIT: Duration = Duration::from_secs(10);
+const FIXTURE: &str = include_str!("../../tests/fixtures/onboarding-tour/learn-iii.json");
+/// The workers the Discoverability prompt asks about.
+const DISCOVERED: [&str; 3] = ["database", "state", "harness"];
+/// How long an added expense may take to ring the tracker's trigger.
+const FIRE_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Tour {
     id: String,
-    #[serde(default)]
-    agent: Option<String>,
     steps: Vec<Step>,
 }
 
@@ -61,6 +63,10 @@ struct Step {
     /// The prompt the step's button sends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ask: Option<String>,
+    /// The profile whose new chat the button sends it to; without one it goes
+    /// to the chat the user is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent: Option<String>,
     /// The trigger the step waits for; without one a button closes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     condition: Option<Condition>,
@@ -83,7 +89,6 @@ fn project(live: &Value) -> Tour {
     let text = |value: &Value| value.as_str().map(str::to_owned);
     Tour {
         id: text(&live["id"]).unwrap_or_default(),
-        agent: text(&live["agent"]),
         steps: live["steps"]
             .as_array()
             .into_iter()
@@ -91,6 +96,7 @@ fn project(live: &Value) -> Tour {
             .map(|step| Step {
                 id: text(&step["id"]).unwrap_or_default(),
                 ask: text(&step["ask"]["text"]),
+                agent: text(&step["ask"]["agent"]),
                 condition: step["condition"].is_object().then(|| Condition {
                     kind: text(&step["condition"]["type"]).unwrap_or_default(),
                     config: match &step["condition"]["config"] {
@@ -148,68 +154,68 @@ const METRICS: [Metric; 12] = [
         question: "Did the Composability step add a database worker that is running?",
     },
     Metric {
-        id: "discoverability.workers",
+        id: "discoverability.functions",
         weight: 8,
         ratio: true,
-        gate: Some(6),
-        label: "The answer names the registered workers",
-        question: "Does the Discoverability answer name the workers registered when it was given?",
+        gate: None,
+        label: "The answer names each worker's real functions",
+        question: "For each of the database, state and harness workers, does the Discoverability answer name a function that worker had registered when it was given?",
     },
     Metric {
         id: "extensibility.worker",
         weight: 12,
         ratio: false,
         gate: Some(12),
-        label: "A TODO worker with CRUD functions",
-        question: "Did the Extensibility step add a worker of its own with at least four functions?",
+        label: "An expense tracker worker runs",
+        question: "Did the Extensibility step add a worker of its own, running with at least two functions?",
     },
     Metric {
         id: "extensibility.page",
         weight: 8,
         ratio: false,
-        gate: Some(8),
-        label: "The TODO worker has a Console page",
+        gate: None,
+        label: "The tracker has a Console page",
         question: "Does that worker inject a page into the Console?",
     },
     Metric {
-        id: "extensibility.row_changed",
+        id: "extensibility.fields",
+        weight: 4,
+        ratio: true,
+        gate: None,
+        label: "An expense has the four fields asked for",
+        question: "Does the tracker's function that adds an expense take a description, an amount, a category and whether it was reimbursed?",
+    },
+    Metric {
+        id: "extensibility.total",
         weight: 6,
         ratio: false,
         gate: None,
-        label: "It reacts to database::row-changed",
-        question: "Did that worker bind a database::row-changed trigger?",
+        label: "The total still to be reimbursed is right",
+        question: "When one expense still to be reimbursed and one already reimbursed are added, does a total the tracker reports grow by the first one's amount alone?",
     },
     Metric {
-        id: "extensibility.trigger_type",
+        id: "reactivity.trigger_type",
         weight: 4,
         ratio: false,
         gate: None,
-        label: "It registers a trigger type",
-        question: "Did that worker register a trigger type of its own?",
+        label: "The tracker registers a trigger type",
+        question: "Did the tracker register a trigger type of its own?",
     },
     Metric {
-        id: "reactivity.items",
+        id: "reactivity.fires",
+        weight: 14,
+        ratio: true,
+        gate: Some(14),
+        label: "Adding an expense rings a trigger",
+        question: "When the user adds each of two expenses through the tracker, does the tracker's trigger fire?",
+    },
+    Metric {
+        id: "reactivity.chat_trigger",
         weight: 6,
         ratio: false,
         gate: Some(6),
-        label: "Three open TODO items",
-        question: "Does the TODO table hold at least three items not yet checked off?",
-    },
-    Metric {
-        id: "reactivity.check_off",
-        weight: 12,
-        ratio: true,
-        gate: Some(12),
-        label: "Checking an item off rings a trigger",
-        question: "When the user checks each of three items off, does the TODO worker's trigger fire?",
-    },
-    Metric {
-        id: "reactivity.user_triggers",
-        weight: 6,
-        ratio: false,
-        gate: None,
-        label: "A trigger waits on the check-off",
-        question: "Is a trigger bound to the TODO worker's trigger type, for the user's check-offs?",
+        label: "A trigger in the chat waits on new expenses",
+        question: "Is a trigger, bound by something other than the tracker, waiting on the tracker's trigger type?",
     },
     Metric {
         id: "cleanup.removed",
@@ -279,16 +285,16 @@ fn root(run_id: &str) -> PathBuf {
         .join(format!("{ID}-{}", &digest(run_id)[..16]))
 }
 
-/// What the page records while the dialogue runs: the steps it closed, the
-/// tour's progress after each, and what the system held when the agent said
-/// what it can do.
+/// What the card records while the dialogue runs: the steps it closed, the
+/// tour's progress after each, and the functions the workers the agent was
+/// asked about had when it answered.
 #[derive(Default, Serialize)]
 struct Observed {
     closed: Vec<Value>,
     #[serde(skip)]
     closed_ids: HashSet<String>,
     progress: Option<Value>,
-    discoverability_workers: Option<Value>,
+    discoverability_functions: Option<Value>,
     errors: Vec<String>,
 }
 
@@ -323,7 +329,7 @@ async fn call(client: &IIIClient, function_id: &str, payload: Value) -> Result<V
         .map_err(|error| anyhow!("{function_id}: {error}"))
 }
 
-/// Close one step as the page does, then snapshot the tour's progress.
+/// Close one step as the card does, then snapshot the tour's progress.
 async fn close(
     client: &IIIClient,
     observed: &Mutex<Observed>,
@@ -340,8 +346,8 @@ async fn close(
     if let Some(fired) = &fired {
         request["fired"] = fired.clone();
     }
-    let closed = call(client, "onboarding::steps::complete", request).await;
-    let progress = call(client, "onboarding::progress::get", json!({})).await;
+    let closed = call(client, "learn-iii::steps::complete", request).await;
+    let progress = call(client, "learn-iii::progress::get", json!({})).await;
     let mut observed = lock_unpoisoned(observed);
     observed.closed.push(json!({
         "step": step_id,
@@ -374,13 +380,18 @@ async fn on_condition(
         return;
     }
     if step_id == "discoverability" {
-        let workers = call(client, "engine::workers::list", json!({})).await;
+        let functions = call(
+            client,
+            "engine::functions::list",
+            json!({"workers": DISCOVERED}),
+        )
+        .await;
         let mut observed = lock_unpoisoned(observed);
-        match workers {
-            Ok(workers) => observed.discoverability_workers = Some(workers),
+        match functions {
+            Ok(functions) => observed.discoverability_functions = Some(functions),
             Err(error) => observed
                 .errors
-                .push(format!("workers at discoverability: {error:#}")),
+                .push(format!("functions at discoverability: {error:#}")),
         }
     }
     close(client, observed, step_id, Some(fired)).await;
@@ -419,7 +430,7 @@ fn bind(
                 Ok::<Value, iii_sdk::errors::Error>(json!({"ok": true}))
             }
         })
-        .description("The onboarding tour page's condition for one step, played by the E2E runner.")
+        .description("The onboarding tour card's condition for one step, played by the E2E runner.")
         .metadata(json!({"internal": true})),
     );
     let trigger = context
@@ -489,44 +500,10 @@ fn exchange_texts(transcript: &Value) -> Vec<String> {
     texts
 }
 
-/// A SQL identifier the agent chose, accepted only when it needs no quoting.
-fn identifier(value: Option<&str>) -> Option<String> {
-    let value = value?.trim();
-    let mut chars = value.chars();
-    (chars.next()?.is_ascii_alphabetic() || value.starts_with('_'))
-        .then_some(())
-        .filter(|()| value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .map(|()| value.to_string())
-}
-
-/// The flag that says an item is checked off, not the time it was.
-fn is_done_column(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    ["done", "complet", "check", "finish"]
-        .iter()
-        .any(|word| name.contains(word))
-        && !["_at", "_on", "time", "date"]
-            .iter()
-            .any(|stamp| name.ends_with(stamp))
-}
-
-fn is_open(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::Bool(done) => !done,
-        Value::Number(number) => number.as_f64() == Some(0.0),
-        Value::String(text) => matches!(
-            text.trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "false" | "f" | "no"
-        ),
-        _ => false,
-    }
-}
-
-/// The TODO worker the Extensibility step added: a worker that was not
+/// The expense tracker the Extensibility step added: a worker that was not
 /// there before the dialogue, is not the database or the tour, and has a
 /// Console page, else the one with the most functions.
-fn todo_worker(baseline: &Value, workers: &Value, registered: &Value) -> Option<String> {
+fn tracker_worker(baseline: &Value, workers: &Value, registered: &Value) -> Option<String> {
     let before = connected_workers(&baseline["workers"]);
     let with_page: HashSet<&str> = items(registered, "registered_triggers")
         .filter(|trigger| trigger["trigger_type"] == "console:script")
@@ -550,51 +527,277 @@ fn todo_worker(baseline: &Value, workers: &Value, registered: &Value) -> Option<
         .map(|(_, _, name)| name)
 }
 
-/// Check off up to three open items as the user would, each with a write
-/// through the database worker (which rings `database::row-changed`), and
-/// count those the TODO worker answered with its own trigger.
-async fn check_off(
+fn function_ids(listed: &Value, worker: &str) -> Vec<String> {
+    items(listed, "functions")
+        .filter(|function| function["worker_name"] == worker)
+        .filter_map(|function| function["function_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Every function a worker registered, each with its request schema.
+async fn described_functions(context: &E2eContext, worker: &str) -> Result<Value> {
+    let listed = context
+        .trigger_value("engine::functions::list", json!({"worker": worker}))
+        .await?;
+    let ids: Vec<String> = function_ids(&listed, worker).into_iter().take(32).collect();
+    if ids.is_empty() {
+        return Ok(json!({"functions": []}));
+    }
+    context
+        .trigger_value("engine::functions::info", json!({"function_ids": ids}))
+        .await
+}
+
+/// The four things the Extensibility prompt says an expense has, each with
+/// the words a property naming it uses, matched in this order.
+const FIELDS: [(&str, &[&str]); 4] = [
+    (
+        "reimbursed",
+        &["reimburs", "refund", "repaid", "paid", "settled"],
+    ),
+    ("amount", &["amount", "cost", "price", "sum", "value"]),
+    ("category", &["categor", "kind", "type", "tag", "group"]),
+    (
+        "description",
+        &["desc", "title", "name", "note", "memo", "label"],
+    ),
+];
+
+/// Which of the four fields each property of a request schema says, by its
+/// name: (field, property).
+fn expense_fields(schema: &Value) -> Vec<(&'static str, String)> {
+    let mut found: Vec<(&'static str, String)> = Vec::new();
+    for property in schema["properties"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, _)| name)
+    {
+        let name = property.to_ascii_lowercase();
+        let field = FIELDS.iter().find(|(field, words)| {
+            !found.iter().any(|(taken, _)| taken == field)
+                && words.iter().any(|word| name.contains(word))
+        });
+        if let Some((field, _)) = field {
+            found.push((field, property.clone()));
+        }
+    }
+    found
+}
+
+/// The tracker's function that adds an expense: the one whose request names
+/// the most of the four fields, at least two, an add-like name breaking a tie.
+fn adder(described: &Value) -> Option<(String, Value)> {
+    items(described, "functions")
+        .filter_map(|function| {
+            let id = function["function_id"].as_str()?.to_string();
+            let schema = function["request_schema"].clone();
+            let fields = expense_fields(&schema).len();
+            let lowered = id.to_ascii_lowercase();
+            let add_like = ["add", "create", "insert", "record", "new", "log", "track"]
+                .iter()
+                .any(|word| lowered.contains(word));
+            (fields >= 2).then_some(((fields, add_like, id.clone()), id, schema))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, id, schema)| (id, schema))
+}
+
+/// The tracker's functions a page could read a total from: callable with no
+/// arguments, named for reading and not for writing, a `total` first.
+fn readers(described: &Value, adder: Option<&str>) -> Vec<String> {
+    const READS: [&str; 8] = [
+        "total",
+        "outstanding",
+        "summary",
+        "balance",
+        "owed",
+        "stats",
+        "list",
+        "get",
+    ];
+    const WRITES: [&str; 9] = [
+        "delete", "remove", "clear", "reset", "add", "create", "update", "set", "insert",
+    ];
+    let mut found: Vec<String> = items(described, "functions")
+        .filter(|function| {
+            items(&function["request_schema"], "required")
+                .next()
+                .is_none()
+        })
+        .filter_map(|function| function["function_id"].as_str())
+        .filter(|id| Some(*id) != adder)
+        .filter(|id| {
+            let name = id.rsplit("::").next().unwrap_or(id).to_ascii_lowercase();
+            READS.iter().any(|word| name.contains(word))
+                && !WRITES.iter().any(|word| name.contains(word))
+        })
+        .map(str::to_owned)
+        .collect();
+    found.sort_by_key(|id| !id.to_ascii_lowercase().contains("total"));
+    found.truncate(4);
+    found
+}
+
+struct Expense {
+    description: &'static str,
+    amount: f64,
+    category: &'static str,
+    reimbursed: bool,
+}
+
+/// What the runner adds as the user would: one still to be reimbursed and one
+/// already reimbursed, so the total still to be reimbursed moves by the first
+/// one's amount alone.
+const EXPENSES: [Expense; 2] = [
+    Expense {
+        description: "E2E check: team lunch",
+        amount: 12.5,
+        category: "meals",
+        reimbursed: false,
+    },
+    Expense {
+        description: "E2E check: train ticket",
+        amount: 40.0,
+        category: "travel",
+        reimbursed: true,
+    },
+];
+
+/// A plain value for a property the request requires and the four fields do
+/// not cover.
+fn plain(kind: &str) -> Value {
+    match kind {
+        "string" => json!("e2e"),
+        "integer" | "number" => json!(1),
+        "boolean" => json!(false),
+        "array" => json!([]),
+        "object" => json!({}),
+        _ => Value::Null,
+    }
+}
+
+fn reimbursed_value(property: &Value, reimbursed: bool) -> Value {
+    if property["type"] != "string" {
+        return json!(reimbursed);
+    }
+    let says_yes = |text: &str| {
+        let text = text.to_ascii_lowercase();
+        !text.starts_with("un")
+            && !text.starts_with("not")
+            && ["reimburs", "paid", "yes", "true", "done", "settled"]
+                .iter()
+                .any(|word| text.contains(word))
+    };
+    items(property, "enum")
+        .filter_map(Value::as_str)
+        .find(|value| says_yes(value) == reimbursed)
+        .map(|value| json!(value))
+        .unwrap_or_else(|| json!(reimbursed.to_string()))
+}
+
+/// An expense as the tracker's page would send it, and the amount it carried:
+/// the four fields where the schema has them, in cents where the amount is a
+/// whole number, and a plain value for anything else the schema requires.
+fn expense_payload(schema: &Value, expense: &Expense) -> (Value, Option<f64>) {
+    let fields = expense_fields(schema);
+    let required: Vec<&str> = items(schema, "required")
+        .filter_map(Value::as_str)
+        .collect();
+    let mut payload = serde_json::Map::new();
+    let mut sent = None;
+    for (property, spec) in schema["properties"].as_object().into_iter().flatten() {
+        let kind = spec["type"].as_str().unwrap_or("");
+        let field = fields
+            .iter()
+            .find(|(_, name)| name == property)
+            .map(|(field, _)| *field);
+        let value = match field {
+            Some("description") => json!(expense.description),
+            Some("category") => json!(expense.category),
+            Some("amount") => {
+                let amount = if kind == "integer" {
+                    (expense.amount * 100.0).round()
+                } else {
+                    expense.amount
+                };
+                sent = Some(amount);
+                match kind {
+                    "integer" => json!(amount as i64),
+                    "string" => json!(amount.to_string()),
+                    _ => json!(amount),
+                }
+            }
+            Some(_) => reimbursed_value(spec, expense.reimbursed),
+            None if required.contains(&property.as_str()) => plain(kind),
+            None => continue,
+        };
+        payload.insert(property.clone(), value);
+    }
+    (Value::Object(payload), sent)
+}
+
+/// Every number in an answer by its path, numeric strings included; array
+/// elements carry `[index]`.
+fn numbers(value: &Value, path: &str, out: &mut HashMap<String, f64>) {
+    match value {
+        Value::Number(number) => {
+            if let Some(number) = number.as_f64() {
+                out.insert(path.to_string(), number);
+            }
+        }
+        Value::String(text) => {
+            if let Ok(number) = text.trim().parse::<f64>() {
+                out.insert(path.to_string(), number);
+            }
+        }
+        Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                numbers(value, &format!("{path}[{index}]"), out);
+            }
+        }
+        Value::Object(fields) => {
+            for (name, value) in fields {
+                numbers(value, &format!("{path}/{name}"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The paths whose number grew by exactly `delta` from one answer to the
+/// next. A field the first answer did not have counts from zero, an array
+/// element never: a new expense in a list is not a total.
+fn moved_by(before: &Value, after: &Value, delta: f64) -> Vec<String> {
+    let (mut old, mut new) = (HashMap::new(), HashMap::new());
+    numbers(before, "", &mut old);
+    numbers(after, "", &mut new);
+    let mut moved: Vec<String> = new
+        .into_iter()
+        .filter(|(path, value)| {
+            let start = old
+                .get(path)
+                .copied()
+                .or_else(|| (!path.contains('[')).then_some(0.0));
+            start.is_some_and(|start| (value - start - delta).abs() < 1e-6)
+        })
+        .map(|(path, _)| path)
+        .collect();
+    moved.sort();
+    moved
+}
+
+/// Add the two expenses through the tracker as its page would, count those
+/// its own trigger answered, and read its totals before and after.
+async fn add_expenses(
     context: &E2eContext,
     run_id: &str,
-    db: &str,
-    table: &str,
+    adder: &(String, Value),
+    readers: &[String],
     trigger_types: &[String],
-) -> Result<(usize, usize, Value)> {
-    let described = context
-        .trigger_value("database::describeTable", json!({"db": db, "table": table}))
-        .await?;
-    let columns: Vec<&Value> = items(&described, "columns")
-        .chain(items(&described["table"], "columns"))
-        .collect();
-    let column = |pick: &dyn Fn(&Value) -> bool| {
-        columns
-            .iter()
-            .find(|column| pick(column))
-            .and_then(|column| identifier(column["name"].as_str()))
-    };
-    let key = column(&|column| column["primary_key"] == true)
-        .context("the TODO table has no primary key")?;
-    let done = column(&|column| column["name"].as_str().is_some_and(is_done_column))
-        .context("the TODO table has no column that says an item is done")?;
-    let boolean = columns.iter().any(|column| {
-        column["name"].as_str() == Some(done.as_str())
-            && column["type"]
-                .as_str()
-                .is_some_and(|ty| ty.to_ascii_lowercase().contains("bool"))
-    });
-    let rows = context
-        .trigger_value(
-            "database::query",
-            json!({"db": db, "sql": format!("SELECT {key}, {done} FROM {table} LIMIT 200")}),
-        )
-        .await?;
-    let open: Vec<Value> = items(&rows, "rows")
-        .filter(|row| is_open(&row[&done]))
-        .map(|row| row[&key].clone())
-        .collect();
-
+) -> (usize, Vec<String>, Value) {
     let heard = Arc::new(Mutex::new(Vec::<u128>::new()));
-    let function_id = format!("e2e::onboarding::{}::check-off", &digest(run_id)[..12]);
+    let function_id = format!("e2e::onboarding::{}::expense-added", &digest(run_id)[..12]);
     let sink = heard.clone();
     let function = context.client().register_function(
         function_id.clone(),
@@ -605,7 +808,7 @@ async fn check_off(
                 Ok::<Value, iii_sdk::errors::Error>(json!({"ok": true}))
             }
         })
-        .description("Hears the TODO worker's trigger while the E2E runner checks items off.")
+        .description("Hears the expense tracker's trigger while the E2E runner adds expenses.")
         .metadata(json!({"internal": true})),
     );
     let mut bindings = Vec::new();
@@ -617,49 +820,62 @@ async fn check_off(
         )) {
             Ok(binding) => bindings.push(binding),
             Err(error) => {
-                tracing::warn!(%trigger_type, %error, "could not bind the TODO worker's trigger")
+                tracing::warn!(%trigger_type, %error, "could not bind the tracker's trigger")
             }
         }
     }
-    let mut checked = Vec::new();
-    let mut rang = 0;
-    for id in open.iter().take(3) {
+    let mut totals_before = Vec::new();
+    for reader in readers {
+        totals_before.push(context.trigger_value(reader, json!({})).await.ok());
+    }
+    let mut added = Vec::new();
+    let mut fired = 0;
+    let mut owed = None;
+    for expense in &EXPENSES {
+        let (payload, sent) = expense_payload(&adder.1, expense);
+        if !expense.reimbursed {
+            owed = sent;
+        }
         let before = lock_unpoisoned(&heard).len();
-        let written = context
-            .trigger_value(
-                "database::execute",
-                json!({
-                    "db": db,
-                    "sql": format!("UPDATE {table} SET {done} = ? WHERE {key} = ? RETURNING {key}"),
-                    "params": [if boolean { json!(true) } else { json!(1) }, id],
-                }),
-            )
-            .await;
-        let deadline = tokio::time::Instant::now() + CHECK_OFF_WAIT;
-        while written.is_ok()
+        let answer = context.trigger_value(&adder.0, payload.clone()).await;
+        let deadline = tokio::time::Instant::now() + FIRE_WAIT;
+        while answer.is_ok()
             && lock_unpoisoned(&heard).len() == before
             && tokio::time::Instant::now() < deadline
         {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         let answered = lock_unpoisoned(&heard).len() > before;
-        rang += usize::from(answered);
-        checked.push(json!({
-            "id": id,
-            "written": written.as_ref().map(|_| true).unwrap_or(false),
-            "error": written.err().map(|error| format!("{error:#}")),
-            "answered": answered,
+        fired += usize::from(answered);
+        added.push(json!({
+            "payload": payload,
+            "added": answer.is_ok(),
+            "error": answer.err().map(|error| format!("{error:#}")),
+            "fired": answered,
         }));
+    }
+    let mut moved = Vec::new();
+    let mut totals = Vec::new();
+    for (reader, before) in readers.iter().zip(totals_before) {
+        let after = context.trigger_value(reader, json!({})).await.ok();
+        if let (Some(before), Some(after), Some(owed)) = (&before, &after, owed) {
+            moved.extend(
+                moved_by(before, after, owed)
+                    .into_iter()
+                    .map(|path| format!("{reader}{path}")),
+            );
+        }
+        totals.push(json!({"function": reader, "before": before, "after": after}));
     }
     for binding in bindings {
         binding.unregister();
     }
     function.unregister();
-    Ok((
-        open.len(),
-        rang,
-        json!({"db": db, "table": table, "key": key, "done": done, "open": open.len(), "checked": checked}),
-    ))
+    (
+        fired,
+        moved,
+        json!({"function": adder.0, "added": added, "owed": owed, "totals": totals}),
+    )
 }
 
 pub struct OnboardingTour;
@@ -675,7 +891,7 @@ impl Scenario for OnboardingTour {
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("On the project `iii project init --learn-iii` creates, take the console tour step by step as a new user does: say hello, add a database, list what the system can do, build a reactive TODO worker with a Console page, check its items off, then remove the tour.")
+        Some("On the project `iii project init --learn-iii` creates, take the learn-iii tour step by step as a new user does: say hey, add the database, ask what three workers do, build an expense tracker, make it fire a trigger for each new expense with one in the chat waiting on it, then remove the tour.")
     }
 
     fn protects(&self) -> Option<&'static str> {
@@ -738,12 +954,8 @@ impl Scenario for OnboardingTour {
                 stuck_timeout_seconds: 900,
                 max_validation_retries: None,
             },
-            // The page closes the steps and the user signs up, never the agent.
-            denied_functions: &[
-                "onboarding::steps::*",
-                "onboarding::subscribe",
-                "approval::*",
-            ],
+            // The card closes the steps and the user signs up, never the agent.
+            denied_functions: &["learn-iii::steps::*", "learn-iii::subscribe", "approval::*"],
             criteria: METRICS
                 .iter()
                 .map(|m| {
@@ -799,7 +1011,7 @@ impl Scenario for OnboardingTour {
             .and_then(|file| file.parent().map(PathBuf::from))
             .context("compose::status did not name the project file")?;
         let live = context
-            .trigger_value("onboarding::tours::get", json!({"id": TOUR_ID}))
+            .trigger_value("learn-iii::tours::get", json!({"id": TOUR_ID}))
             .await
             .context("the onboarding worker does not serve its tour")?;
         let baseline = json!({
@@ -888,12 +1100,12 @@ impl Scenario for OnboardingTour {
         let registered = context
             .trigger_value("engine::registered-triggers::list", json!({}))
             .await?;
-        let (progress, closed, discoverability_workers, errors) = {
+        let (progress, closed, discoverability_functions, errors) = {
             let observed = lock_unpoisoned(&observed);
             (
                 observed.progress.clone(),
                 observed.closed.clone(),
-                observed.discoverability_workers.clone(),
+                observed.discoverability_functions.clone(),
                 observed.errors.clone(),
             )
         };
@@ -928,28 +1140,43 @@ impl Scenario for OnboardingTour {
             .and_then(|index| exchange_texts(&observation.transcript).get(index).cloned())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let described = discoverability_workers.as_ref().unwrap_or(&workers);
-        let registered_then: Vec<String> = connected_workers(described)
-            .into_iter()
-            .filter(|name| name != RUNNER_WORKER)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        let named: Vec<&String> = registered_then
+        let snapshot = discoverability_functions.is_some();
+        let functions_then = match discoverability_functions {
+            Some(functions) => functions,
+            None => context
+                .trigger_value("engine::functions::list", json!({"workers": DISCOVERED}))
+                .await
+                .unwrap_or_default(),
+        };
+        let named: Vec<Value> = DISCOVERED
             .iter()
-            .filter(|name| answer.contains(&name.to_ascii_lowercase()))
+            .map(|worker| {
+                let named: Vec<String> = function_ids(&functions_then, worker)
+                    .into_iter()
+                    .filter(|id| answer.contains(&id.to_ascii_lowercase()))
+                    .collect();
+                json!({"worker": worker, "named": named})
+            })
             .collect();
         observations.push(ratio(
-            "discoverability.workers",
-            named.len(),
-            registered_then.len(),
-            json!({"named": named, "registered": registered_then, "snapshot": discoverability_workers.is_some()}),
+            "discoverability.functions",
+            named
+                .iter()
+                .filter(|worker| {
+                    worker["named"]
+                        .as_array()
+                        .is_some_and(|named| !named.is_empty())
+                })
+                .count(),
+            DISCOVERED.len(),
+            json!({"workers": named, "snapshot": snapshot}),
         ));
 
-        let todo = todo_worker(&baseline, &workers, &registered);
-        let by_todo =
-            |trigger: &&Value| todo.is_some() && trigger["worker_name"].as_str() == todo.as_deref();
-        let functions = todo
+        let tracker = tracker_worker(&baseline, &workers, &registered);
+        let by_tracker = |trigger: &&Value| {
+            tracker.is_some() && trigger["worker_name"].as_str() == tracker.as_deref()
+        };
+        let function_count = tracker
             .as_deref()
             .and_then(|name| {
                 items(&workers, "workers")
@@ -959,77 +1186,83 @@ impl Scenario for OnboardingTour {
             .unwrap_or(0);
         observations.push(binary(
             "extensibility.worker",
-            functions >= 4,
-            json!({"worker": todo, "function_count": functions}),
+            function_count >= 2,
+            json!({"worker": tracker, "function_count": function_count}),
         ));
         let page = items(&registered, "registered_triggers")
-            .filter(by_todo)
+            .filter(by_tracker)
             .any(|trigger| trigger["trigger_type"] == "console:script");
-        observations.push(binary("extensibility.page", page, json!({"worker": todo})));
-        let row_changed: Vec<Value> = items(&registered, "registered_triggers")
-            .filter(by_todo)
-            .filter(|trigger| trigger["trigger_type"] == "database::row-changed")
-            .cloned()
-            .collect();
         observations.push(binary(
-            "extensibility.row_changed",
-            !row_changed.is_empty(),
-            json!({"bindings": row_changed}),
-        ));
-        let own_types: Vec<String> = items(&trigger_types, "triggers")
-            .filter(by_todo)
-            .filter_map(|trigger| trigger["id"].as_str().map(str::to_owned))
-            .collect();
-        observations.push(binary(
-            "extensibility.trigger_type",
-            !own_types.is_empty(),
-            json!({"trigger_types": own_types}),
+            "extensibility.page",
+            page,
+            json!({"worker": tracker}),
         ));
 
+        let described = match tracker.as_deref() {
+            Some(name) => described_functions(context, name)
+                .await
+                .unwrap_or_else(|error| json!({"error": format!("{error:#}")})),
+            None => json!({"functions": []}),
+        };
+        let adds = adder(&described);
+        let fields = adds
+            .as_ref()
+            .map(|(_, schema)| expense_fields(schema))
+            .unwrap_or_default();
+        observations.push(ratio(
+            "extensibility.fields",
+            fields.len(),
+            FIELDS.len(),
+            json!({
+                "function": adds.as_ref().map(|(id, _)| id),
+                "fields": fields.iter().map(|(field, property)| json!({"field": field, "property": property})).collect::<Vec<_>>(),
+            }),
+        ));
+
+        let own_types: Vec<String> = items(&trigger_types, "triggers")
+            .filter(by_tracker)
+            .filter_map(|trigger| trigger["id"].as_str().map(str::to_owned))
+            .collect();
         // Bound before this check binds its own listener on the same types.
         let waiting: Vec<Value> = items(&registered, "registered_triggers")
             .filter(|trigger| {
                 trigger["trigger_type"]
                     .as_str()
                     .is_some_and(|kind| own_types.iter().any(|own| own == kind))
+                    && trigger["worker_name"].as_str() != tracker.as_deref()
             })
             .cloned()
             .collect();
-        let binding = row_changed.first().map(|binding| &binding["config"]);
-        let db = binding
-            .and_then(|config| identifier(config["db"].as_str()))
-            .unwrap_or_else(|| "primary".into());
-        let table = match binding.and_then(|config| identifier(config["table"].as_str())) {
-            Some(table) => Some(table),
-            None => context
-                .trigger_value("database::listTables", json!({"db": db}))
-                .await
-                .ok()
-                .and_then(|listed| {
-                    items(&listed, "tables")
-                        .filter_map(|table| table["name"].as_str())
-                        .find(|name| name.to_ascii_lowercase().contains("todo"))
-                        .and_then(|name| identifier(Some(name)))
-                }),
-        };
-        let checked = match &table {
-            Some(table) => check_off(context, run_id, &db, table, &own_types)
-                .await
-                .map_err(|error| format!("{error:#}")),
-            None => Err("no TODO table in the database".into()),
-        };
-        let (open, rang, check_evidence) = match checked {
-            Ok(checked) => checked,
-            Err(error) => (0, 0, json!({"error": error})),
+        let reimbursable = fields.iter().any(|(field, _)| *field == "reimbursed");
+        let (fired, moved, added) = match &adds {
+            Some(adds) => {
+                let readers = readers(&described, Some(adds.0.as_str()));
+                add_expenses(context, run_id, adds, &readers, &own_types).await
+            }
+            None => (
+                0,
+                Vec::new(),
+                json!({"error": "the tracker has no function that adds an expense", "described": described}),
+            ),
         };
         observations.push(binary(
-            "reactivity.items",
-            open >= 3,
-            json!({"open": open, "table": table}),
+            "extensibility.total",
+            reimbursable && !moved.is_empty(),
+            json!({"reimbursed_field": reimbursable, "moved": moved, "expenses": added}),
         ));
-        observations.push(ratio("reactivity.check_off", rang, 3, check_evidence));
         observations.push(binary(
-            "reactivity.user_triggers",
+            "reactivity.trigger_type",
+            !own_types.is_empty(),
+            json!({"trigger_types": own_types}),
+        ));
+        observations.push(ratio(
+            "reactivity.fires",
+            fired,
+            EXPENSES.len(),
+            json!({"trigger_types": own_types, "expenses": added}),
+        ));
+        observations.push(binary(
+            "reactivity.chat_trigger",
             !waiting.is_empty(),
             json!({"bindings": waiting}),
         ));
@@ -1111,22 +1344,31 @@ mod tests {
     fn the_dialogue_is_the_tour_prompts_in_order() {
         let prompts = prompts();
         assert_eq!(prompts.len(), 6);
-        assert_eq!(prompts[0], "hello");
+        assert_eq!(prompts[0], "hey");
         assert!(prompts[5].starts_with("Remove the onboarding worker"));
         assert_eq!(exchange_of("discoverability"), Some(2));
-        // The tour does not name a profile yet; the test fixes its own.
-        assert_eq!(tour().agent, None);
+        // The tour starts its chat under the profile the test fixes.
+        assert_eq!(tour().steps[0].agent.as_deref(), Some(PROFILE));
+        let asked = tour()
+            .steps
+            .iter()
+            .find(|step| step.id == "discoverability");
+        let asked = asked
+            .and_then(|step| step.ask.as_deref())
+            .unwrap_or_default();
+        assert!(DISCOVERED.iter().all(|worker| asked.contains(worker)));
     }
 
     #[test]
     fn the_served_tour_projects_to_the_fixture_shape() {
         let live = json!({
-            "id": "console-basics",
-            "agent": PROFILE,
+            "id": "learn-iii",
+            "title": "Find your way around",
             "steps": [
-                {"id": "message", "title": "Send a message", "ask": {"text": "hello", "label": "Say hi"},
+                {"id": "message", "title": "Send a message",
+                 "ask": {"text": "hey", "label": "Send a message", "agent": PROFILE},
                  "condition": {"type": "harness::turn-completed", "config": {}, "label": "Waiting"}},
-                {"id": "tabs", "title": "Workspaces", "anchors": [".onboarding-tabs"]},
+                {"id": "tabs", "title": "Workspaces", "anchors": [".learn-iii-tabs"]},
             ],
         });
         let served = project(&live);
@@ -1150,41 +1392,94 @@ mod tests {
     }
 
     #[test]
-    fn agent_chosen_names_are_used_only_when_plain() {
-        assert_eq!(identifier(Some("todos")).as_deref(), Some("todos"));
-        assert_eq!(
-            identifier(Some("todo_items2")).as_deref(),
-            Some("todo_items2")
-        );
-        assert_eq!(identifier(Some("todos; DROP TABLE x")), None);
-        assert_eq!(identifier(Some("1todos")), None);
-        assert!(
-            is_done_column("completed") && is_done_column("is_done") && !is_done_column("title")
-        );
-        assert!(!is_done_column("completed_at") && !is_done_column("done_time"));
-        assert!(
-            is_open(&json!(0))
-                && is_open(&json!(false))
-                && !is_open(&json!(1))
-                && !is_open(&json!(true))
-        );
-    }
-
-    #[test]
-    fn the_todo_worker_is_the_new_one_with_a_page() {
+    fn the_tracker_is_the_new_worker_with_a_page() {
         let baseline = json!({"workers": {"workers": [{"name": "state", "status": "connected"}]}});
         let workers = json!({"workers": [
             {"name": "state", "status": "connected", "function_count": 9},
             {"name": "database", "status": "connected", "function_count": 30},
             {"name": "helper", "status": "connected", "function_count": 12},
-            {"name": "todo-app", "status": "connected", "function_count": 6},
+            {"name": "expenses", "status": "connected", "function_count": 4},
         ]});
         let registered = json!({"registered_triggers": [
-            {"trigger_type": "console:script", "worker_name": "todo-app"},
+            {"trigger_type": "console:script", "worker_name": "expenses"},
         ]});
         assert_eq!(
-            todo_worker(&baseline, &workers, &registered).as_deref(),
-            Some("todo-app")
+            tracker_worker(&baseline, &workers, &registered).as_deref(),
+            Some("expenses")
+        );
+    }
+
+    fn described() -> Value {
+        json!({"functions": [
+            {"function_id": "expenses::list", "request_schema": {"type": "object", "properties": {}}},
+            {"function_id": "expenses::total-unreimbursed", "request_schema": null},
+            {"function_id": "expenses::update", "request_schema": {"type": "object",
+                "properties": {"id": {"type": "string"}, "reimbursed": {"type": "boolean"}, "amount": {"type": "number"}},
+                "required": ["id"]}},
+            {"function_id": "expenses::add", "request_schema": {"type": "object",
+                "properties": {
+                    "description": {"type": "string"}, "amount_cents": {"type": "integer"},
+                    "category": {"type": "string", "enum": ["meals", "travel"]},
+                    "status": {"type": "string", "enum": ["pending", "reimbursed"]},
+                    "currency": {"type": "string"}, "note": {"type": "string"},
+                },
+                "required": ["description", "amount_cents", "currency"]}},
+            {"function_id": "expenses::clear", "request_schema": {"type": "object", "properties": {}}},
+        ]})
+    }
+
+    #[test]
+    fn the_add_function_is_the_one_that_takes_an_expense() {
+        let described = described();
+        let (id, schema) = adder(&described).expect("an add function");
+        assert_eq!(id, "expenses::add");
+        // `status` says nothing reimbursed by name; `note` comes second to `description`.
+        let fields: Vec<&str> = expense_fields(&schema)
+            .into_iter()
+            .map(|(field, _)| field)
+            .collect();
+        assert_eq!(fields.len(), 3);
+        assert!(!fields.contains(&"reimbursed"));
+        assert_eq!(
+            readers(&described, Some(&id)),
+            ["expenses::total-unreimbursed", "expenses::list"]
+        );
+    }
+
+    #[test]
+    fn an_expense_is_sent_in_the_shape_its_schema_asks_for() {
+        let schema = json!({"type": "object",
+            "properties": {
+                "title": {"type": "string"}, "amount": {"type": "integer"},
+                "reimbursement": {"type": "string", "enum": ["unreimbursed", "reimbursed"]},
+                "currency": {"type": "string"}, "receipts": {"type": "array"},
+            },
+            "required": ["title", "amount", "currency"]});
+        let (payload, sent) = expense_payload(&schema, &EXPENSES[0]);
+        assert_eq!(
+            payload,
+            json!({
+                "title": "E2E check: team lunch", "amount": 1250,
+                "reimbursement": "unreimbursed", "currency": "e2e",
+            })
+        );
+        assert_eq!(sent, Some(1250.0));
+        let (payload, _) = expense_payload(&schema, &EXPENSES[1]);
+        assert_eq!(payload["reimbursement"], "reimbursed");
+    }
+
+    #[test]
+    fn a_total_is_a_number_that_grew_by_the_amount_still_owed() {
+        let before = json!({"total": "27.50", "expenses": [{"amount": 15}], "count": 1});
+        let right = json!({"total": "40.00", "expenses": [{"amount": 12.5}, {"amount": 40}, {"amount": 15}], "count": 3});
+        assert_eq!(moved_by(&before, &right, 12.5), ["/total"]);
+        // Counting the reimbursed one too, or only a new list entry, is not it.
+        let wrong = json!({"total": 80.0, "expenses": [{"amount": 12.5}], "count": 3});
+        assert!(moved_by(&before, &wrong, 12.5).is_empty());
+        // A total the first answer did not have yet starts from zero.
+        assert_eq!(
+            moved_by(&json!({}), &json!({"owed": 12.5}), 12.5),
+            ["/owed"]
         );
     }
 }
