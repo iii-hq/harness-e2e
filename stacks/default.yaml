@@ -6,7 +6,8 @@
 #             newest release candidate of iii-hq/iii.
 #   template  optional iii-hq/templates project the groups start from,
 #             `<id>` or `<id>@<revision>`; the containers below then pin
-#             versions of the workers it declares.
+#             versions of the workers it declares and add the ones it does
+#             not.
 #
 # The containers are the workers the stack declares. Everything else in the
 # graph — state, llm-router, iii-directory, session-manager and the rest — is a

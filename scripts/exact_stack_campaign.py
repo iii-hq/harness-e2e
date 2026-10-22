@@ -690,6 +690,24 @@ def project_scaffold(
     def declares(package: str) -> bool:
         return any(package_of(item) == package for item in containers.values())
 
+    if template is not None:
+        # A stack with a template is the template plus what the stack adds: a
+        # stack container pins a worker the template declares (below) and
+        # joins the project when the template has none, as the onboarding
+        # tour's worker does on the `harness` template. Only what the stack
+        # declares, the lock's roots: the rest of the assembled graph arrives
+        # through the template's own workers.
+        roots = set((runtime.get("lock") or {}).get("graphs") or {}) or {
+            package_of(container) for container in assembled.values()
+        }
+        for name, container in assembled.items():
+            package = package_of(container)
+            if package not in roots or declares((template_packages or {}).get(package, package)):
+                continue
+            if name in containers:
+                raise ValueError(f"container {name} is already used by another worker")
+            containers[name] = copy.deepcopy(container)
+
     if not declares(RUNNER):
         containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
     group_scenarios = scenarios
