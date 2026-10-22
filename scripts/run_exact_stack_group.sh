@@ -382,10 +382,22 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# A process that exits before it is ready says why in its own log, not in the
+# probe that then found it gone: the cause is its last error line (its last
+# line when none reads as an error), and the probe is not recorded as the call
+# that failed.
+exited() {
+  local said
+  said=$(grep -E '^(error|Error)\b|\[(ERROR|FATAL)\]|panicked' "$2" 2>/dev/null | tail -n 1 || true)
+  [[ -n "$said" ]] || said=$(grep -v '^[[:space:]]*$' "$2" 2>/dev/null | tail -n 1 || true)
+  rm -f "$iii_failed"
+  fail "$1 exited before becoming ready${said:+: ${said:0:300}}"
+}
+
 wait_for_engine() {
   local response started=$SECONDS
   while ((SECONDS - started < wait_seconds)); do
-    kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before becoming ready"
+    kill -0 "$engine_pid" 2>/dev/null || exited "iii engine" "$artifact_dir/logs/engine.log"
     response=$(iii_trigger "$probe_ms" engine::workers::list --json '{}' 2>/dev/null || true)
     jq -e '.workers != null' <<<"$response" >/dev/null 2>&1 && return 0
     sleep 1
@@ -396,7 +408,7 @@ wait_for_engine() {
 wait_for_compose() {
   local started=$SECONDS
   while ((SECONDS - started < wait_seconds)); do
-    kill -0 "$compose_pid" 2>/dev/null || fail "iii compose exited before becoming ready"
+    kill -0 "$compose_pid" 2>/dev/null || exited "iii compose" "$artifact_dir/logs/compose.log"
     if iii_trigger "$probe_ms" compose::list --namespace "$namespace" --json '{}' >/dev/null 2>&1; then
       return 0
     fi
