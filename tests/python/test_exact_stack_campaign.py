@@ -1255,7 +1255,9 @@ fail() {
             if node["kind"] == "binary"
         }
         helper = "iii-" + "worker"
-        compose = {"pid": 10, "ppid": 1, "comm": "iii", "args": "/run/bin/iii compose --namespace project-one"}
+        # As ps lists it: Compose's own title, cut to 15 characters in comm.
+        compose = {"pid": 10, "ppid": 1, "comm": "iii:c:e2~732b2f",
+                   "args": "iii:c:e2e-004bdf4d-onboarding-tour compose --namespace e2e-004bdf4d-onboarding-tour"}
         vm = {"pid": 11, "ppid": 10, "comm": helper, "args": f"/run/bin/{helper} __vm-boot"}
         with tempfile.TemporaryDirectory() as directory:
             compose_path = Path(directory) / "worker-compose.yaml"
@@ -1272,6 +1274,7 @@ fail() {
                 )
 
             evidence([compose, vm, {"pid": 12, "ppid": 11, "comm": helper, "args": helper}])
+            evidence([{**compose, "comm": "iii", "args": "/run/bin/iii compose"}, vm])
             for during in ([{"comm": helper, "args": helper}],
                            [{"pid": 11, "ppid": 5, "comm": "bash", "args": f"{helper} start"}],
                            [compose, {**vm, "ppid": 1}]):
