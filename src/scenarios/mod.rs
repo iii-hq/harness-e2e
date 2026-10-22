@@ -39,6 +39,7 @@ pub mod linkly;
 pub mod mechanical_reaction;
 pub mod minimal_path;
 pub mod moving_target;
+pub mod onboarding_tour;
 pub mod performance_regression;
 pub mod persistent_state;
 pub mod poison_message;
@@ -131,6 +132,12 @@ pub trait Scenario: Send + Sync {
     }
     /// The closed function surface the subject may call, when the scenario limits it.
     fn allowed_functions(&self, _run_id: &str) -> Option<Vec<String>> {
+        None
+    }
+    /// The Directory agent profile the subject session runs as, when the
+    /// product this test reproduces fixes one. An execution that names no
+    /// profile takes it; one that names another is refused.
+    fn agent_profile(&self) -> Option<&'static str> {
         None
     }
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
@@ -525,6 +532,7 @@ scenarios! {
     KanbanC6Discussion = "kanban_c6_discussion" => kanban::Kanban(5),
     KanbanC7Live = "kanban_c7_live" => kanban::Kanban(6),
     LinklyTutorial = "linkly_tutorial" => linkly::LinklyTutorial,
+    OnboardingTour = "onboarding_tour" => onboarding_tour::OnboardingTour,
     ContextPressure = "context_pressure" => context_pressure::ContextPressure,
     MinimalPath = "minimal_path" => minimal_path::MinimalPath,
     PersistentState = "persistent_state" => persistent_state::PersistentState,
@@ -823,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_fifty_nine_unique_valid_scenarios() {
+    fn registry_contains_sixty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -832,7 +840,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 59);
+        assert_eq!(ids.len(), 60);
     }
 
     #[test]

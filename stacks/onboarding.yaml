@@ -1,0 +1,50 @@
+# The stack the `onboarding` suite runs on: the project a new user's
+# `iii project init --learn-iii` creates. That is the iii-hq/templates
+# `harness` project plus the tour's own `onboarding` container, declared the
+# way the CLI seeds it (iii engine/src/cli/project/mod.rs,
+# ONBOARDING_CONTAINER); keep the two in step.
+#
+# The template tracks its newest revision and the tour its `latest` tag, as
+# a new project does. Otherwise the same workers as harness-template.yaml.
+
+iii: latest
+template: harness
+
+containers:
+  # The guided tour. It serves the `onboarding` console page and the tour
+  # the suite takes.
+  onboarding:
+    worker: package://onboarding
+    version: latest
+    start_after:
+      - state
+
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  # Workers the measurement itself needs and that the application does not
+  # bring along. A worker the application already depends on is left out: the
+  # engine resolves it from that dependency, and declaring it here as well is a
+  # second, independent spec for the same worker, which it refuses.
+  # `browser` is one of those, and arrives with `harness`.
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

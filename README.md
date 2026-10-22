@@ -167,6 +167,12 @@ Featured suites:
   against the `linkly-agentic` scaffold's Compose stack, and scores
   twenty-two deterministic checks. The `linkly` stack starts every group from
   a fresh scaffold; `scripts/linkly_stack.py` prepares one by hand.
+- Onboarding tour: the `onboarding` suite. `onboarding_tour` takes the
+  console tour of the onboarding worker the way a new user does, as one
+  scripted dialogue under the `harness` template's Onboarding profile
+  (`ade-worker-builder`), on the `onboarding` stack: the project
+  `iii project init --learn-iii` creates. The test plays the tour page, closing each step as the page does,
+  and checks what every step left behind.
 - [Trending topics](docs/blog-build-contract.md): an isolated per-attempt Git
   remote and an independent Playwright acceptance check against the delivered
   SHA. Design is free. Screenshots are evidence, not an aesthetic score.
@@ -189,6 +195,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
+| Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -232,6 +239,22 @@ The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 stack, whose template starts every group from a fresh pinned `linkly-agentic`
 scaffold as the Compose project that hosts the Harness; on another stack the
 scenario's setup refuses the project it finds.
+
+The `onboarding` suite runs the onboarding tour alone: its six prompts in
+`case-onboarding-tour`, once, with no technical retries. Run it on the
+`onboarding` stack, the `harness` template plus the tour's `onboarding`
+container as `iii project init --learn-iii` seeds it; on another stack setup
+refuses to start. The test always runs as the template's Onboarding profile,
+`ade-worker-builder`: an execution that names no profile takes it, and one that
+names another is refused. The test plays the tour page. Setup closes the
+button steps (the sign-up box is skipped, never submitted) and binds each other
+step's condition. When a condition fires, the step is closed with
+`onboarding::steps::complete`. After the dialogue the test checks off three of
+the agent's TODO items through the database worker, as a user's click would
+land, and listens for the TODO worker's own trigger.
+[tests/fixtures/onboarding-tour/console-basics.json](tests/fixtures/onboarding-tour/console-basics.json)
+is the tour the test was written against. If the worker serves a different
+tour, the run loses the `tour.current` criterion and nothing else.
 
 ## Release Control
 

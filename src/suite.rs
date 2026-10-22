@@ -59,7 +59,9 @@ fn subject_cost_cap(subject: &SubjectConfig, scenario_id: &str) -> Option<f64> {
 }
 
 fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
-    if crate::scenarios::kanban::IDS.contains(&scenario_id) {
+    if crate::scenarios::kanban::IDS.contains(&scenario_id)
+        || scenario_id == crate::scenarios::onboarding_tour::ID
+    {
         Some(5.0)
     } else if scenario_id == crate::scenarios::linkly::ID {
         Some(10.0)
@@ -241,6 +243,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    config.subject.agent = pinned_agent_profile(&config.scenarios, config.subject.agent.take())?;
     let agent = match config.subject.agent.as_deref() {
         Some(id) => Some(
             resolve_agent_profile(&context, id)
@@ -1128,6 +1131,32 @@ impl ResolvedAgentProfile {
             .as_object_mut()
             .expect("provider option normalized to an object")
             .insert("reasoning_effort".into(), Value::String(effort.into()));
+    }
+}
+
+/// The profile the run's session takes: the one its tests fix, else the
+/// requested one. A run whose tests fix different profiles, or fix one beside
+/// tests that do not, cannot have one session identity and is refused.
+fn pinned_agent_profile(
+    scenarios: &[ScenarioId],
+    requested: Option<String>,
+) -> Result<Option<String>> {
+    let pins: HashSet<Option<&str>> = scenarios
+        .iter()
+        .map(|scenario| scenario.module().agent_profile())
+        .collect();
+    let pinned = match pins.into_iter().collect::<Vec<_>>().as_slice() {
+        [Some(pinned)] => *pinned,
+        [None] | [] => return Ok(requested),
+        _ => {
+            bail!("these tests fix different agent profiles; run each profile in its own execution")
+        }
+    };
+    match requested {
+        Some(requested) if requested != pinned => {
+            bail!("the selected tests run as agent profile '{pinned}', not '{requested}'")
+        }
+        _ => Ok(Some(pinned.into())),
     }
 }
 
@@ -3542,6 +3571,32 @@ mod tests {
         );
         subject.priced = Some(false);
         assert_eq!(subject_cost_cap(&subject, capped), None);
+    }
+
+    #[test]
+    fn a_test_that_fixes_its_profile_runs_as_it() {
+        let onboarding = [ScenarioId::OnboardingTour];
+        assert_eq!(
+            pinned_agent_profile(&onboarding, None).unwrap().as_deref(),
+            Some("ade-worker-builder")
+        );
+        assert_eq!(
+            pinned_agent_profile(&onboarding, Some("ade-worker-builder".into()))
+                .unwrap()
+                .as_deref(),
+            Some("ade-worker-builder")
+        );
+        assert!(pinned_agent_profile(&onboarding, Some("default".into())).is_err());
+        assert!(
+            pinned_agent_profile(&[ScenarioId::OnboardingTour, ScenarioId::MinimalPath], None)
+                .is_err()
+        );
+        assert_eq!(
+            pinned_agent_profile(&[ScenarioId::MinimalPath], Some("tech-lead".into()))
+                .unwrap()
+                .as_deref(),
+            Some("tech-lead")
+        );
     }
 
     #[test]
