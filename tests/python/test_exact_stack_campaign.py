@@ -222,9 +222,11 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "onboarding": ["onboarding", "state"], "harness": ["harness", "judge", "state"], "fp": ["fp"],
         }
         # Assembled: the declared roots and what their graphs brought.
+        contract["runtime"]["lock"]["graphs"]["harness-e2e"] = ["harness-e2e", "database"]
         contract["runtime"]["compose"] = {"containers": {
-            "onboarding": {"worker": "package://onboarding", "version": "latest"},
+            "onboarding": {"worker": "package://onboarding", "version": "latest", "start_after": ["state", "judge"]},
             "harness": {"worker": "package://harness", "version": "latest"},
+            "harness-e2e": {"worker": "package://harness-e2e", "version": "latest", "start_after": ["database"]},
             "fp": {"worker": "package://fp", "version": "latest"},
             "judge": {"worker": "package://judge", "version": "0.4.0"},
         }}
@@ -238,6 +240,10 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "harness": "1.8.60", "state": "latest", "onboarding": "0.3.1", "fp": "latest",
             "harness-e2e": "latest", "provider-deepseek": "latest",
         })
+        # Ordered only after what the project declares; the runner comes in
+        # as it always has, without the assembled order.
+        self.assertEqual(project["containers"]["onboarding"]["start_after"], ["state"])
+        self.assertNotIn("start_after", project["containers"]["harness-e2e"])
         self.assertEqual(set(template["containers"]), {"harness", "state"})
 
     def test_campaign_provider_is_added_to_templates_and_receives_its_pin_and_credentials(self):
