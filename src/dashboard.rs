@@ -707,6 +707,7 @@ pub(crate) mod tests {
         value.subject.agent = Some(crate::report::AgentProfileArtifact {
             id: "ade-worker-builder".into(),
             configuration_sha256: TEST_DIGEST.into(),
+            unavailable_functions: Vec::new(),
         });
         let session = |id: &str, parent: Option<&str>, depth, turns, calls, errors| {
             crate::wire::SessionUsage {
