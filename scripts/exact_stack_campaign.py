@@ -998,11 +998,14 @@ def subscription_login(
 
 
 def started_by_iii(row: dict[str, Any], by_pid: dict[Any, dict[str, Any]]) -> bool:
-    """Whether an `iii` process is among the row's ancestors in one inventory."""
+    """Whether an `iii` process is among the row's ancestors in one inventory.
+    Compose names itself `iii:c:<namespace>` and the engine it manages
+    `iii:e:<namespace>`, truncated as `comm` is."""
     seen = set()
     parent = by_pid.get(row.get("ppid"))
     while parent is not None and parent.get("pid") not in seen:
-        if Path(str(parent.get("comm", ""))).name == "iii":
+        name = Path(str(parent.get("comm", ""))).name
+        if name == "iii" or name.startswith("iii:"):
             return True
         seen.add(parent.get("pid"))
         parent = by_pid.get(parent.get("ppid"))
