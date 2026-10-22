@@ -246,15 +246,18 @@ The `onboarding` suite runs the onboarding tour alone: its six prompts in
 container as `iii project init --learn-iii` seeds it; on another stack setup
 refuses to start. The test always runs as the template's Onboarding profile,
 `ade-worker-builder`: an execution that names no profile takes it, and one that
-names another is refused. The test plays the tour page. Setup closes the
-button steps (the sign-up box is skipped, never submitted) and binds each other
-step's condition. When a condition fires, the step is closed with
-`onboarding::steps::complete`. After the dialogue the test checks off three of
-the agent's TODO items through the database worker, as a user's click would
-land, and listens for the TODO worker's own trigger.
-[tests/fixtures/onboarding-tour/console-basics.json](tests/fixtures/onboarding-tour/console-basics.json)
+names another is refused. The test plays the `learn-iii` tour's card. Setup
+closes the button steps (the sign-up box is skipped, never submitted) and binds
+each other step's condition. When a condition fires, the step is closed with
+`learn-iii::steps::complete`. After the dialogue the test adds two expenses
+through the agent's expense tracker, one still to be reimbursed and one
+already reimbursed, as the tracker's page would. It listens for the tracker's
+own trigger and reads its totals before and after.
+[tests/fixtures/onboarding-tour/learn-iii.json](tests/fixtures/onboarding-tour/learn-iii.json)
 is the tour the test was written against. If the worker serves a different
-tour, the run loses the `tour.current` criterion and nothing else.
+tour, the run loses the `tour.current` criterion and nothing else. When the
+tour changes on purpose, regenerate the fixture from the worker's
+`src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
 
 ## Release Control
 
