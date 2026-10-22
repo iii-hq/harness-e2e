@@ -753,7 +753,8 @@ fn readers(described: &Value, adder: Option<&str>) -> Vec<String> {
 struct Expense {
     description: &'static str,
     amount: f64,
-    category: &'static str,
+    /// Its category, then the words a tracker's own list may use for it.
+    category: &'static [&'static str],
     reimbursed: bool,
 }
 
@@ -764,21 +765,38 @@ const EXPENSES: [Expense; 2] = [
     Expense {
         description: "E2E check: team lunch",
         amount: 12.5,
-        category: "meals",
+        category: &["meals", "food", "dining", "meal"],
         reimbursed: false,
     },
     Expense {
         description: "E2E check: train ticket",
         amount: 40.0,
-        category: "travel",
+        category: &["travel", "transport", "transportation", "trip"],
         reimbursed: true,
     },
 ];
 
+/// The JSON types a property takes: `"type": "string"` or a list of them.
+fn kinds(property: &Value) -> Vec<&str> {
+    match &property["type"] {
+        Value::String(kind) => vec![kind.as_str()],
+        Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The values a property allows, when it lists them.
+fn allowed(property: &Value) -> Vec<&str> {
+    items(property, "enum").filter_map(Value::as_str).collect()
+}
+
 /// A plain value for a property the request requires and the four fields do
-/// not cover.
-fn plain(kind: &str) -> Value {
-    match kind {
+/// not cover: the first it allows, else one of its type.
+fn plain(property: &Value) -> Value {
+    if let Some(first) = allowed(property).first() {
+        return json!(first);
+    }
+    match kinds(property).first().copied().unwrap_or("") {
         "string" => json!("e2e"),
         "integer" | "number" => json!(1),
         "boolean" => json!(false),
@@ -788,8 +806,34 @@ fn plain(kind: &str) -> Value {
     }
 }
 
+/// The category as the tracker's page would pick it: from the list the
+/// tracker allows, the entry that says it (`food` for meals), else `other`,
+/// else the first; free text when it lists none.
+fn category_value(property: &Value, words: &[&str]) -> Value {
+    let allowed = allowed(property);
+    if allowed.is_empty() {
+        return json!(words[0]);
+    }
+    let says = |value: &str| {
+        let value = value.to_ascii_lowercase();
+        words
+            .iter()
+            .any(|word| value == *word || value.contains(word) || word.contains(value.as_str()))
+    };
+    let pick = allowed
+        .iter()
+        .find(|value| says(value))
+        .or_else(|| {
+            allowed
+                .iter()
+                .find(|value| value.eq_ignore_ascii_case("other"))
+        })
+        .or(allowed.first());
+    json!(pick)
+}
+
 fn reimbursed_value(property: &Value, reimbursed: bool) -> Value {
-    if property["type"] != "string" {
+    if !kinds(property).contains(&"string") || kinds(property).contains(&"boolean") {
         return json!(reimbursed);
     }
     let says_yes = |text: &str| {
@@ -800,8 +844,8 @@ fn reimbursed_value(property: &Value, reimbursed: bool) -> Value {
                 .iter()
                 .any(|word| text.contains(word))
     };
-    items(property, "enum")
-        .filter_map(Value::as_str)
+    allowed(property)
+        .into_iter()
         .find(|value| says_yes(value) == reimbursed)
         .map(|value| json!(value))
         .unwrap_or_else(|| json!(reimbursed.to_string()))
@@ -820,7 +864,7 @@ fn expense_payload(schema: &Value, expense: &Expense) -> (Value, Option<f64>) {
             json!({
                 "description": expense.description,
                 "amount": expense.amount,
-                "category": expense.category,
+                "category": expense.category[0],
                 "reimbursed": expense.reimbursed,
             }),
             Some(expense.amount),
@@ -833,29 +877,33 @@ fn expense_payload(schema: &Value, expense: &Expense) -> (Value, Option<f64>) {
     let mut payload = serde_json::Map::new();
     let mut sent = None;
     for (property, spec) in schema["properties"].as_object().into_iter().flatten() {
-        let kind = spec["type"].as_str().unwrap_or("");
+        let kind = kinds(spec);
         let field = fields
             .iter()
             .find(|(_, name)| name == property)
             .map(|(field, _)| *field);
         let value = match field {
             Some("description") => json!(expense.description),
-            Some("category") => json!(expense.category),
+            Some("category") => category_value(spec, expense.category),
             Some("amount") => {
-                let amount = if kind == "integer" {
+                // A number where it takes one; whole numbers are cents.
+                let cents = !kind.contains(&"number") && kind.contains(&"integer");
+                let amount = if cents {
                     (expense.amount * 100.0).round()
                 } else {
                     expense.amount
                 };
                 sent = Some(amount);
-                match kind {
-                    "integer" => json!(amount as i64),
-                    "string" => json!(amount.to_string()),
-                    _ => json!(amount),
+                if cents {
+                    json!(amount as i64)
+                } else if kind.contains(&"number") || kind.is_empty() {
+                    json!(amount)
+                } else {
+                    json!(amount.to_string())
                 }
             }
             Some(_) => reimbursed_value(spec, expense.reimbursed),
-            None if required.contains(&property.as_str()) => plain(kind),
+            None if required.contains(&property.as_str()) => plain(spec),
             None => continue,
         };
         payload.insert(property.clone(), value);
@@ -1740,6 +1788,39 @@ mod tests {
             tracker_of(&candidates, &registered).map(|c| c.0.as_str()),
             Some("expenses")
         );
+    }
+
+    #[test]
+    fn an_expense_keeps_to_the_values_the_tracker_allows() {
+        // expense-tracker::expense::create as execution 194af61b's agent declared it.
+        let schema = json!({"properties": {
+            "amount": {"type": ["string", "number"]},
+            "category": {"enum": ["food", "travel", "office", "software", "utilities", "other"], "type": "string"},
+            "description": {"maxLength": 120, "minLength": 1, "type": "string"},
+            "reimbursed": {"type": "boolean"},
+        }, "required": ["description", "amount", "category"]});
+        let (lunch, sent) = expense_payload(&schema, &EXPENSES[0]);
+        assert_eq!(
+            lunch,
+            json!({
+                "amount": 12.5, "category": "food",
+                "description": "E2E check: team lunch", "reimbursed": false,
+            })
+        );
+        assert_eq!(sent, Some(12.5));
+        let (train, _) = expense_payload(&schema, &EXPENSES[1]);
+        assert_eq!(train["category"], "travel");
+        // A list that has no word for it gets `other`, then the first.
+        let listed = |values: Value| json!({"enum": values, "type": "string"});
+        assert_eq!(
+            category_value(&listed(json!(["rent", "other"])), EXPENSES[0].category),
+            "other"
+        );
+        assert_eq!(
+            category_value(&listed(json!(["rent", "tax"])), EXPENSES[0].category),
+            "rent"
+        );
+        assert_eq!(plain(&listed(json!(["usd", "eur"]))), "usd");
     }
 
     #[test]
