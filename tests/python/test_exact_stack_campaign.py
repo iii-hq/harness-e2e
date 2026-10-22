@@ -212,6 +212,34 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "provider-deepseek": "latest",
         })
 
+    def test_a_template_stack_adds_the_workers_the_template_does_not_declare(self):
+        """The onboarding stack is the `harness` template plus the tour's
+        worker. A stack container joins the project when the template has no
+        worker of its package, and only pins the version when it does."""
+        contract = campaign_contract()
+        contract["runtime"]["lock"] = lock_of({"onboarding": "0.3.1", "harness": "1.8.60", "judge": "0.4.0"})
+        contract["runtime"]["lock"]["graphs"] = {
+            "onboarding": ["onboarding", "state"], "harness": ["harness", "judge", "state"], "fp": ["fp"],
+        }
+        # Assembled: the declared roots and what their graphs brought.
+        contract["runtime"]["compose"] = {"containers": {
+            "onboarding": {"worker": "package://onboarding", "version": "latest"},
+            "harness": {"worker": "package://harness", "version": "latest"},
+            "fp": {"worker": "package://fp", "version": "latest"},
+            "judge": {"worker": "package://judge", "version": "0.4.0"},
+        }}
+        template = {"containers": {
+            "harness": {"worker": "package://harness", "version": "1.8.17"},
+            "state": {"worker": "package://state", "version": "0.22.8"},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        versions = {name: container["version"] for name, container in project["containers"].items()}
+        self.assertEqual(versions, {
+            "harness": "1.8.60", "state": "latest", "onboarding": "0.3.1", "fp": "latest",
+            "harness-e2e": "latest", "provider-deepseek": "latest",
+        })
+        self.assertEqual(set(template["containers"]), {"harness", "state"})
+
     def test_campaign_provider_is_added_to_templates_and_receives_its_pin_and_credentials(self):
         template = {"containers": {
             "subject": {"worker": "package://harness"},
