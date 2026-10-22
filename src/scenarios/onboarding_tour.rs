@@ -501,25 +501,25 @@ fn declared_containers(status: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The assistant's text in each exchange: everything it wrote from one
-/// runner message up to the next. Wake notifications open turns, not
-/// exchanges.
-fn exchange_texts(transcript: &Value) -> Vec<String> {
+/// The assistant's text in each exchange: everything it wrote from one of
+/// the runner's prompts up to the next. Only those open an exchange: a wake
+/// notification or the Harness's own skill update is a user message too.
+fn exchange_texts(transcript: &Value, prompts: &[String]) -> Vec<String> {
     let mut texts: Vec<String> = Vec::new();
     for entry in items(transcript, "messages") {
         let message = &entry["message"];
+        // What it wrote, not what it thought: a thinking block echoes the
+        // prompt it is answering.
         let text = message["content"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|block| block["type"] == "text")
             .filter_map(|block| block["text"].as_str())
             .collect::<Vec<_>>()
             .join("\n");
         match message["role"].as_str() {
-            Some("user")
-                if entry["origin"]["notification"] != true
-                    && !text.trim_start().starts_with("[notification]") =>
-            {
+            Some("user") if prompts.iter().any(|prompt| text.trim() == prompt.trim()) => {
                 texts.push(String::new())
             }
             Some("assistant") => {
@@ -609,18 +609,20 @@ fn name_words(name: &str) -> Vec<String> {
 /// letters or more (`query` in "queries", `update` in "partial updates").
 /// The prompt asks what the workers do, not for their ids.
 fn named_functions(answer: &str, worker: &str, ids: &[String]) -> Vec<String> {
+    // The worker named as a word: `state` is not in "statements".
     let words: HashSet<String> = answer
         .lines()
-        .map(str::to_ascii_lowercase)
-        .filter(|line| line.contains(worker))
-        .flat_map(|line| name_words(&line))
+        .map(name_words)
+        .filter(|line| line.iter().any(|word| word == worker))
+        .flatten()
         .collect();
     let prefix = format!("{worker}::");
     ids.iter()
         .filter(|id| {
             name_words(id.strip_prefix(&prefix).unwrap_or(id))
                 .iter()
-                .filter(|part| part.len() >= 4 && part.as_str() != worker)
+                // `databases` starts as the worker's own name does: it says nothing.
+                .filter(|part| part.len() >= 4 && !part.starts_with(&worker[..worker.len().min(4)]))
                 .any(|part| words.iter().any(|word| word.starts_with(&part[..4])))
         })
         .cloned()
@@ -1433,7 +1435,11 @@ impl Scenario for OnboardingTour {
         ));
 
         let answer = exchange_of("discoverability")
-            .and_then(|index| exchange_texts(&observation.transcript).get(index).cloned())
+            .and_then(|index| {
+                exchange_texts(&observation.transcript, &prompts())
+                    .get(index)
+                    .cloned()
+            })
             .unwrap_or_default()
             .to_ascii_lowercase();
         let snapshot = discoverability_functions.is_some();
@@ -1686,17 +1692,22 @@ mod tests {
     }
 
     #[test]
-    fn exchanges_split_on_runner_messages_not_notifications() {
+    fn exchanges_open_on_the_runner_s_prompts_only() {
         let say = |role: &str, text: &str| json!({"message": {"role": role, "content": [{"type": "text", "text": text}]}});
         let transcript = json!({"messages": [
             say("user", "hello"), say("assistant", "hi"),
             say("user", "list workers"), say("assistant", "state, database"),
             say("user", "[notification] wake"), say("assistant", "and http"),
+            // The Harness's own message, as the local run of the tour had one.
+            say("user", "The available skills have changed."), say("assistant", "noted"),
             say("user", "build"), say("assistant", "done"),
+            json!({"message": {"role": "assistant", "content": [{"type": "thinking", "text": "they asked for state"}]}}),
         ]});
-        let texts = exchange_texts(&transcript);
+        let prompts = ["hello", "list workers", "build"].map(String::from);
+        let texts = exchange_texts(&transcript, &prompts);
         assert_eq!(texts.len(), 3);
         assert!(texts[1].contains("database") && texts[1].contains("http"));
+        assert!(texts[2].starts_with("done") && !texts[2].contains("state"));
     }
 
     #[test]
@@ -1777,6 +1788,18 @@ mod tests {
         assert_eq!(
             named_functions(answer, "harness", &own("harness")),
             ["harness::status"]
+        );
+        // The worker is named as a word.
+        assert!(named_functions(
+            "database runs statements and updates",
+            "state",
+            &own("state")
+        )
+        .is_empty());
+        // A name that starts as the worker's does says nothing.
+        let listed = ["database::listDatabases".to_string()];
+        assert!(
+            named_functions("| **database** | holds databases |", "database", &listed).is_empty()
         );
         // Three letters are not a word of the name: `get` is not "gets".
         assert!(named_functions("database gets rows", "database", &own("database")).is_empty());
