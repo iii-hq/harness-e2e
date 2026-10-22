@@ -500,11 +500,16 @@ def declare_commits(containers: dict[str, Any], commits: dict[str, dict[str, Any
 def download(url: str, sha256: str, destination: Path) -> Path:
     """Fetch `url` and check it against the digest the release or lock states.
     Tried three times, as the groups' `curl --retry 3`; a digest that does not
-    match is an answer, not a blip, and is never retried."""
+    match is an answer, not a blip, and is never retried.
+
+    The Registry's CDN (Cloudflare) answers 403 to urllib's own User-Agent
+    for an artifact its edge has not cached yet, i.e. a fresh release, so
+    the request names itself."""
     destination.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": RUNNER})
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(url, timeout=300) as response:
+            with urllib.request.urlopen(request, timeout=300) as response:
                 payload = response.read()
             break
         except urllib.error.HTTPError as error:
