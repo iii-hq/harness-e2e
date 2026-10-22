@@ -50,6 +50,9 @@ const FIXTURE: &str = include_str!("../../tests/fixtures/onboarding-tour/learn-i
 const DISCOVERED: [&str; 3] = ["database", "state", "harness"];
 /// How long an added expense may take to ring the tracker's trigger.
 const FIRE_WAIT: Duration = Duration::from_secs(10);
+/// How long the user waits on a step the agent is still working on before
+/// clicking on to the next one.
+const STEP_WAIT: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Tour {
@@ -124,6 +127,25 @@ fn exchange_of(step_id: &str) -> Option<usize> {
         .iter()
         .filter(|step| step.ask.is_some())
         .position(|step| step.id == step_id)
+}
+
+/// The step whose prompt opens an exchange.
+fn step_of(exchange: usize) -> Option<&'static Step> {
+    tour()
+        .steps
+        .iter()
+        .filter(|step| step.ask.is_some())
+        .nth(exchange)
+}
+
+/// Whether the agent is still on its last prompt: a turn running or queued,
+/// or a wake it armed still to come.
+fn still_working(status: &Value) -> (bool, bool) {
+    let running = matches!(
+        status["status"].as_str(),
+        Some("running" | "awaiting_functions")
+    ) || items(status, "queued").next().is_some();
+    (running, status["expects_wake"] == true)
 }
 
 struct Metric {
@@ -214,8 +236,8 @@ const METRICS: [Metric; 12] = [
         weight: 6,
         ratio: false,
         gate: Some(6),
-        label: "A trigger in the chat waits on new expenses",
-        question: "Is a trigger, bound by something other than the tracker, waiting on the tracker's trigger type?",
+        label: "The chat binds a trigger on new expenses",
+        question: "Did the chat bind a trigger on the tracker's trigger type, or is one bound by something other than the tracker waiting on it?",
     },
     Metric {
         id: "cleanup.removed",
@@ -765,9 +787,10 @@ fn numbers(value: &Value, path: &str, out: &mut HashMap<String, f64>) {
     }
 }
 
-/// The paths whose number grew by exactly `delta` from one answer to the
-/// next. A field the first answer did not have counts from zero, an array
-/// element never: a new expense in a list is not a total.
+/// The paths whose number grew by `delta` from one answer to the next, in the
+/// unit it was sent or a hundred times either way (an amount in units kept in
+/// cents, or the reverse). A field the first answer did not have counts from
+/// zero, an array element never: a new expense in a list is not a total.
 fn moved_by(before: &Value, after: &Value, delta: f64) -> Vec<String> {
     let (mut old, mut new) = (HashMap::new(), HashMap::new());
     numbers(before, "", &mut old);
@@ -779,12 +802,56 @@ fn moved_by(before: &Value, after: &Value, delta: f64) -> Vec<String> {
                 .get(path)
                 .copied()
                 .or_else(|| (!path.contains('[')).then_some(0.0));
-            start.is_some_and(|start| (value - start - delta).abs() < 1e-6)
+            start.is_some_and(|start| {
+                [delta, delta * 100.0, delta / 100.0]
+                    .iter()
+                    .any(|delta| (value - start - delta).abs() < 1e-6)
+            })
         })
         .map(|(path, _)| path)
         .collect();
     moved.sort();
     moved
+}
+
+/// The triggers the chat bound on these types, from the transcript: an
+/// `engine::register_trigger` call the engine accepted. A wake armed `once`
+/// is gone once it fires, so the live bindings alone miss it.
+fn chat_bindings(transcript: &Value, types: &[String]) -> Vec<Value> {
+    let accepted: HashSet<&str> = items(transcript, "messages")
+        .map(|entry| &entry["message"])
+        .filter(|message| {
+            message["role"] == "function_result"
+                && message["function_id"] == "engine::register_trigger"
+                && message["is_error"] != true
+        })
+        .filter_map(|message| message["function_call_id"].as_str())
+        .collect();
+    items(transcript, "messages")
+        .flat_map(|entry| items(&entry["message"], "content"))
+        .filter(|block| block["type"] == "function_call")
+        .filter_map(|block| {
+            let arguments = &block["arguments"];
+            // Through the Harness's `agent_trigger`, or called directly.
+            let (function, payload) = if block["function_id"] == "agent_trigger" {
+                (&arguments["function"], &arguments["payload"])
+            } else {
+                (&block["function_id"], arguments)
+            };
+            let kind = payload["trigger_type"].as_str()?;
+            (function == "engine::register_trigger"
+                && types.iter().any(|own| own == kind)
+                && block["id"].as_str().is_some_and(|id| accepted.contains(id)))
+            .then(|| {
+                json!({
+                    "call": block["id"],
+                    "trigger_type": kind,
+                    "config": payload["config"],
+                    "once": payload["once"],
+                })
+            })
+        })
+        .collect()
 }
 
 /// Add the two expenses through the tracker as its page would, count those
@@ -980,6 +1047,48 @@ impl Scenario for OnboardingTour {
     /// answer, as the user clicks down the tour.
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         prompts().into_iter().skip(1).collect()
+    }
+
+    /// The card moves on when a step closes. While the agent is still on it
+    /// (a turn running, or a wake it armed still to come), the user waits,
+    /// as the card's "Waiting for the agent to report this step done" asks;
+    /// once the agent is idle the next button is clicked, closed or not.
+    async fn before_followup(
+        &self,
+        context: &E2eContext,
+        run_id: &str,
+        session_id: &str,
+        exchange: usize,
+    ) {
+        let Some(step) = step_of(exchange).filter(|step| step.condition.is_some()) else {
+            return;
+        };
+        let Some(observed) = lock_unpoisoned(runs())
+            .get(run_id)
+            .map(|run| run.observed.clone())
+        else {
+            return;
+        };
+        let deadline = tokio::time::Instant::now() + STEP_WAIT;
+        loop {
+            let closed = lock_unpoisoned(&observed).closed_ids.contains(&step.id);
+            let status = context
+                .trigger_value("harness::status", json!({"session_id": session_id}))
+                .await;
+            let (running, waking) = match &status {
+                Ok(status) => still_working(status),
+                // Unread, it is not held against the agent: the user moves on.
+                Err(_) => (false, false),
+            };
+            if !running && (closed || !waking) {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(step = %step.id, "the agent was still on the step when the wait ran out");
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
     }
 
     /// The project folder, which a new chat in the ADE starts in.
@@ -1261,10 +1370,11 @@ impl Scenario for OnboardingTour {
             EXPENSES.len(),
             json!({"trigger_types": own_types, "expenses": added}),
         ));
+        let from_chat = chat_bindings(&observation.transcript, &own_types);
         observations.push(binary(
             "reactivity.chat_trigger",
-            !waiting.is_empty(),
-            json!({"bindings": waiting}),
+            !waiting.is_empty() || !from_chat.is_empty(),
+            json!({"bindings": waiting, "from_chat": from_chat}),
         ));
 
         observations.push(binary(
@@ -1469,6 +1579,53 @@ mod tests {
     }
 
     #[test]
+    fn the_card_waits_on_a_running_turn_or_an_armed_wake() {
+        assert_eq!(
+            step_of(3).map(|step| step.id.as_str()),
+            Some("extensibility")
+        );
+        assert_eq!(step_of(5).map(|step| step.id.as_str()), Some("clean-up"));
+        assert_eq!(still_working(&json!({"status": "running"})), (true, false));
+        assert_eq!(
+            still_working(&json!({"status": "completed", "expects_wake": true})),
+            (false, true)
+        );
+        assert_eq!(
+            still_working(&json!({"status": "completed", "queued": [{"id": "q"}]})),
+            (true, false)
+        );
+        assert_eq!(
+            still_working(&json!({"status": "completed"})),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn a_trigger_the_chat_bound_counts_once_the_engine_accepted_it() {
+        let call = |id: &str, kind: &str| {
+            json!({"message": {"role": "assistant", "content": [{
+                "type": "function_call", "id": id, "function_id": "agent_trigger",
+                "arguments": {"function": "engine::register_trigger",
+                              "payload": {"trigger_type": kind, "config": {"event": "created"}, "once": true}},
+            }]}})
+        };
+        let result = |id: &str, error: bool| {
+            json!({"message": {
+                "role": "function_result", "function_call_id": id,
+                "function_id": "engine::register_trigger", "is_error": error,
+            }})
+        };
+        let transcript = json!({"messages": [
+            call("a", "expense-tracker:change"), result("a", false),
+            call("b", "expense-tracker:change"), result("b", true),
+            call("c", "state"), result("c", false),
+        ]});
+        let bound = chat_bindings(&transcript, &["expense-tracker:change".to_string()]);
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0]["call"], "a");
+    }
+
+    #[test]
     fn a_total_is_a_number_that_grew_by_the_amount_still_owed() {
         let before = json!({"total": "27.50", "expenses": [{"amount": 15}], "count": 1});
         let right = json!({"total": "40.00", "expenses": [{"amount": 12.5}, {"amount": 40}, {"amount": 15}], "count": 3});
@@ -1481,5 +1638,15 @@ mod tests {
             moved_by(&json!({}), &json!({"owed": 12.5}), 12.5),
             ["/owed"]
         );
+        // An amount sent in units and kept in cents, as execution 8951e88f's
+        // tracker did.
+        let before = json!({"totals": {"unreimbursed_cents": 6140}});
+        let after = json!({"totals": {"unreimbursed_cents": 7390}});
+        assert_eq!(
+            moved_by(&before, &after, 12.5),
+            ["/totals/unreimbursed_cents"]
+        );
+        let all = json!({"totals": {"unreimbursed_cents": 11390}});
+        assert!(moved_by(&before, &all, 12.5).is_empty());
     }
 }

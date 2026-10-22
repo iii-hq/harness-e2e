@@ -2328,6 +2328,11 @@ async fn execute(
     let scripted_dialogue = messages.len() > 1;
     let mut metrics = None;
     for (exchange, message) in messages.into_iter().enumerate() {
+        if exchange > 0 {
+            module
+                .before_followup(context, run_id, session_id, exchange - 1)
+                .await;
+        }
         context.drain_turn_completed_events();
         let response: SendResponse = context
             .trigger(

@@ -143,6 +143,17 @@ pub trait Scenario: Send + Sync {
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         Vec::new()
     }
+    /// Called once exchange `exchange` has its answer and before the next
+    /// follow-up goes out. A dialogue paced by something other than the turn
+    /// (a tour card that moves on when its step closes) waits here.
+    async fn before_followup(
+        &self,
+        _context: &E2eContext,
+        _run_id: &str,
+        _session_id: &str,
+        _exchange: usize,
+    ) {
+    }
     /// The attempt-owned filesystem root that `setup` prepared for the
     /// subject, when the scenario allocates one.
     fn prepared_root(&self, _run_id: &str) -> Result<Option<PathBuf>> {
