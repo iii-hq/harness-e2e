@@ -272,7 +272,7 @@
     {
       "id": "onboarding",
       "label": "Complete the onboarding tour",
-      "purpose": "Can a new user still finish the onboarding we hand them? One session on a fresh harness project with the tour's worker, as iii project init --learn-iii creates it, sends each tour step's prompt under the tour's Onboarding profile: say hello, add a database, list what the system can do, build a reactive TODO worker with a Console page, then remove the tour. The test plays the tour page: it closes the button steps, closes each agent step when its trigger fires, and checks the TODO items off as the user would. Not covered: the setup wizard and the tour's on-screen guidance (the page, the spotlight and the panels it opens).",
+      "purpose": "Can a new user still finish the onboarding we hand them? One session on a fresh harness project with the tour's worker, as iii project init --learn-iii creates it, sends each tour step's prompt under the harness template's Onboarding profile: say hello, add a database, list what the system can do, build a reactive TODO worker with a Console page, then remove the tour. The test plays the tour page: it closes the button steps, closes each agent step when its trigger fires, and checks the TODO items off as the user would. Not covered: the setup wizard and the tour's on-screen guidance (the page, the spotlight and the panels it opens).",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",

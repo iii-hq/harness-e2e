@@ -1,6 +1,5 @@
 {
   "id": "console-basics",
-  "agent": "ade-worker-builder",
   "steps": [
     {
       "id": "message",

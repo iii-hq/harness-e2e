@@ -1,5 +1,5 @@
 //! The onboarding tour a new user takes after `iii project init --learn-iii`,
-//! as one scripted dialogue under the tour's own agent profile.
+//! as one scripted dialogue under the `harness` template's Onboarding profile.
 //!
 //! The `onboarding` stack is that project: the `harness` template plus the
 //! tour's worker. The dialogue sends each step's prompt as the tour page's
@@ -36,8 +36,9 @@ use crate::report::EvaluationDimension;
 pub const ID: &str = "onboarding_tour";
 const EVIDENCE_ID: &str = "onboarding_evidence";
 const TOUR_ID: &str = "console-basics";
-/// The tour's profile: "Onboarding" in the `harness` template, hidden from
-/// the new-chat gallery.
+/// The profile the test fixes: "Onboarding" in the `harness` template, hidden
+/// from the new-chat gallery, which the wizard's build examples run. The tour
+/// itself names none yet; it writes into whatever chat is open.
 const PROFILE: &str = "ade-worker-builder";
 const TOUR_WORKER: &str = "onboarding";
 /// Measurement, not part of the system the agent is asked to describe.
@@ -678,7 +679,7 @@ impl Scenario for OnboardingTour {
     }
 
     fn protects(&self) -> Option<&'static str> {
-        Some("The onboarding a new user is handed works end to end: the tour's prompts, run under its Onboarding profile on a fresh harness project, take an agent through every step. If it fails, a new user's first session with iii ends in a tour they cannot finish.")
+        Some("The onboarding a new user is handed works end to end: the tour's prompts, run under the template's Onboarding profile on a fresh harness project, take an agent through every step. If it fails, a new user's first session with iii ends in a tour they cannot finish.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {
@@ -1113,7 +1114,8 @@ mod tests {
         assert_eq!(prompts[0], "hello");
         assert!(prompts[5].starts_with("Remove the onboarding worker"));
         assert_eq!(exchange_of("discoverability"), Some(2));
-        assert_eq!(tour().agent.as_deref(), Some(PROFILE));
+        // The tour does not name a profile yet; the test fixes its own.
+        assert_eq!(tour().agent, None);
     }
 
     #[test]

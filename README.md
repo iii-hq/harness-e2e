@@ -169,9 +169,9 @@ Featured suites:
   a fresh scaffold; `scripts/linkly_stack.py` prepares one by hand.
 - Onboarding tour: the `onboarding` suite. `onboarding_tour` takes the
   console tour of the onboarding worker the way a new user does, as one
-  scripted dialogue under the tour's Onboarding profile (`ade-worker-builder`),
-  on the `onboarding` stack: the project `iii project init --learn-iii`
-  creates. The test plays the tour page, closing each step as the page does,
+  scripted dialogue under the `harness` template's Onboarding profile
+  (`ade-worker-builder`), on the `onboarding` stack: the project
+  `iii project init --learn-iii` creates. The test plays the tour page, closing each step as the page does,
   and checks what every step left behind.
 - [Trending topics](docs/blog-build-contract.md): an isolated per-attempt Git
   remote and an independent Playwright acceptance check against the delivered
@@ -244,7 +244,7 @@ The `onboarding` suite runs the onboarding tour alone: its six prompts in
 `case-onboarding-tour`, once, with no technical retries. Run it on the
 `onboarding` stack, the `harness` template plus the tour's `onboarding`
 container as `iii project init --learn-iii` seeds it; on another stack setup
-refuses to start. The test always runs as the tour's profile,
+refuses to start. The test always runs as the template's Onboarding profile,
 `ade-worker-builder`: an execution that names no profile takes it, and one that
 names another is refused. The test plays the tour page. Setup closes the
 button steps (the sign-up box is skipped, never submitted) and binds each other
