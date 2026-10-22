@@ -285,8 +285,15 @@ group() {
     stop_daemon
     return 1
   fi
+  # A worker that boots a VM needs KVM: the group runs in the device's group.
+  local groups=(--clear-groups)
+  if [[ -c /dev/kvm ]]; then
+    groups=(--groups "$(stat -c %g /dev/kvm)")
+  else
+    echo "::warning::this host has no /dev/kvm: a worker that boots a VM will not start" >&2
+  fi
   # The launcher may remove every container of this daemon: all are the group's.
-  setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups \
+  setpriv --reuid "${user%:*}" --regid "${user#*:}" "${groups[@]}" \
     env --default-signal=INT,QUIT HARNESS_E2E_OWN_DOCKER=1 bash scripts/run_exact_stack_group.sh &
   launcher=$!
   # A stopped container stops the group first: the launcher takes its stack

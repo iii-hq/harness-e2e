@@ -382,6 +382,13 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("runtime.cli.asset must name the iii CLI archive")
     # The download is checked against it: integrity, not preference.
     require_digest(cli.get("sha256"), "runtime.cli.sha256")
+    for index, companion in enumerate(cli.get("companions") or []):
+        label = f"runtime.cli.companions[{index}]"
+        require_keys(companion, {"asset", "sha256"}, label)
+        # Downloaded from the CLI's release and unpacked beside it.
+        if not re.fullmatch(r"iii-[a-z0-9_.-]+\.tar\.gz", str(companion["asset"])):
+            raise ValueError(f"{label}.asset must name an archive of the iii release")
+        require_digest(companion["sha256"], f"{label}.sha256")
     template = contract["runtime"].get("template")
     if template is not None:
         require_keys(template, {"id", "revision"}, "runtime.template")
@@ -990,6 +997,18 @@ def subscription_login(
     return f"provider-{provider}.{home}={folder}", evidence
 
 
+def started_by_iii(row: dict[str, Any], by_pid: dict[Any, dict[str, Any]]) -> bool:
+    """Whether an `iii` process is among the row's ancestors in one inventory."""
+    seen = set()
+    parent = by_pid.get(row.get("ppid"))
+    while parent is not None and parent.get("pid") not in seen:
+        if Path(str(parent.get("comm", ""))).name == "iii":
+            return True
+        seen.add(parent.get("pid"))
+        parent = by_pid.get(parent.get("ppid"))
+    return False
+
+
 def compose_evidence(
     contract: dict[str, Any],
     compose_path: Path,
@@ -1026,13 +1045,17 @@ def compose_evidence(
     for phase, rows in processes.items():
         if not isinstance(rows, list):
             raise ValueError(f"process inventory {phase} must be an array")
+        if not all(isinstance(row, dict) for row in rows):
+            raise ValueError(f"process inventory {phase} contains an invalid row")
+        by_pid = {row.get("pid"): row for row in rows}
         for row in rows:
-            if not isinstance(row, dict):
-                raise ValueError(f"process inventory {phase} contains an invalid row")
             command = str(row.get("comm", ""))
             executable = str(row.get("args", "")).split(maxsplit=1)[0]
             if Path(command).name == forbidden or Path(executable).name == forbidden:
-                raise ValueError(f"forbidden lifecycle executable observed during {phase}")
+                # Compose boots a VM worker through it; one that iii did not
+                # start is lifecycle outside Compose.
+                if not started_by_iii(row, by_pid):
+                    raise ValueError(f"forbidden lifecycle executable observed during {phase}")
 
     return {
         "contract_sha256": canonical_sha256(contract),

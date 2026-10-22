@@ -140,8 +140,8 @@ fail() {
 
 capture_processes() {
   local output=$1
-  ps -eo pid=,comm=,args= --no-headers | jq -Rn \
-    '[inputs | capture("^\\s*(?<pid>[0-9]+)\\s+(?<comm>\\S+)\\s*(?<args>.*)$") | {pid:(.pid|tonumber),comm,args}]' \
+  ps -eo pid=,ppid=,comm=,args= --no-headers | jq -Rn \
+    '[inputs | capture("^\\s*(?<pid>[0-9]+)\\s+(?<ppid>[0-9]+)\\s+(?<comm>\\S+)\\s*(?<args>.*)$") | {pid:(.pid|tonumber),ppid:(.ppid|tonumber),comm,args}]' \
     >"$output"
 }
 
@@ -417,16 +417,19 @@ log "Downloading exact iii CLI $cli_version"
 curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "$cli_url" -o "$cli_archive"
 printf '%s  %s\n' "$cli_sha" "$cli_archive" | sha256sum --check --status
 tar -xzf "$cli_archive" -C "$tools_dir"
+# What Compose boots a VM worker with, from the same release and beside iii,
+# as the installer puts them. Only Compose runs them.
+while IFS=$'\t' read -r companion companion_sha; do
+  curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "${cli_url%/*}/$companion" -o "$run_root/$companion"
+  printf '%s  %s\n' "${companion_sha#sha256:}" "$run_root/$companion" | sha256sum --check --status
+  tar -xzf "$run_root/$companion" -C "$tools_dir"
+done < <(jq -r '.runtime.cli.companions[]? | [.asset, .sha256] | @tsv' "$contract_path")
 chmod +x "$iii_bin"
 export PATH="$tools_dir:$PATH"
 observed_cli_version=$("$iii_bin" --version 2>&1)
 printf '%s\n' "$observed_cli_version" >"$artifact_dir/iii-version.txt"
 [[ "$observed_cli_version" == *"$cli_version"* ]] || fail \
   "iii CLI version mismatch: expected $cli_version, observed $observed_cli_version"
-forbidden_name="iii""-worker"
-if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; then
-  fail "forbidden lifecycle helper was installed"
-fi
 
 if [[ "$campaign_group_id" == case-kanban-* ]] && [[ -z "$assemble_only" ]]; then
   fixture_root=${HARNESS_E2E_KANBAN_FIXTURE_ROOT:-"$repo_root/target/kanban-fixture"}
