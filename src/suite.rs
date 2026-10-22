@@ -1181,11 +1181,17 @@ async fn resolve_agent_profile(context: &E2eContext, id: &str) -> Result<Resolve
     {
         bail!("agent profile '{id}' has an unresolved inheritance chain: {error}");
     }
-    if !response.unknown_skills.is_empty() || !response.unknown_functions.is_empty() {
+    if !response.unknown_skills.is_empty() {
         bail!(
-            "agent profile '{id}' has unavailable skills {:?} or functions {:?}",
-            response.unknown_skills,
-            response.unknown_functions
+            "agent profile '{id}' has unavailable skills {:?}",
+            response.unknown_skills
+        );
+    }
+    if !response.unknown_functions.is_empty() {
+        tracing::warn!(
+            profile = id,
+            functions = ?response.unknown_functions,
+            "the agent profile preloads functions this stack does not register; the Harness skips them"
         );
     }
     let mut resolved_skills = Vec::with_capacity(response.skills.len());
@@ -1215,6 +1221,7 @@ async fn resolve_agent_profile(context: &E2eContext, id: &str) -> Result<Resolve
         artifact: AgentProfileArtifact {
             id: response.id,
             configuration_sha256,
+            unavailable_functions: response.unknown_functions,
         },
         model: response.model,
         reasoning_effort: response.reasoning_effort,
@@ -3605,6 +3612,7 @@ mod tests {
             artifact: AgentProfileArtifact {
                 id: "software-engineer".into(),
                 configuration_sha256: crate::artifact::sha256_bytes(b"profile"),
+                unavailable_functions: Vec::new(),
             },
             model: Some("openai-codex::gpt-5.3-codex".into()),
             reasoning_effort: Some("ultra".into()),
@@ -3648,6 +3656,7 @@ mod tests {
             artifact: AgentProfileArtifact {
                 id: "profile".into(),
                 configuration_sha256: crate::artifact::sha256_bytes(b"profile"),
+                unavailable_functions: Vec::new(),
             },
             model: Some("claude-code/claude-sonnet-5".into()),
             reasoning_effort: None,
