@@ -741,7 +741,7 @@ impl Controller {
         Ok(())
     }
 
-    async fn emit_change(&self, kind: &str, execution_id: &str) {
+    pub(super) async fn emit_change(&self, kind: &str, execution_id: &str) {
         if let Some(events) = &self.events {
             events.emit(kind, execution_id).await;
         }

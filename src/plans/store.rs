@@ -1095,6 +1095,37 @@ impl PlanStore {
         self.persistence()?.clear_deleted_import(id).await
     }
 
+    /// Skip this GitHub run as GitHub last updated it (`run_updated_at`): its
+    /// execution goes with no tombstone, so a re-run is imported again. An
+    /// import of it under way is not deleted under it.
+    pub(crate) async fn skip_import(
+        &self,
+        id: &str,
+        run_updated_at: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        ensure!(
+            !self
+                .read_execution(id)
+                .await
+                .is_ok_and(|execution| execution.active() || execution.state == "importing"),
+            "An import of this run began meanwhile; it is not skipped."
+        );
+        self.change_saved(
+            self.persistence()?.skip_import(id, run_updated_at, reason),
+            |saved| {
+                saved.remove(id);
+            },
+        )
+        .await
+    }
+
+    /// GitHub's `updated_at` for this run when CI sync last skipped it.
+    pub(crate) async fn import_skipped(&self, id: &str) -> Result<Option<String>> {
+        self.persistence()?.import_skipped(id).await
+    }
+
     /// Name any execution; an empty label restores the default name.
     pub(crate) async fn rename(&self, id: &str, label: &str) -> Result<PlanExecution> {
         let label = clean_label(label)?;
@@ -3858,6 +3889,75 @@ esac"#,
         manager.clear_deleted_import(&id).await.unwrap();
         assert!(!manager.import_deleted(&id).await.unwrap());
         assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
+    }
+
+    #[tokio::test]
+    async fn skip_markers_survive_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let first = manager(root.path(), runner.clone());
+        let reason = "This run keeps no e2e-contract artifact; GitHub keeps artifacts for 90 days";
+        let failed = PlanExecution {
+            state: "failed".into(),
+            error: Some(reason.into()),
+            ..import_stub()
+        };
+        let kept = PlanExecution {
+            id: "plan-kept".into(),
+            idempotency_key: "kept".into(),
+            state: "completed".into(),
+            ..import_stub()
+        };
+        first.write_execution(&failed).await.unwrap();
+        first.write_execution(&kept).await.unwrap();
+        assert_eq!(first.import_skipped(&failed.id).await.unwrap(), None);
+        first
+            .skip_import(&failed.id, "2026-10-20T11:00:00Z", reason)
+            .await
+            .unwrap();
+        // Its execution goes, with no tombstone: a re-run imports again.
+        assert!(first.read_execution(&failed.id).await.is_err());
+        assert!(!first.import_deleted(&failed.id).await.unwrap());
+
+        // As a restarted worker finds them, and as the copy in memory has them.
+        let restarted = manager(root.path(), runner);
+        assert!(restarted.read_execution(&failed.id).await.is_err());
+        assert_eq!(
+            serde_json::to_value(first.executions().await.unwrap()).unwrap(),
+            serde_json::to_value(restarted.executions().await.unwrap()).unwrap()
+        );
+        assert_eq!(
+            restarted
+                .import_skipped(&failed.id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-20T11:00:00Z")
+        );
+        // Skipped again once GitHub ran it again, it keeps the later time.
+        restarted
+            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .import_skipped(&failed.id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-21T09:00:00Z")
+        );
+
+        // An import begun meanwhile is not deleted under it.
+        restarted.write_execution(&import_stub()).await.unwrap();
+        assert!(restarted
+            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .await
+            .is_err());
+        assert_eq!(
+            restarted.read_execution(&failed.id).await.unwrap().state,
+            "importing"
+        );
     }
 
     #[tokio::test]

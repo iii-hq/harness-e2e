@@ -50,6 +50,8 @@ const SCHEMA: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS saved_plan_executions_started_idx ON saved_plan_executions(started_at DESC)",
     // shortcut: salvage keeps no tombstone when this layout moves, add one to `salvage` before changing it.
     "CREATE TABLE IF NOT EXISTS deleted_imports (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL)",
+    // shortcut: salvage keeps no skip when this layout moves, so CI sync tries each skipped run once more; add them to `salvage` before changing it.
+    "CREATE TABLE IF NOT EXISTS skipped_imports (id TEXT PRIMARY KEY, run_updated_at TEXT NOT NULL, reason TEXT NOT NULL, skipped_at TEXT NOT NULL)",
 ];
 
 const STORAGE_TABLE: &str = "harness_e2e_storage";
@@ -547,6 +549,31 @@ impl Persistence {
             json!({"sql": "DELETE FROM deleted_imports WHERE id = ?", "params": [id]}),
         ])
         .await
+    }
+    /// Delete a GitHub run's execution receipt, with no tombstone, and
+    /// remember the run skipped as GitHub last updated it.
+    pub(crate) async fn skip_import(
+        &self,
+        id: &str,
+        run_updated_at: &str,
+        reason: &str,
+    ) -> Result<()> {
+        self.transaction(vec![
+            json!({"sql": "INSERT INTO skipped_imports(id, run_updated_at, reason, skipped_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET run_updated_at=excluded.run_updated_at, reason=excluded.reason, skipped_at=excluded.skipped_at", "params": [id, run_updated_at, reason, chrono::Utc::now().to_rfc3339()]}),
+            json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}),
+        ])
+        .await
+    }
+    pub(crate) async fn import_skipped(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .query(
+                "SELECT id, run_updated_at FROM skipped_imports WHERE id = ?",
+                json!([id]),
+            )
+            .await?
+            .first()
+            .and_then(|row| row["run_updated_at"].as_str())
+            .map(str::to_owned))
     }
 
     pub async fn save_execution(&self, record: &ExecutionRecord) -> Result<()> {
