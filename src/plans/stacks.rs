@@ -9,17 +9,24 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
-/// The repository's stacks, embedded at build time: `stacks/<id>.yaml`.
-pub(crate) const REPOSITORY: &[(&str, &str)] = &[
-    ("default", include_str!("../../stacks/default.yaml")),
-    (
-        "harness-template",
-        include_str!("../../stacks/harness-template.yaml"),
-    ),
-    ("linkly", include_str!("../../stacks/linkly.yaml")),
-    ("onboarding", include_str!("../../stacks/onboarding.yaml")),
-    ("deepwork", include_str!("../../stacks/deepwork.yaml")),
-];
+/// Only top-level stack presets are part of the built-in catalog.
+#[derive(rust_embed::Embed)]
+#[folder = "stacks/"]
+#[include = "*.yaml"]
+#[exclude = "*/*"]
+struct Stacks;
+
+pub(crate) fn repository() -> std::collections::BTreeMap<String, String> {
+    Stacks::iter()
+        .map(|name| {
+            let file = Stacks::get(&name).expect("embedded stack");
+            (
+                name.strip_suffix(".yaml").unwrap().to_owned(),
+                String::from_utf8(file.data.into_owned()).expect("stack YAML is UTF-8"),
+            )
+        })
+        .collect()
+}
 
 /// Top-level keys something reads: the executor's, then Compose's.
 const KNOWN_KEYS: &[&str] = &[
@@ -521,13 +528,10 @@ mod tests {
             .map(|path| path.file_stem().unwrap().to_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         files.sort();
-        let mut embedded = REPOSITORY
-            .iter()
-            .map(|(id, _)| (*id).to_owned())
-            .collect::<Vec<_>>();
-        embedded.sort();
+        let repository = repository();
+        let embedded = repository.keys().cloned().collect::<Vec<_>>();
         assert_eq!(embedded, files);
-        for (id, yaml) in REPOSITORY {
+        for (id, yaml) in &repository {
             let summary = summarize(yaml).unwrap();
             assert_eq!(summary.warnings, Vec::<String>::new(), "{id}");
             assert_eq!(summary.iii.as_deref(), Some("latest"), "{id}");
@@ -540,9 +544,12 @@ mod tests {
                 "{id}"
             );
         }
-        assert_eq!(summarize(REPOSITORY[0].1).unwrap().template, None);
+        assert_eq!(summarize(&repository["default"]).unwrap().template, None);
         assert_eq!(
-            summarize(REPOSITORY[1].1).unwrap().template.as_deref(),
+            summarize(&repository["harness-template"])
+                .unwrap()
+                .template
+                .as_deref(),
             Some("harness")
         );
     }

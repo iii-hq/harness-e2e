@@ -289,6 +289,12 @@ A dispatch names what to test, where, and with whom:
 | `profile` | Optional Directory agent profile the subject runs as. |
 | `execution_id` | Optional Release Control execution. Without it the run only produces artifacts. |
 
+Top-level `stacks/*.yaml` presets and `config/agents/*.md` profiles are
+included automatically in the runner's build and local Docker checkouts.
+Adding one requires no separate catalog entry; publish a new runner to make
+it available as a built-in. Inline stack YAML remains available without a
+new built-in preset.
+
 A stack is an iii Compose project plus `iii` (a release, or `latest` for the
 newest `iii/v*` release candidate, as Release Control resolves it) and an
 optional `template`
