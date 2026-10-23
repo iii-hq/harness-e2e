@@ -618,6 +618,37 @@ describe('grouping', () => {
     ])
   })
 
+  it('keeps a local or Docker run that recorded a release out of it, a ring of its own after it', () => {
+    const local: TrendPoint = {
+      ...all[8],
+      execution_id: 'local-pinned',
+      started_at: '2026-09-28T12:00:00-03:00',
+      source: { kind: 'local', role: 'local' },
+      release: '1.8.35',
+    }
+    const grouped = groupPoints([...all, local], 'release', NOW)
+    expect(grouped.map((point) => point.execution_id)).toEqual([
+      'release:v1.8.31',
+      'release:v1.8.34',
+      'release:v1.8.35',
+      'local-pinned',
+      'release:v1.8.36',
+    ])
+    const release = grouped[2]
+    expect(release.source.kind).toBe('github')
+    expect(release.group?.members.map((member) => member.execution_id)).toEqual(
+      [all[8].execution_id],
+    )
+    expect(grouped[3]).toBe(local)
+    expect(axisMarks(grouped).map((mark) => mark.text)).toEqual([
+      'v1.8.31',
+      'v1.8.34',
+      'v1.8.35',
+      '',
+      'v1.8.36',
+    ])
+  })
+
   it('keeps the baseline on the group that holds it, set by its last execution', () => {
     const sep23 = 'github-35821773226-2'
     expect(baselineOf(byDay, sep23).index).toBe(1)

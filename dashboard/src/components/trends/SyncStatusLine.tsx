@@ -4,9 +4,9 @@ import { Button, RowMenu } from '@/design-system'
 import type { CiSyncStatus } from '@/lib/dashboard-data-source'
 import { formatCount, formatTime, plural } from '@/lib/format'
 
-/** What CI sync is doing, in the words of its phase. A `gh` command is
- *  written between backticks. */
-export function syncText(status: CiSyncStatus): string {
+/** What CI sync is doing, in the words of its phase; `verdict`: the page has
+ *  one. A `gh` command is written between backticks. */
+export function syncText(status: CiSyncStatus, verdict = false): string {
   if (!status.enabled)
     return 'Downloads every CI run GitHub keeps (90 days), the newest Release Control runs first, so the verdict shows within minutes.'
   if (status.signed_in === false)
@@ -21,7 +21,9 @@ export function syncText(status: CiSyncStatus): string {
     case 'quick':
       return `Importing the newest runs first: ${progress}${failed}`
     case 'backfill':
-      return `Verdict ready · importing older runs: ${progress}${failed}`
+      return verdict
+        ? `Verdict ready · importing older runs: ${progress}${failed}`
+        : `Importing older runs: ${progress}${failed}`
     case 'keeping_up':
       return status.checked_at
         ? `Synced from CI at ${formatTime(status.checked_at)}${failed}`
@@ -38,6 +40,7 @@ export function SyncStatusLine({
   status,
   error,
   empty,
+  verdict,
   onSet,
   onCheck,
 }: {
@@ -45,6 +48,8 @@ export function SyncStatusLine({
   /** Why the last Download, Check now or Turn off failed. */
   error: string | null
   empty?: boolean
+  /** The page shows a verdict. */
+  verdict?: boolean
   onSet: (enabled: boolean) => void
   onCheck: () => void
 }) {
@@ -84,7 +89,9 @@ export function SyncStatusLine({
     status.message !== null
   return (
     <div className="tr-sync" data-tone={trouble ? 'danger' : undefined}>
-      <span className="tr-sync-text">{withCode(syncText(status))}</span>
+      <span className="tr-sync-text">
+        {withCode(syncText(status, verdict))}
+      </span>
       <Button
         variant="quiet"
         size="compact"

@@ -151,7 +151,7 @@ try {
   }
 
   // The release overview first. One that fails to load says so under its
-  // heading, and the options stay; Retry asks again.
+  // heading, and the sync line and the options stay; Retry asks again.
   const verdictLine = page.locator('[data-verdict-line]')
   const verdictMatches = async () =>
     assert.match(
@@ -171,6 +171,7 @@ try {
   await page.getByRole('heading', { name: 'Trends', level: 1 }).waitFor()
   await page.getByText('Couldn’t load the release overview').waitFor()
   await page.getByRole('heading', { name: 'Harness evolution' }).waitFor()
+  await page.getByRole('button', { name: 'Download CI results' }).waitFor()
   await moreOptions.waitFor()
   await page.getByRole('button', { name: 'Retry' }).click()
   await verdictLine.waitFor()

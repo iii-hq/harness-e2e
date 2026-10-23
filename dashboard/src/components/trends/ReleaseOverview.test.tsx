@@ -96,6 +96,8 @@ describe('verdict headline', () => {
       },
     })
     expect(unshared).toContain('No suite ran on both v1.8.36 and v1.8.35')
+    expect(unshared).toContain('vs v1.8.35.</p>')
+    expect(unshared).not.toContain('no measure moved')
     expect(unshared).not.toContain('data-move')
     expect(
       none({
@@ -110,6 +112,10 @@ describe('release overview', () => {
   it('draws the releases as a line, the local runs as rings beside it and the latest highlighted', () => {
     const html = render()
     expect(count(html, /role="radio"/)).toBe(6)
+    // The tabs scroll sideways at phone width instead of overflowing.
+    expect(html).toMatch(
+      /role="radiogroup"[^>]*tr-segments|tr-segments[^>]*role="radiogroup"/,
+    )
     expect(count(html, /role="menuitemradio"/)).toBe(8)
     expect(count(html, /class="tr-point"/)).toBe(9)
     expect(count(html, /data-source="local"/)).toBe(5)
@@ -136,6 +142,25 @@ describe('release overview', () => {
     expect(html).toContain('v1.8.36 · 3 Release Control runs')
     expect(html).toContain('What changed')
     expect(count(html, />no change</)).toBe(2)
+    expect(html).not.toContain('Nothing to compare')
+  })
+
+  it('says there is nothing to compare when the latest release shares nothing with the previous one', () => {
+    const releases = releaseOverview.releases.map((release, index, all) =>
+      index === all.length - 1 && release.step
+        ? {
+            ...release,
+            step: {
+              ...release.step,
+              latest_aggregate: null,
+              previous_aggregate: null,
+            },
+          }
+        : release,
+    )
+    const html = render({ overview: { ...releaseOverview, releases } })
+    expect(html).toContain('Nothing to compare with v1.8.35.')
+    expect(html).not.toMatch(/tr-callout[\s\S]*class="tr-measures"/)
   })
 
   it('links the CI runs outside Release Control and lists the latest release in Details, after More options', () => {
@@ -171,6 +196,12 @@ describe('release overview', () => {
     expect(html).toMatch(
       /data-picker="more-metrics"[^>]*><span>Output tokens<\/span>/,
     )
+    expect(html).toMatch(
+      /aria-label="More metrics: Output tokens"[^>]*data-picker="more-metrics"/,
+    )
+    expect(render()).toMatch(
+      /aria-label="More metrics"[^>]*data-picker="more-metrics"/,
+    )
     expect(render()).toMatch(
       /data-picker="more-metrics"[^>]*><span>More<\/span>/,
     )
@@ -198,10 +229,19 @@ describe('release panel', () => {
       'Against v1.8.35',
       '>100.0%<',
       'Regression · deepseek/deepseek-flash · profile none · stack default',
-      'Left out, definition changed: contention_ledger',
+      'Left out: contention_ledger',
     ])
       expect(html).toContain(text)
-    for (const text of ['Set as baseline', 'Open execution', 'Its executions'])
+    for (const text of [
+      'Set as baseline',
+      'Open execution',
+      'Its executions',
+      'definition changed',
+      // A release spans executions: no one stack or lock speaks for it.
+      'stack not recorded',
+      'Its last execution',
+      'no compose lock',
+    ])
       expect(html).not.toContain(text)
   })
 

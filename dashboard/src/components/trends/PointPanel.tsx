@@ -144,6 +144,7 @@ export function PointPanel({
   onBaseline,
   subtitle,
   metrics = TREND_METRICS,
+  versions = true,
   children,
 }: {
   points: TrendPoint[]
@@ -164,6 +165,9 @@ export function PointPanel({
   subtitle?: string
   /** The measures listed, and how each reads. */
   metrics?: TrendMetric[]
+  /** Its versions and stack at the foot; off for a release, which no one
+   *  execution's stack or lock speaks for. */
+  versions?: boolean
   /** After the measures. */
   children?: ReactNode
 }) {
@@ -396,11 +400,13 @@ export function PointPanel({
         </section>
       ) : null}
       {children}
-      <p className="tr-mono tr-small tr-faint-ink tr-wrap">
-        {group ? 'Its last execution: ' : null}
-        {versionsText(point)}
-      </p>
-      {point.workers ? null : (
+      {versions ? (
+        <p className="tr-mono tr-small tr-faint-ink tr-wrap">
+          {group ? 'Its last execution: ' : null}
+          {versionsText(point)}
+        </p>
+      ) : null}
+      {!versions || point.workers ? null : (
         <p className="tr-faint">
           Worker versions: not recorded. This execution has no compose lock, and
           the version a worker reports to the engine is not the release that

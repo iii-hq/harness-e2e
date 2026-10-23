@@ -79,8 +79,9 @@ export type CombinationDelta = {
   combination: Combination
   latest: TrendMeasures
   previous: TrendMeasures
-  /** Tests that ran but do not compare: their definition changed, or one
-   *  release counted no run of them. */
+  /** Tests that do not compare: their definition changed (or is unknown),
+   *  or only one release planned or ran them. A test both planned that one
+   *  release never ran compares, as not completed there. */
   tests_left_out: string[]
 }
 

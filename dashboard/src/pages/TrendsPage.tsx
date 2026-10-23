@@ -879,10 +879,11 @@ export function TrendsPage({
   }
 
   const failedFirstLoad = Boolean(error) && data === null
-  // Both answered, or failed: until then the first screen's shape.
+  const overviewSettled = overview !== null || overviewError !== null
+  // Answered, or failed: until then the first screen's shape. The series
+  // view waits only for its trend.
   const settled =
-    (data !== null || error !== null) &&
-    (overview !== null || overviewError !== null)
+    (data !== null || error !== null) && (mode === 'series' || overviewSettled)
   // A first screen with nothing to draw and sync off: the download is its
   // one action, large; else the sync status sits beside the heading.
   const offer =
@@ -894,6 +895,7 @@ export function TrendsPage({
       status={sync.status}
       error={sync.error}
       empty={empty}
+      verdict={Boolean(overview?.verdict)}
       onSet={sync.set}
       onCheck={sync.check}
     />
@@ -1208,12 +1210,20 @@ export function TrendsPage({
               overview={overview}
               status={offer ? undefined : syncLine(false)}
             />
+          ) : !overviewSettled ? (
+            <div className="tr-loading" role="status" aria-busy="true">
+              <span className="ds-visually-hidden">
+                Loading the release overview
+              </span>
+              <Skeleton className="tr-skel tr-skel-line" />
+            </div>
           ) : (
             <section className="tr-verdict" aria-labelledby="tr-verdict">
               <div className="tr-verdict-head">
                 <h2 id="tr-verdict" className="tr-h2">
                   Harness evolution
                 </h2>
+                {syncLine(false)}
               </div>
               <LedgerLoadFailure
                 what="release overview"

@@ -29,8 +29,12 @@ describe('sync status text', () => {
     expect(syncText(ciSync.quick)).toBe(
       'Importing the newest runs first: 3 of 12',
     )
-    expect(syncText(ciSync.backfill)).toBe(
+    expect(syncText(ciSync.backfill, true)).toBe(
       'Verdict ready · importing older runs: 120 of 3,000 · 2 imports failed',
+    )
+    // Quick hands over after 90 days without two releases too.
+    expect(syncText(ciSync.backfill)).toBe(
+      'Importing older runs: 120 of 3,000 · 2 imports failed',
     )
     expect(syncText({ ...k, checked_at: null, failed: 0 })).toBe('Checking CI…')
     expect(syncText({ ...k, phase: 'off', failed: 0 })).toBe('Starting sync…')
@@ -75,6 +79,19 @@ describe('sync status line', () => {
     expect(signedOut).toContain('<code class="gi-code">gh auth login</code>')
     expect(signedOut).toContain('data-tone="danger"')
     expect(render(ciSync.paused)).toContain('data-tone="danger"')
+
+    // A missing `gh` says so, not how to sign in.
+    const missing = {
+      ...ciSync.quick,
+      signed_in: null,
+      message:
+        'The GitHub CLI (`gh`) is not installed for the Harness E2E worker. Install it, then run `gh auth login`.',
+    }
+    expect(syncText(missing)).toBe(missing.message)
+    const noGh = render(missing)
+    expect(noGh).toContain('<code class="gi-code">gh</code>) is not installed')
+    expect(noGh).toContain('data-tone="danger"')
+    expect(noGh).not.toContain('GitHub is not signed in')
 
     const failed = render(k, { error: 'engine unavailable' })
     expect(failed).toContain('role="alert"')

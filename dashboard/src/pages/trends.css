@@ -381,6 +381,18 @@
   gap: calc(var(--spacing) * 2);
 }
 
+/* The metric tabs scroll sideways at phone width and never wrap. */
+.tr-segments {
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tr-segments > * {
+  flex: none;
+}
+
 /* CI sync's status beside the heading; the large download on an empty first
    screen. */
 .tr-sync {

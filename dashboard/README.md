@@ -24,9 +24,9 @@ pnpm test
 pnpm build
 ```
 
-The Console routes live under `#/ext/harness-e2e`. The page exposes Tests,
-Executions, Suites and Stacks and keeps entity detail inside the same extension
-route.
+The Console routes live under `#/ext/harness-e2e`. The page opens on
+**Trends**, the release overview (see below), and exposes Tests, Executions,
+Suites and Stacks besides; entity detail stays inside the same extension route.
 
 **Run tests** executes a suite, or scenarios ticked by hand, against the
 Harness already running at `III_URL`. Its first field is the suite (see
@@ -146,7 +146,8 @@ opens Run again with B's parameters and only the ticked scenarios.
 
 **Trends** opens on the release overview. Under **Harness evolution**, the
 verdict names the latest Harness release against the previous one and the main
-measures that moved, better or worse, then what it compared. The line below
+measures that moved, better or worse ("no measure moved" only when some were
+compared), then what it compared. The line below
 plots one measure (six tabs, the rest under More), one point per release with
 Release Control results, oldest first. Each step reads against the release
 before it, over the combinations of suite, model, profile and stack both ran
@@ -155,7 +156,8 @@ test one release planned but never ran counts as not completed there. Every
 combination weighs the same, the Completed share and the error rate included,
 and each measure reads the combinations both releases have it for; a count
 such as "41 of 48" is a sum. A point's label and panel give its step, and the callout
-beside the line gives the latest one on every main measure; **What changed**
+beside the line gives the latest one on every main measure, or says there is
+nothing to compare; **What changed**
 opens the latest release's panel: its versions against the previous release and
 each combination the verdict compared. A hollow ring is a local or Docker
 execution, beside the release it ran with; the line leaves it out and it never
@@ -174,9 +176,12 @@ the measure. **Details** holds what sits behind the chart: the latest release's
 executions on the overview, the by-test grid and the executions table on a
 series. Beside **Harness evolution**, one line follows CI sync. **Download CI
 results** turns it on (`e2e::dashboard::ci-sync-set`); the line then reads its
-phase (the newest runs first, then older ones once the verdict is ready, then
-the time of the last check), the imports that failed and a GitHub rate limit's
-end, or `gh auth login` when `gh` is not signed in on the worker's machine.
+phase (the newest runs first, then older ones, with *Verdict ready* once the
+page has a verdict, then the time of the last check), the imports that failed
+and a GitHub rate limit's end, `gh auth login` when `gh` is not signed in on the
+worker's machine, or what else stopped a check (no `gh` installed, a listing
+that failed). The line stays when the release overview fails to load, and the
+series view under More options does not wait for the overview.
 **Check now** asks GitHub at once (`ci-sync-check`); **Turn off sync**, under
 Sync options, stops it and keeps what was imported. The page reads
 `ci-sync-status-get` every 15 s while sync is on, and again when an execution
@@ -238,7 +243,8 @@ group reads its executions together: means weighted by counted runs, tests
 completed per execution, the function calls summed, its versions its last
 execution's. Its panel lists its executions and says when they did not all run
 the same versions. An execution with no recorded Harness version
-is in no release, and the page says how many are left out; a series that
+is in no release, and the page says how many are left out; a local or Docker
+execution is never grouped into a release: it is a ring of its own after it; a series that
 recorded none draws each execution instead, and says so unless the hash asks for
 the release grouping.
 

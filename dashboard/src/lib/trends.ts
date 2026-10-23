@@ -1391,7 +1391,8 @@ export function releaseText(version: string) {
 
 /** One point per day, or per Harness release in version order (an
  *  execution with no single release is in none); each execution as it is
- *  when grouping by execution. */
+ *  when grouping by execution. A local or Docker run never counts in a
+ *  release: it stays a point of its own after the release it ran. */
 export function groupPoints(
   points: TrendPoint[],
   by: TrendGroupBy,
@@ -1399,22 +1400,28 @@ export function groupPoints(
 ): TrendPoint[] {
   if (by === 'execution') return points
   const groups = new Map<string, TrendPoint[]>()
+  const rings = new Map<string, TrendPoint[]>()
   for (const point of points) {
     const key =
       by === 'day' ? localDay(new Date(point.started_at)) : point.release
     if (!key) continue
-    const members = groups.get(key)
+    const into =
+      by === 'release' && point.source.kind !== 'github' ? rings : groups
+    const members = into.get(key)
     if (members) members.push(point)
-    else groups.set(key, [point])
+    else into.set(key, [point])
   }
-  const ordered = [...groups]
-  if (by === 'release')
-    ordered.sort(([one], [two]) => compareVersions(one, two) ?? 0)
-  return ordered.map(([key, members]) =>
-    by === 'day'
-      ? consolidate(by, key, formatDay(members[0].started_at, now), members)
-      : consolidate(by, releaseText(key), releaseText(key), members),
-  )
+  const keys = [...new Set([...groups.keys(), ...rings.keys()])]
+  if (by === 'release') keys.sort((one, two) => compareVersions(one, two) ?? 0)
+  return keys.flatMap((key) => {
+    const members = groups.get(key)
+    const group = !members
+      ? []
+      : by === 'day'
+        ? [consolidate(by, key, formatDay(members[0].started_at, now), members)]
+        : [consolidate(by, releaseText(key), releaseText(key), members)]
+    return [...group, ...(rings.get(key) ?? [])]
+  })
 }
 
 /** A group's measures over its counted runs: means weighted by each
@@ -1535,7 +1542,7 @@ function consolidate(
 
 /** Under the plot: where each day starts, or each release's version. */
 export function axisMarks(points: TrendPoint[], now = new Date()) {
-  if (points[0]?.group?.by === 'release')
+  if (points.some((point) => point.group?.by === 'release'))
     return points.map((point, index) => ({
       index,
       text: point.group?.key ?? '',

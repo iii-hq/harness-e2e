@@ -35,6 +35,8 @@ export function VerdictHeadline({
           MAIN_METRICS.indexOf(one.metric) - MAIN_METRICS.indexOf(two.metric),
       )
     : []
+  // Nothing compared on both sides is no evidence that nothing moved.
+  const compared = moved.length + (summary?.same.length ?? 0) > 0
   return (
     <section className="tr-verdict" aria-labelledby="tr-verdict">
       <div className="tr-verdict-head">
@@ -47,8 +49,8 @@ export function VerdictHeadline({
         <>
           <p className="tr-verdict-line" data-verdict-line>
             <strong>{releaseText(verdict.latest)}</strong>
-            {` (${formatDayLabel(verdict.latest_started_at, now)}) vs ${releaseText(verdict.previous)}: `}
-            {moved.length === 0
+            {` (${formatDayLabel(verdict.latest_started_at, now)}) vs ${releaseText(verdict.previous)}${compared ? ': ' : '.'}`}
+            {compared && moved.length === 0
               ? 'no measure moved'
               : moved.map((move, index) => (
                   <Fragment key={move.metric.id}>

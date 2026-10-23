@@ -85,7 +85,7 @@ function Combinations({ verdict }: { verdict: Verdict }) {
               )}
               {item.tests_left_out.length > 0 ? (
                 <span className="tr-faint">
-                  {`Left out, definition changed: ${item.tests_left_out.join(', ')}`}
+                  {`Left out: ${item.tests_left_out.join(', ')}`}
                 </span>
               ) : null}
             </li>
@@ -156,6 +156,7 @@ export function ReleasePanel({
       bridge={bridge}
       here={hashForTrends()}
       onClose={onClose}
+      versions={false}
       subtitle={[
         plural(release.executions.length, 'Release Control execution'),
         plural(release.combinations.length, 'combination'),
@@ -210,6 +211,10 @@ export function ReleaseOverview({
   )
   const latest: OverviewPoint | undefined = line.points[line.latest]
   const last = releaseOf(overview, latest)
+  // The latest step, when both of its sides were measured.
+  const step = latest?.step
+  const against =
+    step?.latest_aggregate && step.previous_aggregate ? step : null
   const outside = overview.outside_release_control
   const pick = (index: number) => {
     const id = line.points[index]?.execution_id ?? null
@@ -223,6 +228,7 @@ export function ReleaseOverview({
             <SegmentedControl
               variant="radio"
               aria-label="Metric"
+              className="tr-segments"
               value={metric}
               onChange={onMetric}
               options={MAIN_METRICS.map((item) => ({
@@ -235,6 +241,9 @@ export function ReleaseOverview({
                 <button
                   type="button"
                   className="tr-control"
+                  aria-label={
+                    more ? `More metrics: ${more.label}` : 'More metrics'
+                  }
                   data-picker="more-metrics"
                   data-active={more ? true : undefined}
                 >
@@ -325,23 +334,31 @@ export function ReleaseOverview({
                 <h2 id="tr-callout" className="tr-h2">
                   {`${releaseText(last.release)} · ${plural(last.executions.length, 'Release Control run')}`}
                 </h2>
-                <dl className="tr-measures">
-                  {MAIN_METRICS.map((item) => (
-                    <div key={item.id}>
-                      <dt>{item.label}</dt>
-                      <dd>
-                        <DeltaPill
-                          metric={item}
-                          value={aggregateDelta(
-                            item,
-                            latest.step?.latest_aggregate ?? null,
-                            latest.step?.previous_aggregate ?? null,
-                          )}
-                        />
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
+                {against ? (
+                  <dl className="tr-measures">
+                    {MAIN_METRICS.map((item) => (
+                      <div key={item.id}>
+                        <dt>{item.label}</dt>
+                        <dd>
+                          <DeltaPill
+                            metric={item}
+                            value={aggregateDelta(
+                              item,
+                              against.latest_aggregate,
+                              against.previous_aggregate,
+                            )}
+                          />
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="tr-faint">
+                    {step
+                      ? `Nothing to compare with ${releaseText(step.previous)}.`
+                      : 'Nothing earlier to compare with.'}
+                  </p>
+                )}
                 <div className="tr-actions">
                   <button
                     type="button"
