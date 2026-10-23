@@ -54,9 +54,11 @@ describe('section navigation in the Console header', () => {
       sectionForRoute({
         page: 'trends',
         request: {},
-        period: { range: '30d' },
+        period: { range: 'all' },
         base: null,
-        group: 'execution',
+        group: 'release',
+        mode: 'overview',
+        metric: 'score',
       }),
     ).toBe('trends')
     expect(

@@ -10,6 +10,7 @@ import {
   deltaFormat,
   deltaOf,
   profileText,
+  releaseText,
   seriesText,
   stackOptionText,
   type TrendChange,
@@ -17,11 +18,10 @@ import {
   type TrendMetric,
   type TrendMetricId,
   type TrendPoint,
+  type TrendRole,
 } from '@/lib/trends'
 
 /* ------------------------------------------------------------- contract */
-
-export type TrendRole = 'release_control' | 'ci_other' | 'local' | 'docker'
 
 /** What the verdict compares like with like: a series and its stack. */
 export type Combination = {
@@ -138,11 +138,6 @@ export type OverviewPoint = TrendPoint & {
 }
 
 /* -------------------------------------------------------------- wording */
-
-/** `1.8.36` as `v1.8.36`; a commit (`@852b87e*`) as it is. */
-export function releaseText(version: string) {
-  return /^\d+\.\d+\.\d+$/.test(version) ? `v${version}` : version
-}
 
 /** `Regression · deepseek/deepseek-flash · profile none · stack default`. */
 export function combinationText(combination: Combination) {
@@ -273,9 +268,10 @@ function releasePoint(release: ReleasePoint): OverviewPoint {
     execution_id: `release:${release.release}`,
     label: null,
     started_at: release.first_started_at,
-    source: { kind: 'github' },
+    source: { kind: 'github', role: 'release_control' },
     engine: release.engine,
     workers: release.workers,
+    release: release.release,
     runs: release.executions.length,
     counted: release.executions.length,
     measures: release.aggregate?.measures ?? null,
@@ -291,9 +287,14 @@ function localPoint(local: LocalMark, measures: TrendMeasures): OverviewPoint {
     execution_id: local.execution_id,
     label: `${local.suite_label} · ${local.ran ? `ran harness ${local.ran}` : 'Harness version not recorded'}`,
     started_at: local.started_at,
-    source: { kind: local.role === 'docker' ? 'docker' : 'local' },
+    source: {
+      kind: local.role === 'docker' ? 'docker' : 'local',
+      role: local.role,
+    },
     engine: null,
     workers: local.ran ? { harness: local.ran } : null,
+    // Beside its release on the line, never grouped into it.
+    release: null,
     runs: 1,
     counted: 1,
     measures,

@@ -8,7 +8,8 @@
 @import "tailwindcss" source(none);
 @import "./legacy.css" layer(legacy);
 @source "./";
-@source not inline("shadow");
+/* Prose saying "shadow" or "ring" must not emit those box-shadow utilities. */
+@source not inline("shadow ring");
 /* The host's controls carry Tailwind classes of their own, and this sheet's
    copies of the same utilities are scoped under [data-iii-ui], so they
    outrank the host's: the legacy pages' `h-12`, `text-base`, `min-h-12`,

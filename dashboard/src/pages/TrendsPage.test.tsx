@@ -10,10 +10,14 @@ import {
   groupPoints,
   pointTime,
   previousCounted,
+  type TrendsResponse,
   trendMetric,
+  trendsModeFromParams,
 } from '@/lib/trends'
 import {
   answeredView,
+  optionsScent,
+  pageParams,
   requestParams,
   requestSeries,
   stackChoosable,
@@ -22,7 +26,7 @@ import {
   stackSub,
   TrendsSkeleton,
 } from '@/pages/TrendsPage'
-import { seriesPoints } from '@/test-fixtures/trends'
+import { seriesPoints, trendSeries } from '@/test-fixtures/trends'
 
 const regression = seriesPoints('regression', 'default')
 const changes = regression.map((_, index) => changesAt(regression, index))
@@ -115,15 +119,79 @@ describe('trends page state', () => {
     expect(stackLabel('default', regression)).toBe('default')
     expect(stackSub('any')).toBe('every execution of the series')
   })
+
+  it('names the overview by its metric alone and a series by everything', () => {
+    const o = {
+      mode: 'overview' as const,
+      request: {
+        suite: 'regression',
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        profile: null,
+        stack: 'any',
+      },
+      period: { range: 'all' as const },
+      group: 'release' as const,
+      base: null,
+      metric: 'score' as const,
+    }
+    const P =
+      'suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any'
+    const cases: Array<[Parameters<typeof pageParams>[0], string]> = [
+      [o, ''],
+      [{ ...o, metric: 'turns' }, 'metric=turns'],
+      [{ ...o, mode: 'series' }, `${P}&range=all`],
+      [
+        {
+          ...o,
+          mode: 'series',
+          period: { range: '30d' },
+          group: 'execution',
+          base: 'github-35821773226-2',
+          metric: 'turns',
+        },
+        `${P}&range=30d&group=execution&base=github-35821773226-2&metric=turns`,
+      ],
+    ]
+    for (const [view, query] of cases) {
+      expect(pageParams(view).toString()).toBe(query)
+      expect(trendsModeFromParams(new URLSearchParams(query))).toBe(view.mode)
+    }
+  })
+
+  it('sums up what More options hides', () => {
+    const data: TrendsResponse = {
+      series: trendSeries.map((item) => item.series),
+      selected: {
+        suite: 'regression',
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        profile: null,
+      },
+      stack: 'any',
+      stacks: [],
+      points: seriesPoints('regression'),
+    }
+    const overview = 'suite · model · profile · stack · period · baseline'
+    expect(optionsScent('overview', data, { range: 'all' })).toBe(overview)
+    expect(optionsScent('series', data, { range: '30d' })).toBe(
+      'Regression · deepseek/deepseek-flash · profile none · stack any · Last 30 days',
+    )
+    expect(
+      optionsScent('series', { ...data, selected: null }, { range: '30d' }),
+    ).toBe(overview)
+  })
 })
 
 describe('trends page parts', () => {
   it('loads in the shape of the page', () => {
-    const html = renderToStaticMarkup(<TrendsSkeleton narrow={false} />)
+    const html = renderToStaticMarkup(<TrendsSkeleton />)
     expect(html).toContain('role="status" aria-busy="true"')
+    expect(html.match(/tr-skel-line/g)).toHaveLength(2)
+    expect(html.match(/tr-skel-tab/g)).toHaveLength(6)
     expect(html.match(/tr-skel-big/g)).toHaveLength(1)
-    expect(html.match(/tr-skel-mini/g)).toHaveLength(6)
-    expect(html.match(/tr-skel-row/g)).toHaveLength(4)
+    expect(html.match(/tr-skel-row/g)).toHaveLength(2)
+    expect(html).not.toContain('tr-skel-mini')
   })
 
   it('draws a labelled diamond for each change and a button per execution', () => {
@@ -540,6 +608,24 @@ describe('trends page parts', () => {
     expect(html).not.toContain('Compare with')
     expect(html).toContain('>Set as baseline<')
     expect(html).toContain('Its last execution: ')
+  })
+
+  it('says a release step reads its executions together and rings are local', () => {
+    const releases = groupPoints(seriesPoints('regression'), 'release')
+    const html = renderToStaticMarkup(
+      <LargeChart
+        metric={trendMetric('score')}
+        points={releases}
+        changes={releases.map((_, index) => changesAt(releases, index))}
+        selected={-1}
+        baseline={-1}
+        narrow={false}
+        onPick={() => undefined}
+      />,
+    )
+    expect(html).toContain(
+      'One step per Harness release: its executions read together. A hollow ring is a run on this harness or in Docker; the line joins only the others.',
+    )
   })
 
   it('scores each test by execution, with not run and a changed definition', () => {

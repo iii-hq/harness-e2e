@@ -285,14 +285,26 @@ pub(super) fn trends(
         || request.provider.is_some()
         || request.model.is_some()
         || request.profile.is_some();
-    let chosen = if asked {
-        ordered
-            .iter()
-            .find(|executions| requested(request, &executions[0].key))
-    } else {
-        // Nothing asked: the latest series that has a trend, two executions or more.
-        ordered.iter().find(|executions| executions.len() > 1)
+    // A choice left open prefers a series Release Control ran: once CI sync
+    // imports the pull-request runs, the latest series is almost always theirs.
+    let fits = |executions: &&Vec<Execution>| {
+        if asked {
+            requested(request, &executions[0].key)
+        } else {
+            // Nothing asked: a series that has a trend, two executions or more.
+            executions.len() > 1
+        }
     };
+    let release_control = |executions: &&Vec<Execution>| {
+        executions
+            .iter()
+            .any(|execution| source(execution.summary).role == TrendRole::ReleaseControl)
+    };
+    let chosen = ordered
+        .iter()
+        .filter(fits)
+        .find(release_control)
+        .or_else(|| ordered.iter().find(fits));
     let Some(executions) = chosen.or(ordered.first()) else {
         return TrendsResponse {
             series,
@@ -1264,6 +1276,37 @@ pub(super) mod tests {
             asked(json!({"suite": "regression"})),
             Some(key("regression", Some("tech-lead")))
         );
+    }
+
+    #[test]
+    fn a_choice_left_open_takes_a_release_control_series_first() {
+        let github = |id: &str, day: u32, suite: &str, rc: Option<&str>| {
+            let mut execution = listed(id, &format!("2026-09-{day:02}T10:00:00Z"), None, &[]);
+            execution["source"] = json!({
+                "kind": "github", "repository": "o/r", "run_id": day, "run_attempt": 1, "url": "",
+                "release_control_execution_id": rc,
+            });
+            execution["parameters"]["suite"]["id"] = json!(suite);
+            execution
+        };
+        let summaries = [
+            github("a", 1, "regression", Some("rc-1")),
+            github("b", 2, "regression", Some("rc-2")),
+            github("c", 3, "pr", None),
+            github("d", 4, "pr", None),
+        ];
+        let runs = BTreeMap::new();
+        let suite = |request: Value| {
+            let request = serde_json::from_value::<TrendsRequest>(request).unwrap();
+            trends(&request, &summaries, &runs).selected.unwrap().suite
+        };
+        assert_eq!(suite(json!({})), "regression");
+        assert_eq!(
+            suite(json!({"provider": "deepseek", "model": "flash"})),
+            "regression"
+        );
+        // No Release Control series fits: the latest that does.
+        assert_eq!(suite(json!({"suite": "pr"})), "pr");
     }
 
     #[test]

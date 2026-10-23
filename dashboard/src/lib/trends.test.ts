@@ -46,6 +46,7 @@ import {
   testCell,
   testIds,
   trendMetric,
+  trendsModeFromParams,
   trendsParams,
   trendsRequestFromParams,
   unversioned,
@@ -575,19 +576,10 @@ describe('grouping', () => {
     expect(failed[0].reason).toBe('None of its 2 executions has a counted run.')
   })
 
-  it('draws one point per Harness release in the order they first ran, the unrecorded left out', () => {
-    expect(byRelease.map((point) => pointTime(point))).toEqual([
-      'harness 1.8.31',
-      'harness 1.8.34',
-      'harness 1.8.35',
-      'harness 1.8.36',
-    ])
-    expect(axisMarks(byRelease).map((mark) => mark.text)).toEqual([
-      '1.8.31',
-      '1.8.34',
-      '1.8.35',
-      '1.8.36',
-    ])
+  it('draws one point per Harness release in semver order, the unversioned left out', () => {
+    const releases = ['v1.8.31', 'v1.8.34', 'v1.8.35', 'v1.8.36']
+    expect(byRelease.map((point) => pointTime(point))).toEqual(releases)
+    expect(axisMarks(byRelease).map((mark) => mark.text)).toEqual(releases)
     expect(unversioned(all)).toHaveLength(5)
     expect(
       byRelease.reduce(
@@ -602,14 +594,42 @@ describe('grouping', () => {
     ).toBe('1.8.31 → 1.8.34')
   })
 
+  it('orders releases by semver and never reads a commit build as one', () => {
+    const copy = (release: string | null, day: number) => ({
+      ...all[1],
+      execution_id: `copy-${day}`,
+      started_at: `2026-09-${day}T10:00:00-03:00`,
+      release,
+    })
+    const commit = copy(null, 23)
+    commit.workers = { ...commit.workers, harness: '@3f9c2a1' }
+    const points = [
+      copy('1.9.3', 22),
+      commit,
+      copy('1.10.0', 24),
+      copy('1.9.2', 25),
+    ]
+    const grouped = groupPoints(points, 'release', NOW)
+    const releases = ['v1.9.2', 'v1.9.3', 'v1.10.0']
+    expect(grouped.map((point) => point.group?.key)).toEqual(releases)
+    expect(axisMarks(grouped).map((mark) => mark.text)).toEqual(releases)
+    expect(unversioned(points).map((p) => p.workers?.harness)).toEqual([
+      '@3f9c2a1',
+    ])
+  })
+
   it('keeps the baseline on the group that holds it, set by its last execution', () => {
     const sep23 = 'github-35821773226-2'
     expect(baselineOf(byDay, sep23).index).toBe(1)
     expect(baselineId(byDay[1])).toBe(sep23)
     expect(baselineId(all[3])).toBe(all[3].execution_id)
     expect(groupFromParams(withGroup(new URLSearchParams(), 'day'))).toBe('day')
-    expect(withGroup(new URLSearchParams(), 'execution').toString()).toBe('')
-    expect(groupFromParams(new URLSearchParams('group=week'))).toBe('execution')
+    expect(withGroup(new URLSearchParams(), 'release').toString()).toBe('')
+    expect(withGroup(new URLSearchParams(), 'execution').toString()).toBe(
+      'group=execution',
+    )
+    expect(groupFromParams(new URLSearchParams(''))).toBe('release')
+    expect(groupFromParams(new URLSearchParams('group=week'))).toBe('release')
   })
 })
 
@@ -843,7 +863,7 @@ describe('the period', () => {
     })
   })
 
-  it('keeps the period in the hash, a bad one falling back to 30 days', () => {
+  it('keeps the period in the hash, a bad one falling back to all time', () => {
     const at = (query: string) => periodFromParams(new URLSearchParams(query))
     expect(at('range=7d')).toEqual({ range: '7d' })
     expect(at('since=2026-09-01&until=2026-09-10')).toEqual({
@@ -858,6 +878,7 @@ describe('the period', () => {
       'since=yesterday&until=today',
     ])
       expect(at(bad)).toEqual(DEFAULT_PERIOD)
+    expect(DEFAULT_PERIOD).toEqual({ range: 'all' })
     expect(
       withPeriod(new URLSearchParams('stack=any'), {
         since: '2026-09-01',
@@ -917,8 +938,24 @@ describe('the view', () => {
     )
   })
 
+  it('opens the overview unless the hash names a series view', () => {
+    const mode = (query: string) =>
+      trendsModeFromParams(new URLSearchParams(query))
+    for (const query of ['', 'range=all', 'metric=turns'])
+      expect(mode(query), query).toBe('overview')
+    for (const query of [
+      'range=30d',
+      'suite=regression',
+      'stack=any',
+      'group=execution',
+      'base=x',
+      'since=2026-09-01&until=2026-09-10',
+    ])
+      expect(mode(query), query).toBe('series')
+  })
+
   it('sums the executions and counted runs up in one line', () => {
-    expect(summaryText(regression, DEFAULT_PERIOD, 'UTC−3', NOW)).toBe(
+    expect(summaryText(regression, { range: '30d' }, 'UTC−3', NOW)).toBe(
       '11 executions in the last 30 days · 9 with counted runs, 2 without · 81 counted runs · Sep 22 – Sep 28 · times in UTC−3',
     )
     expect(stackNote(regression, 'default')).toBe(

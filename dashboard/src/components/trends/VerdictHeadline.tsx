@@ -3,11 +3,10 @@ import { formatDayLabel } from '@/lib/format'
 import {
   overviewMetric,
   type ReleaseOverview,
-  releaseText,
   scopeText,
   verdictSummary,
 } from '@/lib/release-overview'
-import { TREND_METRICS } from '@/lib/trends'
+import { releaseText, TREND_METRICS } from '@/lib/trends'
 import { DeltaPill } from './TrendsChart'
 
 /** The main measures as the overview reads them. */

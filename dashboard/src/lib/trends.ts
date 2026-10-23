@@ -15,6 +15,7 @@ import {
   formatTokens,
   plural,
 } from '@/lib/format'
+import { compareVersions } from '@/lib/stack-sheet'
 
 /* ------------------------------------------------------------- contract */
 
@@ -93,6 +94,9 @@ export type TrendTest = {
   behavior_sha256: string | null
 }
 
+/** Who ran an execution, and whether it speaks for a release. */
+export type TrendRole = 'release_control' | 'ci_other' | 'local' | 'docker'
+
 export type TrendPoint = {
   execution_id: string
   label: string | null
@@ -103,6 +107,7 @@ export type TrendPoint = {
   profile: string | null
   source: {
     kind: 'local' | 'docker' | 'github'
+    role: TrendRole
     run_id?: number
     run_attempt?: number
     release_control_execution_id?: string
@@ -113,6 +118,9 @@ export type TrendPoint = {
   /** Identity per worker, the engine and harness-e2e left out; null = not
    *  recorded. */
   workers: Record<string, string> | null
+  /** The Harness release as one plain semver, without a leading `v`; null
+   *  for a commit (`@sha7`), joined builds or none recorded. */
+  release: string | null
   planned: string[] | null
   runs: number
   /** Technically valid runs. */
@@ -283,7 +291,7 @@ export type TrendPeriod =
   | { range: TrendRange }
   | { since: string; until: string }
 
-export const DEFAULT_PERIOD: TrendPeriod = { range: '30d' }
+export const DEFAULT_PERIOD: TrendPeriod = { range: 'all' }
 
 const RANGE_DAYS: Record<Exclude<TrendRange, 'all'>, number> = {
   '7d': 7,
@@ -1304,7 +1312,7 @@ export const GROUP_CHOICES: Array<{
   {
     value: 'release',
     label: 'Harness release',
-    sub: 'one point per Harness version, in the order they first ran',
+    sub: 'one point per Harness release, in version order',
   },
 ]
 
@@ -1322,21 +1330,41 @@ export type TrendGroup = {
 
 export function groupFromParams(params: URLSearchParams): TrendGroupBy {
   const group = params.get('group')
-  return group === 'day' || group === 'release' ? group : 'execution'
+  return group === 'execution' || group === 'day' ? group : 'release'
 }
 
 export function withGroup(params: URLSearchParams, group: TrendGroupBy) {
-  if (group !== 'execution') params.set('group', group)
+  if (group !== 'release') params.set('group', group)
   return params
 }
 
-/** Executions with no recorded Harness version: no release holds them. */
-export function unversioned(points: TrendPoint[]) {
-  return points.filter((point) => !point.workers?.harness)
+/** Whether Trends opens on the release overview or on one series: any
+ *  series, stack, period, grouping or baseline in the hash names a series. */
+export function trendsModeFromParams(
+  params: URLSearchParams,
+): 'overview' | 'series' {
+  const period = periodFromParams(params)
+  return Object.keys(trendsRequestFromParams(params)).length > 0 ||
+    !('range' in period && period.range === 'all') ||
+    groupFromParams(params) !== 'release' ||
+    baseFromParams(params) !== null
+    ? 'series'
+    : 'overview'
 }
 
-/** One point per day or per Harness release (an execution with no recorded
- *  version is in none); each execution as it is when grouping by execution. */
+/** Executions with no single Harness release: no release holds them. */
+export function unversioned(points: TrendPoint[]) {
+  return points.filter((point) => !point.release)
+}
+
+/** `1.8.36` as `v1.8.36`; a commit (`@852b87e*`) as it is. */
+export function releaseText(version: string) {
+  return /^\d+\.\d+\.\d+$/.test(version) ? `v${version}` : version
+}
+
+/** One point per day, or per Harness release in version order (an
+ *  execution with no single release is in none); each execution as it is
+ *  when grouping by execution. */
 export function groupPoints(
   points: TrendPoint[],
   by: TrendGroupBy,
@@ -1346,21 +1374,19 @@ export function groupPoints(
   const groups = new Map<string, TrendPoint[]>()
   for (const point of points) {
     const key =
-      by === 'day'
-        ? localDay(new Date(point.started_at))
-        : point.workers?.harness
+      by === 'day' ? localDay(new Date(point.started_at)) : point.release
     if (!key) continue
     const members = groups.get(key)
     if (members) members.push(point)
     else groups.set(key, [point])
   }
-  return [...groups].map(([key, members]) =>
-    consolidate(
-      by,
-      key,
-      by === 'day' ? formatDay(members[0].started_at, now) : `harness ${key}`,
-      members,
-    ),
+  const ordered = [...groups]
+  if (by === 'release')
+    ordered.sort(([one], [two]) => compareVersions(one, two) ?? 0)
+  return ordered.map(([key, members]) =>
+    by === 'day'
+      ? consolidate(by, key, formatDay(members[0].started_at, now), members)
+      : consolidate(by, releaseText(key), releaseText(key), members),
   )
 }
 

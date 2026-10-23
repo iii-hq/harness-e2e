@@ -15,6 +15,16 @@ import {
   trendsOrigin,
 } from '@/hooks/use-hash-route'
 
+const TRENDS = {
+  page: 'trends',
+  request: {},
+  period: { range: 'all' },
+  base: null,
+  group: 'release',
+  mode: 'overview',
+  metric: 'score',
+}
+
 describe('a comparison opened from Trends', () => {
   it('goes back to the Trends view it came from, and to nothing else', () => {
     const trends = hashForTrends(new URLSearchParams({ stack: 'any' }))
@@ -53,8 +63,16 @@ describe('a run page opened from a comparison', () => {
 })
 
 describe('dashboard hash routes', () => {
-  it('opens executions in the Console and rejects standalone routes', () => {
-    expect(routeFromHash('#/ext/harness-e2e')).toEqual({
+  it('opens the release overview in the Console and rejects standalone routes', () => {
+    expect(routeFromHash('#/ext/harness-e2e')).toEqual(TRENDS)
+    expect(routeFromHash('#/ext/harness-e2e?metric=turns')).toMatchObject({
+      mode: 'overview',
+      metric: 'turns',
+    })
+    expect(routeFromHash('#/ext/harness-e2e?metric=nope')).toMatchObject({
+      metric: 'score',
+    })
+    expect(routeFromHash('#/ext/harness-e2e/executions')).toEqual({
       page: 'workspace',
       view: 'executions',
     })
@@ -136,13 +154,7 @@ describe('dashboard hash routes', () => {
     expect(hashForStacks()).toBe('#/ext/harness-e2e/stacks')
     expect(routeFromHash(hashForStacks())).toEqual({ page: 'stacks' })
     expect(hashForTrends()).toBe('#/ext/harness-e2e/trends')
-    expect(routeFromHash(hashForTrends())).toEqual({
-      page: 'trends',
-      request: {},
-      period: { range: '30d' },
-      base: null,
-      group: 'execution',
-    })
+    expect(routeFromHash(hashForTrends())).toEqual(TRENDS)
     expect(
       routeFromHash(
         hashForTrends(
@@ -169,7 +181,9 @@ describe('dashboard hash routes', () => {
       },
       period: { since: '2026-09-01', until: '2026-09-10' },
       base: 'github-35821773226-2',
-      group: 'execution',
+      group: 'release',
+      mode: 'series',
+      metric: 'score',
     })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()

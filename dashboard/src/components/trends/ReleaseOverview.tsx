@@ -27,7 +27,6 @@ import {
   type ReleaseOverview as Overview,
   type OverviewPoint,
   overviewMetric,
-  releaseText,
   stepText,
   type Timeline,
   timeline,
@@ -35,6 +34,7 @@ import {
 } from '@/lib/release-overview'
 import {
   changesAt,
+  releaseText,
   TREND_METRICS,
   type TrendMetricId,
   trendMetric,

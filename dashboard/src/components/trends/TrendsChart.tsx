@@ -383,7 +383,7 @@ const UNITS = {
   },
   release: {
     that: 'that release',
-    step: 'One step per Harness release, in the order they first ran: its executions read together.',
+    step: 'One step per Harness release: its executions read together. A hollow ring is a run on this harness or in Docker; the line joins only the others.',
   },
 }
 

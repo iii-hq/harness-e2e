@@ -7,7 +7,6 @@ import {
   type OverviewPoint,
   overviewMetric,
   type ReleaseOverview,
-  releaseText,
   scopeText,
   stepText,
   timeline,
@@ -16,6 +15,7 @@ import {
 } from '@/lib/release-overview'
 import {
   axisMarks,
+  releaseText,
   TREND_METRICS,
   type TrendMeasures,
   type TrendPoint,
