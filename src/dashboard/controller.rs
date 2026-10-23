@@ -338,6 +338,14 @@ impl Controller {
         ))
     }
 
+    /// The release overview over every execution listed: the Trends first
+    /// screen.
+    pub(super) async fn release_overview(&self) -> Result<super::overview::ReleaseOverview> {
+        let model = self.read_model().await?;
+        let summaries = self.execution_summaries().await?;
+        Ok(super::overview::overview(&summaries, &model.trend_runs()))
+    }
+
     async fn invalidate_summaries(&self) {
         self.read_model.write().await.take();
     }
@@ -745,7 +753,7 @@ pub(super) mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::plans::store::tests::{fake_gh, manager_with_gh, FakeRunner};
+    use crate::plans::store::tests::{fake_gh, manager, manager_with_gh, FakeRunner};
     use crate::plans::store::PlanStore;
 
     /// A controller without a control plane, on this plan store.
@@ -771,6 +779,17 @@ pub(super) mod tests {
             events: None,
             github_imports: Semaphore::new(GITHUB_IMPORTS),
         })
+    }
+
+    #[tokio::test]
+    async fn the_release_overview_of_an_empty_store_has_no_release() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller =
+            without_control_plane(manager(root, Arc::new(FakeRunner::new(root.into()))), root);
+        let overview = controller.release_overview().await.unwrap();
+        assert!(overview.releases.is_empty() && overview.locals.is_empty());
+        assert_eq!((overview.verdict, overview.unversioned), (None, 0));
     }
 
     #[tokio::test]

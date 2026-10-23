@@ -52,6 +52,7 @@ pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const TRENDS_GET: &str = "e2e::dashboard::trends-get";
+pub(super) const RELEASE_OVERVIEW_GET: &str = "e2e::dashboard::release-overview-get";
 pub(super) const VERSION_COMPARE: &str = "e2e::dashboard::version-compare";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const SUITES_LIST: &str = "e2e::dashboard::suites-list";
@@ -659,6 +660,18 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
+        RELEASE_OVERVIEW_GET,
+        "Read how each Harness release did in Release Control, newest last: a point per release over its combinations (suite, provider, model, profile, stack), each compared with the one before over what both ran alike (the latest pair is the verdict), local and Docker runs beside their release, and how many CI runs fall outside Release Control.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
+                let controller = controller.clone();
+                async move { controller.release_overview().await.map_err(handler_error) }
+            })
+        },
+    );
+    register(
+        iii,
         VERSION_COMPARE,
         "Link to what changed between two builds of iii, the runner or a worker (release tags or commits) on GitHub, with how many commits apart they are when gh can tell.",
         {
@@ -1223,6 +1236,18 @@ fn handler_error(error: impl std::fmt::Display) -> Error {
 mod response_contract_tests {
     use super::*;
 
+    /// The keys of an object, sorted and comma-joined.
+    fn keys(value: &Value) -> String {
+        let mut keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys.join(",")
+    }
+
     #[test]
     fn registered_response_types_describe_and_preserve_existing_payloads() {
         let attempt_schema = serde_json::to_value(schemars::schema_for!(AttemptResponse)).unwrap();
@@ -1310,16 +1335,6 @@ mod response_contract_tests {
             }],
         )]);
         let response = serde_json::to_value(trends(&request, &summaries, &runs)).unwrap();
-        let keys = |value: &Value| {
-            let mut keys = value
-                .as_object()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
-            keys.sort();
-            keys.join(",")
-        };
         assert_eq!(keys(&response), "points,selected,series,stack,stacks");
         assert_eq!(
             keys(&response["series"][0]),
@@ -1362,5 +1377,80 @@ mod response_contract_tests {
         )
         .unwrap();
         assert_eq!(compare.head, "@3f2a9c1*");
+    }
+
+    #[test]
+    fn the_release_overview_answers_with_the_names_the_console_reads() {
+        use super::super::overview::tests::{rc, runs, scored, with};
+        use super::super::overview::{overview, ReleaseOverview};
+        let schema = serde_json::to_value(schemars::schema_for!(ReleaseOverview)).unwrap();
+        for field in [
+            "releases",
+            "verdict",
+            "locals",
+            "outside_release_control",
+            "unversioned",
+        ] {
+            assert!(schema["properties"][field].is_object(), "missing {field}");
+        }
+        let summaries = [
+            rc("p", 1, "1.9.2"),
+            rc("l", 2, "1.9.3"),
+            with(rc("local", 3, "1.9.3"), |summary| {
+                summary["source"] = json!({"kind": "local"})
+            }),
+        ]
+        .concat();
+        let answer = serde_json::to_value(overview(
+            &summaries,
+            &runs(vec![
+                ("p", vec![scored("t1", 80.0)]),
+                ("l", vec![scored("t1", 90.0)]),
+                ("local", vec![scored("t1", 70.0)]),
+            ]),
+        ))
+        .unwrap();
+        assert_eq!(
+            keys(&answer),
+            "locals,outside_release_control,releases,unversioned,verdict"
+        );
+        let release = &answer["releases"][1];
+        assert_eq!(
+            keys(release),
+            "aggregate,combinations,engine,executions,first_started_at,joined,left,release,step,tests_not_run,workers"
+        );
+        assert_eq!(
+            keys(&release["aggregate"]),
+            "completed_share,error_rate,measures"
+        );
+        assert_eq!(
+            keys(&release["step"]),
+            "latest_aggregate,previous,previous_aggregate"
+        );
+        assert_eq!(
+            keys(&release["combinations"][0]),
+            "model,profile,provider,stack,suite,suite_label"
+        );
+        assert_eq!(answer["releases"][0]["step"], Value::Null);
+        let verdict = &answer["verdict"];
+        assert_eq!(
+            keys(verdict),
+            "compared,latest,latest_aggregate,latest_started_at,left_out,previous,previous_aggregate"
+        );
+        assert_eq!(
+            keys(&verdict["compared"][0]),
+            "combination,latest,previous,tests_left_out"
+        );
+        assert_eq!(verdict["latest"], "1.9.3");
+        assert_eq!(verdict["left_out"], json!([]));
+        assert_eq!(
+            keys(&answer["locals"][0]),
+            "execution_id,measures,ran,release,role,started_at,suite_label"
+        );
+        assert_eq!(answer["locals"][0]["role"], "local");
+        assert_eq!(
+            answer["outside_release_control"],
+            json!({"executions": 0, "latest_at": null})
+        );
     }
 }

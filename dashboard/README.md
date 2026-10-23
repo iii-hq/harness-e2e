@@ -160,6 +160,22 @@ two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.
 
+**Release overview** (`e2e::dashboard::release-overview-get`, `{}`) is Trends'
+first screen: how each Harness release did in Release Control, over every
+execution listed whatever the filters. Only a Release Control execution that
+completed or was interrupted with counted runs enters. Each plain-semver release
+is a point, newest last (an execution whose Harness is a commit, builds joined
+by a comma or none recorded is `unversioned` and counted as such), pooled per
+combination of suite, provider, model, profile and stack; a re-run id counts
+its latest attempt. Each point is read against the one before it (the latest
+pair is the `verdict`) over the combinations both ran and, within them, the
+tests whose `behavior_sha256` matches; what one ran and the other did not is
+listed as joined, left or left out. Means, the Completed share and the error
+rate give every combination the same weight however often it ran; counts are
+summed. A local or Docker execution sits beside its release (the Harness it
+ran, else the release current when it started) and never counts; other CI runs
+are only counted, as `outside_release_control`.
+
 **Group by** (`&group=day|release` in the hash) draws one point per day, on the
 reader's clock, or per Harness release, in the order they first ran, instead of
 one per execution. A group reads its executions together: means weighted by
