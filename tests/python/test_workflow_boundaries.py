@@ -67,6 +67,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
                          "${{ steps." + upload["id"] + ".outputs.artifact-id }}")
         self.assertEqual(jobs["prepare"]["outputs"].get("contract_attempt"), "${{ github.run_attempt }}")
         self.assertEqual(upload["with"]["retention-days"], 90)
+        self.assertTrue(upload["with"].get("include-hidden-files"), "the frozen contract includes hidden kit skill files")
         # On attempt 2, preparation's retained output is still artifact 71.
         retained_outputs = {"needs.prepare.outputs.contract_artifact_id": "71",
                             "needs.prepare.outputs.contract_artifact_digest": "a" * 64}
