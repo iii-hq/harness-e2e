@@ -1333,8 +1333,13 @@ export function groupFromParams(params: URLSearchParams): TrendGroupBy {
   return group === 'execution' || group === 'day' ? group : 'release'
 }
 
-export function withGroup(params: URLSearchParams, group: TrendGroupBy) {
-  if (group !== 'release') params.set('group', group)
+/** The release grouping is the default, named only when it was asked for. */
+export function withGroup(
+  params: URLSearchParams,
+  group: TrendGroupBy,
+  asked = false,
+) {
+  if (group !== 'release' || asked) params.set('group', group)
   return params
 }
 
@@ -1355,6 +1360,28 @@ export function trendsModeFromParams(
 /** Executions with no single Harness release: no release holds them. */
 export function unversioned(points: TrendPoint[]) {
   return points.filter((point) => !point.release)
+}
+
+/** What the charts group by, and the quiet line on what that leaves out:
+ *  the default release grouping draws each execution of a series that
+ *  recorded no Harness release; one asked for keeps to releases. */
+export function shownGroup(
+  points: TrendPoint[],
+  group: TrendGroupBy,
+  asked: boolean,
+): { by: TrendGroupBy; note: string | null } {
+  const without = group === 'release' ? unversioned(points).length : 0
+  if (!asked && without > 0 && without === points.length)
+    return {
+      by: 'execution',
+      note: 'No Harness release is recorded in this series, so each execution is drawn.',
+    }
+  return {
+    by: group,
+    note: without
+      ? `${plural(without, 'execution')} recorded no single Harness release, so no release holds ${without === 1 ? 'it' : 'them'}.`
+      : null,
+  }
 }
 
 /** `1.8.36` as `v1.8.36`; a commit (`@852b87e*`) as it is. */

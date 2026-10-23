@@ -61,6 +61,7 @@ import {
   profileText,
   seriesModel,
   seriesText,
+  shownGroup,
   stackNote,
   stackOptionText,
   suiteChoices,
@@ -76,7 +77,6 @@ import {
   type TrendsResponse,
   trendMetric,
   trendsParams,
-  unversioned,
   withBase,
   withGroup,
   withPeriod,
@@ -123,6 +123,8 @@ export function pageParams(view: {
   request: TrendsRequest
   period: TrendPeriod
   group: TrendGroupBy
+  /** The release grouping was asked for, not left to its default. */
+  groupAsked?: boolean
   base: string | null
   metric: TrendMetricId
 }) {
@@ -133,6 +135,7 @@ export function pageParams(view: {
           withGroup(
             withPeriod(requestParams(view.request), view.period),
             view.group,
+            view.groupAsked,
           ),
           view.base,
         )
@@ -628,6 +631,7 @@ export function TrendsPage({
   period: routePeriod,
   base: routeBase,
   group: routeGroup = 'release',
+  groupAsked: routeGroupAsked = false,
   mode: routeMode = 'overview',
   metric: routeMetric = 'score',
 }: {
@@ -635,6 +639,8 @@ export function TrendsPage({
   period: TrendPeriod
   base: string | null
   group?: TrendGroupBy
+  /** The hash names the release grouping, not its default. */
+  groupAsked?: boolean
   /** The release overview first; a series once the hash names one. */
   mode?: 'overview' | 'series'
   metric?: TrendMetricId
@@ -648,6 +654,7 @@ export function TrendsPage({
   // The execution pinned as the baseline; it lives in the hash.
   const [base, setBase] = useState<string | null>(routeBase)
   const [groupBy, setGroupBy] = useState<TrendGroupBy>(routeGroup)
+  const [groupAsked, setGroupAsked] = useState(routeGroupAsked)
   // The two days being typed for a custom period, until they make one.
   const [draft, setDraft] = useState<{ since: string; until: string } | null>(
     null,
@@ -680,9 +687,18 @@ export function TrendsPage({
     setPeriod(routePeriod)
     setBase(routeBase)
     setGroupBy(routeGroup)
+    setGroupAsked(routeGroupAsked)
     setDraft(null)
     setFocus(routeMetric)
-  }, [request, routePeriod, routeBase, routeGroup, routeMode, routeMetric])
+  }, [
+    request,
+    routePeriod,
+    routeBase,
+    routeGroup,
+    routeGroupAsked,
+    routeMode,
+    routeMetric,
+  ])
 
   const load = useCallback(async () => {
     const pending = beginRequest()
@@ -754,6 +770,7 @@ export function TrendsPage({
     request: view,
     period,
     group: groupBy,
+    groupAsked,
     base,
     metric: focus,
   }).toString()
@@ -762,8 +779,9 @@ export function TrendsPage({
   }, [viewParams])
 
   const points = data?.points ?? []
+  const group = shownGroup(points, groupBy, groupAsked)
   // What the charts draw: each execution, or one point per day or release.
-  const drawn = useMemo(() => groupPoints(points, groupBy), [points, groupBy])
+  const drawn = useMemo(() => groupPoints(points, group.by), [points, group.by])
   const changes = useMemo(
     () => drawn.map((_, index) => changesAt(drawn, index)),
     [drawn],
@@ -780,6 +798,7 @@ export function TrendsPage({
     setMode('series')
     setPicked(null)
     setGroupBy(next)
+    setGroupAsked(next === 'release')
   }
   const pickBase = (next: string | null) => {
     setMode('series')
@@ -852,6 +871,7 @@ export function TrendsPage({
     setBase(null)
     setPicked(null)
     setGroupBy('release')
+    setGroupAsked(false)
     setOptionsOpen(false)
   }
 
@@ -888,7 +908,6 @@ export function TrendsPage({
   const notice = data ? stackNotice(query, data) : null
   const empty = emptyText(points)
   const point = selected >= 0 ? drawn[selected] : undefined
-  const withoutRelease = unversioned(points).length
 
   // Today's controls and the series' summary, closed until asked for.
   const moreOptions =
@@ -912,7 +931,7 @@ export function TrendsPage({
                 onChange={typeDay}
               />
             ) : null}
-            <GroupMenu group={groupBy} onPick={pickGroup} />
+            <GroupMenu group={group.by} onPick={pickGroup} />
             <BaselineMenu
               points={drawn}
               base={base}
@@ -925,9 +944,9 @@ export function TrendsPage({
                 data.selected?.model === ANY || data.selected?.profile === ANY
               }
               unit={
-                groupBy === 'day'
+                group.by === 'day'
                   ? 'day'
-                  : groupBy === 'release'
+                  : group.by === 'release'
                     ? 'Harness release'
                     : 'execution'
               }
@@ -937,11 +956,9 @@ export function TrendsPage({
             <p className="tr-faint tr-num-text" data-trend-summary>
               {summaryText(points, period)}
             </p>
-            {groupBy === 'release' && withoutRelease > 0 ? (
+            {group.note ? (
               <p className="tr-faint" data-group-note>
-                {plural(withoutRelease, 'execution')} recorded no single Harness
-                release, so no release holds{' '}
-                {withoutRelease === 1 ? 'it' : 'them'}.
+                {group.note}
               </p>
             ) : null}
             {note ? <p className="tr-faint">{note}</p> : null}
@@ -1114,7 +1131,7 @@ export function TrendsPage({
           />
           <ExecutionsTable
             points={points}
-            selected={groupBy === 'execution' ? selected : -1}
+            selected={group.by === 'execution' ? selected : -1}
             narrow={narrow}
           />
         </div>

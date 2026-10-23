@@ -49,6 +49,7 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
           period={route.period}
           base={route.base}
           group={route.group}
+          groupAsked={route.groupAsked}
           mode={route.mode}
           metric={route.metric}
         />

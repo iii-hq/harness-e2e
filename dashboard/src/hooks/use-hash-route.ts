@@ -46,6 +46,9 @@ export type DashboardRoute =
       base: string | null
       /** One point per execution, day or Harness release. */
       group: TrendGroupBy
+      /** The hash names group=release: a series with no release keeps to
+       *  releases instead of drawing each execution. */
+      groupAsked?: true
       /** Any series param in the hash means the series view. */
       mode: 'overview' | 'series'
       /** The measure the large chart draws. */
@@ -61,6 +64,7 @@ function trendsRoute(params: URLSearchParams): DashboardRoute {
     period: periodFromParams(params),
     base: baseFromParams(params),
     group: groupFromParams(params),
+    groupAsked: params.get('group') === 'release' || undefined,
     mode: trendsModeFromParams(params),
     metric: trendMetric(params.get('metric')).id,
   }

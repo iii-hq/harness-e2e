@@ -4,12 +4,15 @@ import { BaselineMenu, baselineText } from '@/components/trends/BaselineMenu'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
+import { routeFromHash } from '@/hooks/use-hash-route'
 import {
   changesAt,
   comparedPair,
   groupPoints,
   pointTime,
   previousCounted,
+  shownGroup,
+  type TrendPoint,
   type TrendsResponse,
   trendMetric,
   trendsModeFromParams,
@@ -626,6 +629,73 @@ describe('trends page parts', () => {
     expect(html).toContain(
       'One step per Harness release: its executions read together. A hollow ring is a run on this harness or in Docker; the line joins only the others.',
     )
+  })
+
+  describe('a series with no Harness release', () => {
+    const se = seriesPoints('se')
+    const drawnPoints = (points: TrendPoint[]) =>
+      renderToStaticMarkup(
+        <LargeChart
+          metric={trendMetric('score')}
+          points={points}
+          changes={points.map((_, index) => changesAt(points, index))}
+          selected={-1}
+          baseline={-1}
+          narrow={false}
+          onPick={() => undefined}
+        />,
+      ).match(/class="tr-point"/g) ?? []
+
+    it('draws each execution under the default release grouping and says why', () => {
+      const route = routeFromHash('#/ext/harness-e2e/trends?suite=se')
+      expect(route).toMatchObject({ group: 'release', mode: 'series' })
+      const shown = shownGroup(se, 'release', false)
+      expect(shown).toEqual({
+        by: 'execution',
+        note: 'No Harness release is recorded in this series, so each execution is drawn.',
+      })
+      expect(drawnPoints(groupPoints(se, shown.by))).toHaveLength(se.length)
+      expect(shownGroup(seriesPoints('local'), 'release', false).by).toBe(
+        'execution',
+      )
+      // A series with a release keeps to releases; the hash stays silent.
+      expect(shownGroup(regression, 'release', false).by).toBe('release')
+      expect(
+        pageParams({
+          mode: 'series',
+          request: { suite: 'se' },
+          period: { range: 'all' },
+          group: 'release',
+          base: null,
+          metric: 'score',
+        }).toString(),
+      ).toBe('suite=se&range=all')
+    })
+
+    it('keeps to releases when the hash asks for them, the unversioned said', () => {
+      const route = routeFromHash(
+        '#/ext/harness-e2e/trends?suite=se&group=release',
+      )
+      expect(route).toMatchObject({ group: 'release', groupAsked: true })
+      const shown = shownGroup(se, 'release', true)
+      expect(shown).toEqual({
+        by: 'release',
+        note: '2 executions recorded no single Harness release, so no release holds them.',
+      })
+      expect(drawnPoints(groupPoints(se, shown.by))).toHaveLength(0)
+      expect(
+        pageParams({
+          mode: 'series',
+          request: { suite: 'se' },
+          period: { range: 'all' },
+          group: 'release',
+          groupAsked: true,
+          base: null,
+          metric: 'score',
+        }).toString(),
+      ).toBe('suite=se&range=all&group=release')
+      expect(shownGroup(se, 'day', false)).toEqual({ by: 'day', note: null })
+    })
   })
 
   it('scores each test by execution, with not run and a changed definition', () => {
