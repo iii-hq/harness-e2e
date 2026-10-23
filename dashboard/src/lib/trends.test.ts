@@ -38,6 +38,7 @@ import {
   stackNote,
   suiteChoices,
   summaryText,
+  TREND_METRICS,
   type TrendMeasures,
   type TrendMetric,
   type TrendPoint,
@@ -233,6 +234,41 @@ describe('measures', () => {
     expect(previous?.execution_id).toBe('github-36296751640-1')
   })
 
+  it('leads with six measures and keeps the rest under More', () => {
+    const ids = (tier: TrendMetric['tier']) =>
+      TREND_METRICS.filter((item) => item.tier === tier).map((item) => item.id)
+    expect(ids('main')).toEqual([
+      'score',
+      'completed',
+      'duration',
+      'error_rate',
+      'input_tokens',
+      'turns',
+    ])
+    expect(ids('more')).toEqual([
+      'output_tokens',
+      'cache_read_tokens',
+      'cache_write_tokens',
+      'reasoning_tokens',
+      'cost',
+      'validation_retries',
+      'technical_retries',
+      'function_calls',
+    ])
+  })
+
+  it('reads tokens, cost and retries like the other measures, a cost without pricing as none', () => {
+    const latest = regression[at(regression, 'github-36381232467-1')]
+    const cost = metric('cost')
+    expect(delta('output_tokens', regression)).toBe(-9.6)
+    expect(delta('cost', regression)).toBe(-9.7)
+    expect(delta('validation_retries', regression)).toBe(-0.1)
+    expect(cost.figure(cost.value(latest) as number, latest)).toBe('$0.0540')
+    expect(metric('output_tokens').figure(3600, latest)).toBe('3.6K')
+    expect(deltaFormat(metric('validation_retries'))(0.1)).toBe('0.1')
+    expect(cost.value(seriesPoints('local')[0])).toBeNull()
+  })
+
   it('skips executions without a counted run', () => {
     const index = at(regression, 'github-36285373498-1')
     expect(previousCounted(regression, index)?.execution_id).toBe(
@@ -247,10 +283,17 @@ describe('measures', () => {
       'duration',
       'error_rate',
       'input_tokens',
+      'output_tokens',
+      'reasoning_tokens',
+      'cost',
+      'validation_retries',
+      'technical_retries',
       'function_calls',
       'turns',
     ])
       expect(metric(id).better).toBe('lower')
+    for (const id of ['cache_read_tokens', 'cache_write_tokens'])
+      expect(metric(id).better).toBe('neither')
   })
 
   it('formats a difference as points, tests, points of a rate or a share', () => {
@@ -483,6 +526,9 @@ describe('grouping', () => {
           score_mean: 10,
           function_calls: 10,
           function_call_errors: 5,
+          output_tokens_mean: 100,
+          validation_retries_mean: 0,
+          cost_usd_mean: null,
         },
       },
       {
@@ -494,12 +540,22 @@ describe('grouping', () => {
           score_mean: 50,
           function_calls: 90,
           function_call_errors: 0,
+          output_tokens_mean: 500,
+          validation_retries_mean: 2,
+          cost_usd_mean: 0.25,
         },
       },
     ]
     const [grouped] = groupPoints(pair, 'day', NOW)
     expect(grouped.measures?.score_mean).toBe(40)
     expect(trendMetric('error_rate').value(grouped)).toBe(5)
+    const keys = Object.keys(one.measures as TrendMeasures).sort()
+    expect(keys).toHaveLength(16)
+    expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(keys)
+    expect(grouped.measures?.output_tokens_mean).toBe(400)
+    expect(grouped.measures?.validation_retries_mean).toBe(1.5)
+    // A member without pricing leaves the mean to the priced ones.
+    expect(grouped.measures?.cost_usd_mean).toBe(0.25)
   })
 
   it('says a day mixed versions, and a day with no counted run has no measures', () => {

@@ -560,7 +560,7 @@ export function TrendsSkeleton({ narrow }: { narrow: boolean }) {
       <Skeleton className="tr-skel tr-skel-line" />
       <Skeleton className="tr-skel tr-skel-big" />
       <div className="tr-minis" data-narrow={narrow || undefined}>
-        {TREND_METRICS.slice(1).map((metric) => (
+        {TREND_METRICS.filter((item) => item.tier === 'main').map((metric) => (
           <Skeleton key={metric.id} className="tr-skel tr-skel-mini" />
         ))}
       </div>
@@ -990,20 +990,20 @@ export function TrendsPage({
                 aria-label="Other measures"
                 data-narrow={narrow || undefined}
               >
-                {TREND_METRICS.filter((item) => item.id !== metric.id).map(
-                  (item) => (
-                    <SmallChart
-                      key={item.id}
-                      metric={item}
-                      points={drawn}
-                      changes={changes}
-                      selected={selected}
-                      baseline={baseline.index}
-                      narrow={narrow}
-                      onFocus={() => setFocus(item.id)}
-                    />
-                  ),
-                )}
+                {TREND_METRICS.filter(
+                  (item) => item.tier === 'main' && item.id !== metric.id,
+                ).map((item) => (
+                  <SmallChart
+                    key={item.id}
+                    metric={item}
+                    points={drawn}
+                    changes={changes}
+                    selected={selected}
+                    baseline={baseline.index}
+                    narrow={narrow}
+                    onFocus={() => setFocus(item.id)}
+                  />
+                ))}
               </section>
               <ByTest
                 points={drawn}

@@ -8,6 +8,7 @@
 import { shortDefinition } from '@/lib/definition-digest'
 import { betterWhen } from '@/lib/execution-comparison'
 import {
+  formatCost,
   formatDateTime,
   formatDay,
   formatDuration,
@@ -62,6 +63,20 @@ export type TrendMeasures = {
   function_calls: number | null
   function_call_errors: number | null
   turns_mean: number | null
+  /** Output tokens per run. */
+  output_tokens_mean: number | null
+  /** Tokens read from the prompt cache per run. */
+  cache_read_tokens_mean: number | null
+  /** Tokens written to the prompt cache per run. */
+  cache_write_tokens_mean: number | null
+  /** Reasoning tokens per run. */
+  reasoning_tokens_mean: number | null
+  /** USD per run; null when the model has no pricing. */
+  cost_usd_mean: number | null
+  /** Harness retries per run. */
+  validation_retries_mean: number | null
+  /** Invalid attempts re-run, per run. */
+  technical_retries_mean: number | null
 }
 
 export type TrendTestState =
@@ -712,11 +727,20 @@ export type TrendMetricId =
   | 'duration'
   | 'error_rate'
   | 'input_tokens'
-  | 'function_calls'
   | 'turns'
+  | 'output_tokens'
+  | 'cache_read_tokens'
+  | 'cache_write_tokens'
+  | 'reasoning_tokens'
+  | 'cost'
+  | 'validation_retries'
+  | 'technical_retries'
+  | 'function_calls'
 
 export type TrendMetric = {
   id: TrendMetricId
+  /** `main` measures are charted up front, `more` ones under More. */
+  tier: 'main' | 'more'
   label: string
   note: string
   better: 'higher' | 'lower' | 'neither'
@@ -738,10 +762,12 @@ const measure =
     return typeof value === 'number' && Number.isFinite(value) ? value : null
   }
 
-/** Score first; the large chart shows one, the six small ones the rest. */
+/** Score first; the large chart shows one. The six `main` measures lead,
+ *  the `more` ones follow under More. */
 export const TREND_METRICS: TrendMetric[] = [
   {
     id: 'score',
+    tier: 'main',
     label: 'Score',
     note: 'mean of the counted runs',
     better: betterWhen('score'),
@@ -752,6 +778,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'completed',
+    tier: 'main',
     label: 'Tests completed',
     note: 'counted runs that completed their task',
     better: betterWhen('completed'),
@@ -763,6 +790,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'duration',
+    tier: 'main',
     label: 'Run duration',
     note: 'mean per run',
     better: betterWhen('duration'),
@@ -773,6 +801,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'error_rate',
+    tier: 'main',
     label: 'Error call rate',
     note: 'failed function calls ÷ calls',
     better: betterWhen('function_errors'),
@@ -787,6 +816,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'input_tokens',
+    tier: 'main',
     label: 'Input tokens',
     note: 'mean per run',
     better: betterWhen('tokens'),
@@ -796,21 +826,100 @@ export const TREND_METRICS: TrendMetric[] = [
     delta: 'percent',
   },
   {
-    id: 'function_calls',
-    label: 'Function calls',
+    id: 'turns',
+    tier: 'main',
+    label: 'Turns',
     note: 'mean per run',
-    better: betterWhen('function_calls'),
-    value: measure('function_calls_mean'),
+    better: betterWhen('turns'),
+    value: measure('turns_mean'),
     figure: fixed1,
     axis: whole,
     delta: 'percent',
   },
   {
-    id: 'turns',
-    label: 'Turns',
+    id: 'output_tokens',
+    tier: 'more',
+    label: 'Output tokens',
     note: 'mean per run',
-    better: betterWhen('turns'),
-    value: measure('turns_mean'),
+    better: betterWhen('output_tokens'),
+    value: measure('output_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'cache_read_tokens',
+    tier: 'more',
+    label: 'Cache read tokens',
+    note: 'mean per run',
+    better: betterWhen('cache_read'),
+    value: measure('cache_read_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'cache_write_tokens',
+    tier: 'more',
+    label: 'Cache write tokens',
+    note: 'mean per run',
+    better: betterWhen('cache_write'),
+    value: measure('cache_write_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'reasoning_tokens',
+    tier: 'more',
+    label: 'Reasoning tokens',
+    note: 'mean per run',
+    better: betterWhen('reasoning_tokens'),
+    value: measure('reasoning_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'cost',
+    tier: 'more',
+    label: 'Cost',
+    note: 'mean per run, USD; none without model pricing',
+    better: betterWhen('cost'),
+    value: measure('cost_usd_mean'),
+    figure: formatCost,
+    axis: formatCost,
+    delta: 'percent',
+  },
+  {
+    id: 'validation_retries',
+    tier: 'more',
+    label: 'Validation retries',
+    note: 'Harness retries, mean per run',
+    better: betterWhen('validation_retries'),
+    value: measure('validation_retries_mean'),
+    figure: fixed1,
+    axis: fixed1,
+    delta: 'points',
+  },
+  {
+    id: 'technical_retries',
+    tier: 'more',
+    label: 'Technical retries',
+    note: 'invalid attempts re-run, mean per run',
+    better: betterWhen('technical_retries'),
+    value: measure('technical_retries_mean'),
+    figure: fixed1,
+    axis: fixed1,
+    delta: 'points',
+  },
+  {
+    id: 'function_calls',
+    tier: 'more',
+    label: 'Function calls',
+    note: 'mean per run',
+    better: betterWhen('function_calls'),
+    value: measure('function_calls_mean'),
     figure: fixed1,
     axis: whole,
     delta: 'percent',
@@ -1339,6 +1448,13 @@ function consolidate(
           function_calls: total((m) => m.function_calls),
           function_call_errors: total((m) => m.function_call_errors),
           turns_mean: weighted((m) => m.turns_mean),
+          output_tokens_mean: weighted((m) => m.output_tokens_mean),
+          cache_read_tokens_mean: weighted((m) => m.cache_read_tokens_mean),
+          cache_write_tokens_mean: weighted((m) => m.cache_write_tokens_mean),
+          reasoning_tokens_mean: weighted((m) => m.reasoning_tokens_mean),
+          cost_usd_mean: weighted((m) => m.cost_usd_mean),
+          validation_retries_mean: weighted((m) => m.validation_retries_mean),
+          technical_retries_mean: weighted((m) => m.technical_retries_mean),
         }
       : null,
     tests,

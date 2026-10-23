@@ -19,6 +19,7 @@
           "started_at": "2026-09-22T11:35:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35741409074,
             "run_attempt": 1,
             "release_control_execution_id": "75b03d86",
@@ -103,7 +104,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": null
         },
         {
           "execution_id": "github-35742568444-1",
@@ -111,6 +113,7 @@
           "started_at": "2026-09-22T11:45:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35742568444,
             "run_attempt": 1,
             "release_control_execution_id": "4d407ce8",
@@ -165,7 +168,14 @@
             "function_calls_mean": 14.8,
             "function_calls": 133,
             "function_call_errors": 0,
-            "turns_mean": 10.2
+            "turns_mean": 10.2,
+            "output_tokens_mean": 1344,
+            "cache_read_tokens_mean": 53776,
+            "cache_write_tokens_mean": 2689,
+            "reasoning_tokens_mean": 672,
+            "cost_usd_mean": 0.0202,
+            "validation_retries_mean": 1,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -225,7 +235,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.31"
         },
         {
           "execution_id": "github-35743058842-1",
@@ -233,6 +244,7 @@
           "started_at": "2026-09-22T11:49:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35743058842,
             "run_attempt": 1,
             "release_control_execution_id": "acb1e425",
@@ -267,7 +279,14 @@
             "function_calls_mean": 14,
             "function_calls": 126,
             "function_call_errors": 0,
-            "turns_mean": 9.2
+            "turns_mean": 9.2,
+            "output_tokens_mean": 976,
+            "cache_read_tokens_mean": 39036,
+            "cache_write_tokens_mean": 1952,
+            "reasoning_tokens_mean": 488,
+            "cost_usd_mean": 0.0146,
+            "validation_retries_mean": 0.9,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -327,7 +346,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": null
         },
         {
           "execution_id": "github-35767230299-1",
@@ -335,6 +355,7 @@
           "started_at": "2026-09-22T15:27:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35767230299,
             "run_attempt": 1,
             "release_control_execution_id": "8a2a287d",
@@ -389,7 +410,14 @@
             "function_calls_mean": 14.9,
             "function_calls": 134,
             "function_call_errors": 0,
-            "turns_mean": 9.2
+            "turns_mean": 9.2,
+            "output_tokens_mean": 1129,
+            "cache_read_tokens_mean": 45140,
+            "cache_write_tokens_mean": 2257,
+            "reasoning_tokens_mean": 564,
+            "cost_usd_mean": 0.0169,
+            "validation_retries_mean": 0.9,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -449,7 +477,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.31"
         },
         {
           "execution_id": "github-35767246472-1",
@@ -457,6 +486,7 @@
           "started_at": "2026-09-22T15:27:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35767246472,
             "run_attempt": 1,
             "release_control_execution_id": "850e3263",
@@ -491,7 +521,14 @@
             "function_calls_mean": 15.1,
             "function_calls": 136,
             "function_call_errors": 0,
-            "turns_mean": 8.9
+            "turns_mean": 8.9,
+            "output_tokens_mean": 880,
+            "cache_read_tokens_mean": 35208,
+            "cache_write_tokens_mean": 1760,
+            "reasoning_tokens_mean": 440,
+            "cost_usd_mean": 0.0132,
+            "validation_retries_mean": 0.9,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -551,7 +588,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": null
         },
         {
           "execution_id": "github-35821773226-2",
@@ -559,6 +597,7 @@
           "started_at": "2026-09-23T02:17:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35821773226,
             "run_attempt": 2,
             "release_control_execution_id": "f96916a6",
@@ -613,7 +652,14 @@
             "function_calls_mean": 14.7,
             "function_calls": 132,
             "function_call_errors": 0,
-            "turns_mean": 9.7
+            "turns_mean": 9.7,
+            "output_tokens_mean": 1099,
+            "cache_read_tokens_mean": 43952,
+            "cache_write_tokens_mean": 2198,
+            "reasoning_tokens_mean": 549,
+            "cost_usd_mean": 0.0165,
+            "validation_retries_mean": 1,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -673,7 +719,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.31"
         },
         {
           "execution_id": "github-35959254741-1",
@@ -681,6 +728,7 @@
           "started_at": "2026-09-24T02:17:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35959254741,
             "run_attempt": 1,
             "release_control_execution_id": "f999ca1a",
@@ -735,7 +783,14 @@
             "function_calls_mean": 17.1,
             "function_calls": 154,
             "function_call_errors": 0,
-            "turns_mean": 8.3
+            "turns_mean": 8.3,
+            "output_tokens_mean": 3631,
+            "cache_read_tokens_mean": 145232,
+            "cache_write_tokens_mean": 7262,
+            "reasoning_tokens_mean": 1815,
+            "cost_usd_mean": 0.0545,
+            "validation_retries_mean": 0.8,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -795,7 +850,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.31"
         },
         {
           "execution_id": "github-36010839787-2",
@@ -803,6 +859,7 @@
           "started_at": "2026-09-24T11:10:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36010839787,
             "run_attempt": 2,
             "release_control_execution_id": "ab2e2d9b",
@@ -857,7 +914,14 @@
             "function_calls_mean": 17.4,
             "function_calls": 157,
             "function_call_errors": 0,
-            "turns_mean": 9.3
+            "turns_mean": 9.3,
+            "output_tokens_mean": 3669,
+            "cache_read_tokens_mean": 146756,
+            "cache_write_tokens_mean": 7338,
+            "reasoning_tokens_mean": 1834,
+            "cost_usd_mean": 0.055,
+            "validation_retries_mean": 0.9,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -917,7 +981,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.34"
         },
         {
           "execution_id": "github-36097908502-1",
@@ -925,6 +990,7 @@
           "started_at": "2026-09-25T02:17:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36097908502,
             "run_attempt": 1,
             "release_control_execution_id": "315c8dfa",
@@ -981,7 +1047,14 @@
             "function_calls_mean": 16.6,
             "function_calls": 149,
             "function_call_errors": 0,
-            "turns_mean": 7.9
+            "turns_mean": 7.9,
+            "output_tokens_mean": 3577,
+            "cache_read_tokens_mean": 143076,
+            "cache_write_tokens_mean": 7154,
+            "reasoning_tokens_mean": 1788,
+            "cost_usd_mean": 0.0537,
+            "validation_retries_mean": 0.8,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1041,7 +1114,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.35"
         },
         {
           "execution_id": "github-36220337119-1",
@@ -1049,6 +1123,7 @@
           "started_at": "2026-09-26T02:17:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36220337119,
             "run_attempt": 1,
             "release_control_execution_id": "e63de635",
@@ -1133,7 +1208,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": null
         },
         {
           "execution_id": "github-36247956691-1",
@@ -1141,6 +1217,7 @@
           "started_at": "2026-09-26T11:16:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36247956691,
             "run_attempt": 1,
             "release_control_execution_id": "dd6afc59",
@@ -1225,7 +1302,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": null
         },
         {
           "execution_id": "github-36285373498-1",
@@ -1233,6 +1311,7 @@
           "started_at": "2026-09-26T22:23:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36285373498,
             "run_attempt": 1,
             "release_control_execution_id": "87f08a12",
@@ -1289,7 +1368,14 @@
             "function_calls_mean": 17.3,
             "function_calls": 156,
             "function_call_errors": 0,
-            "turns_mean": 8.4
+            "turns_mean": 8.4,
+            "output_tokens_mean": 2966,
+            "cache_read_tokens_mean": 118640,
+            "cache_write_tokens_mean": 5932,
+            "reasoning_tokens_mean": 1483,
+            "cost_usd_mean": 0.0445,
+            "validation_retries_mean": 0.8,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1349,7 +1435,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.36"
         },
         {
           "execution_id": "github-36296751640-1",
@@ -1357,6 +1444,7 @@
           "started_at": "2026-09-27T02:17:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36296751640,
             "run_attempt": 1,
             "release_control_execution_id": "4c8188d8",
@@ -1413,7 +1501,14 @@
             "function_calls_mean": 18.2,
             "function_calls": 164,
             "function_call_errors": 0,
-            "turns_mean": 9.1
+            "turns_mean": 9.1,
+            "output_tokens_mean": 3984,
+            "cache_read_tokens_mean": 159352,
+            "cache_write_tokens_mean": 7968,
+            "reasoning_tokens_mean": 1992,
+            "cost_usd_mean": 0.0598,
+            "validation_retries_mean": 0.9,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1473,7 +1568,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.36"
         },
         {
           "execution_id": "github-36381232467-1",
@@ -1481,6 +1577,7 @@
           "started_at": "2026-09-28T02:17:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 36381232467,
             "run_attempt": 1,
             "release_control_execution_id": "cd674932",
@@ -1537,7 +1634,14 @@
             "function_calls_mean": 16.7,
             "function_calls": 150,
             "function_call_errors": 0,
-            "turns_mean": 8.3
+            "turns_mean": 8.3,
+            "output_tokens_mean": 3600,
+            "cache_read_tokens_mean": 144008,
+            "cache_write_tokens_mean": 7200,
+            "reasoning_tokens_mean": 1800,
+            "cost_usd_mean": 0.054,
+            "validation_retries_mean": 0.8,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1597,7 +1701,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": null
+          "profile": null,
+          "release": "1.8.36"
         }
       ]
     },
@@ -1619,7 +1724,8 @@
           "label": null,
           "started_at": "2026-09-27T19:47:00-03:00",
           "source": {
-            "kind": "local"
+            "kind": "local",
+            "role": "local"
           },
           "stack": {
             "name": null,
@@ -1723,7 +1829,8 @@
           ],
           "provider": "anthropic",
           "model": "claude-opus-5-5",
-          "profile": null
+          "profile": null,
+          "release": null
         }
       ]
     },
@@ -1745,7 +1852,8 @@
           "label": "ade-worker-builder · new",
           "started_at": "2026-09-24T15:11:00-03:00",
           "source": {
-            "kind": "local"
+            "kind": "local",
+            "role": "local"
           },
           "stack": {
             "name": null,
@@ -1789,7 +1897,14 @@
             "function_calls_mean": 139.5,
             "function_calls": 279,
             "function_call_errors": 28,
-            "turns_mean": 86
+            "turns_mean": 86,
+            "output_tokens_mean": 540,
+            "cache_read_tokens_mean": 21584,
+            "cache_write_tokens_mean": 1079,
+            "reasoning_tokens_mean": 270,
+            "cost_usd_mean": null,
+            "validation_retries_mean": 8.6,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1807,14 +1922,16 @@
           ],
           "provider": "claude-code",
           "model": "claude-opus-5-5",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         },
         {
           "execution_id": "local-local-2",
           "label": "ade-worker-builder · new 2",
           "started_at": "2026-09-24T15:56:00-03:00",
           "source": {
-            "kind": "local"
+            "kind": "local",
+            "role": "local"
           },
           "stack": {
             "name": null,
@@ -1858,7 +1975,14 @@
             "function_calls_mean": 164,
             "function_calls": 328,
             "function_call_errors": 28,
-            "turns_mean": 96.5
+            "turns_mean": 96.5,
+            "output_tokens_mean": 538,
+            "cache_read_tokens_mean": 21512,
+            "cache_write_tokens_mean": 1076,
+            "reasoning_tokens_mean": 269,
+            "cost_usd_mean": null,
+            "validation_retries_mean": 9.7,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1876,14 +2000,16 @@
           ],
           "provider": "claude-code",
           "model": "claude-opus-5-5",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         },
         {
           "execution_id": "local-local-3",
           "label": "ade-worker-builder · new 2",
           "started_at": "2026-09-24T17:58:00-03:00",
           "source": {
-            "kind": "local"
+            "kind": "local",
+            "role": "local"
           },
           "stack": {
             "name": null,
@@ -1927,7 +2053,14 @@
             "function_calls_mean": 113.5,
             "function_calls": 227,
             "function_call_errors": 16,
-            "turns_mean": 71.5
+            "turns_mean": 71.5,
+            "output_tokens_mean": 531,
+            "cache_read_tokens_mean": 21224,
+            "cache_write_tokens_mean": 1061,
+            "reasoning_tokens_mean": 265,
+            "cost_usd_mean": null,
+            "validation_retries_mean": 7.2,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -1945,14 +2078,16 @@
           ],
           "provider": "claude-code",
           "model": "claude-opus-5-5",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         },
         {
           "execution_id": "local-local-4",
           "label": "ade-worker-builder · new 2",
           "started_at": "2026-09-24T18:39:00-03:00",
           "source": {
-            "kind": "local"
+            "kind": "local",
+            "role": "local"
           },
           "stack": {
             "name": null,
@@ -1996,7 +2131,14 @@
             "function_calls_mean": 101,
             "function_calls": 202,
             "function_call_errors": 11,
-            "turns_mean": 61
+            "turns_mean": 61,
+            "output_tokens_mean": 521,
+            "cache_read_tokens_mean": 20832,
+            "cache_write_tokens_mean": 1042,
+            "reasoning_tokens_mean": 260,
+            "cost_usd_mean": null,
+            "validation_retries_mean": 6.1,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -2014,14 +2156,16 @@
           ],
           "provider": "claude-code",
           "model": "claude-opus-5-5",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         },
         {
           "execution_id": "local-local-5",
           "label": "ade-worker-builder · new 2",
           "started_at": "2026-09-24T19:13:00-03:00",
           "source": {
-            "kind": "local"
+            "kind": "local",
+            "role": "local"
           },
           "stack": {
             "name": null,
@@ -2065,7 +2209,14 @@
             "function_calls_mean": 136.5,
             "function_calls": 273,
             "function_call_errors": 17,
-            "turns_mean": 81
+            "turns_mean": 81,
+            "output_tokens_mean": 554,
+            "cache_read_tokens_mean": 22176,
+            "cache_write_tokens_mean": 1109,
+            "reasoning_tokens_mean": 277,
+            "cost_usd_mean": null,
+            "validation_retries_mean": 8.1,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -2083,7 +2234,8 @@
           ],
           "provider": "claude-code",
           "model": "claude-opus-5-5",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         }
       ]
     },
@@ -2106,6 +2258,7 @@
           "started_at": "2026-09-23T18:53:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35925167026,
             "run_attempt": 1,
             "release_control_execution_id": "e976a3dd",
@@ -2144,7 +2297,14 @@
             "function_calls_mean": 147.3,
             "function_calls": 1768,
             "function_call_errors": 72,
-            "turns_mean": 109.7
+            "turns_mean": 109.7,
+            "output_tokens_mean": 80182,
+            "cache_read_tokens_mean": 3207292,
+            "cache_write_tokens_mean": 160365,
+            "reasoning_tokens_mean": 40091,
+            "cost_usd_mean": 1.2027,
+            "validation_retries_mean": 11,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -2228,7 +2388,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         },
         {
           "execution_id": "github-35965100994-1",
@@ -2236,6 +2397,7 @@
           "started_at": "2026-09-24T03:33:00-03:00",
           "source": {
             "kind": "github",
+            "role": "release_control",
             "run_id": 35965100994,
             "run_attempt": 1,
             "release_control_execution_id": "12d5f973",
@@ -2276,7 +2438,14 @@
             "function_calls_mean": 59.6,
             "function_calls": 715,
             "function_call_errors": 21,
-            "turns_mean": 51.3
+            "turns_mean": 51.3,
+            "output_tokens_mean": 15416,
+            "cache_read_tokens_mean": 616652,
+            "cache_write_tokens_mean": 30833,
+            "reasoning_tokens_mean": 7708,
+            "cost_usd_mean": 0.2312,
+            "validation_retries_mean": 5.1,
+            "technical_retries_mean": 0
           },
           "tests": [
             {
@@ -2372,7 +2541,8 @@
           ],
           "provider": "deepseek",
           "model": "deepseek-flash",
-          "profile": "ade-worker-builder"
+          "profile": "ade-worker-builder",
+          "release": null
         }
       ]
     }
