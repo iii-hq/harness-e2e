@@ -151,6 +151,43 @@ describe('trends page parts', () => {
     expect(html).not.toContain('runner')
   })
 
+  it('draws a local execution as a hollow ring the line does not join', () => {
+    const mixed = [...regression.slice(-2), seriesPoints('local')[0]]
+    const large = renderToStaticMarkup(
+      <LargeChart
+        metric={trendMetric('score')}
+        points={mixed}
+        changes={mixed.map(() => [])}
+        selected={-1}
+        baseline={-1}
+        narrow={false}
+        onPick={() => undefined}
+      />,
+    )
+    expect(large.match(/class="tr-line"/g)).toHaveLength(1)
+    expect(large.match(/data-source="local"/g)).toHaveLength(1)
+    expect(large).toMatch(
+      /aria-label="[^"]+ · This harness · ade-worker-builder · new · Score 100\.0"/,
+    )
+    const local = seriesPoints('local')
+    const small = renderToStaticMarkup(
+      <SmallChart
+        metric={trendMetric('score')}
+        points={local}
+        changes={local.map(() => [])}
+        selected={-1}
+        baseline={-1}
+        narrow={false}
+        onFocus={() => undefined}
+      />,
+    )
+    // A view of local executions only keeps its line.
+    expect(small.match(/class="tr-line"/g)).toHaveLength(4)
+    expect(
+      small.match(/<circle class="tr-dot" data-source="local"/g),
+    ).toHaveLength(5)
+  })
+
   it('draws a small chart with its direction under the title and crosses as strokes', () => {
     const html = renderToStaticMarkup(
       <SmallChart

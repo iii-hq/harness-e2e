@@ -6,12 +6,21 @@ import {
   type MetricMove,
   type OverviewPoint,
   overviewMetric,
+  type ReleaseOverview,
   releaseText,
   scopeText,
+  stepText,
+  timeline,
   type Verdict,
   verdictSummary,
 } from '@/lib/release-overview'
-import { TREND_METRICS, type TrendPoint, trendMetric } from '@/lib/trends'
+import {
+  axisMarks,
+  TREND_METRICS,
+  type TrendMeasures,
+  type TrendPoint,
+  trendMetric,
+} from '@/lib/trends'
 import { releaseOverview } from '@/test-fixtures/release-overview'
 
 const main = TREND_METRICS.filter((metric) => metric.tier === 'main')
@@ -108,5 +117,84 @@ describe('release verdict', () => {
     expect(combinationText(regression)).toEqual(
       'Regression · deepseek/deepseek-flash · profile none · stack default',
     )
+  })
+})
+
+describe('release timeline', () => {
+  const line = timeline(releaseOverview)
+  const { releases, locals } = releaseOverview
+
+  it('puts each local run after the release it ran with, and only measured ones', () => {
+    expect(line.points.map((point) => point.execution_id)).toEqual([
+      'release:1.8.31',
+      'release:1.8.34',
+      'local-local-1',
+      'local-local-2',
+      'local-local-3',
+      'local-local-4',
+      'local-local-5',
+      'release:1.8.35',
+      'release:1.8.36',
+    ])
+    expect(line.latest).toEqual(8)
+    expect(line.points[2].source.kind).toEqual('local')
+    expect(line.points[2].label).toEqual(
+      '2 tests, unsaved · ran harness @852b87e*',
+    )
+    expect(line.points[2].aggregate).toEqual(
+      aggregateOf(locals[0].measures as TrendMeasures),
+    )
+    expect(line.points[8].aggregate).toEqual(releases[3].aggregate)
+    expect(axisMarks(line.points).map((mark) => mark.text)).toEqual([
+      'v1.8.31',
+      'v1.8.34',
+      '',
+      '',
+      '',
+      '',
+      '',
+      'v1.8.35',
+      'v1.8.36',
+    ])
+    expect(line.changes.every((list) => list.length === 0)).toBe(true)
+  })
+
+  it('marks a combination that joined or left, and says when nothing ran', () => {
+    const overview: ReleaseOverview = structuredClone(releaseOverview)
+    overview.releases[3].joined = [
+      { ...regression, suite: 'onboarding', suite_label: 'Onboarding' },
+    ]
+    overview.locals[0].ran = null
+    const marked = timeline(overview)
+    expect(marked.changes[8]).toEqual([
+      {
+        kind: 'tests',
+        major: true,
+        name: 'Onboarding · deepseek/deepseek-flash · profile none · stack default',
+        text: 'joined',
+        note: null,
+        compare: null,
+      },
+    ])
+    expect(marked.points[2].label).toEqual(
+      '2 tests, unsaved · Harness version not recorded',
+    )
+    expect(
+      timeline({ ...releaseOverview, releases: [], verdict: null, locals: [] }),
+    ).toEqual({ points: [], changes: [], latest: -1 })
+  })
+
+  it('reads each release’s step against the release before it', () => {
+    const latest = line.points[8]
+    expect(stepText(trendMetric('score'), latest)).toEqual('−2.3 vs v1.8.35')
+    expect(stepText(trendMetric('duration'), latest)).toEqual(
+      '+6.0% vs v1.8.35',
+    )
+    expect(stepText(trendMetric('completed'), latest)).toEqual(
+      'no change vs v1.8.35',
+    )
+    expect(line.points[7].step?.previous).toEqual('1.8.34')
+    expect(stepText(trendMetric('score'), line.points[0])).toBeNull()
+    expect(stepText(trendMetric('score'), line.points[2])).toBeNull()
   })
 })

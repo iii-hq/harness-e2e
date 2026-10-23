@@ -136,6 +136,23 @@ again. Screenshots a run's deliverables declare are read on demand through
 declares, inside that execution's directory, up to 10 MB. **Rerun selected**
 opens Run again with B's parameters and only the ticked scenarios.
 
+**Trends** opens on the release overview. Under **Harness evolution**, the
+verdict names the latest Harness release against the previous one and the main
+measures that moved, better or worse, then what it compared. The line below
+plots one measure (six tabs, the rest under More), one point per release with
+Release Control results, oldest first. Each step reads against the release
+before it, over the combinations of suite, model, profile and stack both ran
+and, within them, the tests whose definition did not change. Every combination
+weighs the same, the Completed share and the error rate included; a count such
+as "41 of 48" is a sum. A point's label and panel give its step, and the callout
+beside the line gives the latest one on every main measure; **What changed**
+opens the latest release's panel: its versions against the previous release and
+each combination the verdict compared. A hollow ring is a local or Docker
+execution, beside the release it ran with; the line leaves it out and it never
+counts. A diamond over a release marks a combination that joined or left. A
+strip counts the **CI runs outside Release Control** and links to them in the
+Executions list.
+
 **Trends** (`e2e::dashboard::trends-get`) follows one series (suite id, or the
 digest of an unsaved suite, × provider × model × agent profile) over time, from
 what the read model already holds. `model: "any"` or `profile: "any"` joins

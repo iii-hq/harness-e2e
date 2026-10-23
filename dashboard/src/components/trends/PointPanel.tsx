@@ -1,5 +1,5 @@
 import { ArrowUpRight, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { buttonClassName } from '@/design-system'
 import {
@@ -27,6 +27,7 @@ import {
   sourceText,
   TREND_METRICS,
   type TrendChange,
+  type TrendMetric,
   type TrendPoint,
   type VersionCompareResponse,
   versionsText,
@@ -141,10 +142,14 @@ export function PointPanel({
   here,
   onClose,
   onBaseline,
+  subtitle,
+  metrics = TREND_METRICS,
+  children,
 }: {
   points: TrendPoint[]
   index: number
-  changes: TrendChange[]
+  /** Null leaves out what changed. */
+  changes: TrendChange[] | null
   /** The previous execution with a counted run. */
   previous: TrendPoint | null
   /** The pinned baseline, when this view shows it. */
@@ -153,7 +158,14 @@ export function PointPanel({
   /** This view's hash, for Compare to come back to. */
   here: string
   onClose: () => void
-  onBaseline: (id: string | null) => void
+  /** Without it, no baseline is offered. */
+  onBaseline?: (id: string | null) => void
+  /** In place of the line under the title. */
+  subtitle?: string
+  /** The measures listed, and how each reads. */
+  metrics?: TrendMetric[]
+  /** After the measures. */
+  children?: ReactNode
 }) {
   const point = points[index]
   const isBaseline = baseline?.execution_id === point.execution_id
@@ -167,7 +179,9 @@ export function PointPanel({
   const [unfolded, setUnfolded] = useState<string | null>(null)
   const showAll = unfolded === referenceId
   const listed = useMemo(() => {
-    const all = against ? changesBetween(points, againstIndex, index) : changes
+    const all = against
+      ? changesBetween(points, againstIndex, index)
+      : (changes ?? [])
     const ordered = majorsFirst(all)
     const minors = ordered.filter((change) => !change.major)
     const hidden = showAll ? 0 : Math.max(0, minors.length - SHOWN_MINORS)
@@ -218,7 +232,9 @@ export function PointPanel({
             </h2>
             {isBaseline ? <span className="tr-tag">baseline</span> : null}
           </div>
-          <span className="tr-mono tr-small tr-faint-ink">{source}</span>
+          <span className="tr-mono tr-small tr-faint-ink">
+            {subtitle ?? source}
+          </span>
         </div>
         <button
           type="button"
@@ -247,66 +263,70 @@ export function PointPanel({
           completed.
         </p>
       ) : null}
-      <section className="tr-panel-section" aria-labelledby="tr-ch">
-        <h3 id="tr-ch" className="tr-h3">
-          {against
-            ? `What changed between ${pointTime(against)} (baseline) and ${pointTime(point)}`
-            : before
-              ? `What changed since ${pointTime(before)}`
-              : 'The first execution in this view'}
-        </h3>
-        {listed.total === 0 ? (
-          <p className="tr-faint">
-            {against || before
-              ? 'Nothing recorded changed: same iii, stack, workers and test definitions.'
-              : 'There is nothing before it to compare with.'}
-          </p>
-        ) : (
-          <ul className="tr-changes">
-            {listed.shown.map((change) => (
-              <li
-                key={`${change.kind}:${change.name}`}
-                data-change={change.kind}
-              >
-                <span className="tr-change-head">
-                  <span
-                    className="tr-change-dot"
-                    data-major={change.major}
-                    aria-hidden="true"
-                  />
-                  <span className="tr-mono tr-strong">{change.name}</span>
-                  <span className="tr-faint">
-                    {CHANGE_KIND_TEXT[change.kind]}
+      {changes === null ? null : (
+        <section className="tr-panel-section" aria-labelledby="tr-ch">
+          <h3 id="tr-ch" className="tr-h3">
+            {against
+              ? `What changed between ${pointTime(against)} (baseline) and ${pointTime(point)}`
+              : before
+                ? `What changed since ${pointTime(before)}`
+                : 'The first execution in this view'}
+          </h3>
+          {listed.total === 0 ? (
+            <p className="tr-faint">
+              {against || before
+                ? 'Nothing recorded changed: same iii, stack, workers and test definitions.'
+                : 'There is nothing before it to compare with.'}
+            </p>
+          ) : (
+            <ul className="tr-changes">
+              {listed.shown.map((change) => (
+                <li
+                  key={`${change.kind}:${change.name}`}
+                  data-change={change.kind}
+                >
+                  <span className="tr-change-head">
+                    <span
+                      className="tr-change-dot"
+                      data-major={change.major}
+                      aria-hidden="true"
+                    />
+                    <span className="tr-mono tr-strong">{change.name}</span>
+                    <span className="tr-faint">
+                      {CHANGE_KIND_TEXT[change.kind]}
+                    </span>
                   </span>
-                </span>
-                <span className="tr-mono tr-small tr-wrap">{change.text}</span>
-                <CommitsLink
-                  change={change}
-                  lookup={
-                    change.compare
-                      ? lookups[compareKey(change.compare)]
-                      : undefined
-                  }
-                />
-                {change.note ? (
-                  <span className="tr-faint">{change.note}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-        {listed.hidden > 0 || showAll ? (
-          <button
-            type="button"
-            className={buttonClassName({ variant: 'quiet', size: 'compact' })}
-            aria-expanded={showAll}
-            onClick={() => setUnfolded(showAll ? null : referenceId)}
-          >
-            {showAll ? 'Show fewer' : `Show ${listed.hidden} more`}
-          </button>
-        ) : null}
-      </section>
-      {group ? (
+                  <span className="tr-mono tr-small tr-wrap">
+                    {change.text}
+                  </span>
+                  <CommitsLink
+                    change={change}
+                    lookup={
+                      change.compare
+                        ? lookups[compareKey(change.compare)]
+                        : undefined
+                    }
+                  />
+                  {change.note ? (
+                    <span className="tr-faint">{change.note}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {listed.hidden > 0 || showAll ? (
+            <button
+              type="button"
+              className={buttonClassName({ variant: 'quiet', size: 'compact' })}
+              aria-expanded={showAll}
+              onClick={() => setUnfolded(showAll ? null : referenceId)}
+            >
+              {showAll ? 'Show fewer' : `Show ${listed.hidden} more`}
+            </button>
+          ) : null}
+        </section>
+      )}
+      {group && group.members.length > 0 ? (
         <section className="tr-panel-section" aria-labelledby="tr-mb">
           <h3 id="tr-mb" className="tr-h3">
             Its executions
@@ -353,7 +373,7 @@ export function PointPanel({
                 : 'Measures'}
           </h3>
           <dl className="tr-measures">
-            {TREND_METRICS.map((metric) => {
+            {metrics.map((metric) => {
               const value = metric.value(point)
               return (
                 <div key={metric.id}>
@@ -375,6 +395,7 @@ export function PointPanel({
           </dl>
         </section>
       ) : null}
+      {children}
       <p className="tr-mono tr-small tr-faint-ink tr-wrap">
         {group ? 'Its last execution: ' : null}
         {versionsText(point)}
@@ -419,7 +440,7 @@ export function PointPanel({
             {...pointInvestigation(points, reference, index)}
           />
         ) : null}
-        {counted(point) ? (
+        {counted(point) && onBaseline ? (
           <button
             type="button"
             className={buttonClassName({ variant: 'secondary' })}

@@ -14,6 +14,7 @@ import {
   roomyMarks,
   segments,
   slotX,
+  sourceText,
   type TrendChange,
   type TrendMetric,
   type TrendPoint,
@@ -49,7 +50,7 @@ export function DeltaPill({
 }
 
 /** Which way the measure is better, with its arrow. */
-function Direction({ better }: { better: TrendMetric['better'] }) {
+export function Direction({ better }: { better: TrendMetric['better'] }) {
   if (better === 'neither') return null
   const Arrow = better === 'higher' ? ArrowUp : ArrowDown
   return (
@@ -117,14 +118,18 @@ const BASELINE_LABEL = { w: 60, h: 16 }
 /** The plot: one step per execution, a line through the counted ones (faint
  *  across those without), dashed where something major changed, a solid
  *  rule on the picked one and a heavier one on the baseline. The large plot
- *  carries the lane of diamonds and its points are buttons. */
-function Plot({
+ *  carries the lane of diamonds and its points are buttons. A local or
+ *  Docker execution is a hollow ring the line leaves out, unless the view
+ *  holds nothing else. */
+export function Plot({
   metric,
   points,
   changes,
   selected,
   baseline,
   height,
+  latest = -1,
+  step,
   onPick,
 }: {
   metric: TrendMetric
@@ -133,6 +138,10 @@ function Plot({
   selected: number
   baseline: number
   height: number
+  /** The point to highlight, -1 for none. */
+  latest?: number
+  /** What a point's label adds after its value. */
+  step?: (index: number) => string | null
   /** Only the large chart picks. */
   onPick?: (index: number) => void
 }) {
@@ -143,6 +152,12 @@ function Plot({
   const plotW = Math.max(40, width - g.gutter - g.right)
   const bottom = g.top + plotH
   const values = points.map((point) => metric.value(point))
+  const ring = (point: TrendPoint) =>
+    point.source.kind === 'github' ? undefined : point.source.kind
+  // The line joins the rings only in a view of nothing else.
+  const offLine = points.some((point) => !ring(point))
+    ? (index: number) => Boolean(ring(points[index]))
+    : undefined
   const known = values.filter((value): value is number => value !== null)
   if (known.length === 0)
     return <div ref={ref} className="tr-plot" style={{ height }} />
@@ -221,7 +236,7 @@ function Plot({
             y2={bottom}
           />
         ) : null}
-        {segments(values).map((segment) => (
+        {segments(values, offLine).map((segment) => (
           <line
             key={segment.from}
             className="tr-line"
@@ -248,19 +263,22 @@ function Plot({
             </text>
           </g>
         ) : null}
-        {roomyMarks(axisMarks(points), (mark) => xAt(mark.index), 56).map(
-          (mark) => (
-            <text
-              key={mark.index}
-              className="tr-axis"
-              x={xAt(mark.index)}
-              y={bottom + 15}
-              textAnchor="middle"
-            >
-              {mark.text}
-            </text>
-          ),
-        )}
+        {roomyMarks(
+          // A local ring between releases has no mark to make room for.
+          axisMarks(points).filter((mark) => mark.text),
+          (mark) => xAt(mark.index),
+          56,
+        ).map((mark) => (
+          <text
+            key={mark.index}
+            className="tr-axis"
+            x={xAt(mark.index)}
+            y={bottom + 15}
+            textAnchor="middle"
+          >
+            {mark.text}
+          </text>
+        ))}
         {lane.map((item) =>
           item.label ? (
             <text
@@ -293,6 +311,7 @@ function Plot({
                 <circle
                   key={point.execution_id}
                   className="tr-dot"
+                  data-source={ring(point)}
                   data-selected={picked || undefined}
                   cx={xAt(index)}
                   cy={yAt(value)}
@@ -321,12 +340,18 @@ function Plot({
             // Only an execution without a counted run gets the cross; one
             // that counted but did not measure this leaves a gap.
             if (value === null && counted(point)) return null
-            const label = `${pointTime(point)} · ${metric.label} ${value === null ? 'no counted run' : metric.figure(value, point)}`
+            const where = ring(point)
+              ? ` · ${sourceText(point)}${point.label ? ` · ${point.label}` : ''}`
+              : ''
+            const after = step?.(index)
+            const label = `${pointTime(point)}${where} · ${metric.label} ${value === null ? 'no counted run' : metric.figure(value, point)}${after ? ` · ${after}` : ''}`
             return (
               <button
                 key={point.execution_id}
                 type="button"
                 className={value === null ? 'tr-missed' : 'tr-point'}
+                data-source={value === null ? undefined : ring(point)}
+                data-latest={index === latest || undefined}
                 data-selected={index === selected || undefined}
                 aria-pressed={index === selected}
                 aria-label={label}

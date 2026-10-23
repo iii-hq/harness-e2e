@@ -268,6 +268,15 @@
   background: var(--color-panel-raised);
 }
 
+/* A local run as the chart draws it: a hollow ring. */
+.tr-legend-ring {
+  width: calc(var(--spacing) * 2.5);
+  height: calc(var(--spacing) * 2.5);
+  border: 1.5px solid var(--color-ink-faint);
+  border-radius: 50%;
+  background: var(--color-panel-raised);
+}
+
 .tr-summary {
   display: flex;
   flex-direction: column;
@@ -339,6 +348,65 @@
 
 .tr-top[data-panel] {
   grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 90);
+}
+
+/* The release overview: the verdict, the metric tabs, the release line and
+   its callout, the legend, the CI runs outside Release Control and the
+   disclosures. */
+.tr-overview {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3.5);
+}
+
+.tr-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+}
+
+.tr-verdict p {
+  margin: 0;
+}
+
+.tr-verdict-head,
+.tr-tabs,
+.tr-outside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+}
+
+.tr-verdict-line {
+  font-size: var(--ds-text-md, 0.875rem);
+  line-height: calc(var(--spacing) * 7);
+}
+
+.tr-move {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.tr-control[data-active] {
+  background: var(--color-surface-selected);
+}
+
+.tr-callout .tr-measures > div {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.tr-outside {
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+}
+
+.tr-outside .tr-link {
+  margin-left: auto;
 }
 
 .tr-big {
@@ -469,6 +537,12 @@
   fill: var(--color-ink);
 }
 
+.tr-dot[data-source] {
+  fill: var(--color-panel-raised);
+  stroke: var(--color-ink-faint);
+  stroke-width: 1.5;
+}
+
 .tr-miss-mark {
   stroke: var(--ds-danger-text);
   stroke-linecap: round;
@@ -501,6 +575,18 @@
 
 .tr-point[data-selected] {
   background: var(--color-ink);
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+/* A local or Docker run: hollow, picked or not. */
+.tr-point[data-source],
+.tr-point[data-source][data-selected] {
+  border: 1.5px solid var(--color-ink-faint);
+  background: var(--color-panel-raised);
+}
+
+.tr-point[data-latest] {
   outline: 2px solid var(--color-ink);
   outline-offset: 2px;
 }

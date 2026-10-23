@@ -1060,7 +1060,8 @@ export function majorsFirst(changes: TrendChange[]) {
 /* ---------------------------------------------------------------- axes */
 
 /** The value axis: scores around what was scored, tests from 0 to the
- *  plan, the error rate from 0, anything else padded by 30% of its span. */
+ *  plan (a share of them from 0 to 100), the error rate from 0, anything
+ *  else padded by 30% of its span. */
 export function domain(
   metric: TrendMetric,
   values: number[],
@@ -1074,9 +1075,12 @@ export function domain(
     if (hi - lo < 4) lo = Math.max(0, hi - 4)
   } else if (metric.id === 'completed') {
     // `planned` counts runs (planned tests × runs per test), as `completed`
-    // does; the plan's test list does not.
+    // does; the plan's test list does not. A share runs to 100.
     lo = 0
-    hi = Math.max(hi, ...points.map((point) => point.measures?.planned ?? 0))
+    hi =
+      metric.delta === 'tests'
+        ? Math.max(hi, ...points.map((point) => point.measures?.planned ?? 0))
+        : 100
   } else if (metric.id === 'error_rate') {
     lo = 0
     hi = Math.max(1, Math.ceil(hi * 1.25))
@@ -1134,12 +1138,17 @@ export type ChartSegment = {
   faded: boolean
 }
 
-/** The line between consecutive points with a value. */
-export function segments(values: Array<number | null>): ChartSegment[] {
+/** The line between consecutive points with a value; a skipped point is
+ *  left out without fading the line across it. */
+export function segments(
+  values: Array<number | null>,
+  skip?: (index: number) => boolean,
+): ChartSegment[] {
   const out: ChartSegment[] = []
   let last = -1
   let gap = false
   values.forEach((value, index) => {
+    if (skip?.(index)) return
     if (value === null) {
       gap = true
       return

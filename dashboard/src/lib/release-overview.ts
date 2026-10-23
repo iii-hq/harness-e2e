@@ -6,10 +6,13 @@
 
 import { deltaDirection, deltaTone } from '@/design-system'
 import {
+  ANY,
+  deltaFormat,
   deltaOf,
   profileText,
   seriesText,
   stackOptionText,
+  type TrendChange,
   type TrendMeasures,
   type TrendMetric,
   type TrendMetricId,
@@ -241,6 +244,122 @@ export function verdictSummary(
   return latest_aggregate && previous_aggregate
     ? moves(latest_aggregate, previous_aggregate, metrics)
     : { better: [], worse: [], same: [] }
+}
+
+/* ------------------------------------------------------------- timeline */
+
+export type Timeline = {
+  points: OverviewPoint[]
+  /** What joined or left at each point; none at a local run. */
+  changes: TrendChange[][]
+  /** The latest release's point; -1 without one. */
+  latest: number
+}
+
+const UNPLACED = {
+  provider: ANY,
+  model: ANY,
+  profile: null,
+  stack: { name: null, matched_by_workers: false },
+  planned: null,
+  reason: null,
+  tests: [],
+} satisfies Partial<TrendPoint>
+
+function releasePoint(release: ReleasePoint): OverviewPoint {
+  const text = releaseText(release.release)
+  return {
+    ...UNPLACED,
+    execution_id: `release:${release.release}`,
+    label: null,
+    started_at: release.first_started_at,
+    source: { kind: 'github' },
+    engine: release.engine,
+    workers: release.workers,
+    runs: release.executions.length,
+    counted: release.executions.length,
+    measures: release.aggregate?.measures ?? null,
+    group: { by: 'release', key: text, label: text, members: [], mixed: [] },
+    aggregate: release.aggregate,
+    step: release.step,
+  }
+}
+
+function localPoint(local: LocalMark, measures: TrendMeasures): OverviewPoint {
+  return {
+    ...UNPLACED,
+    execution_id: local.execution_id,
+    label: `${local.suite_label} · ${local.ran ? `ran harness ${local.ran}` : 'Harness version not recorded'}`,
+    started_at: local.started_at,
+    source: { kind: local.role === 'docker' ? 'docker' : 'local' },
+    engine: null,
+    workers: local.ran ? { harness: local.ran } : null,
+    runs: 1,
+    counted: 1,
+    measures,
+    aggregate: aggregateOf(measures),
+    step: null,
+  }
+}
+
+/** A combination that joined or left at a release, as the chart marks a
+ *  change of its tests. */
+const mixChange =
+  (text: 'joined' | 'left') =>
+  (combination: Combination): TrendChange => ({
+    kind: 'tests',
+    major: true,
+    name: combinationText(combination),
+    text,
+    note: null,
+    compare: null,
+  })
+
+/** The release line: each release, then the measured local runs that ran
+ *  with it, oldest first. */
+export function timeline(overview: ReleaseOverview): Timeline {
+  const points: OverviewPoint[] = []
+  const changes: TrendChange[][] = []
+  // shortcut: a local whose release has no Release Control point is left out; place it by semver when that shows up
+  for (const release of overview.releases) {
+    points.push(releasePoint(release))
+    changes.push([
+      ...release.joined.map(mixChange('joined')),
+      ...release.left.map(mixChange('left')),
+    ])
+    for (const local of overview.locals)
+      if (local.release === release.release && local.measures) {
+        points.push(localPoint(local, local.measures))
+        changes.push([])
+      }
+  }
+  const latest =
+    overview.verdict?.latest ?? overview.releases.at(-1)?.release ?? null
+  return {
+    points,
+    changes,
+    latest: points.findIndex(
+      (point) => point.execution_id === `release:${latest}`,
+    ),
+  }
+}
+
+/** A release's step on a measure, as its point says it: `−2.3 vs v1.8.35`;
+ *  null without a step or a value on either side. */
+export function stepText(metric: TrendMetric, point: OverviewPoint) {
+  const { step } = point
+  if (!step) return null
+  const delta = aggregateDelta(
+    metric,
+    step.latest_aggregate,
+    step.previous_aggregate,
+  )
+  if (delta === null) return null
+  const text =
+    delta === 0
+      ? 'no change'
+      : `${delta > 0 ? '+' : '−'}${deltaFormat(overviewMetric(metric))(Math.abs(delta))}`
+  return `${text} vs ${releaseText(step.previous)}`
 }
 
 /* ---------------------------------------------------------------- scope */

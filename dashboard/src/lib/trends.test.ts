@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { pointInvestigation } from '@/components/trends/PointPanel'
+import { overviewMetric } from '@/lib/release-overview'
 import {
   axisMarks,
   baseFromParams,
@@ -671,6 +672,23 @@ describe('axes', () => {
       { from: 0, to: 3, faded: true },
       { from: 3, to: 4, faded: false },
     ])
+  })
+
+  it('leaves skipped points out of the line without fading it', () => {
+    expect(segments([1, 2, 3, 4], (i) => i === 1 || i === 2)).toEqual([
+      { from: 0, to: 3, faded: false },
+    ])
+    expect(segments([1, null, 3, 4], (i) => i === 3)).toEqual([
+      { from: 0, to: 2, faded: true },
+    ])
+  })
+
+  it('draws a share of completed runs from 0 to 100, whatever the plan', () => {
+    expect(
+      domain(overviewMetric(trendMetric('completed')), [88.9, 100], [
+        { measures: { planned: 150 } },
+      ] as unknown as TrendPoint[]),
+    ).toEqual([0, 100])
   })
 })
 
