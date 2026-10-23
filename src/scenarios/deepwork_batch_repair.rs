@@ -748,6 +748,23 @@ async fn collect(context: &E2eContext, observation: &ScenarioObservation, run_id
             known.push(json!({ "commit": commit, "exists": exists }));
         }
         batch["verified_commits"] = json!(known);
+        // The verdicts the batch lead graded the cards from.
+        let scope = batch["batch"]["check_from"]["scope"]
+            .as_str()
+            .map(str::to_string);
+        let keys: Vec<String> = batch["batch"]["check_from"]["keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|key| key.as_str().map(str::to_string))
+            .collect();
+        if let Some(scope) = scope {
+            let mut verdicts = serde_json::Map::new();
+            for key in keys {
+                verdicts.insert(key.clone(), state_get(context, &scope, &key).await);
+            }
+            batch["check_verdicts"] = Value::Object(verdicts);
+        }
     }
     evidence
 }
