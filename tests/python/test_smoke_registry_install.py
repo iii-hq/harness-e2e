@@ -1,15 +1,18 @@
-"""A Registry outage turns the packaged install smoke into a warning."""
+"""Registry install topology and outage handling."""
 import contextlib
 import http.server
 import importlib.util
 import io
+import json
 import pathlib
 import socket
 import tempfile
 import threading
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import yaml
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "scripts/smoke_registry_install.py"
 spec = importlib.util.spec_from_file_location("smoke_registry_install", SCRIPT)
@@ -91,6 +94,54 @@ class RegistryOutageTest(unittest.TestCase):
             "http://127.0.0.1:41234/candidate.tar.gz")))
         self.assertTrue(module.registry_outage('Error: {"code": "REGISTRY_UNREACHABLE"}'))
         self.assertFalse(module.registry_outage('Error: {"code": "PACKAGE_DIGEST_MISMATCH"}'))
+
+
+class RegistryTopologyTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = pathlib.Path(temporary.name)
+        self.binary = self.root / "harness-e2e"
+        self.binary.write_text("candidate")
+
+    def test_engine_nodes_are_preserved_but_not_installed(self):
+        resolved = {
+            "graph": [
+                {"name": "harness-e2e", "version": "9.9.9", "type": "binary",
+                 "binaries": {"x": {"url": "https://example/harness"}}, "config": {}},
+                {"name": "database", "version": "1.0.0", "type": "binary",
+                 "binaries": {"x": {"url": "https://example/database"}}, "config": {}},
+                {"name": "shared-engine", "version": "1.0.0", "type": "engine", "config": {}},
+            ],
+            "edges": [
+                {"from": "harness-e2e", "to": "database"},
+                {"from": "harness-e2e", "to": "shared-engine"},
+            ],
+        }
+        with patch.object(module, "resolve", return_value=resolved), \
+                patch.object(module.subprocess, "check_output", return_value='{"version":"2.0.0","supported_targets":["x"]}'), \
+                patch.object(module.subprocess, "Popen", side_effect=RuntimeError("stop before engine start")):
+            with self.assertRaisesRegex(RuntimeError, "stop before engine start"):
+                module.run(self.binary, self.root / "smoke")
+
+        directory = self.root / "smoke"
+        self.assertEqual(json.loads((directory / "registry-resolution.json").read_text()), resolved)
+        compose = yaml.safe_load((directory / "worker-compose.yaml").read_text())["containers"]
+        lock = yaml.safe_load((directory / "worker-compose.lock").read_text())["containers"]
+        self.assertEqual(set(compose), {"harness-e2e", "sql-service"})
+        self.assertEqual(set(lock), {"harness-e2e", "sql-service"})
+        self.assertEqual(compose["harness-e2e"]["start_after"], ["sql-service"])
+
+    def test_binary_without_artifacts_still_fails(self):
+        resolved = {"graph": [{"name": "harness-e2e", "version": "1.0.0", "type": "binary",
+                                "config": {}}], "edges": []}
+        server, thread = Mock(server_port=1), Mock()
+        with patch.object(module, "resolve", return_value=resolved), \
+                patch.object(module.subprocess, "check_output", return_value='{"version":"2.0.0","supported_targets":["x"]}'), \
+                patch.object(module.http.server, "ThreadingHTTPServer", return_value=server), \
+                patch.object(module.threading, "Thread", return_value=thread):
+            with self.assertRaisesRegex(KeyError, "binaries"):
+                module.run(self.binary, self.root / "invalid")
 
 
 if __name__ == "__main__":
