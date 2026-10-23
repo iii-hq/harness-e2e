@@ -42,6 +42,8 @@ const SCHEMA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS local_stacks (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS saved_plan_executions_started_idx ON saved_plan_executions(started_at DESC)",
+    // shortcut: salvage keeps no tombstone when this layout moves, add one to `salvage` before changing it.
+    "CREATE TABLE IF NOT EXISTS deleted_imports (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL)",
 ];
 
 const STORAGE_TABLE: &str = "harness_e2e_storage";
@@ -502,9 +504,29 @@ impl Persistence {
         self.transaction(vec![saved_execution_statement(execution)?])
             .await
     }
-    pub(crate) async fn delete_execution_receipt(&self, id: &str) -> Result<()> {
+    /// Delete an execution's receipt; with `tombstone`, remember that it was
+    /// deleted, so an import does not bring it back on its own.
+    pub(crate) async fn delete_execution_receipt(&self, id: &str, tombstone: bool) -> Result<()> {
+        let mut statements = Vec::new();
+        if tombstone {
+            statements.push(json!({"sql": "INSERT INTO deleted_imports(id, deleted_at) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET deleted_at=excluded.deleted_at", "params": [id, chrono::Utc::now().to_rfc3339()]}));
+        }
+        statements
+            .push(json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}));
+        self.transaction(statements).await
+    }
+    pub(crate) async fn import_deleted(&self, id: &str) -> Result<bool> {
+        Ok(!self
+            .query(
+                "SELECT id, deleted_at FROM deleted_imports WHERE id = ?",
+                json!([id]),
+            )
+            .await?
+            .is_empty())
+    }
+    pub(crate) async fn clear_deleted_import(&self, id: &str) -> Result<()> {
         self.transaction(vec![
-            json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}),
+            json!({"sql": "DELETE FROM deleted_imports WHERE id = ?", "params": [id]}),
         ])
         .await
     }
@@ -1017,7 +1039,12 @@ pub(crate) mod tests {
         params: &Value,
     ) -> Result<Vec<Value>, String> {
         let unexpected = || format!("unexpected statement: {sql}");
-        if let Some(rest) = sql.strip_prefix("SELECT id, payload_json, payload_sha256 FROM ") {
+        // Any column list but `*` reads whole rows.
+        if let Some((_, rest)) = sql
+            .strip_prefix("SELECT ")
+            .and_then(|rest| rest.split_once(" FROM "))
+            .filter(|(columns, _)| *columns != "*")
+        {
             let (table, clause) = rest.split_once(' ').ok_or_else(unexpected)?;
             let mut found = rows.get(table).cloned().unwrap_or_default();
             if clause == "WHERE id = ?" {

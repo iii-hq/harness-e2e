@@ -582,7 +582,12 @@ again offers as recorded), the workers each group resolved and observed, and
 its GitHub origin. Contracts from before the workflow stated its execution (plan and
 profile only) import too. A group that left only `failure.json` is kept as a slot with
 that error. Importing a run again replaces the runs of the earlier import; the
-execution keeps its name. Imported and local executions are the same record:
+execution keeps its name.
+A run GitHub ended other than `success` (cancelled, failed) imports as
+`interrupted`, with `The GitHub run ended <conclusion>.`, as an execution
+started from here does. Deleting an imported execution remembers its run, so
+the worker does not import it again on its own; **Import** of that run does,
+and forgets the delete. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
 
 ### Run in Docker

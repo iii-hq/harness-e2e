@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use super::docker::dispatch_suite;
-use super::github::import_id;
+use super::github::{import_id, stopped_by};
 use super::{now, sequential_groups, ExecutionSource, PlanExecution, PlanStore, Rerun};
 use crate::plans::stacks;
 use crate::test_plan::MasterPlan;
@@ -67,7 +67,7 @@ impl GithubFollow {
 
 /// Followed on GitHub by this worker (started here, or a job re-run): its
 /// page follows the run until it ends and the worker imports it.
-pub(super) fn github_started(execution: &PlanExecution) -> bool {
+pub(crate) fn github_started(execution: &PlanExecution) -> bool {
     match &execution.source {
         ExecutionSource::Github { follow, .. } => {
             follow.followed || execution.idempotency_key.starts_with(KEY_PREFIX)
@@ -240,6 +240,9 @@ impl PlanStore {
             url,
             release_control_execution_id: None,
             stack: None,
+            run_updated_at: None,
+            sync_attempts: 0,
+            conclusion: None,
             status: Some("queued".into()),
             follow: GithubFollow {
                 followed: true,
@@ -363,10 +366,10 @@ impl PlanStore {
             }
             tokio::time::sleep(self.github.follow_interval).await;
         };
-        let stopped = conclusion
-            .filter(|conclusion| conclusion != "success")
-            .map(|conclusion| format!("The GitHub run ended {conclusion}."));
-        if let Err(error) = self.download_and_install(id, stopped).await {
+        if let Err(error) = self
+            .download_and_install(id, stopped_by(conclusion.as_deref()))
+            .await
+        {
             tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "GitHub import failed");
             let _guard = self.lock.lock().await;
             let mut execution = self.read_execution(id).await?;
