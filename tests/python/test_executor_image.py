@@ -423,6 +423,8 @@ class ExecutorTests(unittest.TestCase):
             f"prepare commits {contract_dir} --cache-dir target/worker-builds",
             f"prepare runner {contract_dir}",
             "runner test-plan materialize --profile pr",
+            # Cut down to the slots the dispatch re-runs, when it names some.
+            f"prepare slots {contract_dir}",
             f"prepare contracts {contract_dir} --execution-key 42 --oidc-audience release-control-harness-e2e",
             f"group target/harness-e2e-contract/contracts/pr-r01.json case-minimal-path 1 {assembly}/attempt-1",
             f"group target/harness-e2e-contract/contracts/pr-r01.json case-minimal-path 1 {assembly}/attempt-2",

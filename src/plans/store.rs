@@ -27,13 +27,13 @@ use crate::test_plan::{self, ProfileSnapshot};
 mod docker;
 mod github;
 mod github_start;
-use github_start::github_started;
-pub(crate) use github_start::GithubFollow;
+pub(crate) use github_start::{github_started, GithubFollow};
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
 pub(crate) use github::{
-    GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest, VersionCompareRequest,
+    import_id, rate_limited, GithubRunContractsRequest, GithubRunImportRequest,
+    GithubRunsListRequest, VersionCompareRequest,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -240,6 +240,17 @@ pub(crate) enum ExecutionSource {
         /// before contracts stated their execution.
         #[serde(default)]
         stack: Option<String>,
+        /// GitHub's `updated_at` of the run as last imported: it moves with a
+        /// new attempt.
+        #[serde(default)]
+        run_updated_at: Option<String>,
+        /// Imports of the run as GitHub last updated it that failed, rate
+        /// limits aside; a new update starts again from 0.
+        #[serde(default)]
+        sync_attempts: u32,
+        /// How GitHub concluded the run (`success`, `failure`, `cancelled`, ...).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conclusion: Option<String>,
         /// The run's status while this worker follows an execution it
         /// started there: `queued`, `in_progress`, then `completed`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -996,7 +1007,23 @@ impl PlanStore {
         if matches!(execution.source, ExecutionSource::Docker { .. }) {
             self.remove_docker_folder(id).await;
         }
-        self.persistence()?.delete_execution_receipt(id).await
+        self.persistence()?
+            .delete_execution_receipt(
+                id,
+                matches!(execution.source, ExecutionSource::Github { .. }),
+            )
+            .await
+    }
+
+    /// Whether this GitHub run's execution was deleted since it was last
+    /// imported by hand.
+    pub(crate) async fn import_deleted(&self, id: &str) -> Result<bool> {
+        self.persistence()?.import_deleted(id).await
+    }
+
+    /// Forget that this GitHub run's execution was deleted.
+    pub(crate) async fn clear_deleted_import(&self, id: &str) -> Result<()> {
+        self.persistence()?.clear_deleted_import(id).await
     }
 
     /// Name any execution; an empty label restores the default name.
@@ -2411,6 +2438,7 @@ pub(crate) mod tests {
             api_timeout: Duration::from_millis(500),
             download_timeout: Duration::from_millis(500),
             follow_interval: Duration::from_millis(10),
+            sync_interval: Duration::from_millis(10),
         }
     }
     /// The execution once finished, read under the store's lock as admission
@@ -3338,6 +3366,9 @@ pub(crate) mod tests {
                 url: "https://github.com/iii-hq/harness-e2e/actions/runs/42".into(),
                 release_control_execution_id: Some("rc-execution".into()),
                 stack: None,
+                run_updated_at: None,
+                sync_attempts: 0,
+                conclusion: None,
                 status: None,
                 follow: Default::default(),
             },
@@ -3541,6 +3572,9 @@ pub(crate) mod tests {
             url: String::new(),
             release_control_execution_id: None,
             stack: None,
+            run_updated_at: None,
+            sync_attempts: 0,
+            conclusion: None,
             status: None,
             follow: Default::default(),
         };
@@ -3554,6 +3588,236 @@ pub(crate) mod tests {
             .as_deref()
             .unwrap()
             .contains("did not finish within 500ms"));
+    }
+
+    #[tokio::test]
+    async fn a_windowed_listing_asks_for_runs_created_since_a_day_or_within_days() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let gh = fake_gh(
+            root.path(),
+            r#"echo "$*" >> "$(dirname "$0")/calls"
+printf '%s' '{"total_count":150,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · rc-1","created_at":"2026-09-20T10:00:00Z","updated_at":"2026-09-21T09:30:00Z","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/41"}]}'"#,
+        );
+        let calls = || fs::read_to_string(root.path().join("calls")).unwrap_or_default();
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+
+        let since = manager
+            .github_runs_window("o/r", "2026-07-24", 1, 100)
+            .await
+            .unwrap();
+        assert_eq!(since["runs"][0]["updated_at"], "2026-09-21T09:30:00Z");
+        assert_eq!(since["runs"][0]["run_attempt"], 2);
+        assert_eq!(
+            (&since["next_page"], &since["total_count"]),
+            (&json!(2), &json!(150))
+        );
+        let within = manager
+            .github_runs_window("o/r", "2026-07-24..2026-08-01", 2, 100)
+            .await
+            .unwrap();
+        assert_eq!(within["next_page"], Value::Null);
+        let runs = "api repos/o/r/actions/workflows/exact-stack-e2e.yml/runs?status=completed";
+        assert_eq!(
+            calls(),
+            format!(
+                "{runs}&created=%3E%3D2026-07-24&per_page=100&page=1\n{runs}&created=2026-07-24..2026-08-01&per_page=100&page=2\n"
+            )
+        );
+        // The page the Console lists carries when GitHub last updated a run too.
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        assert_eq!(listed["runs"][0]["updated_at"], "2026-09-21T09:30:00Z");
+        assert!(calls().ends_with("runs?status=completed&per_page=20&page=1\n"));
+
+        // Refused before `gh` runs.
+        for (created_from, page, per_page) in [
+            ("2026-7-24", 1, 100),
+            ("yesterday", 1, 100),
+            ("2026-07-24..", 1, 100),
+            ("2026-07-24&x=1", 1, 100),
+            ("2026-07-24", 0, 100),
+            ("2026-07-24", 1, 0),
+            ("2026-07-24", 1, 101),
+        ] {
+            assert!(
+                manager
+                    .github_runs_window("o/r", created_from, page, per_page)
+                    .await
+                    .is_err(),
+                "{created_from} page {page} per_page {per_page}"
+            );
+        }
+        assert_eq!(calls().lines().count(), 3, "{}", calls());
+    }
+
+    #[tokio::test]
+    async fn failed_imports_of_one_run_state_count_but_rate_limits_do_not() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let run = |updated_at: &str, attempt: u32| {
+            fs::write(
+                root.path().join("run.json"),
+                json!({
+                    "id": 42, "run_attempt": attempt, "display_title": "E2E · rc-1",
+                    "conclusion": "failure", "created_at": "2026-09-20T10:00:00Z",
+                    "updated_at": updated_at, "html_url": "https://github.com/o/r/actions/runs/42",
+                })
+                .to_string(),
+            )
+            .unwrap()
+        };
+        // The run answers; every other call fails, on the rate limit while
+        // `limited` exists.
+        let gh = fake_gh(
+            root.path(),
+            r#"here="$(dirname "$0")"
+case "$*" in
+  "api repos/o/r/actions/runs/42") cat "$here/run.json" ;;
+  *) if [ -f "$here/limited" ]; then
+       echo "gh: API rate limit exceeded for user ID 1. (HTTP 403)" >&2
+     else
+       echo "HTTP 502: Bad Gateway" >&2
+     fi
+     exit 1 ;;
+esac"#,
+        );
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+        let id = github::import_id("o/r", 42);
+        let synced = |execution: &PlanExecution| match &execution.source {
+            ExecutionSource::Github {
+                run_attempt,
+                run_updated_at,
+                sync_attempts,
+                conclusion,
+                ..
+            } => (
+                *run_attempt,
+                run_updated_at.clone(),
+                *sync_attempts,
+                conclusion.clone(),
+            ),
+            other => panic!("not imported from GitHub: {other:?}"),
+        };
+        async fn import_again(manager: &PlanStore, id: &str) -> PlanExecution {
+            assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
+            manager.finish_github_import(id).await.unwrap();
+            manager.read_execution(id).await.unwrap()
+        }
+
+        run("2026-09-20T11:00:00Z", 1);
+        let (begun, started) = manager.begin_github_import("o/r", 42).await.unwrap();
+        assert!(started);
+        assert_eq!(
+            synced(&begun),
+            (
+                1,
+                Some("2026-09-20T11:00:00Z".into()),
+                0,
+                Some("failure".into())
+            )
+        );
+        manager.finish_github_import(&id).await.unwrap();
+        let failed = manager.read_execution(&id).await.unwrap();
+        assert_eq!((failed.state.as_str(), synced(&failed).2), ("failed", 1));
+        let failed = import_again(&manager, &id).await;
+        assert_eq!((failed.state.as_str(), synced(&failed).2), ("failed", 2));
+
+        // A rate limit says nothing about the run: it is not counted.
+        fs::write(root.path().join("limited"), "").unwrap();
+        let limited = import_again(&manager, &id).await;
+        assert!(github::rate_limited(limited.error.as_deref().unwrap()));
+        assert_eq!(synced(&limited).2, 2);
+
+        // GitHub updated the run (a new attempt): it starts over.
+        fs::remove_file(root.path().join("limited")).unwrap();
+        run("2026-09-21T08:00:00Z", 2);
+        let (begun, started) = manager.begin_github_import("o/r", 42).await.unwrap();
+        assert!(started);
+        assert_eq!(
+            synced(&begun),
+            (
+                2,
+                Some("2026-09-21T08:00:00Z".into()),
+                0,
+                Some("failure".into())
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deleted_import_is_remembered_until_the_run_is_imported_again() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        // Every call answers with the run, so its artifacts hold no contract
+        // and each import ends failed.
+        let gh = fake_gh(
+            root.path(),
+            r#"printf '%s' '{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","html_url":"https://github.com/o/r/actions/runs/42","created_at":"2026-09-20T10:00:00Z","updated_at":"2026-09-20T11:00:00Z"}'"#,
+        );
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+        let (begun, started) = manager.begin_github_import("o/r", 42).await.unwrap();
+        assert!(started);
+        let id = begun.id;
+        manager.finish_github_import(&id).await.unwrap();
+        assert!(!manager.import_deleted(&id).await.unwrap());
+        manager.delete_execution(&id).await.unwrap();
+        assert!(manager.import_deleted(&id).await.unwrap());
+
+        // An execution not imported from GitHub leaves nothing behind.
+        let mut stub = import_stub();
+        stub.state = "completed".into();
+        manager.write_execution(&stub).await.unwrap();
+        manager.delete_execution(&stub.id).await.unwrap();
+        assert!(!manager.import_deleted(&stub.id).await.unwrap());
+
+        // An import begun anyway (a sync retry that lost the race to the
+        // delete) does not forget it.
+        assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
+        assert!(manager.import_deleted(&id).await.unwrap());
+        manager.finish_github_import(&id).await.unwrap();
+
+        manager.clear_deleted_import(&id).await.unwrap();
+        assert!(!manager.import_deleted(&id).await.unwrap());
+        assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
+    }
+
+    #[tokio::test]
+    async fn an_imported_run_github_cancelled_ends_interrupted_with_why() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let (bundle, contract, native) =
+            exact_stack_bundle(&root.path().join("fixture"), "rc:e2e:cancelled", "1.8.8");
+        // `run download 42 -R o/r -n <name> -D <destination>`.
+        let gh = fake_gh(
+            root.path(),
+            &format!(
+                r#"case "$*" in
+  "api repos/o/r/actions/runs/42") printf '%s' '{{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","conclusion":"cancelled","created_at":"2026-09-20T10:00:00Z","updated_at":"2026-09-20T11:00:00Z","html_url":"https://github.com/o/r/actions/runs/42"}}' ;;
+  "api --paginate"*) printf 'e2e-contract-rc-1-gh-1\ne2e-observation-rc-1-gh-1\n' ;;
+  "run download"*) case "$7" in
+      e2e-contract-*) cp -R '{contract}' "$9" ;;
+      *) cp -R '{bundle}' "$9" ;;
+    esac ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac"#,
+                contract = contract.display(),
+                bundle = bundle.display(),
+            ),
+        );
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+        let (begun, started) = manager.begin_github_import("o/r", 42).await.unwrap();
+        assert!(started);
+        manager.finish_github_import(&begun.id).await.unwrap();
+        let imported = manager.read_execution(&begun.id).await.unwrap();
+        assert_eq!(imported.state, "interrupted");
+        assert_eq!(
+            imported.error.as_deref(),
+            Some("The GitHub run ended cancelled.")
+        );
+        assert!(imported
+            .slots
+            .iter()
+            .any(|slot| slot.execution_id == native));
     }
 
     #[tokio::test]
@@ -3833,7 +4097,7 @@ pub(crate) mod tests {
         assert!(runner.record(&id).await.is_none());
     }
 
-    fn import_stub() -> PlanExecution {
+    pub(crate) fn import_stub() -> PlanExecution {
         PlanExecution {
             id: "plan-stub".into(),
             idempotency_key: "github:owner/repo#1".into(),
@@ -4665,6 +4929,9 @@ pub(crate) mod tests {
             url: "https://github.com/o/r/actions/runs/42".into(),
             release_control_execution_id: None,
             stack: None,
+            run_updated_at: None,
+            sync_attempts: 0,
+            conclusion: None,
             status: None,
             follow: Default::default(),
         };

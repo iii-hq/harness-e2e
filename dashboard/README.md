@@ -119,6 +119,11 @@ installs its native runs like finished local runs. An imported execution is the
 same record as one run here: the list, the report, evidence and
 `e2e::dashboard::execution-rename` treat both alike, and its origin is shown as
 text (`local` or `GitHub #<run>` with a link). `gh` errors are shown as they come.
+`e2e::dashboard::ci-sync-set` turns CI sync on or off, `ci-sync-check` checks
+GitHub now, and `ci-sync-status-get` reads its status: the phase (`off`,
+`quick`, `backfill`, `keeping_up`), whether `gh` is signed in, the last and
+next check, imported, failed and remaining runs, and a rate-limit pause. The
+status is kept in memory and filled again on the first check after a restart.
 
 Tick two executions and **compare** (`#/compare/<a>/<b>`): the first is A, the
 base. Both are read with `e2e::dashboard::execution-get` and compared the way
@@ -138,18 +143,43 @@ every series of the suite that shares the rest into one line (the answer's
 `selected` says `any` back, and each point carries its own provider, model and
 profile); the page marks a change of model or profile with a diamond. Each execution is a point measured over its
 technically valid runs only; completed runs are counted out of the planned ones
-(tests × runs per test), and a planned test with no run is `not_run`. The stack
-filter defaults to `any`, also when it names a stack the series never ran on;
+(tests × runs per test), and a planned test with no run is `not_run`. A point
+also carries the means of output, cache read, cache write and reasoning tokens,
+of cost, and of validation and technical retries (attempts beyond the first);
+a run that lacks one is left out of that mean, and the cost is null for a model
+without pricing. A run stored before trends measured these keeps them null until
+the next start reprojects it once from its native bundle; a run whose bundle is
+gone stays null, a gap in those means. The stack filter defaults to `any`, also when it names a stack the series never ran on;
 an execution that recorded no stack joins the stack whose first execution ran
 workers of the same names. `since` and `until` (RFC 3339, inclusive, on the
 start) limit the points and the stacks' counts; the series listed and the
 stack each execution joins are still read over all time. A worker is named by its commit
 (`@sha7`, `*` when dirty), else the version its compose lock resolved (on this
 harness, a concrete version its compose file pins), never the version the
-engine observed (a binary's Cargo version, which releases did not always move). `e2e::dashboard::version-compare` links
+engine observed (a binary's Cargo version, which releases did not always move). `source.role` says who ran
+the execution: `release_control` (a GitHub run Release Control started, which
+validates a release), `ci_other` (any other GitHub run), `local` or `docker`;
+`release` is the Harness's identity when it is one plain semver (a leading `v`
+removed), else null: a commit, builds joined by a comma, or none recorded. `e2e::dashboard::version-compare` links
 two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.
+
+**Release overview** (`e2e::dashboard::release-overview-get`, `{}`) is Trends'
+first screen: how each Harness release did in Release Control, over every
+execution listed whatever the filters. Only a Release Control execution that
+completed or was interrupted with counted runs enters. Each plain-semver release
+is a point, newest last (an execution whose Harness is a commit, builds joined
+by a comma or none recorded is `unversioned` and counted as such), pooled per
+combination of suite, provider, model, profile and stack; a re-run id counts
+its latest attempt. Each point is read against the one before it (the latest
+pair is the `verdict`) over the combinations both ran and, within them, the
+tests whose `behavior_sha256` matches; what one ran and the other did not is
+listed as joined, left or left out. Means, the Completed share and the error
+rate give every combination the same weight however often it ran; counts are
+summed. A local or Docker execution sits beside its release (the Harness it
+ran, else the release current when it started) and never counts; other CI runs
+are only counted, as `outside_release_control`.
 
 **Group by** (`&group=day|release` in the hash) draws one point per day, on the
 reader's clock, or per Harness release, in the order they first ran, instead of

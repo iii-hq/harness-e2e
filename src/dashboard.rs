@@ -1,7 +1,9 @@
 mod assessment_projection;
 mod bus;
+mod ci_sync;
 mod controller;
 mod live_progress;
+mod overview;
 mod plan_projection;
 pub(crate) mod presenter;
 pub(crate) mod read_model;

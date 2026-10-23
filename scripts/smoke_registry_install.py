@@ -70,6 +70,13 @@ def resolve(registry):
         raise RegistryUnavailable(f"{registry}/resolve: {error!r}") from error
 
 
+def binary_workers(resolved):
+    """The resolved workers Compose installs. An engine worker (such as
+    `configuration`) runs inside the Engine this smoke configures and has no
+    package to install."""
+    return [worker for worker in resolved["graph"] if worker.get("type") != "engine"]
+
+
 def run(binary, directory, registry=REGISTRY):
     directory.mkdir(parents=True, exist_ok=True)
     directory = directory.resolve()
@@ -104,11 +111,7 @@ def run(binary, directory, registry=REGISTRY):
     processes = []
     compose = directory / "worker-compose.yaml"
     containers, lock = {}, {}
-    engine_names = {worker["name"] for worker in resolved["graph"]
-                    if worker.get("type") == "engine"}
-    for worker in resolved["graph"]:
-        if worker.get("type") == "engine":
-            continue
+    for worker in binary_workers(resolved):
         name = DATABASE if worker["name"] == "database" else worker["name"]
         version = manifest["version"] if name == "harness-e2e" else worker["version"]
         reference = "package://api.workers.iii.dev/" + worker["name"]
@@ -124,8 +127,7 @@ def run(binary, directory, registry=REGISTRY):
             containers[name]["config_override"] = {"data_dir": str(directory / "evidence")}
             containers[name]["start_after"] = [
                 DATABASE if edge["to"] == "database" else edge["to"]
-                for edge in resolved["edges"]
-                if edge["from"] == "harness-e2e" and edge["to"] not in engine_names
+                for edge in resolved["edges"] if edge["from"] == "harness-e2e"
             ]
         elif name == DATABASE:
             containers[name]["config_name"] = CONFIG
