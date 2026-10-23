@@ -462,6 +462,7 @@
         "performance_regression",
         "browser_cross_site",
         "release_train_recovery",
+        "deepwork_batch_repair",
         "cross_repo_contract_migration"
       ]
     },
