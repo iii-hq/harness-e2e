@@ -18,10 +18,12 @@ import type { HeaderAction } from '@/components/shell/HeaderActions'
 import { BaselineMenu } from '@/components/trends/BaselineMenu'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { ReleaseOverview } from '@/components/trends/ReleaseOverview'
+import { SyncStatusLine } from '@/components/trends/SyncStatusLine'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
 import { VerdictHeadline } from '@/components/trends/VerdictHeadline'
 import { buttonClassName, EmptyState } from '@/design-system'
+import { useCiSync } from '@/hooks/use-ci-sync'
 import {
   hashForExecution,
   hashForTrends,
@@ -763,6 +765,7 @@ export function TrendsPage({
     void loadOverview()
   }, [load, loadOverview])
   useRunChanges(bridge, reload)
+  const sync = useCiSync(bridge)
 
   // The hash names what is on screen, once the worker said what that is.
   const viewParams = pageParams({
@@ -880,6 +883,21 @@ export function TrendsPage({
   const settled =
     (data !== null || error !== null) &&
     (overview !== null || overviewError !== null)
+  // A first screen with nothing to draw and sync off: the download is its
+  // one action, large; else the sync status sits beside the heading.
+  const offer =
+    mode === 'overview' &&
+    overview?.releases.length === 0 &&
+    sync.status?.enabled === false
+  const syncLine = (empty: boolean) => (
+    <SyncStatusLine
+      status={sync.status}
+      error={sync.error}
+      empty={empty}
+      onSet={sync.set}
+      onCheck={sync.check}
+    />
+  )
   const noneInPeriod = data !== null && points.length === 0
   const nothingCounted = !noneInPeriod && !points.some(counted)
   const days =
@@ -1186,7 +1204,10 @@ export function TrendsPage({
       ) : (
         <>
           {overview ? (
-            <VerdictHeadline overview={overview} />
+            <VerdictHeadline
+              overview={overview}
+              status={offer ? undefined : syncLine(false)}
+            />
           ) : (
             <section className="tr-verdict" aria-labelledby="tr-verdict">
               <div className="tr-verdict-head">
@@ -1232,6 +1253,7 @@ export function TrendsPage({
                   icon={<ChartLine size={24} />}
                   title="No release to draw yet"
                   description="The timeline draws the CI runs Release Control dispatched, once this worker has imported them."
+                  actions={offer ? syncLine(true) : undefined}
                 />
               }
             />

@@ -381,6 +381,42 @@
   gap: calc(var(--spacing) * 2);
 }
 
+/* CI sync's status beside the heading; the large download on an empty first
+   screen. */
+.tr-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.tr-sync[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.tr-sync-error {
+  color: var(--danger);
+}
+
+.tr-sync-empty {
+  display: grid;
+  justify-items: center;
+  gap: calc(var(--spacing) * 3);
+  max-width: calc(var(--spacing) * 100);
+  text-align: center;
+}
+
+.tr-sync-empty p {
+  margin: 0;
+}
+
+.tr-sync-empty .tr-sync-error {
+  font-size: var(--text-xs);
+}
+
 .tr-verdict-line {
   font-size: var(--ds-text-md, 0.875rem);
   line-height: calc(var(--spacing) * 7);
