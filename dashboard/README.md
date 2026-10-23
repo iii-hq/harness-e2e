@@ -118,7 +118,12 @@ an `importing` execution at once; the worker downloads the run's bundle and
 installs its native runs like finished local runs. An imported execution is the
 same record as one run here: the list, the report, evidence and
 `e2e::dashboard::execution-rename` treat both alike, and its origin is shown as
-text (`local` or `GitHub #<run>` with a link). `gh` errors are shown as they come.
+text (`This harness`, `Docker` or `GitHub #<run>` with a link, plus
+`· Release Control` when Release Control started the run). In the list,
+`&origin=release-control` or `&origin=outside-release-control` filters by it
+(the second is every other GitHub run: pull requests, runs started here, hand
+dispatches), and a failed import nothing else explains reads its error.
+`gh` errors are shown as they come.
 `e2e::dashboard::ci-sync-set` turns CI sync on or off, `ci-sync-check` checks
 GitHub now, and `ci-sync-status-get` reads its status: the phase (`off`,
 `quick`, `backfill`, `keeping_up`), whether `gh` is signed in, the last and

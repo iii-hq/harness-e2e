@@ -456,6 +456,8 @@ export type DashboardExecutionSummary = JsonObject & {
   lane?: string
   /** Execution state (`importing`, `completed`, …) of a composed execution. */
   state?: string
+  /** Why it failed, when it did and no report says. */
+  first_failure?: { kind: string; message: string } | null
   parameters?: ExecutionParameters | null
   stack?: JsonObject | StackWorker[]
   subjects: DashboardSubjectSummary[]

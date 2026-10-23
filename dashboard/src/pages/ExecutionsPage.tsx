@@ -114,18 +114,38 @@ const PAGE_SIZE = 50
 
 export type LedgerSort = 'newest' | 'oldest' | 'runtime' | 'tokens' | 'result'
 
+/** Release Control's own runs, or every other GitHub run: pull requests, runs
+ *  started here, hand dispatches. */
+export type LedgerOrigin = 'all' | 'outside_release_control' | 'release_control'
+
 export type LedgerFilters = {
   query: string
   /** `all` or a result state. */
   status: 'all' | ResultState
+  origin: LedgerOrigin
   sort: LedgerSort
 }
 
 export const LEDGER_DEFAULT_FILTERS: LedgerFilters = {
   query: '',
   status: 'all',
+  origin: 'all',
   sort: 'newest',
 }
+
+const ORIGINS: Array<{ value: LedgerOrigin; label: string; param: string }> = [
+  { value: 'all', label: 'Every origin', param: 'all' },
+  {
+    value: 'outside_release_control',
+    label: 'CI runs outside Release Control',
+    param: 'outside-release-control',
+  },
+  {
+    value: 'release_control',
+    label: 'Release Control',
+    param: 'release-control',
+  },
+]
 
 const SORTS: Array<{ value: LedgerSort; label: string }> = [
   { value: 'newest', label: 'Newest first' },
@@ -141,10 +161,12 @@ export function ledgerFiltersFromParams(
 ): LedgerFilters {
   const sort = params.get('sort')
   const status = params.get('status')
+  const origin = params.get('origin')
   return {
     query: params.get('q') ?? '',
     // Only a result the filter offers; `in` would also take `toString`.
     status: SEGMENT_ORDER.find((state) => state === status) ?? 'all',
+    origin: ORIGINS.find((entry) => entry.param === origin)?.value ?? 'all',
     sort: SORTS.find((entry) => entry.value === sort)?.value ?? 'newest',
   }
 }
@@ -153,6 +175,8 @@ export function ledgerFiltersToParams(filters: LedgerFilters): URLSearchParams {
   const params = new URLSearchParams()
   if (filters.query.trim()) params.set('q', filters.query.trim())
   if (filters.status !== 'all') params.set('status', filters.status)
+  const origin = ORIGINS.find((entry) => entry.value === filters.origin)
+  if (origin && origin.value !== 'all') params.set('origin', origin.param)
   if (filters.sort !== 'newest') params.set('sort', filters.sort)
   return params
 }
@@ -253,7 +277,11 @@ export function buildLedgerRows(
                 presentation.primaryIssue.category,
                 presentation.primaryIssue.count,
               )
-            : evidenceNote(execution)),
+            : (evidenceNote(execution) ??
+              // Nothing measured: an import that failed says why.
+              (result.state === 'failed'
+                ? (execution.first_failure?.message ?? null)
+                : null))),
       model,
       models: modelNames(presentation.subjects),
       profile,
@@ -316,11 +344,23 @@ function resultRank(row: LedgerRow) {
   return rank === -1 ? RESULT_ORDER.length : rank
 }
 
+// Only a GitHub run is either: local and Docker executions are neither.
+function matchesOrigin(row: LedgerRow, origin: LedgerOrigin) {
+  if (origin === 'all') return true
+  const source = row.execution.source
+  if (source?.kind !== 'github') return false
+  return (
+    (origin === 'release_control') ===
+    Boolean(source.release_control_execution_id)
+  )
+}
+
 export function filterLedgerRows(rows: LedgerRow[], filters: LedgerFilters) {
   const query = filters.query.trim().toLowerCase()
   const matched = rows.filter(
     (row) =>
       (filters.status === 'all' || row.result.state === filters.status) &&
+      matchesOrigin(row, filters.origin) &&
       (!query || row.searchText.includes(query)),
   )
   const time = (row: LedgerRow) => Date.parse(row.date) || 0
@@ -1548,6 +1588,13 @@ export function ExecutionsPage() {
                 </>
               ),
             }))}
+          />
+          <HostSelect
+            aria-label="Execution origin"
+            className="ex-sort"
+            value={filters.origin}
+            onChange={(value) => setFilter('origin', value)}
+            options={ORIGINS}
           />
           <HostSelect
             aria-label="Sort executions"

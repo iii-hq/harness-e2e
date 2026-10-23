@@ -321,7 +321,8 @@ export function executionResult(presentation: ExecutionPresentation): {
 }
 
 /** Where an execution came from, as text with a link when it has one. Native
- *  runs and executions started here ran on this harness. */
+ *  runs and executions started here ran on this harness; a GitHub run that
+ *  Release Control started says so. */
 export function executionOrigin(execution: DashboardExecutionSummary): {
   label: string
   href: string | null
@@ -329,7 +330,9 @@ export function executionOrigin(execution: DashboardExecutionSummary): {
   const source = objectValue(execution.source)
   if (source.kind === 'github')
     return {
-      label: `GitHub #${String(source.run_id ?? '')}`,
+      label: `GitHub #${String(source.run_id ?? '')}${
+        source.release_control_execution_id ? ' · Release Control' : ''
+      }`,
       href: stringValue(source.url) || null,
     }
   if (source.kind === 'docker') return { label: 'Docker', href: null }

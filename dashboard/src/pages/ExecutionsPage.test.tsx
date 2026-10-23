@@ -18,6 +18,7 @@ import {
   LEDGER_DEFAULT_FILTERS,
   type LedgerActions,
   LedgerEmpty,
+  type LedgerFilters,
   LedgerLoadFailure,
   type LedgerRow,
   LedgerTable,
@@ -68,6 +69,7 @@ describe('executions list filters', () => {
     expect(filters).toEqual({
       query: 'terra',
       status: 'failed',
+      origin: 'all',
       sort: 'tokens',
     })
     expect(ledgerFiltersToParams(filters).toString()).toBe(
@@ -86,6 +88,31 @@ describe('executions list filters', () => {
     expect(
       ledgerFiltersFromParams(new URLSearchParams('status=cancelled')).status,
     ).toBe('cancelled')
+  })
+
+  it('filters by origin, Release Control or the CI runs outside it', () => {
+    const origin = (value: string) =>
+      ledgerFiltersFromParams(new URLSearchParams({ origin: value })).origin
+    expect(origin('outside-release-control')).toBe('outside_release_control')
+    expect(origin('release-control')).toBe('release_control')
+    // Only a value the filter offers: not its state name, nor inherited ones.
+    for (const value of ['release_control', 'toString', 'github', ''])
+      expect(origin(value)).toBe('all')
+    expect(
+      ledgerFiltersToParams({
+        ...LEDGER_DEFAULT_FILTERS,
+        origin: 'outside_release_control',
+      }).toString(),
+    ).toBe('origin=outside-release-control')
+
+    const byOrigin = (value: LedgerFilters['origin']) =>
+      ids(filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, origin: value }))
+    expect(byOrigin('release_control')).toEqual(['plan-958b1543'])
+    expect(byOrigin('outside_release_control')).toEqual([
+      'plan-e5b0a2c4',
+      'plan-1d320744',
+    ])
+    expect(byOrigin('all')).toHaveLength(16)
   })
 
   it('searches the title, id, model, profile, origin and date', () => {
@@ -219,7 +246,7 @@ describe('executions list rows', () => {
       tokens: '85.4K',
     })
     expect(row('plan-958b1543')).toMatchObject({
-      meta: 'GitHub #35925167026 · 8:00 PM · plan-958b1543',
+      meta: 'GitHub #35925167026 · Release Control · 8:00 PM · plan-958b1543',
       result: { state: 'failed' },
       issue: '1 infrastructure event',
       model: 'deepseek/deepseek-flash',
@@ -246,6 +273,29 @@ describe('executions list rows', () => {
       runtime: '8.8s',
       tokens: '4.2K',
     })
+  })
+
+  it('says why a failed import failed when nothing else does', () => {
+    const message = 'GitHub keeps artifacts for 90 days; this run has none left'
+    const [failed] = buildLedgerRows(
+      [
+        {
+          ...ledgerExecution('plan-1d320744'),
+          status: 'failed',
+          state: 'failed',
+          assessment_summary: undefined,
+          totals: undefined,
+          first_failure: { kind: 'execution', message },
+        },
+      ],
+      LEDGER_NOW,
+    )
+    expect(failed).toMatchObject({
+      result: { state: 'failed' },
+      issue: message,
+    })
+    // What the run measured still comes first.
+    expect(row('plan-958b1543').issue).toBe('1 infrastructure event')
   })
 
   it('titles an untitled execution by its model and when it was created', () => {
