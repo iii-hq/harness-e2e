@@ -1074,43 +1074,44 @@ esac"#,
             manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
             &data,
         );
+        // Puts a bundle's native run in the data directory.
+        let place = |name: &str| {
+            let (bundle, _, id) =
+                exact_stack_bundle(&root.path().join(name), &format!("rc:e2e:{name}"), "1.8.8");
+            fs::rename(
+                bundle
+                    .join("smoke-r01/groups/case-context/native")
+                    .join(&id),
+                data.join(&id),
+            )
+            .unwrap();
+            id
+        };
+        // Held before the import, so the import's runs join a test version's.
+        let held = place("held");
         let before = controller.read_model().await.unwrap();
+        assert_eq!(before.summaries.len(), 1);
         // A run only a rebuild reads.
-        let (decoy_bundle, _, decoy) =
-            exact_stack_bundle(&root.path().join("decoy"), "rc:e2e:decoy", "1.8.8");
-        fs::rename(
-            decoy_bundle
-                .join("smoke-r01/groups/case-context/native")
-                .join(&decoy),
-            data.join(&decoy),
-        )
-        .unwrap();
+        let decoy = place("decoy");
 
         let imported = controller.sync_import("o/r", 42).await.unwrap().unwrap();
         assert_eq!(imported.state, "completed");
         let model = controller.read_model().await.unwrap();
         assert!(!Arc::ptr_eq(&model, &before));
-        let ids = model
+        let mut ids = model
             .summaries
             .iter()
             .map(|summary| summary["id"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(ids, [native.as_str()]);
+        ids.sort();
+        let mut expected = [held.as_str(), native.as_str()];
+        expected.sort();
+        assert_eq!(ids, expected);
 
         fs::remove_dir_all(data.join(&decoy)).unwrap();
         let built = DashboardReadModel::load(&data).unwrap();
-        assert_eq!(model.revision, built.revision);
-        assert_eq!(model.summaries, built.summaries);
+        assert_eq!(model.state(), built.state());
         assert_eq!(model.trend_runs(), built.trend_runs());
-        let tests = |model: &DashboardReadModel| {
-            serde_json::to_value(
-                model
-                    .tests_list(crate::dashboard::read_model::TestsListRequest::default())
-                    .unwrap(),
-            )
-            .unwrap()
-        };
-        assert_eq!(tests(&model), tests(&built));
     }
 
     /// A controller whose `gh` answers run 1 and lists its artifacts as

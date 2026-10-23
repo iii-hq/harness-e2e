@@ -546,6 +546,23 @@ impl DashboardReadModel {
         Ok(Some(model))
     }
 
+    /// Everything the model answers from but the `trend_runs` cache, for
+    /// telling two builds apart.
+    #[cfg(test)]
+    pub(crate) fn state(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                &self.revision,
+                &self.summaries,
+                &self.cohorts,
+                &self.evaluated_versions,
+                &self.tests,
+                &self.result_paths,
+            )
+        )
+    }
+
     /// `with_records` over runs read from their directories, as `load` reads
     /// them.
     #[cfg(test)]
@@ -641,7 +658,8 @@ impl DashboardReadModel {
                 .cmp(&left["started_at"].as_str())
                 .then_with(|| right["id"].as_str().cmp(&left["id"].as_str()))
         });
-        // Over the sorted summaries: the order the records come in leaves it.
+        // Over the sorted summaries, not the input order: a grown model cannot
+        // tell where `records()` (newest `requested_at` first) would list its runs.
         self.revision = artifact::sha256_value(
             &self
                 .summaries
@@ -663,6 +681,21 @@ impl DashboardReadModel {
                 continue;
             }
             self.index_projection(projection);
+        }
+        // Newest first, whatever order the runs were indexed in, so a grown
+        // model lists them as a full build does. Stable: an execution's own
+        // observations keep their order.
+        for version in self
+            .tests
+            .values_mut()
+            .flat_map(|test| test.versions.values_mut())
+        {
+            version.observations.sort_by(|left, right| {
+                right
+                    .completed_at
+                    .cmp(&left.completed_at)
+                    .then_with(|| right.execution_id.cmp(&left.execution_id))
+            });
         }
         Ok(())
     }
@@ -2353,8 +2386,8 @@ mod tests {
         let grown = base.with_records(b(), &none).unwrap().unwrap();
         // Listed in another order, as the database lists them.
         let built = DashboardReadModel::from_records([b(), a()].concat(), &none).unwrap();
-        assert_eq!(grown.revision, built.revision);
-        assert_eq!(grown.summaries, built.summaries);
+        // Every test version's observations included, whose order an answer keeps.
+        assert_eq!(grown.state(), built.state());
         let ids = grown
             .summaries
             .iter()
@@ -2363,11 +2396,6 @@ mod tests {
         assert_eq!(ids, ["b-newest", "a-new", "a-old", "b-oldest"]);
         assert_eq!(grown.trend_runs(), built.trend_runs());
         assert_eq!(grown.trend_runs().len(), 4);
-        let tests = |model: &DashboardReadModel| {
-            serde_json::to_value(model.tests_list(TestsListRequest::default()).unwrap()).unwrap()
-        };
-        assert_eq!(tests(&grown), tests(&built));
-        assert_eq!(grown.result_paths, built.result_paths);
         assert_eq!(grown.result_paths.len(), 4);
 
         let again = record("a-new", "2026-08-10T12:00:00Z");
