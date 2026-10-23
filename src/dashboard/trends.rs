@@ -229,13 +229,13 @@ pub(super) struct TrendRun {
 }
 
 /// An execution of the Console that belongs to a series.
-struct Execution<'a> {
-    summary: &'a Value,
-    id: &'a str,
-    started_at: &'a str,
-    key: TrendSeriesKey,
-    parameters: ExecutionParameters,
-    workers: Vec<StackWorker>,
+pub(super) struct Execution<'a> {
+    pub summary: &'a Value,
+    pub id: &'a str,
+    pub started_at: &'a str,
+    pub key: TrendSeriesKey,
+    pub parameters: ExecutionParameters,
+    pub workers: Vec<StackWorker>,
 }
 
 /// The trends of the requested series, from the executions the Console
@@ -246,12 +246,7 @@ pub(super) fn trends(
     summaries: &[Value],
     runs: &BTreeMap<String, Vec<TrendRun>>,
 ) -> TrendsResponse {
-    let mut children = BTreeMap::<&str, Vec<&Value>>::new();
-    for summary in summaries {
-        if let Some(parent) = summary["parent_plan_execution_id"].as_str() {
-            children.entry(parent).or_default().push(summary);
-        }
-    }
+    let children = natives(summaries);
     let mut groups = BTreeMap::<TrendSeriesKey, Vec<Execution>>::new();
     for execution in summaries.iter().filter_map(execution) {
         groups
@@ -402,9 +397,20 @@ pub(super) fn trends(
     }
 }
 
+/// The native runs the Console lists, by the execution they belong to.
+pub(super) fn natives(summaries: &[Value]) -> BTreeMap<&str, Vec<&Value>> {
+    let mut children = BTreeMap::<&str, Vec<&Value>>::new();
+    for summary in summaries {
+        if let Some(parent) = summary["parent_plan_execution_id"].as_str() {
+            children.entry(parent).or_default().push(summary);
+        }
+    }
+    children
+}
+
 /// The execution a summary lists, when it belongs to a series: an execution
 /// of the Console (not one of its native runs) that names a suite and a model.
-fn execution(summary: &Value) -> Option<Execution<'_>> {
+pub(super) fn execution(summary: &Value) -> Option<Execution<'_>> {
     if summary.get("parent_plan_execution_id").is_some() {
         return None;
     }
@@ -434,7 +440,7 @@ fn execution(summary: &Value) -> Option<Execution<'_>> {
 }
 
 /// The suite's label; an unsaved one has none and reads by its size.
-fn suite_label(execution: &Execution) -> String {
+pub(super) fn suite_label(execution: &Execution) -> String {
     let suite = execution.parameters.suite.as_ref();
     if let Some(label) = suite
         .map(|suite| &suite.label)
@@ -592,7 +598,7 @@ fn engine(execution: &Execution, natives: &[&Value]) -> Option<String> {
         })
 }
 
-fn source(summary: &Value) -> TrendSource {
+pub(super) fn source(summary: &Value) -> TrendSource {
     let source =
         serde_json::from_value::<ExecutionSource>(summary["source"].clone()).unwrap_or_default();
     let kind = |kind: &str, role| TrendSource {
@@ -629,7 +635,7 @@ fn source(summary: &Value) -> TrendSource {
     }
 }
 
-fn point(
+pub(super) fn point(
     execution: &Execution,
     stack: TrendStack,
     natives: &[&Value],
@@ -753,19 +759,19 @@ pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasur
 }
 
 /// The mean of the values present; none present is none.
-fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+pub(super) fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     let values = values.flatten().collect::<Vec<_>>();
     (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }
 
-fn sum(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+pub(super) fn sum(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     values
         .flatten()
         .fold(None, |total, value| Some(total.unwrap_or(0.0) + value))
 }
 
 /// RFC 3339 instants compare as instants, whatever their offset.
-fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
+pub(super) fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
     (
         DateTime::parse_from_rfc3339(value)
             .ok()
@@ -775,13 +781,17 @@ fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::plans::store::WorkerSource;
     use serde_json::json;
 
     /// A packaged worker as a lock that asked for `latest` records it.
-    fn worker(name: &str, resolved: Option<&str>, observed: Option<&str>) -> StackWorker {
+    pub(in crate::dashboard) fn worker(
+        name: &str,
+        resolved: Option<&str>,
+        observed: Option<&str>,
+    ) -> StackWorker {
         StackWorker {
             name: name.into(),
             source: WorkerSource::Package,
@@ -795,7 +805,12 @@ mod tests {
     }
 
     /// An execution of the Console as `execution_summaries` lists it.
-    fn listed(id: &str, at: &str, stack: Option<&str>, workers: &[&str]) -> Value {
+    pub(in crate::dashboard) fn listed(
+        id: &str,
+        at: &str,
+        stack: Option<&str>,
+        workers: &[&str],
+    ) -> Value {
         json!({
             "id": id, "label": "", "started_at": at, "source": {"kind": "local"},
             "stack": workers.iter().map(|name| worker(name, Some("1.0.0"), None)).collect::<Vec<_>>(),
@@ -808,11 +823,16 @@ mod tests {
         })
     }
 
-    fn native(id: &str, parent: &str) -> Value {
+    pub(in crate::dashboard) fn native(id: &str, parent: &str) -> Value {
         json!({"id": id, "parent_plan_execution_id": parent, "engine_version": "0.24.3"})
     }
 
-    fn run(test: &str, counted: bool, completed: bool, score: Option<f64>) -> TrendRun {
+    pub(in crate::dashboard) fn run(
+        test: &str,
+        counted: bool,
+        completed: bool,
+        score: Option<f64>,
+    ) -> TrendRun {
         TrendRun {
             test: test.into(),
             behavior_sha256: Some(format!("sha256:{test}")),
