@@ -143,6 +143,18 @@ pub trait Scenario: Send + Sync {
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         Vec::new()
     }
+    /// Extra `harness::send` `options.metadata` keys, sent on every exchange
+    /// beside the runner's own, which win on a clash. Part of the task, so it
+    /// is folded into `behavior_sha256` when non-empty.
+    fn send_metadata(&self, _run_id: &str) -> serde_json::Map<String, Value> {
+        serde_json::Map::new()
+    }
+    /// What `setup` plants before the prompt, rendered for `run_id`, when that
+    /// state is part of the task. `setup` must plant exactly this; it is folded
+    /// into `behavior_sha256` like the prompt, when `Some`.
+    fn planted_state(&self, _run_id: &str) -> Option<Value> {
+        None
+    }
     /// Called once exchange `exchange` has its answer and before the next
     /// follow-up goes out. A dialogue paced by something other than the turn
     /// (a tour card that moves on when its step closes) waits here.
@@ -666,6 +678,11 @@ pub const CONTRACT_NAMESPACE: &str = "contract";
 /// bounded, how it is scored, and the case-independent contract. Seed-specific
 /// inputs are excluded so every seed of one definition shares the digest.
 pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
+    crate::artifact::sha256_value(&behavior_definition(id, case)?)
+}
+
+/// The JSON that `behavior_sha256` hashes.
+pub(crate) fn behavior_definition(id: ScenarioId, case: &ScenarioCase) -> Result<Value> {
     let spec = id.spec(CONTRACT_NAMESPACE);
     let mut definition = serde_json::json!({
         "scenario_id": id.as_str(),
@@ -705,11 +722,18 @@ pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
     if !followups.is_empty() {
         definition["dialogue_followups"] = serde_json::json!(followups);
     }
+    let send_metadata = module.send_metadata(CONTRACT_NAMESPACE);
+    if !send_metadata.is_empty() {
+        definition["send_metadata"] = Value::Object(send_metadata);
+    }
+    if let Some(planted) = module.planted_state(CONTRACT_NAMESPACE) {
+        definition["planted_state"] = planted;
+    }
     let run_dir = std::env::var_os("HARNESS_E2E_RUN_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     without_run_dir(&mut definition, &run_dir);
-    crate::artifact::sha256_value(&definition)
+    Ok(definition)
 }
 
 /// Scenario workspaces live under the host's run directory
