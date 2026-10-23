@@ -115,8 +115,9 @@ do not report a 100-point score from the browser suite alone.
 `src/scenarios/trending_topics_build.rs` embeds only the runtime/evaluator assets,
 registers one attempt-specific execution tool, captures the independent result
 before cleanup, and maps observed B01–B10 outcomes to the contract weights.
-The subject can access that tool and function discovery only. It receives the
-public task and must clone, implement, commit and push branch `build` itself.
+The subject may use any available tools and delegate work. Native filesystem
+tools and subagents share the attempt workspace with the execution tool's
+container. The delivered application must be committed and pushed to branch `build`.
 
 Controller prerequisites are Linux amd64, Docker, Git, Python 3 and Node, plus
 read access to the pinned private fixture repository. Image preparation needs

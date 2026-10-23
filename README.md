@@ -541,12 +541,11 @@ profile adds no model pins. Harness uses the workspace filesystem boundary
 for the root and its children. These are the native build scenarios, not the
 Kanban fixture's Docker isolation.
 
-The suite reuses the existing prompts, criteria and scenario IDs. It excludes
-Kanban, Registry and trending-topics builds: their closed fixture tools do
-not support Deepwork's native shell, Kanban and delegation functions. Passing
-`profile=deepwork` alone to `software-engineering` does not make those tests
-compatible. This suite measures the plain multiagent flow, not Deepwork's Git
-worktree workflow.
+The suite reuses the existing prompts, criteria and scenario IDs for the three
+native builds. Registry and trending-topics tests in `software-engineering`
+also allow the selected profile's tools and delegation; their deliveries still
+belong in their per-attempt containers. Kanban keeps its closed fixture tool.
+This suite measures the plain multiagent flow, not Deepwork's Git worktree workflow.
 
 Stacks can declare other Registry kits with an optional `kits` list:
 
