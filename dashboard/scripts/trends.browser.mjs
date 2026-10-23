@@ -289,13 +289,14 @@ try {
   // on the host's StatusPanel and retries. The overview's own panel asked
   // for commits before: count from here.
   const compared = requests('version-compare').length
+  // The link opened afresh: a reload after landing on it would race the page
+  // pinning the hash to the series it answered.
+  failing = 1
+  const mark = requests('trends-get').length
+  await page.goto('about:blank')
   await page.goto(
     `${server.url}#/ext/harness-e2e/trends?range=30d&group=execution`,
   )
-  await summary.getByText('14 executions in the last 30 days').waitFor()
-  failing = 1
-  const mark = requests('trends-get').length
-  await page.reload()
   await page.getByRole('heading', { name: 'Trends', level: 1 }).waitFor()
   await page.getByText('Couldn’t load the trend').waitFor()
   await page.getByText('engine unavailable').waitFor()

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   comparisonOrigin,
+  currentDashboardRoute,
   hashForComparison,
   hashForExecution,
   hashForStacks,
@@ -10,6 +11,8 @@ import {
   hashForVersionComparison,
   hashForWorkspace,
   hashFrom,
+  replaceDashboardHash,
+  replaceRouteParams,
   routeFromHash,
   routeRenderIdentity,
   trendsOrigin,
@@ -199,5 +202,39 @@ describe('dashboard hash routes', () => {
     expect(routeRenderIdentity({ page: 'workspace', view: 'tests' })).toBe(
       'workspace:tests',
     )
+  })
+})
+
+describe('a page writing its view into the hash', () => {
+  it('leaves a link that landed before the route read it', () => {
+    const location = { pathname: '/', search: '', hash: hashForTrends() }
+    vi.stubGlobal('window', {
+      location,
+      history: {
+        state: null,
+        replaceState: (_state: unknown, _title: string, url: string) => {
+          location.hash = url.slice(url.indexOf('#'))
+        },
+      },
+    })
+    try {
+      currentDashboardRoute()
+      // A link lands on a series; its hashchange is still queued when the
+      // overview, a render behind, writes its own view.
+      const series = hashForTrends(new URLSearchParams({ range: '30d' }))
+      location.hash = series
+      replaceRouteParams(new URLSearchParams())
+      replaceDashboardHash(hashForTrends())
+      expect(location.hash).toBe(series)
+      // The hashchange: the route reads the link, and the page writes again.
+      currentDashboardRoute()
+      const pinned = new URLSearchParams({ suite: 'regression', range: '30d' })
+      replaceRouteParams(pinned)
+      expect(location.hash).toBe(hashForTrends(pinned))
+      replaceRouteParams(new URLSearchParams({ range: '30d' }))
+      expect(location.hash).toBe(series)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
