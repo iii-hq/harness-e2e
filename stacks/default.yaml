@@ -1,12 +1,14 @@
 # The default stack a campaign measures: where a suite runs.
 #
-# A stack is an iii Compose project plus two keys for the executor:
+# A stack is an iii Compose project plus the executor's keys:
 #
 #   iii       the iii CLI release every group installs, or `latest` for the
 #             newest release candidate of iii-hq/iii.
 #   template  optional iii-hq/templates project the groups start from,
 #             `<id>` or `<id>@<revision>`; the containers below then pin
-#             versions of the workers it declares.
+#             versions of the workers it declares and add the ones it does
+#             not.
+#   kits      optional Registry kits installed and frozen during preparation.
 #
 # The containers are the workers the stack declares. Everything else in the
 # graph — state, llm-router, iii-directory, session-manager and the rest — is a

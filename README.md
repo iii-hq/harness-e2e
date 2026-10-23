@@ -170,6 +170,12 @@ Featured suites:
   against the `linkly-agentic` scaffold's Compose stack, and scores
   twenty-two deterministic checks. The `linkly` stack starts every group from
   a fresh scaffold; `scripts/linkly_stack.py` prepares one by hand.
+- Onboarding tour: the `onboarding` suite. `onboarding_tour` takes the
+  console tour of the onboarding worker the way a new user does, as one
+  scripted dialogue under the `harness` template's Onboarding profile
+  (`ade-worker-builder`), on the `onboarding` stack: the project
+  `iii project init --learn-iii` creates. The test plays the tour page, closing each step as the page does,
+  and checks what every step left behind.
 - [Trending topics](docs/blog-build-contract.md): an isolated per-attempt Git
   remote and an independent Playwright acceptance check against the delivered
   SHA. Design is free. Screenshots are evidence, not an aesthetic score.
@@ -191,7 +197,9 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
+| Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
+| Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -235,6 +243,34 @@ The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 stack, whose template starts every group from a fresh pinned `linkly-agentic`
 scaffold as the Compose project that hosts the Harness; on another stack the
 scenario's setup refuses the project it finds.
+
+The `onboarding` suite runs the onboarding tour alone: its six prompts in
+`case-onboarding-tour`, once, with no technical retries. Run it on the
+`onboarding` stack, the `harness` template plus the tour's `onboarding`
+container as `iii project init --learn-iii` seeds it; on another stack setup
+refuses to start. The test always runs as the template's Onboarding profile,
+`ade-worker-builder`: an execution that names no profile takes it, and one that
+names another is refused. The test plays the `learn-iii` tour's card. Setup
+closes the button steps (the sign-up box is skipped, never submitted) and binds
+each other step's condition. When a condition fires, the step is closed with
+`learn-iii::steps::complete`. After the dialogue the test adds two expenses
+through the agent's expense tracker, one still to be reimbursed and one
+already reimbursed, as the tracker's page would. It listens for the tracker's
+own trigger after each and reads its totals before, between and after.
+The objectives, gates in bold: **every tour step closed**, **the database
+worker runs**, the Discoverability answer saying what each worker can do, **a new
+worker with at least two functions**, its Console page, an expense's four
+fields, a total still to be reimbursed that counts only the unreimbursed
+expense, the tracker's own trigger type, **that trigger firing for each added
+expense**, **a trigger the chat bound on it**, **the onboarding worker
+removed**, and the tour served matching the fixture. Between prompts the test
+waits, as the tour's card does, while the agent is still on a step: a turn
+running or a wake it armed, up to twenty minutes.
+[tests/fixtures/onboarding-tour/learn-iii.json](tests/fixtures/onboarding-tour/learn-iii.json)
+is the tour the test was written against. If the worker serves a different
+tour, the run loses the `tour.current` criterion and nothing else. When the
+tour changes on purpose, regenerate the fixture from the worker's
+`src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
 
 ## Release Control
 
@@ -478,6 +514,45 @@ missing fails resolution. A profile model overrides the plan model;
 subject model and the profile configuration hash. **Run again** resolves the
 same profile id in its test stack. Comparisons stay manual in Release Control.
 Omitting `profile` keeps the built-in agent.
+
+### Deepwork
+
+In Release Control, select suite **deepwork**, stack **deepwork**, and agent
+profile **deepwork-e2e**. The stack pins the published `iii/deepwork@0.4.3`
+kit. Preparation installs it through Directory, including its worker
+dependencies, before sealing the final worker lock. It freezes `kits.lock`,
+agent profiles and skills with content hashes in the execution's contract
+artifact. Every group and GitHub retry restores that snapshot instead of
+installing the kit again. A kit that still needs a decision fails preparation
+with its plan diagnostic; it does not silently continue without its profiles.
+
+`deepwork-e2e` extends the kit's `deepwork` profile with `flow=plain
+approve=off`. It delegates implementation and verification in the supplied
+attempt workspace, without an unattended approval card or a separate Git
+worktree that the evaluator would not read. The kit's original profiles stay
+unchanged. Models are inherited from the selected execution model; this
+profile adds no model pins. Harness uses the workspace filesystem boundary
+for the root and its children. These are the native build scenarios, not the
+Kanban fixture's Docker isolation.
+
+The suite reuses the existing prompts, criteria and scenario IDs. It excludes
+Kanban, Registry and trending-topics builds: their closed fixture tools do
+not support Deepwork's native shell, Kanban and delegation functions. Passing
+`profile=deepwork` alone to `software-engineering` does not make those tests
+compatible. This suite measures the plain multiagent flow, not Deepwork's Git
+worktree workflow.
+
+Stacks can declare other Registry kits with an optional `kits` list:
+
+```yaml
+kits:
+  - iii/deepwork@0.4.3
+```
+
+The selector is resolved during preparation. The resolved version, installed
+files and worker lock are held for the execution, including failed-job
+retries. Kit requirements must fit the stack's existing worker pins; a kit
+cannot silently replace the worker versions the test requested.
 
 A project template belongs to the stack and is independent of the suite and
 the agent profile:

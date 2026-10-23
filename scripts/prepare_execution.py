@@ -62,8 +62,11 @@ TEMPLATES_REPOSITORY = "iii-hq/templates"
 CONTRACT_SCHEMA = "rc-e2e/v2"
 CLI_TARGET = "x86_64-unknown-linux-gnu"
 CLI_ASSET = f"iii-{CLI_TARGET}.tar.gz"
+#: What Compose boots a VM worker with, from the CLI's own release; the
+#: installer puts them beside iii, the worker for glibc and the init static.
+CLI_COMPANIONS = (f"iii-worker-{CLI_TARGET}.tar.gz", "iii-init-x86_64-unknown-linux-musl.tar.gz")
 #: Stack keys the executor reads; the rest of a stack is the Compose project.
-EXECUTOR_KEYS = ("iii", "template")
+EXECUTOR_KEYS = ("iii", "template", "kits")
 #: The runner executing the scenarios inside the declared stack.
 RUNNER = "harness-e2e"
 #: A release candidate tag of iii-hq/iii, as Release Control's release grammar reads one.
@@ -71,6 +74,7 @@ RELEASE_CANDIDATE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.(
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 #: What a stack may write as `commit:`, short or full.
 COMMIT = re.compile(r"^[0-9a-f]{4,40}$")
+KIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?$")
 #: Where the Registry points a release: the repository it was built from.
 RELEASE_ASSET = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/")
 #: A pinned container's keys that only say where its commit is.
@@ -145,6 +149,16 @@ def compose_of(stack: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
 
 
+def stack_kits(stack: dict[str, Any]) -> list[str]:
+    """Registry kits the stack asks Directory to install natively."""
+    kits = stack.get("kits") or []
+    if not isinstance(kits, list) or any(not isinstance(kit, str) or not KIT.fullmatch(kit) for kit in kits):
+        raise ResolutionError("stack kits must be an array of <author>/<kit>[@version|tag|range]")
+    if len(kits) != len(set(kits)):
+        raise ResolutionError("stack kits must be unique")
+    return kits
+
+
 def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:
     """The execution a dispatch asks for."""
     suite = (inputs.get("suite") or "").strip()
@@ -195,19 +209,23 @@ def release_candidates(versions: list[str]) -> list[str]:
     return [version for _, version in ranked]
 
 
-def cli_release(version: str, token: str | None) -> dict[str, str] | None:
-    """iii/v<version>'s archive for the groups, with its digest; None while
-    the release publishes no such archive."""
+def cli_release(version: str, token: str | None) -> dict[str, Any] | None:
+    """iii/v<version>'s archive for the groups, with its digest and the
+    companions the release publishes; None while it publishes no archive."""
     release = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/releases/tags/iii/v{version}", token=token)
-    for asset in release.get("assets") or []:
-        if asset.get("name") == CLI_ASSET:
-            digest = asset.get("digest")
-            # The digest is what the groups check the download against.
-            if not isinstance(digest, str) or not SHA256.fullmatch(digest):
-                raise ResolutionError(f"iii/v{version} {CLI_ASSET} has no SHA-256 digest")
-            digest = digest if digest.startswith("sha256:") else f"sha256:{digest}"
-            return {"version": version, "target": CLI_TARGET, "asset": CLI_ASSET, "sha256": digest}
-    return None
+    assets = {asset.get("name"): asset for asset in release.get("assets") or []}
+    if CLI_ASSET not in assets:
+        return None
+
+    def digest(name: str) -> str:
+        value = assets[name].get("digest")
+        # The digest is what the groups check the download against.
+        if not isinstance(value, str) or not SHA256.fullmatch(value):
+            raise ResolutionError(f"iii/v{version} {name} has no SHA-256 digest")
+        return value if value.startswith("sha256:") else f"sha256:{value}"
+
+    return {"version": version, "target": CLI_TARGET, "asset": CLI_ASSET, "sha256": digest(CLI_ASSET),
+            "companions": [{"asset": name, "sha256": digest(name)} for name in CLI_COMPANIONS if name in assets]}
 
 
 def resolve_cli(selector: str, token: str | None, skipped: list[dict[str, str]] | None = None) -> dict[str, str]:
@@ -500,11 +518,16 @@ def declare_commits(containers: dict[str, Any], commits: dict[str, dict[str, Any
 def download(url: str, sha256: str, destination: Path) -> Path:
     """Fetch `url` and check it against the digest the release or lock states.
     Tried three times, as the groups' `curl --retry 3`; a digest that does not
-    match is an answer, not a blip, and is never retried."""
+    match is an answer, not a blip, and is never retried.
+
+    The Registry's CDN (Cloudflare) answers 403 to urllib's own User-Agent
+    for an artifact its edge has not cached yet, i.e. a fresh release, so
+    the request names itself."""
     destination.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": RUNNER})
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(url, timeout=300) as response:
+            with urllib.request.urlopen(request, timeout=300) as response:
                 payload = response.read()
             break
         except urllib.error.HTTPError as error:
@@ -609,6 +632,7 @@ def build_contract(
     template: dict[str, str] | None = None,
     lock: dict[str, Any] | None = None,
     commits: dict[str, dict[str, Any]] | None = None,
+    kits: list[str] | None = None,
 ) -> dict[str, Any]:
     provider, _, model = execution["model"].partition("/")
     suite = {
@@ -637,6 +661,8 @@ def build_contract(
                 "worker", "repository", "path", "commit", "on_default_branch", "dependencies", "config", "env")}
             for name, pin in commits.items()
         }
+    if kits:
+        runtime["kits"] = {"requested": kits}
     return seal(
         {
             "schema": CONTRACT_SCHEMA,
@@ -802,6 +828,7 @@ def command_contracts(args: argparse.Namespace) -> None:
             oidc_audience=args.oidc_audience,
             template=template,
             commits=execution.get("commits"),
+            kits=stack_kits(stack),
         )
         write_json(directory / "contracts" / f"{campaign['campaign_id']}.json", contract)
         for group in contract["suite"]["groups"]:
@@ -850,13 +877,36 @@ def command_lock(args: argparse.Namespace) -> None:
     compose = load_yaml((args.assembled / "worker-compose.yaml").read_text())
     lock_text = (args.assembled / "worker-compose.lock").read_text()
     lock = load_yaml(lock_text)
-    for path in contract_paths(directory):
+    paths = contract_paths(directory)
+    requested = (json.loads(paths[0].read_text())["runtime"].get("kits") or {}).get("requested") if paths else None
+    kits = None
+    kit_assets = args.assembled / "kit-assets"
+    if requested and not kit_assets.is_dir():
+        raise ResolutionError("stack kit installation produced no frozen assets")
+    if kit_assets.is_dir():
+        manifest = json.loads((kit_assets / "manifest.json").read_text())
+        kits_lock_text = (kit_assets / "kits.lock").read_text()
+        kits = {
+            "requested": requested,
+            "lock": load_yaml(kits_lock_text),
+            "lock_sha256": manifest["lock_sha256"],
+            "assets": manifest["files"],
+        }
+        destination = directory / "kit-assets"
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(kit_assets, destination)
+    for path in paths:
         contract = json.loads(path.read_text())
         contract.pop("idempotency_key", None)
         contract["runtime"].update(compose=compose, lock=lock)
+        if kits:
+            contract["runtime"]["kits"] = kits
         write_json(path, seal(contract))
     resolution = json.loads((directory / "contracts" / "resolution.json").read_text())
     resolution["stack_versions"] = stack_versions(lock)
+    if kits:
+        resolution["kits"] = kits
     write_json(directory / "contracts" / "resolution.json", resolution)
     # The stack as it ran, and its lock byte for byte, beside the contracts
     # for whoever reads the execution later.
@@ -865,6 +915,8 @@ def command_lock(args: argparse.Namespace) -> None:
     head = {"iii": execution["iii"]}
     if template:
         head["template"] = f"{template['id']}@{template['revision']}"
+    if kits:
+        head["kits"] = kits["requested"]
     (directory / "stack.yaml").write_text(yaml.safe_dump({**head, **compose}, sort_keys=False))
     (directory / "worker-compose.lock").write_text(lock_text)
 

@@ -15,6 +15,8 @@ pub(super) const ANY: &str = "any";
 /// Stack rows that are the runner and the engine, not workers of the stack.
 const RUNNER: &str = "harness-e2e";
 const ENGINE: &str = "compose";
+/// The stack row that is the Harness under test.
+pub(super) const HARNESS: &str = "harness";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub(super) struct TrendsRequest {
@@ -105,10 +107,25 @@ pub(super) struct TrendsResponse {
     pub points: Vec<TrendPoint>,
 }
 
+/// Who ran an execution, and whether it speaks for a release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TrendRole {
+    /// A GitHub run Release Control started: it validates a release.
+    ReleaseControl,
+    /// Any other GitHub run (a pull request, a manual dispatch, a schedule).
+    CiOther,
+    /// Run by this worker on the machine.
+    Local,
+    /// Run in Docker by this worker.
+    Docker,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct TrendSource {
     /// `local`, `docker` or `github`.
     pub kind: String,
+    pub role: TrendRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +157,9 @@ pub(super) struct TrendPoint {
     pub engine: Option<String>,
     /// Identity per worker, runner and engine left out; null: not recorded.
     pub workers: Option<BTreeMap<String, String>>,
+    /// The Harness release as one plain semver, without a leading `v`; null
+    /// for a commit (`@sha7`), joined builds (`a, b`) or none recorded.
+    pub release: Option<String>,
     pub planned: Option<Vec<String>>,
     /// Runs observed.
     pub runs: usize,
@@ -166,6 +186,13 @@ pub(super) struct TrendMeasures {
     pub function_calls: Option<f64>,
     pub function_call_errors: Option<f64>,
     pub turns_mean: Option<f64>,
+    pub cost_usd_mean: Option<f64>,
+    pub output_tokens_mean: Option<f64>,
+    pub cache_read_tokens_mean: Option<f64>,
+    pub cache_write_tokens_mean: Option<f64>,
+    pub reasoning_tokens_mean: Option<f64>,
+    pub validation_retries_mean: Option<f64>,
+    pub technical_retries_mean: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -192,16 +219,23 @@ pub(super) struct TrendRun {
     pub function_calls: Option<f64>,
     pub function_call_errors: Option<f64>,
     pub turns: Option<f64>,
+    pub cost_usd: Option<f64>,
+    pub output_tokens: Option<f64>,
+    pub cache_read_tokens: Option<f64>,
+    pub cache_write_tokens: Option<f64>,
+    pub reasoning_tokens: Option<f64>,
+    pub validation_retries: Option<f64>,
+    pub technical_retries: Option<f64>,
 }
 
 /// An execution of the Console that belongs to a series.
-struct Execution<'a> {
-    summary: &'a Value,
-    id: &'a str,
-    started_at: &'a str,
-    key: TrendSeriesKey,
-    parameters: ExecutionParameters,
-    workers: Vec<StackWorker>,
+pub(super) struct Execution<'a> {
+    pub summary: &'a Value,
+    pub id: &'a str,
+    pub started_at: &'a str,
+    pub key: TrendSeriesKey,
+    pub parameters: ExecutionParameters,
+    pub workers: Vec<StackWorker>,
 }
 
 /// The trends of the requested series, from the executions the Console
@@ -212,12 +246,7 @@ pub(super) fn trends(
     summaries: &[Value],
     runs: &BTreeMap<String, Vec<TrendRun>>,
 ) -> TrendsResponse {
-    let mut children = BTreeMap::<&str, Vec<&Value>>::new();
-    for summary in summaries {
-        if let Some(parent) = summary["parent_plan_execution_id"].as_str() {
-            children.entry(parent).or_default().push(summary);
-        }
-    }
+    let children = natives(summaries);
     let mut groups = BTreeMap::<TrendSeriesKey, Vec<Execution>>::new();
     for execution in summaries.iter().filter_map(execution) {
         groups
@@ -368,9 +397,20 @@ pub(super) fn trends(
     }
 }
 
+/// The native runs the Console lists, by the execution they belong to.
+pub(super) fn natives(summaries: &[Value]) -> BTreeMap<&str, Vec<&Value>> {
+    let mut children = BTreeMap::<&str, Vec<&Value>>::new();
+    for summary in summaries {
+        if let Some(parent) = summary["parent_plan_execution_id"].as_str() {
+            children.entry(parent).or_default().push(summary);
+        }
+    }
+    children
+}
+
 /// The execution a summary lists, when it belongs to a series: an execution
 /// of the Console (not one of its native runs) that names a suite and a model.
-fn execution(summary: &Value) -> Option<Execution<'_>> {
+pub(super) fn execution(summary: &Value) -> Option<Execution<'_>> {
     if summary.get("parent_plan_execution_id").is_some() {
         return None;
     }
@@ -400,7 +440,7 @@ fn execution(summary: &Value) -> Option<Execution<'_>> {
 }
 
 /// The suite's label; an unsaved one has none and reads by its size.
-fn suite_label(execution: &Execution) -> String {
+pub(super) fn suite_label(execution: &Execution) -> String {
     let suite = execution.parameters.suite.as_ref();
     if let Some(label) = suite
         .map(|suite| &suite.label)
@@ -524,6 +564,22 @@ fn workers(rows: &[StackWorker], local: bool) -> Option<BTreeMap<String, String>
     })
 }
 
+/// A plain release: an optional leading `v`, then exactly three numbers.
+/// A pre-release, a commit and joined builds are not releases.
+pub(super) fn semver_key(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.strip_prefix('v').unwrap_or(version).split('.');
+    let mut number = || parts.next()?.parse().ok();
+    let key = (number()?, number()?, number()?);
+    parts.next().is_none().then_some(key)
+}
+
+/// The Harness's identity when it is one plain release, else none.
+pub(super) fn release_of(workers: Option<&BTreeMap<String, String>>) -> Option<String> {
+    let identity = workers?.get(HARNESS)?;
+    semver_key(identity)?;
+    Some(identity.strip_prefix('v').unwrap_or(identity).to_owned())
+}
+
 /// The engine its native runs reported, else the `iii:` its stack pinned,
 /// else the compose row.
 fn engine(execution: &Execution, natives: &[&Value]) -> Option<String> {
@@ -542,36 +598,44 @@ fn engine(execution: &Execution, natives: &[&Value]) -> Option<String> {
         })
 }
 
-fn source(summary: &Value) -> TrendSource {
+pub(super) fn source(summary: &Value) -> TrendSource {
     let source =
         serde_json::from_value::<ExecutionSource>(summary["source"].clone()).unwrap_or_default();
-    let kind = |kind: &str| TrendSource {
+    let kind = |kind: &str, role| TrendSource {
         kind: kind.into(),
+        role,
         run_id: None,
         run_attempt: None,
         release_control_execution_id: None,
         url: None,
     };
     match source {
-        ExecutionSource::Local => kind("local"),
-        ExecutionSource::Docker { .. } => kind("docker"),
+        ExecutionSource::Local => kind("local", TrendRole::Local),
+        ExecutionSource::Docker { .. } => kind("docker", TrendRole::Docker),
         ExecutionSource::Github {
             run_id,
             run_attempt,
             url,
             release_control_execution_id,
             ..
-        } => TrendSource {
-            run_id: Some(run_id),
-            run_attempt: Some(run_attempt),
-            release_control_execution_id,
-            url: Some(url).filter(|url| !url.is_empty()),
-            ..kind("github")
-        },
+        } => {
+            let role = if release_control_execution_id.is_some() {
+                TrendRole::ReleaseControl
+            } else {
+                TrendRole::CiOther
+            };
+            TrendSource {
+                run_id: Some(run_id),
+                run_attempt: Some(run_attempt),
+                release_control_execution_id,
+                url: Some(url).filter(|url| !url.is_empty()),
+                ..kind("github", role)
+            }
+        }
     }
 }
 
-fn point(
+pub(super) fn point(
     execution: &Execution,
     stack: TrendStack,
     natives: &[&Value],
@@ -583,6 +647,7 @@ fn point(
         .filter(|run| run.counted)
         .copied()
         .collect::<Vec<_>>();
+    let measures = measures(runs, planned_runs(&execution.parameters, runs.len()));
     let mut ids = planned.iter().map(String::as_str).collect::<Vec<_>>();
     for run in runs {
         if !ids.contains(&run.test.as_str()) {
@@ -616,24 +681,10 @@ fn point(
             }
         })
         .collect();
-    let measures = (!counted.is_empty()).then(|| TrendMeasures {
-        score_mean: mean(counted.iter().map(|run| run.score)),
-        completed: counted.iter().filter(|run| run.completed).count(),
-        planned: if planned.is_empty() {
-            runs.len()
-        } else {
-            planned.len() * execution.parameters.runs.max(1) as usize
-        },
-        duration_ms_mean: mean(counted.iter().map(|run| run.duration_ms)),
-        input_tokens_mean: mean(counted.iter().map(|run| run.input_tokens)),
-        function_calls_mean: mean(counted.iter().map(|run| run.function_calls)),
-        function_calls: sum(counted.iter().map(|run| run.function_calls)),
-        function_call_errors: sum(counted.iter().map(|run| run.function_call_errors)),
-        turns_mean: mean(counted.iter().map(|run| run.turns)),
-    });
     let summary = execution.summary;
     let source = source(summary);
     let local = source.kind == "local";
+    let workers = workers(&execution.workers, local);
     TrendPoint {
         execution_id: execution.id.to_owned(),
         label: summary["label"]
@@ -647,7 +698,8 @@ fn point(
         source,
         stack,
         engine: engine(execution, natives),
-        workers: workers(&execution.workers, local),
+        release: release_of(workers.as_ref()),
+        workers,
         planned: (!planned.is_empty()).then(|| planned.clone()),
         runs: runs.len(),
         counted: counted.len(),
@@ -668,20 +720,58 @@ fn point(
     }
 }
 
+/// The planned runs (tests × runs per test), else the runs observed:
+/// what `completed` counts.
+pub(super) fn planned_runs(parameters: &ExecutionParameters, observed: usize) -> usize {
+    if parameters.scenarios.is_empty() {
+        observed
+    } else {
+        parameters.scenarios.len() * parameters.runs.max(1) as usize
+    }
+}
+
+/// The counted runs' measures; none counted is none. A run that lacks a
+/// value is left out of its mean, never counted as zero.
+pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasures> {
+    let counted = runs
+        .iter()
+        .filter(|run| run.counted)
+        .copied()
+        .collect::<Vec<_>>();
+    (!counted.is_empty()).then(|| TrendMeasures {
+        score_mean: mean(counted.iter().map(|run| run.score)),
+        completed: counted.iter().filter(|run| run.completed).count(),
+        planned,
+        duration_ms_mean: mean(counted.iter().map(|run| run.duration_ms)),
+        input_tokens_mean: mean(counted.iter().map(|run| run.input_tokens)),
+        function_calls_mean: mean(counted.iter().map(|run| run.function_calls)),
+        function_calls: sum(counted.iter().map(|run| run.function_calls)),
+        function_call_errors: sum(counted.iter().map(|run| run.function_call_errors)),
+        turns_mean: mean(counted.iter().map(|run| run.turns)),
+        cost_usd_mean: mean(counted.iter().map(|run| run.cost_usd)),
+        output_tokens_mean: mean(counted.iter().map(|run| run.output_tokens)),
+        cache_read_tokens_mean: mean(counted.iter().map(|run| run.cache_read_tokens)),
+        cache_write_tokens_mean: mean(counted.iter().map(|run| run.cache_write_tokens)),
+        reasoning_tokens_mean: mean(counted.iter().map(|run| run.reasoning_tokens)),
+        validation_retries_mean: mean(counted.iter().map(|run| run.validation_retries)),
+        technical_retries_mean: mean(counted.iter().map(|run| run.technical_retries)),
+    })
+}
+
 /// The mean of the values present; none present is none.
-fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+pub(super) fn mean(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     let values = values.flatten().collect::<Vec<_>>();
     (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }
 
-fn sum(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+pub(super) fn sum(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     values
         .flatten()
         .fold(None, |total, value| Some(total.unwrap_or(0.0) + value))
 }
 
 /// RFC 3339 instants compare as instants, whatever their offset.
-fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
+pub(super) fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
     (
         DateTime::parse_from_rfc3339(value)
             .ok()
@@ -691,13 +781,17 @@ fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::plans::store::WorkerSource;
     use serde_json::json;
 
     /// A packaged worker as a lock that asked for `latest` records it.
-    fn worker(name: &str, resolved: Option<&str>, observed: Option<&str>) -> StackWorker {
+    pub(in crate::dashboard) fn worker(
+        name: &str,
+        resolved: Option<&str>,
+        observed: Option<&str>,
+    ) -> StackWorker {
         StackWorker {
             name: name.into(),
             source: WorkerSource::Package,
@@ -711,7 +805,12 @@ mod tests {
     }
 
     /// An execution of the Console as `execution_summaries` lists it.
-    fn listed(id: &str, at: &str, stack: Option<&str>, workers: &[&str]) -> Value {
+    pub(in crate::dashboard) fn listed(
+        id: &str,
+        at: &str,
+        stack: Option<&str>,
+        workers: &[&str],
+    ) -> Value {
         json!({
             "id": id, "label": "", "started_at": at, "source": {"kind": "local"},
             "stack": workers.iter().map(|name| worker(name, Some("1.0.0"), None)).collect::<Vec<_>>(),
@@ -724,11 +823,16 @@ mod tests {
         })
     }
 
-    fn native(id: &str, parent: &str) -> Value {
+    pub(in crate::dashboard) fn native(id: &str, parent: &str) -> Value {
         json!({"id": id, "parent_plan_execution_id": parent, "engine_version": "0.24.3"})
     }
 
-    fn run(test: &str, counted: bool, completed: bool, score: Option<f64>) -> TrendRun {
+    pub(in crate::dashboard) fn run(
+        test: &str,
+        counted: bool,
+        completed: bool,
+        score: Option<f64>,
+    ) -> TrendRun {
         TrendRun {
             test: test.into(),
             behavior_sha256: Some(format!("sha256:{test}")),
@@ -740,6 +844,13 @@ mod tests {
             function_calls: Some(10.0),
             function_call_errors: Some(1.0),
             turns: Some(5.0),
+            cost_usd: Some(0.25),
+            output_tokens: Some(40.0),
+            cache_read_tokens: Some(500.0),
+            cache_write_tokens: Some(30.0),
+            reasoning_tokens: Some(8.0),
+            validation_retries: Some(1.0),
+            technical_retries: Some(0.0),
         }
     }
 
@@ -765,6 +876,10 @@ mod tests {
             duration_ms: Some(9_000_000.0),
             function_calls: Some(1_000.0),
             turns: Some(1_000.0),
+            cost_usd: Some(9.0),
+            output_tokens: Some(1_000_000.0),
+            validation_retries: Some(50.0),
+            technical_retries: Some(2.0),
             ..run("t13", false, true, Some(0.0))
         });
         let response = trends(
@@ -787,11 +902,35 @@ mod tests {
         assert_eq!(measures.function_calls, Some(120.0));
         assert_eq!(measures.function_call_errors, Some(12.0));
         assert_eq!(measures.turns_mean, Some(5.0));
+        assert_eq!(measures.cost_usd_mean, Some(0.25));
+        assert_eq!(measures.output_tokens_mean, Some(40.0));
+        assert_eq!(measures.cache_read_tokens_mean, Some(500.0));
+        assert_eq!(measures.cache_write_tokens_mean, Some(30.0));
+        assert_eq!(measures.reasoning_tokens_mean, Some(8.0));
+        assert_eq!(measures.validation_retries_mean, Some(1.0));
+        assert_eq!(measures.technical_retries_mean, Some(0.0));
         let invalid = &point.tests[12];
         assert_eq!(
             (invalid.id.as_str(), invalid.state.as_str(), invalid.score),
             ("t13", "technical_invalid", None)
         );
+    }
+
+    #[test]
+    fn measures_count_only_counted_runs_and_keep_the_planned_runs_given() {
+        let invalid = run("t01", false, true, Some(10.0));
+        let scored = run("t01", true, true, Some(80.0));
+        let unpriced = TrendRun {
+            cost_usd: None,
+            validation_retries: Some(3.0),
+            ..run("t02", true, false, Some(40.0))
+        };
+        assert_eq!(measures(&[&invalid], 4), None);
+        let m = measures(&[&scored, &unpriced, &invalid], 4).unwrap();
+        assert_eq!((m.completed, m.planned, m.score_mean), (1, 4, Some(60.0)));
+        // A run without a cost is left out of the mean, never counted as zero.
+        assert_eq!(m.cost_usd_mean, Some(0.25));
+        assert_eq!(m.validation_retries_mean, Some(2.0));
     }
 
     #[test]
@@ -849,6 +988,90 @@ mod tests {
             Some(BTreeMap::from([("harness".into(), "1.8.36".into())]))
         );
         assert_eq!(workers(&[], false), None);
+    }
+
+    #[test]
+    fn a_release_is_one_plain_semver_ordered_by_its_numbers() {
+        assert_eq!(semver_key("1.9.3"), Some((1, 9, 3)));
+        assert_eq!(semver_key("v1.9.3"), Some((1, 9, 3)));
+        assert!(semver_key("1.10.0") > semver_key("1.9.3"));
+        for not_a_release in [
+            "@abc1234",
+            "@abc1234*",
+            "latest",
+            "1.9.3, 1.9.4",
+            "1.9",
+            "1.9.3-rc.1",
+            "",
+        ] {
+            assert_eq!(semver_key(not_a_release), None, "{not_a_release:?}");
+        }
+        let harness = |id: &str| BTreeMap::from([(HARNESS.to_owned(), id.to_owned())]);
+        for (id, release) in [
+            ("1.9.3", Some("1.9.3")),
+            ("v1.9.3", Some("1.9.3")),
+            ("@3f2a9c1", None),
+            ("1.9.3, 1.9.4", None),
+        ] {
+            assert_eq!(release_of(Some(&harness(id))).as_deref(), release, "{id:?}");
+        }
+        let other = BTreeMap::from([("state".to_owned(), "1.9.3".to_owned())]);
+        assert_eq!(release_of(Some(&other)), None);
+        assert_eq!(release_of(None), None);
+    }
+
+    #[test]
+    fn a_point_carries_its_role_and_its_release() {
+        let github = json!({
+            "kind": "github", "repository": "o/r", "run_id": 7, "run_attempt": 1, "url": "",
+            "release_control_execution_id": "75b03d86",
+        });
+        let mut rc = listed("rc", "2026-09-20T10:00:00Z", None, &["harness"]);
+        rc["source"] = github.clone();
+        let mut pr = listed("pr", "2026-09-21T10:00:00Z", None, &["harness"]);
+        pr["source"] = json!({
+            "kind": "github", "repository": "o/r", "run_id": 8, "run_attempt": 1, "url": "",
+            "release_control_execution_id": null,
+        });
+        pr["stack"][0]["commit"] = json!(format!("3f2a9c1{}", "d".repeat(33)));
+        let mut docker = listed(
+            "docker",
+            "2026-09-22T10:00:00Z",
+            None,
+            &["harness", "harness"],
+        );
+        docker["source"] = json!({"kind": "docker", "attempt": 1, "phase": "done", "groups": []});
+        docker["stack"][1]["resolved"] = json!("1.0.1");
+        let local = listed("local", "2026-09-23T10:00:00Z", None, &[]);
+        let response = trends(
+            &TrendsRequest::default(),
+            &[rc, pr, docker, local],
+            &BTreeMap::new(),
+        );
+        let seen = response
+            .points
+            .iter()
+            .map(|point| {
+                (
+                    point.execution_id.as_str(),
+                    point.source.role,
+                    point.release.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            seen,
+            [
+                ("rc", TrendRole::ReleaseControl, Some("1.0.0")),
+                ("pr", TrendRole::CiOther, None),
+                ("docker", TrendRole::Docker, None),
+                ("local", TrendRole::Local, None),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(TrendRole::CiOther).unwrap(),
+            json!("ci_other")
+        );
     }
 
     #[test]

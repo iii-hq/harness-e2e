@@ -232,6 +232,11 @@ impl ScenarioId {
                     A::AppBuilding,
                     &[D::Frontend, D::Backend, D::Data, D::Infra],
                 ),
+                Self::OnboardingTour => (
+                    &[W::Ade, W::Compose, W::Database, W::Engine, W::Ide, W::State],
+                    A::AppBuilding,
+                    &[D::Frontend, D::Backend, D::Data],
+                ),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {

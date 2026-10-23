@@ -398,17 +398,19 @@ try {
   const mine = page.locator('[data-stack-group="local"]')
   await repo.waitFor()
   await page
-    .getByText(/^3 in the repository, read-only · none in this Console\. /)
+    .getByText(/^5 in the repository, read-only · none in this Console\. /)
     .waitFor()
   assert.deepEqual(
     repository.map((stack) => stack.id),
-    ['default', 'harness-template', 'linkly'],
+    ['deepwork', 'default', 'harness-template', 'linkly', 'onboarding'],
   )
   for (const stack of repository) {
     const row = repo.locator(`[data-stack="${stack.id}"]`)
     await row.getByText(`stacks/${stack.id}.yaml`, { exact: true }).waitFor()
     await row.getByRole('listitem', { name: 'iii: latest' }).waitFor()
-    await row.getByRole('listitem', { name: 'workers: 5' }).waitFor()
+    await row
+      .getByRole('listitem', { name: `workers: ${stack.containers.length}` })
+      .waitFor()
     await row
       .getByRole('listitem', { name: `template: ${stack.template ?? 'none'}` })
       .waitFor()
@@ -425,7 +427,7 @@ try {
     .getByText('Against default: adds template harness.', { exact: true })
     .waitFor()
   await mine.getByText(/^None yet\. /).waitFor()
-  const fallback = repository[0]
+  const fallback = repository.find((stack) => stack.id === 'default')
 
   // A copy that fails says so on the page; opening another stack does not
   // carry it along.
@@ -665,7 +667,7 @@ try {
   for (const warning of warnings)
     await copy.getByText(warning, { exact: true }).waitFor()
   await page
-    .getByText(/^3 in the repository, read-only · 1 in this Console\. /)
+    .getByText(/^5 in the repository, read-only · 1 in this Console\. /)
     .waitFor()
 
   // Edit opens it again, as saved, on the tab last used.

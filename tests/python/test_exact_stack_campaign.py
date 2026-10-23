@@ -212,6 +212,40 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "provider-deepseek": "latest",
         })
 
+    def test_a_template_stack_adds_the_workers_the_template_does_not_declare(self):
+        """The onboarding stack is the `harness` template plus the tour's
+        worker. A stack container joins the project when the template has no
+        worker of its package, and only pins the version when it does."""
+        contract = campaign_contract()
+        contract["runtime"]["lock"] = lock_of({"onboarding": "0.3.1", "harness": "1.8.60", "judge": "0.4.0"})
+        contract["runtime"]["lock"]["graphs"] = {
+            "onboarding": ["onboarding", "state"], "harness": ["harness", "judge", "state"], "fp": ["fp"],
+        }
+        # Assembled: the declared roots and what their graphs brought.
+        contract["runtime"]["lock"]["graphs"]["harness-e2e"] = ["harness-e2e", "database"]
+        contract["runtime"]["compose"] = {"containers": {
+            "onboarding": {"worker": "package://onboarding", "version": "latest", "start_after": ["state", "judge"]},
+            "harness": {"worker": "package://harness", "version": "latest"},
+            "harness-e2e": {"worker": "package://harness-e2e", "version": "latest", "start_after": ["database"]},
+            "fp": {"worker": "package://fp", "version": "latest"},
+            "judge": {"worker": "package://judge", "version": "0.4.0"},
+        }}
+        template = {"containers": {
+            "harness": {"worker": "package://harness", "version": "1.8.17"},
+            "state": {"worker": "package://state", "version": "0.22.8"},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        versions = {name: container["version"] for name, container in project["containers"].items()}
+        self.assertEqual(versions, {
+            "harness": "1.8.60", "state": "latest", "onboarding": "0.3.1", "fp": "latest",
+            "harness-e2e": "latest", "provider-deepseek": "latest",
+        })
+        # Ordered only after what the project declares; the runner comes in
+        # as it always has, without the assembled order.
+        self.assertEqual(project["containers"]["onboarding"]["start_after"], ["state"])
+        self.assertNotIn("start_after", project["containers"]["harness-e2e"])
+        self.assertEqual(set(template["containers"]), {"harness", "state"})
+
     def test_campaign_provider_is_added_to_templates_and_receives_its_pin_and_credentials(self):
         template = {"containers": {
             "subject": {"worker": "package://harness"},
@@ -469,9 +503,10 @@ scaffold() { mkdir -p "$4"; for folder in $SHIPPED; do mkdir -p "$4/$folder"; do
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
-        start = source.index('if [[ "$profile_assets" == true ]]; then', source.index('failure_phase=project_start'))
+        function = source[source.index("load_profile_assets() {"):source.index("wait_for_profiles() {")]
+        start = source.index('if [[ "$profile_assets" == true ]]', source.index('failure_phase=project_start'))
         block = source[start:source.index("if jq -e '.suite.agent_profile != null'", start)]
-        for mode in ("ok", "missing", "broken"):
+        for mode in ("ok", "missing", "broken", "misplaced"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "project/agents").mkdir(parents=True)
@@ -497,23 +532,32 @@ project_trigger() {
   test "$1" = directory::skills::download_from_registry
   test "$(jq -r '.version' <<<"$2")" = 1.2.3
   # As iii_trigger names a call that failed.
-  if [[ "$MODE" != ok ]]; then printf '%s' "$1" >"$iii_failed"; fi
+  if [[ "$MODE" == missing || "$MODE" == broken ]]; then printf '%s' "$1" >"$iii_failed"; fi
   if [[ "$MODE" == missing ]]; then echo 'D310 not_found: registry worker "harness" has no published skills bundle.' >&2; return 1; fi
   if [[ "$MODE" == broken ]]; then echo 'registry unavailable' >&2; return 1; fi
   printf 'downloaded profile' >"$project_dir/agents/tech-lead.md"
-  printf '{"source":{"version":"1.2.3"}}\\n'
+  root="$project_dir/.iii/registry-skills"
+  [[ "$MODE" == misplaced ]] && root="$project_dir/skills"
+  mkdir -p "$root/harness"
+  printf '# Harness\\n' >"$root/harness/SKILL.md"
+  printf '{"namespace":"harness","skills_written":["SKILL.md"],"source":{"version":"1.2.3"}}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
+                result = subprocess.run(["bash", "-c", shell + function + block, "runner", str(root), str(SCRIPT)],
                     env={**os.environ, "MODE": mode}, capture_output=True, text=True)
-                if mode == "broken":
+                if mode in ("broken", "misplaced"):
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("Could not load pinned skills", result.stderr)
-                    # The failure that ends the group stays named.
-                    self.assertTrue((root / "iii-failed").exists())
+                    if mode == "broken":
+                        self.assertIn("Could not load pinned skills", result.stderr)
+                        # The failure that ends the group stays named.
+                        self.assertTrue((root / "iii-failed").exists())
+                    else:
+                        self.assertIn("was not written below the frozen skill root", result.stderr)
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual((root / "project/agents/tech-lead.md").read_text(), "selected template")
+                    if mode == "ok":
+                        self.assertTrue((root / "project/.iii/registry-skills/harness/SKILL.md").is_file())
                     # A worker with no skills bundle is no cause of a later failure.
                     self.assertFalse((root / "iii-failed").exists())
 
@@ -532,7 +576,11 @@ project_trigger() {
 
     def test_runner_waits_for_an_existing_profile_and_fails_if_it_stays_missing(self):
         source = RUNNER_SCRIPT.read_text()
-        block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=runner_readiness")]
+        function_start = source.index("wait_for_profiles() {")
+        function = source[function_start:source.index("# `compose::add`", function_start)]
+        group_start = source.index("# Group stack is now up")
+        block = source[source.index("if jq -e '.suite.agent_profile != null'", group_start):
+                       source.index("failure_phase=runner_readiness", group_start)]
         for available_after in [0, 1, 99]:
             with self.subTest(available_after=available_after), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -551,7 +599,7 @@ project_trigger() {
   printf '{"id":"console-ui"}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
+                result = subprocess.run(["bash", "-c", shell + function + block, "runner", str(root), str(SCRIPT)],
                                         env={**os.environ, "AVAILABLE_AFTER": str(available_after)},
                                         capture_output=True, text=True)
                 calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
@@ -559,10 +607,11 @@ project_trigger() {
                 self.assertEqual(len(calls), min(available_after + 1, 3))
                 if available_after == 99:
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("Directory profile console-ui is unavailable after 120s", result.stderr)
+                    self.assertIn("Directory profile console-ui has unresolved inheritance", result.stderr)
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(json.loads((root / "stack/agent-profile.json").read_text()), {"id": "console-ui"})
+                    self.assertEqual(json.loads((root / "stack/profiles/console-ui.json").read_text()),
+                                     {"id": "console-ui"})
 
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -945,6 +994,17 @@ fail() {
         value["reporting"] = {"channel": "#releases"}
         MODULE.validate_contract(value)
 
+    def test_cli_companions_are_archives_of_the_release_with_digests(self):
+        value = campaign_contract()
+        companion = {"asset": "iii-init-x86_64-unknown-linux-musl.tar.gz", "sha256": "sha256:" + "a" * 64}
+        value["runtime"]["cli"]["companions"] = [companion]
+        MODULE.validate_contract(value)
+        for broken, error in (({"asset": "../iii.tar.gz"}, "must name an archive"),
+                              ({"sha256": "a" * 12}, "sha256")):
+            value["runtime"]["cli"]["companions"] = [{**companion, **broken}]
+            with self.subTest(broken=broken), self.assertRaisesRegex(ValueError, error):
+                MODULE.validate_contract(value)
+
     def test_rejects_a_suite_the_pinned_runner_cannot_execute(self):
         contract = campaign_contract()
         contract["suite"]["groups"][0]["scenarios"] = ["a_scenario_that_never_shipped"]
@@ -1200,29 +1260,41 @@ fail() {
                 self.assertEqual(evidence["runtime"]["version_report_warnings"], warnings)
                 self.assertEqual(evidence["runtime"]["observed_versions"]["harness"], "1.9.0")
 
-    def test_compose_evidence_rejects_the_removed_lifecycle_executable(self):
+    def test_compose_evidence_rejects_the_lifecycle_executable_unless_iii_started_it(self):
+        """Compose boots a VM worker through the helper; the executor running
+        it is lifecycle outside Compose."""
         contract = campaign_contract()
         expected = {
             node["worker"]: node["version"]
             for node in contract["orchestration"]["nodes"]
             if node["kind"] == "binary"
         }
+        helper = "iii-" + "worker"
+        # As ps lists it: Compose's own title, cut to 15 characters in comm.
+        compose = {"pid": 10, "ppid": 1, "comm": "iii:c:e2~732b2f",
+                   "args": "iii:c:e2e-004bdf4d-onboarding-tour compose --namespace e2e-004bdf4d-onboarding-tour"}
+        vm = {"pid": 11, "ppid": 10, "comm": helper, "args": f"/run/bin/{helper} __vm-boot"}
         with tempfile.TemporaryDirectory() as directory:
             compose_path = Path(directory) / "worker-compose.yaml"
             compose_path.write_text("namespace: project-one\ncontainers: {}\n")
-            with self.assertRaisesRegex(ValueError, "forbidden lifecycle executable"):
-                MODULE.compose_evidence(
+
+            def evidence(during):
+                return MODULE.compose_evidence(
                     contract,
                     compose_path,
                     "project-one",
                     {name: {} for name in ("add", "up", "status", "down")},
                     {"workers": [{"name": worker, "version": version} for worker, version in expected.items()]},
-                    {
-                        "before": [],
-                        "during": [{"comm": "iii-" + "worker", "args": "iii-" + "worker"}],
-                        "after": [],
-                    },
+                    {"before": [], "during": during, "after": []},
                 )
+
+            evidence([compose, vm, {"pid": 12, "ppid": 11, "comm": helper, "args": helper}])
+            evidence([{**compose, "comm": "iii", "args": "/run/bin/iii compose"}, vm])
+            for during in ([{"comm": helper, "args": helper}],
+                           [{"pid": 11, "ppid": 5, "comm": "bash", "args": f"{helper} start"}],
+                           [compose, {**vm, "ppid": 1}]):
+                with self.subTest(during=during), self.assertRaisesRegex(ValueError, "forbidden lifecycle executable"):
+                    evidence(during)
 
     def test_packages_raw_file_digests(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1628,7 +1700,7 @@ exit "$status"
         source = RUNNER_SCRIPT.read_text()
         decide = source[source.index("if [[ -n \"$assemble_only\" ]]; then"):source.index("profile_assets=")]
         start = source.index("failure_phase=project_assembly")
-        assembly = source[start:source.index("jq -e '.status == \"ok\"' \"$artifact_dir/stack/up.json\"")]
+        assembly = source[start:source.index("# Group stack is now up", start)]
         stubs = """set -Eeuo pipefail
 artifact_dir=$1
 contract_path=$1/contract.json
@@ -1637,6 +1709,9 @@ contract_tool=$2
 log() { :; }
 await_compose_add() { :; }
 export_compose() { :; }
+python3() {
+  if [[ "$2" == locked-workers ]]; then printf '[]\n'; else command python3 "$@"; fi
+}
 compose_trigger() {
   printf '%s\\n' "$*" >>"$artifact_dir/calls"
   # Harness's graph brings the Directory when the case says so.
@@ -1782,6 +1857,265 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
                 target[path[-1]] = value
                 with self.assertRaisesRegex(ValueError, expected):
                     MODULE.validate_contract(contract)
+
+
+class KitAssetTests(unittest.TestCase):
+    def test_multiple_bundle_receipts_preserve_the_compose_namespace(self):
+        source = RUNNER_SCRIPT.read_text()
+        function = source[source.index("load_profile_assets() {"):source.index("wait_for_profiles() {")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "artifacts/stack").mkdir(parents=True)
+            (root / "artifacts/stack/declared-workers.json").write_text(json.dumps([
+                {"worker": "harness", "version": "1.2.3"},
+                {"worker": "browser", "version": "2.3.4"},
+            ]))
+            shell = r'''set -Eeuo pipefail
+run_root=$1
+artifact_dir=$1/artifacts
+project_dir=$1/project
+namespace=group-namespace
+iii_failed=$1/iii-failed
+fail() { printf '%s\n' "$1" >&2; return 1; }
+project_trigger() {
+  test "$namespace" = group-namespace
+  worker=$(jq -r .worker <<<"$2")
+  version=$(jq -r .version <<<"$2")
+  printf '%s\n' "$worker" >>"$artifact_dir/calls"
+  mkdir -p "$project_dir/.iii/registry-skills/$worker"
+  printf '# Skill\n' >"$project_dir/.iii/registry-skills/$worker/SKILL.md"
+  jq -cn --arg namespace "$worker" --arg version "$version" \
+    '{namespace:$namespace,skills_written:["SKILL.md"],source:{version:$version}}'
+}
+'''
+            result = subprocess.run(
+                ["bash", "-c", shell + function +
+                 'load_profile_assets\ntest "$namespace" = group-namespace\n', "runner", str(root)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "artifacts/calls").read_text().splitlines(), ["harness", "browser"])
+
+    def test_kit_preparation_reloads_profile_roots_before_downloading_assets(self):
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index('if [[ -n "$assemble_only" ]]; then', source.index("failure_phase=project_assembly"))
+        block = source[start:source.index("export_compose", start)]
+        configured = block.index("configure-profile-root")
+        restarted = block.index("compose::restart", configured)
+        bundles = block.index("load_profile_assets", restarted)
+        installed = block.index("directory::download-kit", bundles)
+        self.assertLess(configured, restarted)
+        self.assertLess(restarted, bundles)
+        self.assertLess(bundles, installed)
+        self.assertNotIn("compose::down", block[configured:bundles])
+
+    def test_native_kit_profiles_include_owned_children_and_selected_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / "kits.lock"
+            lock.write_text("""version: 1
+kits:
+  iii/deepwork:
+    files:
+      agents/deepwork-lead.md: {sha256: abc}
+      agents/deepwork-worker.md: {sha256: def}
+      agents/template-owned.md: {sha256: 123, skipped: true}
+      skills/iii/deepwork/SKILL.md: {sha256: 456}
+""")
+            self.assertEqual(MODULE.kit_agent_ids(lock, "deepwork-e2e"),
+                             ["deepwork-e2e", "deepwork-lead", "deepwork-worker"])
+
+    def test_profile_preflight_checks_every_id_and_rejects_invalid_child(self):
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index("wait_for_profiles() {")
+        function = source[start:source.index("# `compose::add`", start)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "stack").mkdir()
+            shell = r'''set -Eeuo pipefail
+artifact_dir=$1
+sleep() { SECONDS=$((SECONDS + 60)); }
+fail() { printf '%s\n' "$1" >&2; return 1; }
+project_trigger() {
+  id=$(jq -r .id <<<"$2")
+  printf '%s\n' "$id" >>"$artifact_dir/calls"
+  if [[ "$id" == deepwork-worker ]]; then
+    jq -cn --arg id "$id" '{id:$id,unknown_functions:["missing::fn"]}'
+  else
+    jq -cn --arg id "$id" '{id:$id}'
+  fi
+}
+'''
+            result = subprocess.run(
+                ["bash", "-c", shell + function +
+                 "wait_for_profiles <<'EOF'\ndeepwork-lead\ndeepwork-impl\ndeepwork-worker\nEOF\n",
+                 "runner", str(root)], capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("deepwork-worker has unresolved inheritance", result.stderr)
+            self.assertEqual(set((root / "calls").read_text().splitlines()),
+                             {"deepwork-lead", "deepwork-impl", "deepwork-worker"})
+
+    def test_kit_cannot_change_an_existing_worker_source_or_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before.lock"
+            after = root / "after.lock"
+            before.write_text("""version: 1
+containers:
+  harness:
+    worker: package://harness
+    resolved: {version: 1.8.54}
+""")
+            after.write_text("""version: 1
+containers:
+  harness:
+    worker: package://harness
+    resolved: {version: 1.8.54}
+  kanban:
+    worker: package://kanban
+    resolved: {version: 0.1.21}
+""")
+            MODULE.assert_lock_preserves_workers(before, after)
+            after.write_text(after.read_text().replace("1.8.54", "1.9.0"))
+            with self.assertRaisesRegex(ValueError, "harness"):
+                MODULE.assert_lock_preserves_workers(before, after)
+
+    def test_locked_workers_use_resolved_versions_instead_of_requested_ranges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / "worker-compose.lock"
+            lock.write_text("""version: 1
+containers:
+  harness:
+    worker: package://harness
+    requested: latest
+    resolved: {name: harness, version: 1.8.54}
+  kanban:
+    worker: package://kanban
+    requested: ^0.1.21
+    resolved: {name: kanban, version: 0.1.24}
+  local:
+    worker: path://./local
+    resolved: {name: local, version: 0.0.1}
+""")
+            self.assertEqual(MODULE.locked_registry_workers(lock), [
+                {"worker": "harness", "version": "1.8.54"},
+                {"worker": "kanban", "version": "0.1.24"},
+            ])
+
+    def test_kit_assembly_configures_the_directory_brought_by_the_native_graph(self):
+        manifest = {"containers": {"directory": {
+            "worker": "package://api.workers.iii.dev/iii-directory", "version": "1.2.29",
+        }}}
+        MODULE.configure_directory_profile_root(manifest, Path("/private/project"), "e2e-prepare")
+        directory = manifest["containers"]["directory"]
+        self.assertEqual(directory["config_name"], "e2e-prepare-directory")
+        self.assertEqual(directory["config_override"]["agents_folder"], "/private/project/agents")
+        self.assertEqual(directory["config_override"]["skills_folder"],
+                         "/private/project/.iii/registry-skills")
+        MODULE.clear_directory_profile_root(manifest)
+        self.assertNotIn("config_override", directory)
+        with self.assertRaisesRegex(ValueError, "brings no iii-directory"):
+            MODULE.configure_directory_profile_root({"containers": {}}, Path("/private/project"), "e2e-prepare")
+
+    def test_kit_assets_are_hashed_exported_and_restored_without_runtime_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / "agents").mkdir(parents=True)
+            (project / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
+            (project / ".iii/registry-skills/harness").mkdir(parents=True)
+            (project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (project / "agents/deepwork.md").write_text("---\nid: deepwork\n---\n")
+            (project / ".iii/registry-skills/iii/deepwork/SKILL.md").write_text("# Deepwork\n")
+            marker = project / ".iii/registry-skills/harness/.iii-skill-complete"
+            marker.write_text('{"worker":"harness","version":"1.8.61"}\n')
+
+            snapshot = root / "snapshot"
+            manifest = MODULE.kit_assets(project, snapshot)
+            contract = campaign_contract()
+            contract["runtime"]["kits"] = {
+                "requested": ["iii/deepwork@0.4.3"],
+                "lock": {"version": 1, "kits": {}},
+                "lock_sha256": manifest["lock_sha256"],
+                "assets": manifest["files"],
+            }
+            MODULE.validate_contract(contract)
+            restored = root / "restored"
+            (restored / "agents").mkdir(parents=True)
+            (restored / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
+            (restored / ".iii/registry-skills/harness").mkdir(parents=True)
+            (restored / "kits.lock").write_text("old lock")
+            (restored / "agents/deepwork.md").write_text("template profile")
+            (restored / ".iii/registry-skills/iii/deepwork/SKILL.md").write_text("old skill")
+            (restored / ".iii/registry-skills/harness/.iii-skill-complete").write_text("old marker")
+            MODULE.restore_kit_assets(contract, snapshot, restored)
+
+            self.assertEqual((restored / "kits.lock").read_bytes(), (project / "kits.lock").read_bytes())
+            self.assertEqual((restored / "agents/deepwork.md").read_bytes(),
+                             (project / "agents/deepwork.md").read_bytes())
+            self.assertEqual((restored / ".iii/registry-skills/iii/deepwork/SKILL.md").read_bytes(),
+                             (project / ".iii/registry-skills/iii/deepwork/SKILL.md").read_bytes())
+            self.assertEqual((restored / ".iii/registry-skills/harness/.iii-skill-complete").read_bytes(),
+                             marker.read_bytes())
+            self.assertNotIn(str(root), json.dumps(contract["runtime"]["kits"]))
+
+            (snapshot / ".iii/registry-skills/harness/.iii-skill-complete").write_text("changed")
+            other = root / "other"
+            other.mkdir()
+            with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                MODULE.restore_kit_assets(contract, snapshot, other)
+
+    def test_kit_asset_export_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / "agents").mkdir(parents=True)
+            (project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (project / "agents/deepwork.md").symlink_to(project / "kits.lock")
+            with self.assertRaisesRegex(ValueError, "symlinks"):
+                MODULE.kit_assets(project, root / "snapshot")
+
+    def test_kit_asset_export_rejects_other_non_markdown_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / ".iii/registry-skills/harness").mkdir(parents=True)
+            (project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (project / ".iii/registry-skills/harness/unexpected.json").write_text("{}")
+            with self.assertRaisesRegex(ValueError, "Markdown files or native skill markers"):
+                MODULE.kit_assets(project, root / "snapshot")
+
+    def test_kit_restore_rejects_symlink_destinations_and_parents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_project = root / "source-project"
+            (source_project / "agents").mkdir(parents=True)
+            (source_project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (source_project / "agents/deepwork.md").write_text("deepwork profile")
+            snapshot = root / "snapshot"
+            manifest = MODULE.kit_assets(source_project, snapshot)
+            contract = campaign_contract()
+            contract["runtime"]["kits"] = {
+                "requested": ["iii/deepwork@0.4.3"], "lock": {"version": 1, "kits": {}},
+                "lock_sha256": manifest["lock_sha256"], "assets": manifest["files"],
+            }
+            outside = root / "outside"
+            outside.mkdir()
+            sentinel = outside / "sentinel"
+            sentinel.write_text("untouched")
+
+            file_link = root / "file-link"
+            (file_link / "agents").mkdir(parents=True)
+            (file_link / "agents/deepwork.md").symlink_to(sentinel)
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                MODULE.restore_kit_assets(contract, snapshot, file_link)
+
+            parent_link = root / "parent-link"
+            parent_link.mkdir()
+            (parent_link / "agents").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "unsafe parent"):
+                MODULE.restore_kit_assets(contract, snapshot, parent_link)
+            self.assertEqual(sentinel.read_text(), "untouched")
 
 
 if __name__ == "__main__":

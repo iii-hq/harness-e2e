@@ -40,6 +40,7 @@ case "$artifact_dir" in
   *) echo "artifact directory escapes the canonical target directory" >&2; exit 2 ;;
 esac
 contract_path="$artifact_dir/stack-lock.json"
+contract_asset_root=$(realpath "$(dirname "$HARNESS_E2E_CONTRACT")/../kit-assets" 2>/dev/null || true)
 # A file, not a variable: the contract carries the assembled stack and its
 # lock, which outgrow what one environment string may hold.
 cp "$HARNESS_E2E_CONTRACT" "$contract_path"
@@ -50,8 +51,9 @@ jq -e --arg group "$campaign_group_id" \
   '.suite.groups | any(.id == $group)' \
   "$contract_path" >/dev/null
 project_template=$(jq -r '.runtime.template.id // empty' "$contract_path")
+kits_requested=$(jq -r '.runtime.kits.requested // [] | length' "$contract_path")
 if [[ -n "$assemble_only" ]]; then
-  project_template=""
+  [[ "${kits_requested:-0}" != 0 ]] || project_template=""
 fi
 # A stack the execution already assembled starts from its lock; a template
 # project is assembled here, pinned to the versions that lock resolved.
@@ -64,6 +66,7 @@ fi
 # says). Otherwise it runs as the stack declares it and downloads the skills of
 # every worker installed, those the subject adds too (Linkly).
 profile_assets=$(jq -r '.suite.agent_profile != null' "$contract_path")
+(( ${kits_requested:-0} == 0 )) || profile_assets=true
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
@@ -140,8 +143,8 @@ fail() {
 
 capture_processes() {
   local output=$1
-  ps -eo pid=,comm=,args= --no-headers | jq -Rn \
-    '[inputs | capture("^\\s*(?<pid>[0-9]+)\\s+(?<comm>\\S+)\\s*(?<args>.*)$") | {pid:(.pid|tonumber),comm,args}]' \
+  ps -eo pid=,ppid=,comm=,args= --no-headers | jq -Rn \
+    '[inputs | capture("^\\s*(?<pid>[0-9]+)\\s+(?<ppid>[0-9]+)\\s+(?<comm>\\S+)\\s*(?<args>.*)$") | {pid:(.pid|tonumber),ppid:(.ppid|tonumber),comm,args}]' \
     >"$output"
 }
 
@@ -205,6 +208,61 @@ project_trigger() {
   local payload=$2
   local timeout_ms=${3:-30000}
   iii_trigger "$timeout_ms" "$function_id" --namespace "$namespace" --json "$payload"
+}
+
+load_profile_assets() {
+  local package worker request receipt error_log skill_namespace skill_relative
+  mkdir -p "$artifact_dir/stack/skills"
+  while IFS= read -r package; do
+    worker=$(jq -r '.worker' <<<"$package")
+    request=$(jq -c '{worker,version}' <<<"$package")
+    receipt="$artifact_dir/stack/skills/$worker.json"
+    error_log="$artifact_dir/stack/skills/$worker.log"
+    if project_trigger directory::skills::download_from_registry "$request" 60000 >"$receipt" 2>"$error_log"; then
+      jq -e --arg version "$(jq -r '.version' <<<"$package")" '.source.version == $version' "$receipt" >/dev/null
+      while IFS=$'\t' read -r skill_namespace skill_relative; do
+        case "$skill_namespace:$skill_relative" in
+          :*|.:*|..:*|*/*:*|*:/*|*:..|*:../*|*:*/../*|*:*/..) fail "Pinned skill receipt contains an unsafe path" ;;
+        esac
+        [[ -f "$project_dir/.iii/registry-skills/$skill_namespace/$skill_relative" ]] \
+          || fail "Pinned skill $skill_namespace/$skill_relative was not written below the frozen skill root"
+      done < <(jq -r '.namespace as $namespace | .skills_written[]? | [$namespace, .] | @tsv' "$receipt")
+    else
+      # A worker may legitimately publish no skill bundle. Other failures must
+      # not turn a requested profile into an execution with different assets.
+      grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" \
+        || fail "Could not load pinned skills for $worker"
+      rm -f "$iii_failed"
+    fi
+  done < <(jq -c '.[]' "$artifact_dir/stack/declared-workers.json")
+  # Registry bundles may also contain profiles. The explicitly selected
+  # template owns collisions; restore its files after the versioned downloads.
+  for folder in agents skills; do
+    if [[ -d "$run_root/template-assets/$folder" ]]; then
+      mkdir -p "$project_dir/$folder"
+      cp -R "$run_root/template-assets/$folder/." "$project_dir/$folder/"
+    fi
+  done
+}
+
+wait_for_profiles() {
+  local profile_id agent_request agent_deadline receipt error_log
+  mkdir -p "$artifact_dir/stack/profiles"
+  while IFS= read -r profile_id; do
+    [[ -n "$profile_id" ]] || continue
+    agent_request=$(jq -cn --arg id "$profile_id" '{id:$id}')
+    receipt="$artifact_dir/stack/profiles/$profile_id.json"
+    error_log="$artifact_dir/stack/profiles/$profile_id.log"
+    agent_deadline=$((SECONDS + 120))
+    until project_trigger directory::agents::get "$agent_request" 30000 >"$receipt" 2>"$error_log" \
+        && jq -e --arg id "$profile_id" '.id == $id and (.inheritance_error == null)
+          and ((.unknown_skills // []) | length == 0)
+          and ((.unknown_functions // []) | length == 0)' "$receipt" >/dev/null; do
+      ((SECONDS < agent_deadline)) || fail \
+        "Directory profile $profile_id has unresolved inheritance, skills or functions after 120s"
+      sleep 2
+    done
+  done
 }
 
 # `compose::add` may either finish synchronously or return an asynchronous
@@ -382,10 +440,22 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# A process that exits before it is ready says why in its own log, not in the
+# probe that then found it gone: the cause is its last error line (its last
+# line when none reads as an error), and the probe is not recorded as the call
+# that failed.
+exited() {
+  local said
+  said=$(grep -E '^(error|Error)\b|\[(ERROR|FATAL)\]|panicked' "$2" 2>/dev/null | tail -n 1 || true)
+  [[ -n "$said" ]] || said=$(grep -v '^[[:space:]]*$' "$2" 2>/dev/null | tail -n 1 || true)
+  rm -f "$iii_failed"
+  fail "$1 exited before becoming ready${said:+: ${said:0:300}}"
+}
+
 wait_for_engine() {
   local response started=$SECONDS
   while ((SECONDS - started < wait_seconds)); do
-    kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before becoming ready"
+    kill -0 "$engine_pid" 2>/dev/null || exited "iii engine" "$artifact_dir/logs/engine.log"
     response=$(iii_trigger "$probe_ms" engine::workers::list --json '{}' 2>/dev/null || true)
     jq -e '.workers != null' <<<"$response" >/dev/null 2>&1 && return 0
     sleep 1
@@ -396,7 +466,7 @@ wait_for_engine() {
 wait_for_compose() {
   local started=$SECONDS
   while ((SECONDS - started < wait_seconds)); do
-    kill -0 "$compose_pid" 2>/dev/null || fail "iii compose exited before becoming ready"
+    kill -0 "$compose_pid" 2>/dev/null || exited "iii compose" "$artifact_dir/logs/compose.log"
     if iii_trigger "$probe_ms" compose::list --namespace "$namespace" --json '{}' >/dev/null 2>&1; then
       return 0
     fi
@@ -417,16 +487,19 @@ log "Downloading exact iii CLI $cli_version"
 curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "$cli_url" -o "$cli_archive"
 printf '%s  %s\n' "$cli_sha" "$cli_archive" | sha256sum --check --status
 tar -xzf "$cli_archive" -C "$tools_dir"
+# What Compose boots a VM worker with, from the same release and beside iii,
+# as the installer puts them. Only Compose runs them.
+while IFS=$'\t' read -r companion companion_sha; do
+  curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "${cli_url%/*}/$companion" -o "$run_root/$companion"
+  printf '%s  %s\n' "${companion_sha#sha256:}" "$run_root/$companion" | sha256sum --check --status
+  tar -xzf "$run_root/$companion" -C "$tools_dir"
+done < <(jq -r '.runtime.cli.companions[]? | [.asset, .sha256] | @tsv' "$contract_path")
 chmod +x "$iii_bin"
 export PATH="$tools_dir:$PATH"
 observed_cli_version=$("$iii_bin" --version 2>&1)
 printf '%s\n' "$observed_cli_version" >"$artifact_dir/iii-version.txt"
 [[ "$observed_cli_version" == *"$cli_version"* ]] || fail \
   "iii CLI version mismatch: expected $cli_version, observed $observed_cli_version"
-forbidden_name="iii""-worker"
-if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; then
-  fail "forbidden lifecycle helper was installed"
-fi
 
 if [[ "$campaign_group_id" == case-kanban-* ]] && [[ -z "$assemble_only" ]]; then
   fixture_root=${HARNESS_E2E_KANBAN_FIXTURE_ROOT:-"$repo_root/target/kanban-fixture"}
@@ -458,6 +531,13 @@ if [[ -n "$project_template" ]]; then
       profile_assets=true
     fi
   done
+fi
+
+if (( ${kits_requested:-0} > 0 )) && [[ -z "$assemble_only" ]]; then
+  failure_phase=kit_assets
+  [[ -n "$contract_asset_root" ]] || fail "Frozen kit assets are unavailable"
+  python3 "$contract_tool" restore-kit-assets --contract "$contract_path" \
+    --source-root "$contract_asset_root" --project-root "$project_dir"
 fi
 
 # One env file for the whole project, written after any template scaffold so
@@ -508,7 +588,7 @@ fi
 # The Directory's configuration is per group; the assembled stack has none.
 # It also serves this repository's own profiles (config/agents: null-agent,
 # the null-canary subject); a template file with the same id wins.
-if [[ "$profile_assets" == true && -z "$assemble_only" ]]; then
+if [[ "$profile_assets" == true ]]; then
   mkdir -p "$project_dir/agents"
   for profile in "$repo_root"/config/agents/*.md; do
     [[ -e "$project_dir/agents/${profile##*/}" ]] || cp "$profile" "$project_dir/agents/"
@@ -605,64 +685,87 @@ if [[ -n "$assemble_only" ]]; then
     compose_trigger compose::add "file=$compose_file" "worker=$worker" >"$artifact_dir/stack/add-$worker.json"
     await_compose_add "$artifact_dir/stack/add-$worker.json" "$artifact_dir/stack/add-$worker-operation.json"
   done
-  # compose::add expanded every root into its graph and wrote the lock beside
-  # the file; the exit handler takes the project down.
-  log "Assembled $compose_file and its worker-compose.lock"
+  python3 "$contract_tool" locked-workers --lock "${compose_file%.yaml}.lock" \
+    >"$artifact_dir/stack/declared-workers.json"
+  if (( ${kits_requested:-0} > 0 )); then
+    python3 "$contract_tool" configure-profile-root --compose "$compose_file" \
+      --profile-root "$project_dir" --namespace "$namespace"
+  fi
+  if (( ${kits_requested:-0} == 0 )); then
+    # compose::add expanded every root into its graph and wrote the lock beside
+    # the file; the exit handler takes the project down.
+    log "Assembled $compose_file and its worker-compose.lock"
+    failure_phase=complete
+    exit 0
+  fi
+
+  failure_phase=project_start
+  # compose::add already started the Directory from its resolved graph. A
+  # project-wide restart forgets the cached manifest and reloads the profile
+  # roots above; a named restart or another compose::up keeps the old config.
+  compose_trigger compose::restart "file=$compose_file" >"$artifact_dir/stack/profile-root-restart.json"
+  cp "$artifact_dir/stack/profile-root-restart.json" "$artifact_dir/stack/up.json"
+  jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
+  compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
+  iii_trigger 30000 engine::workers::list --json '{}' >"$artifact_dir/stack/workers.json"
+  capture_processes "$artifact_dir/stack/processes-during.json"
+
+  failure_phase=profile_assets
+  load_profile_assets
+
+  failure_phase=kit_installation
+  mkdir -p "$artifact_dir/stack/kits"
+  cp "$compose_file" "$run_root/pre-kit-worker-compose.yaml"
+  cp "${compose_file%.yaml}.lock" "$run_root/pre-kit-worker-compose.lock"
+  while IFS= read -r kit; do
+    receipt="$artifact_dir/stack/kits/$(printf '%s' "$kit" | sha256sum | cut -c1-16).json"
+    request=$(jq -cn --arg kit "$kit" '{kit:$kit,apply:true}')
+    project_trigger directory::download-kit "$request" 1200000 >"$receipt"
+    status=$(jq -r '.status // empty' "$receipt")
+    case "$status" in
+      applied | up_to_date) ;;
+      planned) fail "Kit $kit was not applied automatically: $(jq -r '.message // "review required"' "$receipt")" ;;
+      *) fail "Kit $kit installation answered '${status:-no status}'" ;;
+    esac
+  done < <(jq -r '.runtime.kits.requested[]' "$contract_path")
+  python3 "$contract_tool" assert-lock-preserves-workers \
+    --before "$run_root/pre-kit-worker-compose.lock" --after "${compose_file%.yaml}.lock"
+  failure_phase=agent_profile_resolution
+  profile_ids=$(python3 "$contract_tool" kit-agent-ids --lock "$project_dir/kits.lock" \
+    --selected "$(jq -r '.suite.agent_profile // empty' "$contract_path")")
+  wait_for_profiles <<<"$profile_ids"
+  python3 "$contract_tool" export-kit-assets --project-root "$project_dir" \
+    --output-root "$artifact_dir/stack/kit-assets"
+  # Profile roots belong to this preparation attempt. Groups inject their own
+  # after restoring the same assets; do not put this temporary path in identity.
+  python3 "$contract_tool" configure-profile-root --compose "$compose_file" \
+    --profile-root "$project_dir" --namespace "$namespace" --clear
+  log "Installed the stack kits and froze $compose_file with its worker-compose.lock"
   failure_phase=complete
   exit 0
 fi
 
+python3 "$contract_tool" locked-workers --lock "${compose_file%.yaml}.lock" \
+  >"$artifact_dir/stack/declared-workers.json"
 export_compose
-
-python3 "$contract_tool" roots --compose "$compose_file" \
-  | jq -Rc 'split("@") | {worker: .[0], version: .[1]}' \
-  | jq -sc '.' >"$artifact_dir/stack/declared-workers.json"
 
 failure_phase=project_start
 up_request=$(jq -cn --arg file "$compose_file" --argjson frozen "$frozen" '{file:$file,frozen:$frozen}')
 start_compose "$up_request"
 jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
+# Group stack is now up; the remaining work records and runs it.
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 iii_trigger 30000 engine::workers::list --json '{}' >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 
-if [[ "$profile_assets" == true ]]; then
+if [[ "$profile_assets" == true ]] && (( ${kits_requested:-0} == 0 )); then
   failure_phase=profile_assets
-  mkdir -p "$artifact_dir/stack/skills"
-  while IFS= read -r package; do
-    worker=$(jq -r '.worker' <<<"$package")
-    request=$(jq -c '{worker,version}' <<<"$package")
-    receipt="$artifact_dir/stack/skills/$worker.json"
-    error_log="$artifact_dir/stack/skills/$worker.log"
-    if project_trigger directory::skills::download_from_registry "$request" 60000 >"$receipt" 2>"$error_log"; then
-      jq -e --arg version "$(jq -r '.version' <<<"$package")" '.source.version == $version' "$receipt" >/dev/null
-    else
-      # A worker may legitimately publish no skill bundle. Other failures must
-      # not turn a requested profile into an execution with different assets.
-      grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" || fail "Could not load pinned skills for $worker"
-      rm -f "$iii_failed"
-    fi
-  done < <(jq -c '.[]' "$artifact_dir/stack/declared-workers.json")
-  # Registry bundles may also contain profiles. The explicitly selected
-  # template owns collisions; restore its files after the versioned downloads.
-  for folder in agents skills; do
-    if [[ -d "$run_root/template-assets/$folder" ]]; then
-      mkdir -p "$project_dir/$folder"
-      cp -R "$run_root/template-assets/$folder/." "$project_dir/$folder/"
-    fi
-  done
+  load_profile_assets
 fi
 
 if jq -e '.suite.agent_profile != null' "$contract_path" >/dev/null; then
   failure_phase=agent_profile_resolution
-  agent_request=$(jq -c '{id: .suite.agent_profile}' "$contract_path")
-  agent_deadline=$((SECONDS + 120))
-  # Directory downloads installed workers' profiles asynchronously after boot.
-  until project_trigger directory::agents::get "$agent_request" 10000 \
-    >"$artifact_dir/stack/agent-profile.json" 2>"$artifact_dir/stack/agent-profile-error.log"; do
-    ((SECONDS < agent_deadline)) || fail "Directory profile $(jq -r '.suite.agent_profile' "$contract_path") is unavailable after 120s"
-    sleep 2
-  done
+  wait_for_profiles <<<"$(jq -r '.suite.agent_profile' "$contract_path")"
 fi
 
 failure_phase=runner_readiness

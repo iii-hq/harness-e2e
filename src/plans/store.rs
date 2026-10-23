@@ -2913,7 +2913,9 @@ pub(crate) mod tests {
             vec![
                 ("default", "repository"),
                 ("harness-template", "repository"),
-                ("linkly", "repository")
+                ("linkly", "repository"),
+                ("onboarding", "repository"),
+                ("deepwork", "repository")
             ]
         );
         assert!(listed.iter().all(|stack| stack.warnings.is_empty()));
@@ -3030,6 +3032,8 @@ pub(crate) mod tests {
                 "default".to_owned(),
                 "harness-template".into(),
                 "linkly".into(),
+                "onboarding".into(),
+                "deepwork".into(),
                 again.id
             ]
         );
@@ -3115,7 +3119,7 @@ pub(crate) mod tests {
             let error = manager.create_stack(request).await.unwrap_err();
             assert!(error.to_string().contains(reason), "{error}");
         }
-        assert_eq!(manager.stacks().await.unwrap().len(), 4);
+        assert_eq!(manager.stacks().await.unwrap().len(), 6);
     }
 
     #[tokio::test]

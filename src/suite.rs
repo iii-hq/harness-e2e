@@ -59,7 +59,9 @@ fn subject_cost_cap(subject: &SubjectConfig, scenario_id: &str) -> Option<f64> {
 }
 
 fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
-    if crate::scenarios::kanban::IDS.contains(&scenario_id) {
+    if crate::scenarios::kanban::IDS.contains(&scenario_id)
+        || scenario_id == crate::scenarios::onboarding_tour::ID
+    {
         Some(5.0)
     } else if scenario_id == crate::scenarios::linkly::ID {
         Some(10.0)
@@ -241,6 +243,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    config.subject.agent = pinned_agent_profile(&config.scenarios, config.subject.agent.take())?;
     let agent = match config.subject.agent.as_deref() {
         Some(id) => Some(
             resolve_agent_profile(&context, id)
@@ -1131,6 +1134,32 @@ impl ResolvedAgentProfile {
     }
 }
 
+/// The profile the run's session takes: the one its tests fix, else the
+/// requested one. A run whose tests fix different profiles, or fix one beside
+/// tests that do not, cannot have one session identity and is refused.
+fn pinned_agent_profile(
+    scenarios: &[ScenarioId],
+    requested: Option<String>,
+) -> Result<Option<String>> {
+    let pins: HashSet<Option<&str>> = scenarios
+        .iter()
+        .map(|scenario| scenario.module().agent_profile())
+        .collect();
+    let pinned = match pins.into_iter().collect::<Vec<_>>().as_slice() {
+        [Some(pinned)] => *pinned,
+        [None] | [] => return Ok(requested),
+        _ => {
+            bail!("these tests fix different agent profiles; run each profile in its own execution")
+        }
+    };
+    match requested {
+        Some(requested) if requested != pinned => {
+            bail!("the selected tests run as agent profile '{pinned}', not '{requested}'")
+        }
+        _ => Ok(Some(pinned.into())),
+    }
+}
+
 async fn resolve_agent_profile(context: &E2eContext, id: &str) -> Result<ResolvedAgentProfile> {
     let response: AgentProfileResponse = serde_json::from_value(
         context
@@ -1152,11 +1181,17 @@ async fn resolve_agent_profile(context: &E2eContext, id: &str) -> Result<Resolve
     {
         bail!("agent profile '{id}' has an unresolved inheritance chain: {error}");
     }
-    if !response.unknown_skills.is_empty() || !response.unknown_functions.is_empty() {
+    if !response.unknown_skills.is_empty() {
         bail!(
-            "agent profile '{id}' has unavailable skills {:?} or functions {:?}",
-            response.unknown_skills,
-            response.unknown_functions
+            "agent profile '{id}' has unavailable skills {:?}",
+            response.unknown_skills
+        );
+    }
+    if !response.unknown_functions.is_empty() {
+        tracing::warn!(
+            profile = id,
+            functions = ?response.unknown_functions,
+            "the agent profile preloads functions this stack does not register; the Harness skips them"
         );
     }
     let mut resolved_skills = Vec::with_capacity(response.skills.len());
@@ -1186,6 +1221,7 @@ async fn resolve_agent_profile(context: &E2eContext, id: &str) -> Result<Resolve
         artifact: AgentProfileArtifact {
             id: response.id,
             configuration_sha256,
+            unavailable_functions: response.unknown_functions,
         },
         model: response.model,
         reasoning_effort: response.reasoning_effort,
@@ -2292,6 +2328,11 @@ async fn execute(
     let scripted_dialogue = messages.len() > 1;
     let mut metrics = None;
     for (exchange, message) in messages.into_iter().enumerate() {
+        if exchange > 0 {
+            module
+                .before_followup(context, run_id, session_id, exchange - 1)
+                .await;
+        }
         context.drain_turn_completed_events();
         let response: SendResponse = context
             .trigger(
@@ -3577,11 +3618,38 @@ mod tests {
     }
 
     #[test]
+    fn a_test_that_fixes_its_profile_runs_as_it() {
+        let onboarding = [ScenarioId::OnboardingTour];
+        assert_eq!(
+            pinned_agent_profile(&onboarding, None).unwrap().as_deref(),
+            Some("ade-worker-builder")
+        );
+        assert_eq!(
+            pinned_agent_profile(&onboarding, Some("ade-worker-builder".into()))
+                .unwrap()
+                .as_deref(),
+            Some("ade-worker-builder")
+        );
+        assert!(pinned_agent_profile(&onboarding, Some("default".into())).is_err());
+        assert!(
+            pinned_agent_profile(&[ScenarioId::OnboardingTour, ScenarioId::MinimalPath], None)
+                .is_err()
+        );
+        assert_eq!(
+            pinned_agent_profile(&[ScenarioId::MinimalPath], Some("tech-lead".into()))
+                .unwrap()
+                .as_deref(),
+            Some("tech-lead")
+        );
+    }
+
+    #[test]
     fn agent_profile_resolves_route_reasoning_and_report_identity() {
         let profile = ResolvedAgentProfile {
             artifact: AgentProfileArtifact {
                 id: "software-engineer".into(),
                 configuration_sha256: crate::artifact::sha256_bytes(b"profile"),
+                unavailable_functions: Vec::new(),
             },
             model: Some("openai-codex::gpt-5.3-codex".into()),
             reasoning_effort: Some("ultra".into()),
@@ -3625,6 +3693,7 @@ mod tests {
             artifact: AgentProfileArtifact {
                 id: "profile".into(),
                 configuration_sha256: crate::artifact::sha256_bytes(b"profile"),
+                unavailable_functions: Vec::new(),
             },
             model: Some("claude-code/claude-sonnet-5".into()),
             reasoning_effort: None,

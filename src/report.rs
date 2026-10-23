@@ -1556,6 +1556,11 @@ impl E2eScenarioReport {
 pub struct AgentProfileArtifact {
     pub id: String,
     pub configuration_sha256: String,
+    /// Functions the profile preloads that this stack does not register. The
+    /// Harness skips them, as it does in any project without their worker;
+    /// listed so a report says the session ran without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_functions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
