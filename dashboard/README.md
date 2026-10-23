@@ -138,8 +138,13 @@ every series of the suite that shares the rest into one line (the answer's
 `selected` says `any` back, and each point carries its own provider, model and
 profile); the page marks a change of model or profile with a diamond. Each execution is a point measured over its
 technically valid runs only; completed runs are counted out of the planned ones
-(tests × runs per test), and a planned test with no run is `not_run`. The stack
-filter defaults to `any`, also when it names a stack the series never ran on;
+(tests × runs per test), and a planned test with no run is `not_run`. A point
+also carries the means of output, cache read, cache write and reasoning tokens,
+of cost, and of validation and technical retries (attempts beyond the first);
+a run that lacks one is left out of that mean, and the cost is null for a model
+without pricing. A run stored before trends measured these keeps them null until
+the next start reprojects it once from its native bundle; a run whose bundle is
+gone stays null, a gap in those means. The stack filter defaults to `any`, also when it names a stack the series never ran on;
 an execution that recorded no stack joins the stack whose first execution ran
 workers of the same names. `since` and `until` (RFC 3339, inclusive, on the
 start) limit the points and the stacks' counts; the series listed and the

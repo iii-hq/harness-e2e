@@ -166,6 +166,13 @@ pub(super) struct TrendMeasures {
     pub function_calls: Option<f64>,
     pub function_call_errors: Option<f64>,
     pub turns_mean: Option<f64>,
+    pub cost_usd_mean: Option<f64>,
+    pub output_tokens_mean: Option<f64>,
+    pub cache_read_tokens_mean: Option<f64>,
+    pub cache_write_tokens_mean: Option<f64>,
+    pub reasoning_tokens_mean: Option<f64>,
+    pub validation_retries_mean: Option<f64>,
+    pub technical_retries_mean: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -192,6 +199,13 @@ pub(super) struct TrendRun {
     pub function_calls: Option<f64>,
     pub function_call_errors: Option<f64>,
     pub turns: Option<f64>,
+    pub cost_usd: Option<f64>,
+    pub output_tokens: Option<f64>,
+    pub cache_read_tokens: Option<f64>,
+    pub cache_write_tokens: Option<f64>,
+    pub reasoning_tokens: Option<f64>,
+    pub validation_retries: Option<f64>,
+    pub technical_retries: Option<f64>,
 }
 
 /// An execution of the Console that belongs to a series.
@@ -583,6 +597,7 @@ fn point(
         .filter(|run| run.counted)
         .copied()
         .collect::<Vec<_>>();
+    let measures = measures(runs, planned_runs(&execution.parameters, runs.len()));
     let mut ids = planned.iter().map(String::as_str).collect::<Vec<_>>();
     for run in runs {
         if !ids.contains(&run.test.as_str()) {
@@ -616,21 +631,6 @@ fn point(
             }
         })
         .collect();
-    let measures = (!counted.is_empty()).then(|| TrendMeasures {
-        score_mean: mean(counted.iter().map(|run| run.score)),
-        completed: counted.iter().filter(|run| run.completed).count(),
-        planned: if planned.is_empty() {
-            runs.len()
-        } else {
-            planned.len() * execution.parameters.runs.max(1) as usize
-        },
-        duration_ms_mean: mean(counted.iter().map(|run| run.duration_ms)),
-        input_tokens_mean: mean(counted.iter().map(|run| run.input_tokens)),
-        function_calls_mean: mean(counted.iter().map(|run| run.function_calls)),
-        function_calls: sum(counted.iter().map(|run| run.function_calls)),
-        function_call_errors: sum(counted.iter().map(|run| run.function_call_errors)),
-        turns_mean: mean(counted.iter().map(|run| run.turns)),
-    });
     let summary = execution.summary;
     let source = source(summary);
     let local = source.kind == "local";
@@ -666,6 +666,44 @@ fn point(
         measures,
         tests,
     }
+}
+
+/// The planned runs (tests × runs per test), else the runs observed:
+/// what `completed` counts.
+pub(super) fn planned_runs(parameters: &ExecutionParameters, observed: usize) -> usize {
+    if parameters.scenarios.is_empty() {
+        observed
+    } else {
+        parameters.scenarios.len() * parameters.runs.max(1) as usize
+    }
+}
+
+/// The counted runs' measures; none counted is none. A run that lacks a
+/// value is left out of its mean, never counted as zero.
+pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasures> {
+    let counted = runs
+        .iter()
+        .filter(|run| run.counted)
+        .copied()
+        .collect::<Vec<_>>();
+    (!counted.is_empty()).then(|| TrendMeasures {
+        score_mean: mean(counted.iter().map(|run| run.score)),
+        completed: counted.iter().filter(|run| run.completed).count(),
+        planned,
+        duration_ms_mean: mean(counted.iter().map(|run| run.duration_ms)),
+        input_tokens_mean: mean(counted.iter().map(|run| run.input_tokens)),
+        function_calls_mean: mean(counted.iter().map(|run| run.function_calls)),
+        function_calls: sum(counted.iter().map(|run| run.function_calls)),
+        function_call_errors: sum(counted.iter().map(|run| run.function_call_errors)),
+        turns_mean: mean(counted.iter().map(|run| run.turns)),
+        cost_usd_mean: mean(counted.iter().map(|run| run.cost_usd)),
+        output_tokens_mean: mean(counted.iter().map(|run| run.output_tokens)),
+        cache_read_tokens_mean: mean(counted.iter().map(|run| run.cache_read_tokens)),
+        cache_write_tokens_mean: mean(counted.iter().map(|run| run.cache_write_tokens)),
+        reasoning_tokens_mean: mean(counted.iter().map(|run| run.reasoning_tokens)),
+        validation_retries_mean: mean(counted.iter().map(|run| run.validation_retries)),
+        technical_retries_mean: mean(counted.iter().map(|run| run.technical_retries)),
+    })
 }
 
 /// The mean of the values present; none present is none.
@@ -740,6 +778,13 @@ mod tests {
             function_calls: Some(10.0),
             function_call_errors: Some(1.0),
             turns: Some(5.0),
+            cost_usd: Some(0.25),
+            output_tokens: Some(40.0),
+            cache_read_tokens: Some(500.0),
+            cache_write_tokens: Some(30.0),
+            reasoning_tokens: Some(8.0),
+            validation_retries: Some(1.0),
+            technical_retries: Some(0.0),
         }
     }
 
@@ -765,6 +810,10 @@ mod tests {
             duration_ms: Some(9_000_000.0),
             function_calls: Some(1_000.0),
             turns: Some(1_000.0),
+            cost_usd: Some(9.0),
+            output_tokens: Some(1_000_000.0),
+            validation_retries: Some(50.0),
+            technical_retries: Some(2.0),
             ..run("t13", false, true, Some(0.0))
         });
         let response = trends(
@@ -787,11 +836,35 @@ mod tests {
         assert_eq!(measures.function_calls, Some(120.0));
         assert_eq!(measures.function_call_errors, Some(12.0));
         assert_eq!(measures.turns_mean, Some(5.0));
+        assert_eq!(measures.cost_usd_mean, Some(0.25));
+        assert_eq!(measures.output_tokens_mean, Some(40.0));
+        assert_eq!(measures.cache_read_tokens_mean, Some(500.0));
+        assert_eq!(measures.cache_write_tokens_mean, Some(30.0));
+        assert_eq!(measures.reasoning_tokens_mean, Some(8.0));
+        assert_eq!(measures.validation_retries_mean, Some(1.0));
+        assert_eq!(measures.technical_retries_mean, Some(0.0));
         let invalid = &point.tests[12];
         assert_eq!(
             (invalid.id.as_str(), invalid.state.as_str(), invalid.score),
             ("t13", "technical_invalid", None)
         );
+    }
+
+    #[test]
+    fn measures_count_only_counted_runs_and_keep_the_planned_runs_given() {
+        let invalid = run("t01", false, true, Some(10.0));
+        let scored = run("t01", true, true, Some(80.0));
+        let unpriced = TrendRun {
+            cost_usd: None,
+            validation_retries: Some(3.0),
+            ..run("t02", true, false, Some(40.0))
+        };
+        assert_eq!(measures(&[&invalid], 4), None);
+        let m = measures(&[&scored, &unpriced, &invalid], 4).unwrap();
+        assert_eq!((m.completed, m.planned, m.score_mean), (1, 4, Some(60.0)));
+        // A run without a cost is left out of the mean, never counted as zero.
+        assert_eq!(m.cost_usd_mean, Some(0.25));
+        assert_eq!(m.validation_retries_mean, Some(2.0));
     }
 
     #[test]

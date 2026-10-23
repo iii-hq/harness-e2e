@@ -24,6 +24,7 @@ use crate::report::{
 use crate::scenarios::{
     stable_seed, ExecutionPolicy, ScenarioCharacterization, ScenarioId, ScenarioSpec,
 };
+use crate::wire::SessionUsageTotals;
 
 const DEFAULT_PAGE_SIZE: u16 = 25;
 
@@ -440,6 +441,21 @@ struct RunMetrics {
     technical: Option<TechnicalState>,
     #[serde(default)]
     input_tokens: Option<f64>,
+    /// The fields from here on are absent in a projection written before
+    /// trends measured them; the next start reprojects it once.
+    #[serde(default)]
+    output_tokens: Option<f64>,
+    #[serde(default)]
+    cache_read_tokens: Option<f64>,
+    #[serde(default)]
+    cache_write_tokens: Option<f64>,
+    #[serde(default)]
+    reasoning_tokens: Option<f64>,
+    #[serde(default)]
+    validation_retries: Option<f64>,
+    /// Technical attempts beyond the first.
+    #[serde(default)]
+    technical_retries: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1096,7 +1112,8 @@ impl DashboardReadModel {
                         // ponytail: a projection written before runs kept their
                         // technical state counts a run by its score (an invalid
                         // run's is dropped): a valid unscored run of one is left
-                        // out, and none has input tokens. Reprojecting lifts it.
+                        // out, and none has its token counts or retries.
+                        // Reprojecting lifts it.
                         counted: run
                             .technical
                             .map_or(run.score.is_some(), |t| t == TechnicalState::Valid),
@@ -1107,6 +1124,13 @@ impl DashboardReadModel {
                         function_calls: run.function_calls,
                         function_call_errors: run.function_call_errors,
                         turns: run.turns,
+                        cost_usd: run.cost_usd,
+                        output_tokens: run.output_tokens,
+                        cache_read_tokens: run.cache_read_tokens,
+                        cache_write_tokens: run.cache_write_tokens,
+                        reasoning_tokens: run.reasoning_tokens,
+                        validation_retries: run.validation_retries,
+                        technical_retries: run.technical_retries,
                     }
                 }));
             }
@@ -1444,6 +1468,12 @@ fn scenario_contract_sha256(scenario: &E2eScenarioReport) -> Result<String> {
 }
 
 fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMetrics {
+    let totals = |field: fn(&SessionUsageTotals) -> Option<u64>| {
+        run.metrics
+            .as_ref()
+            .and_then(|metrics| field(&metrics.totals))
+            .map(|tokens| tokens as f64)
+    };
     let tokens = run.metrics.as_ref().and_then(|metrics| {
         metrics
             .totals
@@ -1499,11 +1529,20 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         status: run.status,
         assessment: assessment.clone(),
         technical: Some(run.technical),
-        input_tokens: run
-            .metrics
+        input_tokens: totals(|totals| totals.input_tokens),
+        output_tokens: totals(|totals| totals.output_tokens),
+        cache_read_tokens: totals(|totals| totals.cache_read_tokens),
+        cache_write_tokens: totals(|totals| totals.cache_write_tokens),
+        reasoning_tokens: totals(|totals| totals.reasoning_tokens),
+        validation_retries: run
+            .efficiency
             .as_ref()
-            .and_then(|metrics| metrics.totals.input_tokens)
-            .map(|tokens| tokens as f64),
+            .and_then(|efficiency| efficiency.validation_retries)
+            .map(|value| value as f64),
+        technical_retries: run
+            .efficiency
+            .as_ref()
+            .map(|efficiency| f64::from(efficiency.technical_attempts.saturating_sub(1))),
     }
 }
 
@@ -2096,8 +2135,15 @@ mod tests {
         let older = serde_json::to_string(&projection("local-older", TechnicalState::Valid))
             .unwrap()
             .replace(r#","technical":"valid""#, "")
-            .replace(r#","input_tokens":null"#, "");
+            .replace(r#","input_tokens":null"#, "")
+            .replace(r#","output_tokens":null"#, "")
+            .replace(r#","cache_read_tokens":null"#, "")
+            .replace(r#","cache_write_tokens":null"#, "")
+            .replace(r#","reasoning_tokens":null"#, "")
+            .replace(r#","validation_retries":null"#, "")
+            .replace(r#","technical_retries":null"#, "");
         assert!(!older.contains("\"technical\":"));
+        assert!(!older.contains(r#""reasoning_tokens":"#));
         let model = DashboardReadModel::indexed(
             vec![
                 projection("local-valid", TechnicalState::Valid),
@@ -2123,6 +2169,69 @@ mod tests {
         assert_eq!(
             counted("local-older"),
             ("direct_answer", true, Some(90.0), Some(1_500.0))
+        );
+        let older = &runs["local-older"][0];
+        assert_eq!(
+            (older.output_tokens, older.cost_usd, older.technical_retries),
+            (None, Some(0.1), None)
+        );
+    }
+
+    #[test]
+    fn trend_runs_carry_tokens_cost_and_retries_of_the_final_attempt() {
+        let mut report = super::super::tests::report();
+        let run = &mut report.scenarios[0].runs[0];
+        run.metrics = Some(crate::wire::Observed::from_normalized(
+            crate::wire::SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: SessionUsageTotals {
+                    sessions: 1,
+                    turns: 3,
+                    function_calls: 4,
+                    function_call_errors: 1,
+                    validation_retries: Some(2),
+                    input_tokens: Some(800),
+                    output_tokens: Some(200),
+                    cache_read_tokens: Some(5_000),
+                    cache_write_tokens: Some(300),
+                    reasoning_tokens: Some(50),
+                    ..SessionUsageTotals::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            },
+        ));
+        run.update_efficiency();
+        run.efficiency.as_mut().unwrap().technical_attempts = 3;
+        let projection = ExecutionProjection::from_stored(&StoredRun {
+            metadata: super::super::tests::metadata(),
+            report: Some(report),
+            live_progress: None,
+            live_progress_error: None,
+        })
+        .unwrap();
+        let model = DashboardReadModel::indexed(vec![projection], &BTreeSet::new()).unwrap();
+        let run = &model.trend_runs()["local-20260807T120000-abcdef12"][0];
+        assert_eq!(
+            (
+                run.input_tokens,
+                run.output_tokens,
+                run.cache_read_tokens,
+                run.cache_write_tokens,
+                run.reasoning_tokens
+            ),
+            (
+                Some(800.0),
+                Some(200.0),
+                Some(5_000.0),
+                Some(300.0),
+                Some(50.0)
+            )
+        );
+        assert_eq!(
+            (run.cost_usd, run.validation_retries, run.technical_retries),
+            (Some(0.1), Some(2.0), Some(2.0))
         );
     }
 
