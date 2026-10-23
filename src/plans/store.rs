@@ -4098,7 +4098,7 @@ esac"#,
         assert!(runner.record(&id).await.is_none());
     }
 
-    fn import_stub() -> PlanExecution {
+    pub(crate) fn import_stub() -> PlanExecution {
         PlanExecution {
             id: "plan-stub".into(),
             idempotency_key: "github:owner/repo#1".into(),
