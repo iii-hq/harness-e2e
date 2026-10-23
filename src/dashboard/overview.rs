@@ -194,7 +194,7 @@ pub(super) fn overview(
     });
 
     let mut unversioned = 0;
-    let mut releases = BTreeMap::<&str, BTreeMap<&str, &Ran>>::new();
+    let mut releases = BTreeMap::<&str, BTreeMap<(&str, Key), &Ran>>::new();
     for ran in &executions {
         let finished = matches!(
             ran.execution.summary["state"].as_str(),
@@ -209,11 +209,12 @@ pub(super) fn overview(
             continue;
         };
         let id = ran.point.source.release_control_execution_id.as_deref();
-        // Oldest first: a later attempt of the same id replaces the earlier.
+        // Oldest first: a later attempt of the same id and combination
+        // replaces the earlier; another combination under the id stays.
         releases
             .entry(release)
             .or_default()
-            .insert(id.unwrap_or_default(), ran);
+            .insert((id.unwrap_or_default(), combination_key(ran)), ran);
     }
     let mut lines = releases
         .into_iter()
@@ -345,6 +346,18 @@ pub(super) fn overview(
     }
 }
 
+/// The combination an execution ran: its series and its stack name.
+fn combination_key(ran: &Ran) -> Key {
+    (
+        ran.execution.key.clone(),
+        ran.point
+            .stack
+            .name
+            .clone()
+            .unwrap_or_else(|| NOT_RECORDED.into()),
+    )
+}
+
 /// A release's kept executions, oldest first, grouped by combination.
 fn line<'a>(release: &'a str, mut kept: Vec<&'a Ran<'a>>) -> Line<'a> {
     kept.sort_by(|left, right| {
@@ -352,12 +365,7 @@ fn line<'a>(release: &'a str, mut kept: Vec<&'a Ran<'a>>) -> Line<'a> {
     });
     let mut groups = BTreeMap::<Key, Vec<&Ran>>::new();
     for ran in &kept {
-        let stack = ran.point.stack.name.clone();
-        let key = (
-            ran.execution.key.clone(),
-            stack.unwrap_or_else(|| NOT_RECORDED.into()),
-        );
-        groups.entry(key).or_default().push(ran);
+        groups.entry(combination_key(ran)).or_default().push(ran);
     }
     let combinations = groups
         .into_iter()
@@ -1156,6 +1164,33 @@ pub(super) mod tests {
         assert_eq!(latest.executions, ["second"]);
         assert_eq!(latest.first_started_at, at(3));
         assert_eq!(score(&latest.aggregate), Some(90.0));
+    }
+
+    #[test]
+    fn one_release_control_id_keeps_each_combination_it_ran() {
+        let shared = |summary: &mut Value| {
+            summary["source"]["release_control_execution_id"] = json!("75b03d86")
+        };
+        let summaries = [
+            rc("p", 1, "1.9.2"),
+            with(rc("regression", 2, "1.9.3"), shared),
+            with(
+                with(rc("onboarding", 3, "1.9.3"), shared),
+                suite("onboarding", "Onboarding"),
+            ),
+        ]
+        .concat();
+        let overview = overview(
+            &summaries,
+            &runs(vec![
+                ("p", vec![scored("t1", 80.0)]),
+                ("regression", vec![scored("t1", 90.0)]),
+                ("onboarding", vec![scored("t9", 50.0)]),
+            ]),
+        );
+        let latest = &overview.releases[1];
+        assert_eq!(latest.executions, ["regression", "onboarding"]);
+        assert_eq!(latest.combinations.len(), 2);
     }
 
     #[test]
