@@ -11,6 +11,7 @@ use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 use url::Url;
 
 use super::bus::DashboardEvents;
+use super::overview::ReleaseOverview;
 use super::read_model::DashboardReadModel;
 use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
@@ -34,6 +35,44 @@ struct ControllerState {
     job: Option<RunMetadata>,
 }
 
+/// The cached read model, and how often the slot changed: what was derived
+/// from a model tells it from the one that replaced it, even when both left
+/// out the same previous attempts.
+#[derive(Default)]
+struct ModelSlot {
+    generation: u64,
+    /// The previous-attempts revision the model left out, and the model.
+    model: Option<(u64, Arc<DashboardReadModel>)>,
+}
+
+impl ModelSlot {
+    fn replace(&mut self, model: Option<(u64, Arc<DashboardReadModel>)>) {
+        self.model = model;
+        self.generation += 1;
+    }
+
+    /// Sets a summary's availability when it differs; otherwise nothing
+    /// changes, and what was derived from the model stays current.
+    fn mark_availability(&mut self, id: &str, availability: &Value) {
+        let Some((_, model)) = self.model.as_mut() else {
+            return;
+        };
+        let Some(position) = model
+            .summaries
+            .iter()
+            .position(|summary| summary["id"] == id && summary["availability"] != *availability)
+        else {
+            return;
+        };
+        Arc::make_mut(model).summaries[position]["availability"] = availability.clone();
+        self.generation += 1;
+    }
+}
+
+/// What `execution_summaries` and the overview were computed from: the read
+/// model's generation and the saved executions' revision.
+type Key = (u64, u64);
+
 pub(super) struct Controller {
     pub(super) plan_store: Arc<crate::plans::store::PlanStore>,
     pub(super) github_repository: String,
@@ -41,8 +80,12 @@ pub(super) struct Controller {
     defaults: Defaults,
     control: Option<ControlPlane>,
     state: Mutex<ControllerState>,
-    /// The read model and the previous-attempts revision it left out.
-    read_model: RwLock<Option<(u64, Arc<DashboardReadModel>)>>,
+    read_model: RwLock<ModelSlot>,
+    /// The last merged `execution_summaries`. Held while one is merged, so
+    /// callers that arrive meanwhile wait for it instead of merging again.
+    summaries: Mutex<Option<(Key, Arc<Vec<Value>>)>>,
+    /// The last `release_overview`, kept as `summaries` is.
+    overview: Mutex<Option<(Key, Arc<ReleaseOverview>)>>,
     events: Option<Arc<DashboardEvents>>,
     /// Turns for the GitHub imports in the background (`GITHUB_IMPORTS`).
     github_imports: Semaphore,
@@ -95,7 +138,9 @@ impl Controller {
             },
             control,
             state: Mutex::new(ControllerState { job: None }),
-            read_model: RwLock::new(None),
+            read_model: RwLock::default(),
+            summaries: Mutex::new(None),
+            overview: Mutex::new(None),
             events,
             github_imports: Semaphore::new(GITHUB_IMPORTS),
         });
@@ -173,16 +218,17 @@ impl Controller {
         } else {
             super::presenter::execution_detail_value_optional(&metadata, hydrated.report.as_ref())?
         };
-        if let Some((_, model)) = self.read_model.write().await.as_mut() {
-            if let Some(summary) = Arc::make_mut(model)
-                .summaries
-                .iter_mut()
-                .find(|summary| summary["id"] == id)
-            {
-                summary["availability"] = detail["availability"].clone();
-            }
-        }
+        self.mark_availability(id, &detail["availability"]).await;
         Ok(detail)
+    }
+
+    /// Records in the cached model what `execution_detail` found out about a
+    /// run's evidence.
+    async fn mark_availability(&self, id: &str, availability: &Value) {
+        self.read_model
+            .write()
+            .await
+            .mark_availability(id, availability);
     }
 
     pub(super) async fn attempt_get(
@@ -218,8 +264,47 @@ impl Controller {
         })
     }
 
+    /// Every execution listed, the native runs and the saved plan executions
+    /// together. The answer is kept until the read model or a saved
+    /// execution changes.
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
-        let mut summaries = self.read_model().await?.summaries.clone();
+        let (key, model) = self.keyed_read_model().await?;
+        self.summaries_of(key, &model).await
+    }
+
+    /// The read model with the key its derived answers are kept under.
+    async fn keyed_read_model(&self) -> Result<(Key, Arc<DashboardReadModel>)> {
+        // Read before the executions, so a write between the two merges
+        // them again next time.
+        let revision = self.plan_store.executions_revision();
+        let (generation, model) = self.read_model_at().await?;
+        Ok(((generation, revision), model))
+    }
+
+    async fn summaries_of(&self, key: Key, model: &DashboardReadModel) -> Result<Arc<Vec<Value>>> {
+        let mut kept = self.summaries.lock().await;
+        if let Some((at, summaries)) = kept.as_ref() {
+            if *at == key {
+                return Ok(summaries.clone());
+            }
+        }
+        let summaries = self.merge_summaries(model).await?;
+        // Without a control plane, a test hears of a live run only by reading
+        // its files again at every call.
+        #[cfg(test)]
+        if self.control.is_none()
+            && summaries
+                .iter()
+                .any(|summary| matches!(summary["status"].as_str(), Some("running" | "cancelling")))
+        {
+            return Ok(summaries);
+        }
+        *kept = Some((key, summaries.clone()));
+        Ok(summaries)
+    }
+
+    async fn merge_summaries(&self, model: &DashboardReadModel) -> Result<Arc<Vec<Value>>> {
+        let mut summaries = model.summaries.clone();
         let (parents, children) = self.plan_store.dashboard_summaries(&summaries).await?;
         #[cfg(test)]
         if self.control.is_none() {
@@ -257,12 +342,20 @@ impl Controller {
     }
 
     pub(super) async fn read_model(&self) -> Result<Arc<DashboardReadModel>> {
+        Ok(self.read_model_at().await?.1)
+    }
+
+    /// The read model, and the generation of the slot it came from.
+    async fn read_model_at(&self) -> Result<(u64, Arc<DashboardReadModel>)> {
         // Read before the previous attempts, so a change between the two
         // builds the model again next time.
         let attempts = self.plan_store.attempts_revision();
-        if let Some((revision, model)) = self.read_model.read().await.as_ref() {
-            if *revision == attempts {
-                return Ok(model.clone());
+        {
+            let slot = self.read_model.read().await;
+            if let Some((revision, model)) = &slot.model {
+                if *revision == attempts {
+                    return Ok((slot.generation, model.clone()));
+                }
             }
         }
         #[cfg(test)]
@@ -275,8 +368,7 @@ impl Controller {
                         anyhow::anyhow!("load dashboard test model task: {error}")
                     })??,
             );
-            *self.read_model.write().await = Some((attempts, model.clone()));
-            return Ok(model);
+            return Ok(self.install(attempts, model).await);
         }
         let mut records = self
             .control
@@ -289,8 +381,18 @@ impl Controller {
         }
         let discarded = self.plan_store.previous_attempts().await?;
         let model = Arc::new(DashboardReadModel::from_records(records, &discarded)?);
-        *self.read_model.write().await = Some((attempts, model.clone()));
-        Ok(model)
+        Ok(self.install(attempts, model).await)
+    }
+
+    /// Caches a model built at this previous-attempts revision.
+    async fn install(
+        &self,
+        attempts: u64,
+        model: Arc<DashboardReadModel>,
+    ) -> (u64, Arc<DashboardReadModel>) {
+        let mut slot = self.read_model.write().await;
+        slot.replace(Some((attempts, model.clone())));
+        (slot.generation, model)
     }
 
     /// Marks a record's projection unavailable when its native results or
@@ -315,7 +417,7 @@ impl Controller {
     /// attempts moved, the import failed, or the model changed meanwhile.
     async fn grow_read_model(&self, id: &str) -> Result<bool> {
         let attempts = self.plan_store.attempts_revision();
-        let base = match self.read_model.read().await.as_ref() {
+        let base = match self.read_model.read().await.model.as_ref() {
             Some((revision, model)) if *revision == attempts => model.clone(),
             _ => return Ok(false),
         };
@@ -341,14 +443,15 @@ impl Controller {
         };
         // Two imports can finish at once: only the model this one grew is
         // replaced.
-        let mut cached = self.read_model.write().await;
-        let unchanged = cached
+        let mut slot = self.read_model.write().await;
+        let unchanged = slot
+            .model
             .as_ref()
             .is_some_and(|(revision, model)| *revision == attempts && Arc::ptr_eq(model, &base));
         if !unchanged || self.plan_store.attempts_revision() != attempts {
             return Ok(false);
         }
-        *cached = Some((attempts, Arc::new(grown)));
+        slot.replace(Some((attempts, Arc::new(grown))));
         Ok(true)
     }
 
@@ -412,8 +515,8 @@ impl Controller {
         &self,
         request: super::trends::TrendsRequest,
     ) -> Result<super::trends::TrendsResponse> {
-        let model = self.read_model().await?;
-        let summaries = self.execution_summaries().await?;
+        let (key, model) = self.keyed_read_model().await?;
+        let summaries = self.summaries_of(key, &model).await?;
         Ok(super::trends::trends(
             &request,
             &summaries,
@@ -422,15 +525,23 @@ impl Controller {
     }
 
     /// The release overview over every execution listed: the Trends first
-    /// screen.
-    pub(super) async fn release_overview(&self) -> Result<super::overview::ReleaseOverview> {
-        let model = self.read_model().await?;
-        let summaries = self.execution_summaries().await?;
-        Ok(super::overview::overview(&summaries, &model.trend_runs()))
+    /// screen. Kept until the read model or a saved execution changes.
+    pub(super) async fn release_overview(&self) -> Result<Arc<ReleaseOverview>> {
+        let (key, model) = self.keyed_read_model().await?;
+        let mut kept = self.overview.lock().await;
+        if let Some((at, overview)) = kept.as_ref() {
+            if *at == key {
+                return Ok(overview.clone());
+            }
+        }
+        let summaries = self.summaries_of(key, &model).await?;
+        let overview = Arc::new(super::overview::overview(&summaries, &model.trend_runs()));
+        *kept = Some((key, overview.clone()));
+        Ok(overview)
     }
 
     async fn invalidate_summaries(&self) {
-        self.read_model.write().await.take();
+        self.read_model.write().await.replace(None);
     }
 
     pub(super) async fn suites(&self) -> Result<Vec<SuiteView>> {
@@ -911,7 +1022,9 @@ pub(super) mod tests {
             },
             control: None,
             state: Mutex::new(ControllerState { job: None }),
-            read_model: RwLock::new(None),
+            read_model: RwLock::default(),
+            summaries: Mutex::new(None),
+            overview: Mutex::new(None),
             events: None,
             github_imports: Semaphore::new(GITHUB_IMPORTS),
             ci_sync: crate::dashboard::ci_sync::CiSync::load(runs_dir),
@@ -926,7 +1039,7 @@ pub(super) mod tests {
             without_control_plane(manager(root, Arc::new(FakeRunner::new(root.into()))), root);
         let overview = controller.release_overview().await.unwrap();
         assert!(overview.releases.is_empty() && overview.locals.is_empty());
-        assert_eq!((overview.verdict, overview.unversioned), (None, 0));
+        assert_eq!((&overview.verdict, overview.unversioned), (&None, 0));
     }
 
     #[tokio::test]
@@ -1048,6 +1161,20 @@ esac"#,
         assert!(!controller.plan_store.import_deleted(&id).await.unwrap());
     }
 
+    /// Puts the native run of a bundle named `name` in the data directory.
+    fn place_native_run(root: &Path, data: &Path, name: &str) -> String {
+        let (bundle, _, id) =
+            exact_stack_bundle(&root.join(name), &format!("rc:e2e:{name}"), "1.8.8");
+        fs::rename(
+            bundle
+                .join("smoke-r01/groups/case-context/native")
+                .join(&id),
+            data.join(&id),
+        )
+        .unwrap();
+        id
+    }
+
     #[tokio::test]
     async fn an_import_grows_the_read_model_instead_of_rebuilding_it() {
         let root = tempfile::tempdir().unwrap();
@@ -1074,19 +1201,7 @@ esac"#,
             manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
             &data,
         );
-        // Puts a bundle's native run in the data directory.
-        let place = |name: &str| {
-            let (bundle, _, id) =
-                exact_stack_bundle(&root.path().join(name), &format!("rc:e2e:{name}"), "1.8.8");
-            fs::rename(
-                bundle
-                    .join("smoke-r01/groups/case-context/native")
-                    .join(&id),
-                data.join(&id),
-            )
-            .unwrap();
-            id
-        };
+        let place = |name: &str| place_native_run(root.path(), &data, name);
         // Held before the import, so the import's runs join a test version's.
         let held = place("held");
         let before = controller.read_model().await.unwrap();
@@ -1112,6 +1227,74 @@ esac"#,
         let built = DashboardReadModel::load(&data).unwrap();
         assert_eq!(model.state(), built.state());
         assert_eq!(model.trend_runs(), built.trend_runs());
+    }
+
+    #[tokio::test]
+    async fn a_second_overview_without_a_change_reuses_the_first() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = importing_run_1(root.path(), "");
+        let summaries = controller.execution_summaries().await.unwrap();
+        let overview = controller.release_overview().await.unwrap();
+        // Nothing was written: the same answers, not new ones.
+        assert!(Arc::ptr_eq(
+            &summaries,
+            &controller.execution_summaries().await.unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &overview,
+            &controller.release_overview().await.unwrap()
+        ));
+        controller
+            .trends(super::super::trends::TrendsRequest::default())
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &summaries,
+            &controller.execution_summaries().await.unwrap()
+        ));
+
+        // A saved execution changes what is listed and what is counted.
+        controller
+            .plan_store
+            .begin_github_import("o/r", 1)
+            .await
+            .unwrap();
+        let changed = controller.execution_summaries().await.unwrap();
+        let recounted = controller.release_overview().await.unwrap();
+        assert_eq!(changed.len(), 1);
+        assert!(!Arc::ptr_eq(&overview, &recounted));
+        // Both equal what a controller that never saw the old answers builds.
+        let fresh = without_control_plane(controller.plan_store.clone(), &root.path().join("data"));
+        assert_eq!(*changed, *fresh.execution_summaries().await.unwrap());
+        assert_eq!(*recounted, *fresh.release_overview().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_changed_availability_reaches_the_summaries_and_an_unchanged_one_keeps_them() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let controller = without_control_plane(
+            manager(&data, Arc::new(FakeRunner::new(data.clone()))),
+            &data,
+        );
+        let id = place_native_run(root.path(), &data, "held");
+        let listed = controller.execution_summaries().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_ne!(listed[0]["availability"], "unavailable");
+
+        controller
+            .mark_availability(&id, &json!("unavailable"))
+            .await;
+        let marked = controller.execution_summaries().await.unwrap();
+        assert_eq!(marked[0]["availability"], "unavailable");
+
+        controller
+            .mark_availability(&id, &json!("unavailable"))
+            .await;
+        assert!(Arc::ptr_eq(
+            &marked,
+            &controller.execution_summaries().await.unwrap()
+        ));
     }
 
     /// A controller whose `gh` answers run 1 and lists its artifacts as

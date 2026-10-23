@@ -568,7 +568,6 @@ impl PlanStore {
     /// Moves on every write or delete of a saved plan execution, failed ones
     /// included: read it before `executions()`, so a change between the two
     /// reads them again.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn executions_revision(&self) -> u64 {
         self.saved_revision.load(Ordering::SeqCst)
     }

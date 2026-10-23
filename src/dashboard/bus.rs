@@ -714,7 +714,10 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             let controller = controller.clone();
             RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
                 let controller = controller.clone();
-                async move { controller.release_overview().await.map_err(handler_error) }
+                async move {
+                    let overview = controller.release_overview().await.map_err(handler_error)?;
+                    Ok((*overview).clone())
+                }
             })
         },
     );
