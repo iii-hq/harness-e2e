@@ -126,9 +126,12 @@ dispatches), and a failed import nothing else explains reads its error.
 `gh` errors are shown as they come.
 `e2e::dashboard::ci-sync-set` turns CI sync on or off, `ci-sync-check` checks
 GitHub now, and `ci-sync-status-get` reads its status: the phase (`off`,
-`quick`, `backfill`, `keeping_up`), whether `gh` is signed in, the last and
-next check, imported, failed and remaining runs, and a rate-limit pause. The
-status is kept in memory and filled again on the first check after a restart.
+`quick`, `backfill`, `keeping_up`), whether `gh` is signed in (null when `gh`
+is missing or does not answer), the last and next check, imported, failed and
+remaining runs, a rate-limit pause, and a message only for what stopped a whole
+check (`gh` not ready, a listing that failed; a run whose import failed only
+counts as failed). The status is kept in memory and filled again on the first
+check after a restart.
 
 Tick two executions and **compare** (`#/compare/<a>/<b>`): the first is A, the
 base. Both are read with `e2e::dashboard::execution-get` and compared the way

@@ -24,7 +24,7 @@ const WORKFLOW: &str = "exact-stack-e2e.yml";
 const KEY_PREFIX: &str = "github-start:";
 
 const NOT_INSTALLED: &str = "The GitHub CLI (`gh`) is not installed for the Harness E2E worker. Install it, then run `gh auth login`.";
-const NOT_SIGNED_IN: &str =
+pub(crate) const NOT_SIGNED_IN: &str =
     "`gh` is not signed in on the worker's machine. Run `gh auth login` there, then reopen this dialog.";
 
 /// One job of the run's latest attempt, as the follow loop last saw it.
