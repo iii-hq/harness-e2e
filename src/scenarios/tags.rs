@@ -162,6 +162,7 @@ impl ScenarioId {
             match self {
                 Self::MinimalPath => (&[W::State], A::CoreLoop, &[]),
                 Self::PersistentState => (&[W::State], A::DataSafety, &[]),
+                Self::DeepworkBatchRepair => (&[W::Ide, W::State], A::Coordination, &[]),
                 Self::ToolContractRecovery => (&[W::Engine], A::ToolAdaptation, &[]),
                 Self::ShellCoderSandbox => (&[W::Ide], A::Coding, &[D::Backend]),
                 Self::TimerWake => (&[W::Engine, W::State], A::Scheduling, &[]),
