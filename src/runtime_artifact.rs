@@ -6,7 +6,23 @@ use serde_json::json;
 
 use crate::context::E2eContext;
 
-pub(crate) async fn observe(context: &E2eContext, engine_url: &str) -> Result<String> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Observation {
+    pid: u64,
+    start_ticks: u64,
+    pub(crate) digest: String,
+}
+
+pub(crate) fn confirmed_digest(
+    before: Option<Observation>,
+    after: Option<Observation>,
+) -> Option<String> {
+    before
+        .filter(|first| Some(first) == after.as_ref())
+        .map(|same| same.digest)
+}
+
+pub(crate) async fn observe(context: &E2eContext, engine_url: &str) -> Result<Observation> {
     ensure!(
         cfg!(target_os = "linux"),
         "executable capture requires Linux procfs"
@@ -47,8 +63,19 @@ pub(crate) async fn observe(context: &E2eContext, engine_url: &str) -> Result<St
     tokio::task::spawn_blocking(move || capture(pid)).await?
 }
 
-fn capture(pid: u64) -> Result<String> {
+fn start_ticks(pid: u64) -> Result<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    // The command name may contain spaces and parentheses. Field 22 is starttime.
+    stat.rsplit_once(')')
+        .and_then(|(_, fields)| fields.split_whitespace().nth(19))
+        .context("process start time is absent")?
+        .parse()
+        .context("invalid process start time")
+}
+
+fn capture(pid: u64) -> Result<Observation> {
     ensure!(pid > 0, "Harness PID must be positive");
+    let started = start_ticks(pid).context("identify Harness process")?;
     let path = std::path::PathBuf::from(format!("/proc/{pid}/exe"));
     let executable = std::fs::read_link(&path).context("resolve Harness executable")?;
     ensure!(
@@ -58,7 +85,15 @@ fn capture(pid: u64) -> Result<String> {
         "Compose PID is not a Harness executable"
     );
     let bytes = std::fs::read(&path).context("read running Harness executable")?;
-    Ok(crate::artifact::sha256_bytes(&bytes))
+    ensure!(
+        start_ticks(pid)? == started,
+        "Harness PID was reused during capture"
+    );
+    Ok(Observation {
+        pid,
+        start_ticks: started,
+        digest: crate::artifact::sha256_bytes(&bytes),
+    })
 }
 
 #[cfg(test)]
@@ -70,6 +105,37 @@ mod tests {
         assert!(capture(0).is_err());
         assert!(capture(u64::MAX).is_err());
         assert!(capture(u64::from(std::process::id())).is_err());
+    }
+
+    #[test]
+    fn only_an_unchanged_process_can_attest_a_suite() {
+        let sample = || Observation {
+            pid: 10,
+            start_ticks: 20,
+            digest: "abc".into(),
+        };
+        assert_eq!(
+            confirmed_digest(Some(sample()), Some(sample())),
+            Some("abc".into())
+        );
+        assert_eq!(confirmed_digest(None, Some(sample())), None);
+        assert_eq!(confirmed_digest(Some(sample()), None), None);
+        for changed in [
+            Observation {
+                pid: 11,
+                ..sample()
+            },
+            Observation {
+                start_ticks: 21,
+                ..sample()
+            },
+            Observation {
+                digest: "def".into(),
+                ..sample()
+            },
+        ] {
+            assert_eq!(confirmed_digest(Some(sample()), Some(changed)), None);
+        }
     }
 
     #[test]
@@ -86,10 +152,22 @@ mod tests {
             .spawn()
             .unwrap();
         std::fs::remove_file(&executable).unwrap();
-        let captured = capture(u64::from(process.id()));
+        let captured = capture(u64::from(process.id())).unwrap();
+        assert_eq!(captured.digest, expected);
         let _ = process.kill();
         process.wait().unwrap();
+        std::fs::copy("/bin/bash", &executable).unwrap();
+        let mut replacement = std::process::Command::new(&executable)
+            .args(["-c", "read -t 30"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let after = capture(u64::from(replacement.id())).unwrap();
+        let _ = replacement.kill();
+        replacement.wait().unwrap();
+        std::fs::remove_file(&executable).unwrap();
         std::fs::remove_dir(&directory).unwrap();
-        assert_eq!(captured.unwrap(), expected);
+        assert_eq!(after.digest, expected);
+        assert_eq!(confirmed_digest(Some(captured), Some(after)), None);
     }
 }

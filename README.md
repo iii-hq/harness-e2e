@@ -965,7 +965,9 @@ contracts, definition digest, materialized inputs, seed, policies, artifacts,
 and raw structural evidence.
 
 On a local Linux Compose stack, `system_under_test.harness_binary_sha256`
-records the running Harness executable before the suite starts. It stays in
+records the running Harness executable only when its PID, process start time
+and executable digest agree before and after the suite. A restart or an
+unavailable observation leaves the digest absent. It stays in
 the report after teardown. It is absent when the process cannot be observed;
 a version or source revision does not substitute for this executable digest.
 

@@ -243,10 +243,10 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
-    match crate::runtime_artifact::observe(&context, &config.url).await {
-        Ok(digest) => system_under_test.harness_binary_sha256 = Some(digest),
-        Err(error) => tracing::warn!(%error, "Harness binary digest is unavailable"),
-    }
+    let initial_artifact = crate::runtime_artifact::observe(&context, &config.url)
+        .await
+        .inspect_err(|error| tracing::warn!(%error, "Harness binary identity is unavailable"))
+        .ok();
     config.subject.agent = pinned_agent_profile(&config.scenarios, config.subject.agent.take())?;
     let agent = match config.subject.agent.as_deref() {
         Some(id) => Some(
@@ -475,6 +475,11 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
 
     worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
 
+    let final_artifact = crate::runtime_artifact::observe(&context, &config.url)
+        .await
+        .ok();
+    system_under_test.harness_binary_sha256 =
+        crate::runtime_artifact::confirmed_digest(initial_artifact, final_artifact);
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let execution = ExecutionIdentity {
         execution_id,

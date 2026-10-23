@@ -366,13 +366,16 @@ impl Runner for ControlPlane {
         let context = crate::context::E2eContext::from_client(self.client().clone());
         let contracts = context.preflight_control_plane().await?;
         let versions = context.runtime_versions().await?;
-        Ok(serde_json::to_value(
-            crate::identity::SystemUnderTestIdentity::from_environment(
-                versions.engine,
-                versions.harness,
-                &contracts,
-            )?,
-        )?)
+        let mut identity = crate::identity::SystemUnderTestIdentity::from_environment(
+            versions.engine,
+            versions.harness,
+            &contracts,
+        )?;
+        identity.harness_binary_sha256 = crate::runtime_artifact::observe(&context, self.url())
+            .await
+            .ok()
+            .map(|current| current.digest);
+        Ok(serde_json::to_value(identity)?)
     }
     async fn cancel(&self, id: &str) -> Result<()> {
         ControlPlane::cancel(self, id).await?;
@@ -2130,7 +2133,7 @@ pub(crate) mod tests {
                 engine_version: "0.22.0".into(),
                 engine_revision: None,
                 harness_version: harness.into(),
-                harness_binary_sha256: None,
+                harness_binary_sha256: Some(artifact::sha256_bytes(harness.as_bytes())),
                 e2e_repository: "iii-hq/harness-e2e".into(),
                 e2e_revision: "0123456789abcdef0123456789abcdef01234567".into(),
                 contract_hashes: BTreeMap::from([(
@@ -5022,6 +5025,27 @@ esac"#,
             serde_json::to_value(&unchanged).unwrap(),
             serde_json::to_value(&finished).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn rerun_accepts_the_same_captured_binary_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let started = manager
+            .start_execution(parameters(&["minimal_path"]), "")
+            .await
+            .unwrap();
+        let before = terminal(&manager, &started.id).await;
+        let pinned = before.system_under_test.as_ref().unwrap();
+        assert!(pinned["harness_binary_sha256"].as_str().is_some());
+        let rerun = manager
+            .rerun_scenario(&before.id, "minimal_path")
+            .await
+            .unwrap();
+        let after = terminal(&manager, &rerun.id).await;
+        assert_eq!(after.system_under_test, before.system_under_test);
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
