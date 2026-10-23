@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type {
   DashboardDataBridge,
   JsonObject,
@@ -43,15 +43,25 @@ export function followRunChanges(
   }
 }
 
-/** Follows run changes while `bridge` is set. Pass a stable `onChange`. */
+/** Follows run changes while `bridge` is set, calling the latest
+ *  `onChange`: a new one keeps the subscription and a call it postponed. */
 export function useRunChanges(
   bridge: RunChanges | null,
   onChange: (payload: JsonObject) => unknown,
   delayMs = 400,
   minIntervalMs = 0,
 ) {
+  const latest = useRef(onChange)
+  useEffect(() => {
+    latest.current = onChange
+  }, [onChange])
   useEffect(() => {
     if (bridge)
-      return followRunChanges(bridge, onChange, delayMs, minIntervalMs)
-  }, [bridge, onChange, delayMs, minIntervalMs])
+      return followRunChanges(
+        bridge,
+        (payload) => latest.current(payload),
+        delayMs,
+        minIntervalMs,
+      )
+  }, [bridge, delayMs, minIntervalMs])
 }

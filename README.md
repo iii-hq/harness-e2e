@@ -653,16 +653,16 @@ started here, one imported at the same GitHub `updated_at`, one whose artifacts
 are gone or that left no bundle, and one deleted here; it tries other failures
 3 times. A run that left no results (no `e2e-contract` artifact: cancelled
 early, or failed before its tests) is skipped, not kept as a failed execution:
-its execution is deleted, though not remembered as a delete, the run counts as
-skipped, and CI sync leaves it alone until GitHub updates it (a re-run is tried
-again). An import of such a run that ended failed, an earlier one or one by
-hand, turns into the same skip when CI sync next lists the run, so **Import**
-shows its error until then (for a run CI sync already skipped, until GitHub
-updates it). A run whose import fails only counts as failed (its execution
-keeps why, or the worker log when none was created); the status says what
-stopped a whole check: `gh` missing, signed out or not answering, or a listing
-that failed. A `gh` rate limit pauses it an hour without counting an attempt.
-`gh` needs read access to the repository.
+its execution is deleted, though not remembered as a delete, the status line
+counts it as without results, and CI sync leaves it alone until GitHub updates
+it (a re-run is tried again). An import of such a run that ended failed, an
+earlier one or one by hand, turns into the same skip when CI sync next lists
+the run, so **Import** shows its error until then (for a run CI sync already
+skipped, until GitHub updates it). A run whose import fails only counts as
+failed (its execution keeps why, or the worker log when none was created); the
+status says what stopped a whole check: `gh` missing, signed out or not
+answering, or a listing that failed. A `gh` rate limit pauses it an hour
+without counting an attempt. `gh` needs read access to the repository.
 
 ### Run in Docker
 
