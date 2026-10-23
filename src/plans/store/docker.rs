@@ -2047,6 +2047,7 @@ mod tests {
             saved: Default::default(),
             saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
+            saved_stale: Default::default(),
         })
     }
 

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -389,6 +389,15 @@ impl Runner for ControlPlane {
     }
 }
 
+/// Marks the saved executions stale when dropped: a write whose caller went
+/// before `saved` followed it.
+struct Unapplied<'a>(&'a AtomicBool);
+impl Drop for Unapplied<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 pub(crate) struct PlanStore {
     pub(crate) root: PathBuf,
     persistence: Option<Persistence>,
@@ -413,6 +422,9 @@ pub(crate) struct PlanStore {
     /// Moves on every write or delete of a saved plan execution, failed ones
     /// included.
     saved_revision: AtomicU64,
+    /// Set when a write was dropped before `saved` followed it: the next read
+    /// takes the database's word.
+    saved_stale: AtomicBool,
 }
 impl PlanStore {
     pub(crate) async fn new(
@@ -433,6 +445,7 @@ impl PlanStore {
             saved: Default::default(),
             saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
+            saved_stale: AtomicBool::new(false),
         });
         if manager.runner.is_some() {
             manager.reconcile().await?;
@@ -499,10 +512,15 @@ impl PlanStore {
         &self,
         read: impl FnOnce(&BTreeMap<String, PlanExecution>) -> T,
     ) -> Result<T> {
-        if let Some(saved) = &*self.saved.read().await {
-            return Ok(read(saved));
+        if !self.saved_stale.load(Ordering::SeqCst) {
+            if let Some(saved) = &*self.saved.read().await {
+                return Ok(read(saved));
+            }
         }
         let mut saved = self.saved.write().await;
+        if self.saved_stale.swap(false, Ordering::SeqCst) {
+            *saved = None;
+        }
         let executions = match saved.take() {
             Some(executions) => executions,
             None => self
@@ -518,7 +536,7 @@ impl PlanStore {
         Ok(read(saved.insert(executions)))
     }
     /// `write` to the database, then `apply` to the saved executions, one
-    /// write at a time.
+    /// write at a time. Dropped between the two, it leaves them stale.
     async fn change_saved(
         &self,
         write: impl std::future::Future<Output = Result<()>>,
@@ -527,6 +545,7 @@ impl PlanStore {
         let _writing = self.saved_writes.lock().await;
         // Loaded before the write: a load still reading could miss it.
         self.saved(|_| ()).await?;
+        let unapplied = Unapplied(&self.saved_stale);
         let written = write.await;
         let mut saved = self.saved.write().await;
         match saved.as_mut() {
@@ -535,6 +554,7 @@ impl PlanStore {
             // the next read takes the database's word.
             _ => *saved = None,
         }
+        std::mem::forget(unapplied);
         // Either way, the next read may find them changed.
         self.saved_revision.fetch_add(1, Ordering::SeqCst);
         written
@@ -573,14 +593,15 @@ impl PlanStore {
     }
     /// The native runs a later attempt replaced, in every execution.
     pub(crate) async fn previous_attempts(&self) -> Result<BTreeSet<String>> {
-        Ok(self
-            .executions()
-            .await?
-            .iter()
-            .flat_map(|execution| &execution.slots)
-            .flat_map(|slot| &slot.previous_attempts)
-            .map(|attempt| attempt.execution_id.clone())
-            .collect())
+        self.saved(|saved| {
+            saved
+                .values()
+                .flat_map(|execution| &execution.slots)
+                .flat_map(|slot| &slot.previous_attempts)
+                .map(|attempt| attempt.execution_id.clone())
+                .collect()
+        })
+        .await
     }
     /// Newest first by `started_at`, then id.
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
@@ -1096,8 +1117,9 @@ impl PlanStore {
     }
 
     /// Skip this GitHub run as GitHub last updated it (`run_updated_at`): its
-    /// execution goes with no tombstone, so a re-run is imported again. An
-    /// import of it under way is not deleted under it.
+    /// execution goes with no tombstone, so a re-run is imported again. Only
+    /// an execution that left no results goes: an import of it begun or
+    /// ended since is not deleted under it.
     pub(crate) async fn skip_import(
         &self,
         id: &str,
@@ -1106,10 +1128,8 @@ impl PlanStore {
     ) -> Result<()> {
         let _guard = self.lock.lock().await;
         ensure!(
-            !self
-                .read_execution(id)
-                .await
-                .is_ok_and(|execution| execution.active() || execution.state == "importing"),
+            self.saved(|saved| saved.get(id).is_none_or(left_no_results))
+                .await?,
             "An import of this run began meanwhile; it is not skipped."
         );
         self.change_saved(
@@ -2054,6 +2074,18 @@ fn stack_changes(recorded: &[StackWorker], now: &[StackWorker]) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+/// An import that ended failed because the run left no results (no
+/// e2e-contract artifact), and holds no runs of an earlier import: it
+/// installed nothing.
+pub(crate) fn left_no_results(execution: &PlanExecution) -> bool {
+    execution.state == "failed"
+        && !github_started(execution)
+        && execution
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("keeps no e2e-contract artifact"))
+        && native_runs(execution).all(str::is_empty)
+}
 /// Every native run an execution's slots ran, previous attempts included.
 pub(crate) fn native_runs(execution: &PlanExecution) -> impl Iterator<Item = &str> {
     execution.slots.iter().flat_map(|slot| {
@@ -2528,6 +2560,7 @@ pub(crate) mod tests {
             saved: Default::default(),
             saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
+            saved_stale: AtomicBool::new(false),
         })
     }
     /// A stand-in `gh`: a shell script, with a short deadline.
@@ -2604,6 +2637,7 @@ pub(crate) mod tests {
             saved: Default::default(),
             saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
+            saved_stale: AtomicBool::new(false),
         });
         let suite = manager
             .create_suite(SuiteCreateRequest {
@@ -3958,6 +3992,20 @@ esac"#,
             restarted.read_execution(&failed.id).await.unwrap().state,
             "importing"
         );
+        // Nor one that ended since with its results.
+        let completed = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        restarted.write_execution(&completed).await.unwrap();
+        assert!(restarted
+            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .await
+            .is_err());
+        assert_eq!(
+            restarted.read_execution(&failed.id).await.unwrap().state,
+            "completed"
+        );
     }
 
     #[tokio::test]
@@ -4436,6 +4484,40 @@ esac"#,
         store_raw(root.path(), &lost.id, serde_json::to_string(&lost).unwrap());
         assert!(store.write_execution(&lost).await.is_err());
         assert_eq!(store.executions_revision(), revision + 1);
+
+        let listed = store.executions().await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            serde_json::to_value(listed).unwrap(),
+            serde_json::to_value(manager(root.path(), runner).executions().await.unwrap()).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_dropped_before_it_applied_reads_the_database_again() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let store = manager(root.path(), runner.clone());
+        let kept = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        store.write_execution(&kept).await.unwrap();
+        let lost = PlanExecution {
+            id: "plan-lost".into(),
+            idempotency_key: "lost".into(),
+            ..kept.clone()
+        };
+        // Its commit lands, then its caller is dropped before the copy follows.
+        let write = async {
+            store_raw(root.path(), &lost.id, serde_json::to_string(&lost).unwrap());
+            std::future::pending::<Result<()>>().await
+        };
+        let dropped = tokio::time::timeout(
+            Duration::from_millis(100),
+            store.change_saved(write, |_| ()),
+        );
+        assert!(dropped.await.is_err());
 
         let listed = store.executions().await.unwrap();
         assert_eq!(listed.len(), 2);
@@ -5155,6 +5237,19 @@ esac"#,
                 failed.execution_id.clone(),
                 second.slots[0].execution_id.clone()
             ])
+        );
+        // Read in place, it equals the scan of every execution listed.
+        assert_eq!(
+            manager.previous_attempts().await.unwrap(),
+            manager
+                .executions()
+                .await
+                .unwrap()
+                .iter()
+                .flat_map(|execution| &execution.slots)
+                .flat_map(|slot| &slot.previous_attempts)
+                .map(|attempt| attempt.execution_id.clone())
+                .collect::<BTreeSet<_>>()
         );
 
         // Totals, assessment and runtime count the current attempts only;

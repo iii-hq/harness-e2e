@@ -15,7 +15,7 @@ use tokio::sync::Notify;
 
 use super::controller::Controller;
 use crate::plans::store::{
-    github_started, import_id, native_runs, rate_limited, ExecutionSource, PlanExecution,
+    github_started, import_id, left_no_results, rate_limited, ExecutionSource, PlanExecution,
     NOT_SIGNED_IN,
 };
 
@@ -441,18 +441,6 @@ fn needs_import(
     execution.state == "failed"
         && !gone(execution.error.as_deref().unwrap_or_default())
         && attempts < MAX_ATTEMPTS
-}
-
-/// An import that ended failed because the run left no results, and holds
-/// no runs of an earlier import: CI sync skips the run instead of keeping it.
-fn left_no_results(execution: &PlanExecution) -> bool {
-    execution.state == "failed"
-        && !github_started(execution)
-        && execution
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("keeps no e2e-contract artifact"))
-        && native_runs(execution).all(str::is_empty)
 }
 
 /// A failure no retry fixes.
