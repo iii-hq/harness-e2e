@@ -37,6 +37,7 @@ pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
 pub mod mechanical_reaction;
+pub mod memory;
 pub mod minimal_path;
 pub mod moving_target;
 pub mod onboarding_tour;
