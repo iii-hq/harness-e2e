@@ -433,16 +433,6 @@ impl Persistence {
         .await
     }
 
-    pub(crate) async fn saved_execution(&self, id: &str) -> Result<Option<PlanExecution>> {
-        let rows = self
-            .query(
-                "SELECT id, payload_json, payload_sha256 FROM saved_plan_executions WHERE id = ?",
-                json!([id]),
-            )
-            .await?;
-        Ok(self.retained_executions(rows).await?.pop())
-    }
-
     pub(crate) async fn saved_executions(&self) -> Result<Vec<PlanExecution>> {
         let rows = self
             .rows(
@@ -995,6 +985,8 @@ pub(crate) mod tests {
         refuse_writes: bool,
         /// The most rows one query answered.
         largest_reply: usize,
+        /// Every query's SQL, in the order it ran.
+        queries: Vec<String>,
     }
 
     /// Ends the client's connection loop when the server answering it goes.
@@ -1076,6 +1068,17 @@ pub(crate) mod tests {
             self.0.lock().unwrap().largest_reply
         }
 
+        /// How many queries read `table`.
+        pub(crate) fn queries(&self, table: &str) -> usize {
+            let from = format!(" FROM {table}");
+            let tables = self.0.lock().unwrap();
+            tables
+                .queries
+                .iter()
+                .filter(|sql| sql.contains(&from))
+                .count()
+        }
+
         /// Keep a row as another runner wrote it.
         pub(crate) fn insert(&self, table: &str, row: Value) {
             self.0
@@ -1099,6 +1102,7 @@ pub(crate) mod tests {
                 let (sql, params) = statement(data);
                 let rows = execute(&mut tables.rows, &sql, &params)?;
                 tables.largest_reply = tables.largest_reply.max(rows.len());
+                tables.queries.push(sql);
                 return Ok(json!({"rows": rows}));
             }
             if function_id != DATABASE_TRANSACTION {

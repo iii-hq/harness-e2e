@@ -1,7 +1,7 @@
 //! Executions composed of native runs, and the suites and stacks this
 //! Console keeps.
 //! Every planned child and its idempotency key is durable before admission.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -403,6 +403,11 @@ pub(crate) struct PlanStore {
     /// Moves whenever a slot's previous attempts change, so views that leave
     /// them out know to read them again.
     attempts: AtomicU64,
+    /// Every saved plan execution by id, as `executions()` reads them: read
+    /// from the database once, since this worker is their only writer.
+    saved: tokio::sync::OnceCell<std::sync::RwLock<BTreeMap<String, PlanExecution>>>,
+    /// Moves on every write or delete of a saved plan execution.
+    saved_revision: AtomicU64,
 }
 impl PlanStore {
     pub(crate) async fn new(
@@ -420,6 +425,8 @@ impl PlanStore {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_revision: AtomicU64::new(0),
         });
         if manager.runner.is_some() {
             manager.reconcile().await?;
@@ -475,17 +482,31 @@ impl PlanStore {
         Ok(stacks)
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
-        self.load_execution(id)
-            .await
-            .map(ran_where_it_came_from)
-            .map(resolved_from_lock)
-    }
-    async fn load_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
-        self.persistence()?
-            .saved_execution(id)
+        self.saved()
             .await?
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
             .context("unknown execution")
+    }
+    /// The saved executions, read from the database on first use; concurrent
+    /// first uses wait for that one read.
+    async fn saved(&self) -> Result<&std::sync::RwLock<BTreeMap<String, PlanExecution>>> {
+        self.saved
+            .get_or_try_init(|| async {
+                let executions = self.persistence()?.saved_executions().await?;
+                anyhow::Ok(std::sync::RwLock::new(
+                    executions
+                        .into_iter()
+                        .map(ran_where_it_came_from)
+                        .map(resolved_from_lock)
+                        .map(|execution| (execution.id.clone(), execution))
+                        .collect(),
+                ))
+            })
+            .await
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
@@ -496,7 +517,18 @@ impl PlanStore {
         Ok(())
     }
     async fn save_execution(&self, execution: &PlanExecution) -> Result<()> {
-        self.persistence()?.save_execution_receipt(execution).await
+        // Loaded before the write: a load still reading could miss it.
+        let saved = self.saved().await?;
+        self.persistence()?
+            .save_execution_receipt(execution)
+            .await?;
+        let execution = resolved_from_lock(ran_where_it_came_from(execution.clone()));
+        saved
+            .write()
+            .unwrap()
+            .insert(execution.id.clone(), execution);
+        self.saved_revision.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     /// The ids of Docker executions as they change in the background.
     pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
@@ -505,6 +537,12 @@ impl PlanStore {
     /// Changes whenever a slot's previous attempts do.
     pub(crate) fn attempts_revision(&self) -> u64 {
         self.attempts.load(Ordering::SeqCst)
+    }
+    /// Moves on every write or delete of a saved plan execution: read it
+    /// before `executions()`, so a change between the two reads them again.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn executions_revision(&self) -> u64 {
+        self.saved_revision.load(Ordering::SeqCst)
     }
     /// The native runs a later attempt replaced, in every execution.
     pub(crate) async fn previous_attempts(&self) -> Result<BTreeSet<String>> {
@@ -517,13 +555,18 @@ impl PlanStore {
             .map(|attempt| attempt.execution_id.clone())
             .collect())
     }
+    /// Newest first, as the database lists them.
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
-        let executions = self.persistence()?.saved_executions().await?;
-        Ok(executions
-            .into_iter()
-            .map(ran_where_it_came_from)
-            .map(resolved_from_lock)
-            .collect())
+        let mut executions = self
+            .saved()
+            .await?
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        executions.sort_by(|a, b| (&b.started_at, &b.id).cmp(&(&a.started_at, &a.id)));
+        Ok(executions)
     }
 
     /// Every suite an execution can run: the master plan's, read-only, then
@@ -1012,7 +1055,10 @@ impl PlanStore {
                 id,
                 matches!(execution.source, ExecutionSource::Github { .. }),
             )
-            .await
+            .await?;
+        self.saved().await?.write().unwrap().remove(id);
+        self.saved_revision.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Whether this GitHub run's execution was deleted since it was last
@@ -2425,6 +2471,8 @@ pub(crate) mod tests {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_revision: AtomicU64::new(0),
         })
     }
     /// A stand-in `gh`: a shell script, with a short deadline.
@@ -2498,6 +2546,8 @@ pub(crate) mod tests {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_revision: AtomicU64::new(0),
         });
         let suite = manager
             .create_suite(SuiteCreateRequest {
@@ -2523,8 +2573,9 @@ pub(crate) mod tests {
             db.local_suite(&suite.id).await.unwrap().unwrap().label,
             "Essential checks before merge copy"
         );
+        let saved = db.saved_executions().await.unwrap();
         assert_eq!(
-            db.saved_execution(&id).await.unwrap().unwrap().slots.len(),
+            saved.iter().find(|e| e.id == id).unwrap().slots.len(),
             execution.slots.len()
         );
 
@@ -4123,6 +4174,76 @@ esac"#,
     }
 
     #[tokio::test]
+    async fn executions_are_read_from_the_database_once() {
+        let root = tempfile::tempdir().unwrap();
+        store_raw(
+            root.path(),
+            "plan-stub",
+            serde_json::to_string(&import_stub()).unwrap(),
+        );
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        assert_eq!(manager.executions().await.unwrap().len(), 1);
+        assert_eq!(manager.executions().await.unwrap().len(), 1);
+        manager.read_execution("plan-stub").await.unwrap();
+        assert_eq!(database(root.path()).queries("saved_plan_executions"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_written_or_deleted_execution_shows_without_a_reload_and_moves_the_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        assert!(manager.executions().await.unwrap().is_empty());
+        let revision = manager.executions_revision();
+        let execution = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        manager.write_execution(&execution).await.unwrap();
+        let listed = manager.executions().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].state, "completed");
+        assert_eq!(manager.executions_revision(), revision + 1);
+
+        manager.delete_execution(&execution.id).await.unwrap();
+        assert!(manager.executions().await.unwrap().is_empty());
+        assert!(manager.read_execution(&execution.id).await.is_err());
+        assert_eq!(manager.executions_revision(), revision + 2);
+        assert_eq!(database(root.path()).queries("saved_plan_executions"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_new_store_on_the_same_database_reads_what_the_last_one_wrote() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let first = manager(root.path(), runner.clone());
+        let kept = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        let deleted = PlanExecution {
+            id: "plan-deleted".into(),
+            idempotency_key: "deleted".into(),
+            ..kept.clone()
+        };
+        first.write_execution(&kept).await.unwrap();
+        first.write_execution(&deleted).await.unwrap();
+        first.rename(&kept.id, "Kept").await.unwrap();
+        first.delete_execution(&deleted.id).await.unwrap();
+
+        // As a restarted worker finds them.
+        let restarted = manager(root.path(), runner);
+        let listed = restarted.executions().await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|execution| (execution.id.as_str(), execution.label.as_deref()))
+                .collect::<Vec<_>>(),
+            [("plan-stub", Some("Kept"))]
+        );
+        assert!(restarted.read_execution(&deleted.id).await.is_err());
+    }
+
+    #[tokio::test]
     async fn dashboard_summaries_skip_bad_receipts_without_hiding_valid_children() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
@@ -4184,8 +4305,12 @@ esac"#,
             system_under_test: None,
             rerun: None,
         };
-        manager.write_execution(&execution).await.unwrap();
+        // Stored before the first write reads the saved executions.
         store_raw(root.path(), "corrupt", "not json".into());
+        manager.write_execution(&execution).await.unwrap();
+        assert!(database(root.path())
+            .row("saved_plan_executions", "corrupt")
+            .is_none());
 
         let (summaries, children) = manager
             .dashboard_summaries(&[json!({
