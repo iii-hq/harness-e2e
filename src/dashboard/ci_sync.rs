@@ -343,7 +343,7 @@ async fn import(controller: &Arc<Controller>, mut rows: Vec<Value>) -> Result<Op
                         &execution,
                         row["updated_at"].as_str().unwrap_or_default(),
                     )
-                    .await?
+                    .await;
                 }
                 Ok(Some(_)) => sync.lock().failed += 1,
                 Err(error) if rate_limited(&format!("{error:#}")) => return Ok(Some(sync.pause())),
@@ -379,8 +379,11 @@ async fn decide(controller: &Controller, row: &Value) -> Result<bool> {
                 }
                 _ => String::new(),
             };
-            skip(controller, &failed, &at).await?;
-            skipped = Some(at);
+            if skip(controller, &failed, &at).await {
+                skipped = Some(at);
+            } else {
+                execution = Some(failed);
+            }
         }
     }
     let deleted = controller.plan_store.import_deleted(&id).await?;
@@ -393,19 +396,25 @@ async fn decide(controller: &Controller, row: &Value) -> Result<bool> {
 }
 
 /// Skip a run that left no results, as GitHub updated it at `run_updated_at`:
-/// its execution goes, and the Console hears so.
-async fn skip(controller: &Controller, failed: &PlanExecution, run_updated_at: &str) -> Result<()> {
-    controller
+/// its execution goes, and the Console hears so. `false` when it could not
+/// (an import of it began meanwhile, or the write failed): one run's skip
+/// only goes to the log, and the pass goes on.
+async fn skip(controller: &Controller, failed: &PlanExecution, run_updated_at: &str) -> bool {
+    if let Err(error) = controller
         .plan_store
         .skip_import(
             &failed.id,
             run_updated_at,
             failed.error.as_deref().unwrap_or_default(),
         )
-        .await?;
+        .await
+    {
+        tracing::warn!(execution_id = %failed.id, error = %format!("{error:#}"), "CI sync could not skip a run that left no results");
+        return false;
+    }
     controller.ci_sync.lock().skipped += 1;
     controller.emit_change("deleted", &failed.id).await;
-    Ok(())
+    true
 }
 
 /// A listed run needs an import unless it was deleted here, skipped as GitHub
@@ -908,6 +917,54 @@ esac"#,
         );
         let status = controller.ci_sync_status();
         assert_eq!((status.failed, status.skipped), (0, 3));
+    }
+
+    #[tokio::test]
+    async fn a_run_ci_sync_could_not_skip_stays_failed_and_the_pass_goes_on() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(
+            root,
+            &[
+                GH,
+                r#"
+  *workflows/*) printf '{"total_count":1,"workflow_runs":['; run 8 'E2E · rc-8'; printf ']}' ;;
+  *artifacts*) ;;
+  *runs/8) run 8 'E2E · rc-8' ;;
+esac"#,
+            ]
+            .concat(),
+        );
+        // Imported before CI sync skipped such runs, it ended failed.
+        let (begun, _) = controller
+            .plan_store
+            .begin_github_import("o/r", 8)
+            .await
+            .unwrap();
+        controller
+            .plan_store
+            .finish_github_import(&begun.id)
+            .await
+            .unwrap();
+        controller.ci_sync_set(true).unwrap();
+        // Its skip cannot be written.
+        crate::plans::store::tests::database(&root.join("data")).refuse_writes();
+
+        assert_eq!(tick(&controller).await, Duration::ZERO);
+        let status = controller.ci_sync_status();
+        assert_eq!(
+            (status.message, status.phase, status.skipped),
+            (None, CiSyncPhase::Backfill, 0)
+        );
+        assert_eq!(
+            controller
+                .plan_store
+                .read_execution(&begun.id)
+                .await
+                .unwrap()
+                .state,
+            "failed"
+        );
     }
 
     #[tokio::test]
