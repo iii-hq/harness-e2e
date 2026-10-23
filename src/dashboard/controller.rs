@@ -19,8 +19,8 @@ use crate::control::{
 };
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
-    import_id, native_runs, ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest,
-    GithubRunsListRequest, SuiteView,
+    import_id, left_no_results, native_runs, ExecutionParameters, GithubRunContractsRequest,
+    GithubRunImportRequest, GithubRunsListRequest, SuiteView,
 };
 use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
@@ -49,6 +49,16 @@ impl ModelSlot {
     fn replace(&mut self, model: Option<(u64, Arc<DashboardReadModel>)>) {
         self.model = model;
         self.generation += 1;
+    }
+
+    /// Caches a model built while the slot was at `generation`. Refused when
+    /// the slot changed since: the model may lack that change.
+    fn install(&mut self, generation: u64, model: (u64, Arc<DashboardReadModel>)) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.replace(Some(model));
+        true
     }
 
     /// Sets a summary's availability when it differs; otherwise nothing
@@ -289,18 +299,22 @@ impl Controller {
             }
         }
         let summaries = self.merge_summaries(model).await?;
-        // Without a control plane, a test hears of a live run only by reading
-        // its files again at every call.
         #[cfg(test)]
-        if self.control.is_none()
-            && summaries
-                .iter()
-                .any(|summary| matches!(summary["status"].as_str(), Some("running" | "cancelling")))
-        {
+        if self.reads_live_runs_again(&summaries) {
             return Ok(summaries);
         }
         *kept = Some((key, summaries.clone()));
         Ok(summaries)
+    }
+
+    /// Without a control plane, a test hears of a live run only by reading
+    /// its files again at every call: nothing derived from one is kept.
+    #[cfg(test)]
+    fn reads_live_runs_again(&self, summaries: &[Value]) -> bool {
+        self.control.is_none()
+            && summaries
+                .iter()
+                .any(|summary| matches!(summary["status"].as_str(), Some("running" | "cancelling")))
     }
 
     async fn merge_summaries(&self, model: &DashboardReadModel) -> Result<Arc<Vec<Value>>> {
@@ -345,30 +359,45 @@ impl Controller {
         Ok(self.read_model_at().await?.1)
     }
 
-    /// The read model, and the generation of the slot it came from.
+    /// The read model, and the generation of the slot it came from. A model
+    /// built while the slot changed is not kept: it may lack that change.
     async fn read_model_at(&self) -> Result<(u64, Arc<DashboardReadModel>)> {
-        // Read before the previous attempts, so a change between the two
-        // builds the model again next time.
-        let attempts = self.plan_store.attempts_revision();
-        {
-            let slot = self.read_model.read().await;
-            if let Some((revision, model)) = &slot.model {
-                if *revision == attempts {
-                    return Ok((slot.generation, model.clone()));
+        let mut retried = false;
+        loop {
+            // Read before the previous attempts, so a change between the two
+            // builds the model again next time.
+            let attempts = self.plan_store.attempts_revision();
+            let generation = {
+                let slot = self.read_model.read().await;
+                match &slot.model {
+                    Some((revision, model)) if *revision == attempts => {
+                        return Ok((slot.generation, model.clone()));
+                    }
+                    _ => slot.generation,
                 }
+            };
+            let model = Arc::new(self.build_read_model().await?);
+            let mut slot = self.read_model.write().await;
+            if slot.install(generation, (attempts, model.clone())) {
+                return Ok((slot.generation, model));
             }
+            if retried {
+                // Answered as built, under a generation the slot has left, so
+                // nothing derived from it is reused.
+                return Ok((generation, model));
+            }
+            retried = true;
         }
+    }
+
+    /// A read model of every record, previous attempts left out.
+    async fn build_read_model(&self) -> Result<DashboardReadModel> {
         #[cfg(test)]
         if self.control.is_none() {
             let runs_dir = self.runs_dir.clone();
-            let model = Arc::new(
-                tokio::task::spawn_blocking(move || DashboardReadModel::load(&runs_dir))
-                    .await
-                    .map_err(|error| {
-                        anyhow::anyhow!("load dashboard test model task: {error}")
-                    })??,
-            );
-            return Ok(self.install(attempts, model).await);
+            return tokio::task::spawn_blocking(move || DashboardReadModel::load(&runs_dir))
+                .await
+                .map_err(|error| anyhow::anyhow!("load dashboard test model task: {error}"))?;
         }
         let mut records = self
             .control
@@ -380,19 +409,7 @@ impl Controller {
             self.mark_unavailable(record);
         }
         let discarded = self.plan_store.previous_attempts().await?;
-        let model = Arc::new(DashboardReadModel::from_records(records, &discarded)?);
-        Ok(self.install(attempts, model).await)
-    }
-
-    /// Caches a model built at this previous-attempts revision.
-    async fn install(
-        &self,
-        attempts: u64,
-        model: Arc<DashboardReadModel>,
-    ) -> (u64, Arc<DashboardReadModel>) {
-        let mut slot = self.read_model.write().await;
-        slot.replace(Some((attempts, model.clone())));
-        (slot.generation, model)
+        DashboardReadModel::from_records(records, &discarded)
     }
 
     /// Marks a record's projection unavailable when its native results or
@@ -413,19 +430,24 @@ impl Controller {
     }
 
     /// Adds the native runs a finished import installed to the cached read
-    /// model, as a new model. `false` when no model is cached, the previous
-    /// attempts moved, the import failed, or the model changed meanwhile.
+    /// model, as a new model; `true` with no change for one that left no
+    /// results. `false` when no model is cached, the previous attempts moved,
+    /// the import failed otherwise, or the model changed meanwhile.
     async fn grow_read_model(&self, id: &str) -> Result<bool> {
+        let execution = self.plan_store.read_execution(id).await?;
+        // It failed before installing a run: whatever is cached is current.
+        if left_no_results(&execution) {
+            return Ok(true);
+        }
+        // A failed import may have installed runs its slots do not name.
+        if execution.state == "failed" {
+            return Ok(false);
+        }
         let attempts = self.plan_store.attempts_revision();
         let base = match self.read_model.read().await.model.as_ref() {
             Some((revision, model)) if *revision == attempts => model.clone(),
             _ => return Ok(false),
         };
-        let execution = self.plan_store.read_execution(id).await?;
-        // A failed import may have installed runs its slots do not name.
-        if execution.state == "failed" {
-            return Ok(false);
-        }
         let natives = execution
             .slots
             .iter()
@@ -536,6 +558,10 @@ impl Controller {
         }
         let summaries = self.summaries_of(key, &model).await?;
         let overview = Arc::new(super::overview::overview(&summaries, &model.trend_runs()));
+        #[cfg(test)]
+        if self.reads_live_runs_again(&summaries) {
+            return Ok(overview);
+        }
         *kept = Some((key, overview.clone()));
         Ok(overview)
     }
@@ -1029,6 +1055,23 @@ pub(super) mod tests {
             github_imports: Semaphore::new(GITHUB_IMPORTS),
             ci_sync: crate::dashboard::ci_sync::CiSync::load(runs_dir),
         })
+    }
+
+    #[test]
+    fn a_slot_refuses_a_model_built_before_it_changed() {
+        let model =
+            || Arc::new(DashboardReadModel::from_records(Vec::new(), &BTreeSet::new()).unwrap());
+        let mut slot = ModelSlot::default();
+        let built_at = slot.generation;
+        // An import invalidated the slot while the model was built.
+        slot.replace(None);
+        assert!(!slot.install(built_at, (0, model())));
+        assert!(slot.model.is_none());
+
+        let built_at = slot.generation;
+        assert!(slot.install(built_at, (0, model())));
+        assert!(slot.model.is_some());
+        assert_ne!(slot.generation, built_at);
     }
 
     #[tokio::test]

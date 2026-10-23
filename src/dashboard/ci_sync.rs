@@ -798,8 +798,11 @@ esac"#,
         fs::write(root.join("updated"), "2026-10-20T11:00:00Z").unwrap();
         controller.ci_sync_set(true).unwrap();
         let id = import_id("o/r", 7);
+        let model = controller.read_model().await.unwrap();
 
         tick(&controller).await;
+        // The import installed nothing: the read model is kept, not built again.
+        assert!(Arc::ptr_eq(&model, &controller.read_model().await.unwrap()));
         assert!(controller.plan_store.read_execution(&id).await.is_err());
         assert_eq!(
             controller
