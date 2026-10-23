@@ -432,6 +432,15 @@ fn answer(evidence: &Evidence, index: usize) -> &str {
 /// A run that cannot show memory ran is an infrastructure failure, not a score.
 fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
     let mut problems = Vec::new();
+    // A missing exchange must never read as "nothing injected": every check
+    // below walks the exchanges that exist, so a short observation would pass.
+    let expected = 1 + case.followups.len();
+    let seen = evidence.observed.exchanges.len();
+    if seen != expected {
+        problems.push(format!(
+            "observed {seen} exchanges, the case sends {expected}"
+        ));
+    }
     for (index, exchange) in evidence.observed.exchanges.iter().enumerate() {
         if exchange.memory_bank.is_none() {
             problems.push(format!("exchange {index} ran without the memory hook"));
@@ -824,8 +833,34 @@ mod tests {
 
         // A case that forces no compaction needs no status.
         let small_talk = case_named("memory_small_talk");
-        let plain = evidence_with(small_talk, observed(&["x"], vec![]), PROMPT, None);
+        let plain = evidence_with(
+            small_talk,
+            observed(&["x", "y", "z", "w"], vec![]),
+            PROMPT,
+            None,
+        );
         assert_eq!(evaluate(small_talk, &plain).infrastructure_error, None);
+    }
+
+    #[test]
+    fn a_short_observation_is_an_infrastructure_error_not_a_pass() {
+        for id in ["memory_small_talk", "memory_first_person_off_topic"] {
+            let case = case_named(id);
+            let sent = 1 + case.followups.len();
+            for seen in [0, 1, sent - 1, sent + 1]
+                .into_iter()
+                .filter(|seen| *seen != sent)
+            {
+                let answers = vec!["x"; seen];
+                let evidence = evidence_with(case, observed(&answers, vec![]), PROMPT, None);
+                let error = evaluate(case, &evidence)
+                    .infrastructure_error
+                    .unwrap_or_else(|| panic!("{id}: {seen} of {sent} exchanges went unflagged"));
+                assert!(error.contains("exchanges"), "{id}: {error}");
+            }
+            let whole = evidence_with(case, observed(&vec!["x"; sent], vec![]), PROMPT, None);
+            assert_eq!(evaluate(case, &whole).infrastructure_error, None, "{id}");
+        }
     }
 
     #[test]
