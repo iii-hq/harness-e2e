@@ -2045,6 +2045,7 @@ mod tests {
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
             saved: Default::default(),
+            saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
         })
     }

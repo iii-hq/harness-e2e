@@ -404,9 +404,14 @@ pub(crate) struct PlanStore {
     /// them out know to read them again.
     attempts: AtomicU64,
     /// Every saved plan execution by id, as `executions()` reads them: read
-    /// from the database once, since this worker is their only writer.
-    saved: tokio::sync::OnceCell<std::sync::RwLock<BTreeMap<String, PlanExecution>>>,
-    /// Moves on every write or delete of a saved plan execution.
+    /// from the database once, since this worker is their only writer. `None`
+    /// until then, and again after a write the database may not have kept.
+    saved: tokio::sync::RwLock<Option<BTreeMap<String, PlanExecution>>>,
+    /// Held across a saved execution's database write and its update in
+    /// `saved`, so writes apply in one order to both. Taken last.
+    saved_writes: Mutex<()>,
+    /// Moves on every write or delete of a saved plan execution, failed ones
+    /// included.
     saved_revision: AtomicU64,
 }
 impl PlanStore {
@@ -426,6 +431,7 @@ impl PlanStore {
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
             saved: Default::default(),
+            saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
         });
         if manager.runner.is_some() {
@@ -483,30 +489,55 @@ impl PlanStore {
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
-        self.saved()
+        self.saved(|saved| saved.get(id).cloned())
             .await?
-            .read()
-            .unwrap()
-            .get(id)
-            .cloned()
             .context("unknown execution")
     }
-    /// The saved executions, read from the database on first use; concurrent
-    /// first uses wait for that one read.
-    async fn saved(&self) -> Result<&std::sync::RwLock<BTreeMap<String, PlanExecution>>> {
-        self.saved
-            .get_or_try_init(|| async {
-                let executions = self.persistence()?.saved_executions().await?;
-                anyhow::Ok(std::sync::RwLock::new(
-                    executions
-                        .into_iter()
-                        .map(ran_where_it_came_from)
-                        .map(resolved_from_lock)
-                        .map(|execution| (execution.id.clone(), execution))
-                        .collect(),
-                ))
-            })
-            .await
+    /// `read` over the saved executions, read from the database on first use;
+    /// concurrent first uses wait for that one read.
+    async fn saved<T>(
+        &self,
+        read: impl FnOnce(&BTreeMap<String, PlanExecution>) -> T,
+    ) -> Result<T> {
+        if let Some(saved) = &*self.saved.read().await {
+            return Ok(read(saved));
+        }
+        let mut saved = self.saved.write().await;
+        let executions = match saved.take() {
+            Some(executions) => executions,
+            None => self
+                .persistence()?
+                .saved_executions()
+                .await?
+                .into_iter()
+                .map(ran_where_it_came_from)
+                .map(resolved_from_lock)
+                .map(|execution| (execution.id.clone(), execution))
+                .collect(),
+        };
+        Ok(read(saved.insert(executions)))
+    }
+    /// `write` to the database, then `apply` to the saved executions, one
+    /// write at a time.
+    async fn change_saved(
+        &self,
+        write: impl std::future::Future<Output = Result<()>>,
+        apply: impl FnOnce(&mut BTreeMap<String, PlanExecution>),
+    ) -> Result<()> {
+        let _writing = self.saved_writes.lock().await;
+        // Loaded before the write: a load still reading could miss it.
+        self.saved(|_| ()).await?;
+        let written = write.await;
+        let mut saved = self.saved.write().await;
+        match saved.as_mut() {
+            Some(executions) if written.is_ok() => apply(executions),
+            // A failed write may have committed all the same, its reply lost:
+            // the next read takes the database's word.
+            _ => *saved = None,
+        }
+        // Either way, the next read may find them changed.
+        self.saved_revision.fetch_add(1, Ordering::SeqCst);
+        written
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
@@ -517,18 +548,14 @@ impl PlanStore {
         Ok(())
     }
     async fn save_execution(&self, execution: &PlanExecution) -> Result<()> {
-        // Loaded before the write: a load still reading could miss it.
-        let saved = self.saved().await?;
-        self.persistence()?
-            .save_execution_receipt(execution)
-            .await?;
-        let execution = resolved_from_lock(ran_where_it_came_from(execution.clone()));
-        saved
-            .write()
-            .unwrap()
-            .insert(execution.id.clone(), execution);
-        self.saved_revision.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        let read = resolved_from_lock(ran_where_it_came_from(execution.clone()));
+        self.change_saved(
+            self.persistence()?.save_execution_receipt(execution),
+            |saved| {
+                saved.insert(read.id.clone(), read);
+            },
+        )
+        .await
     }
     /// The ids of Docker executions as they change in the background.
     pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
@@ -538,8 +565,9 @@ impl PlanStore {
     pub(crate) fn attempts_revision(&self) -> u64 {
         self.attempts.load(Ordering::SeqCst)
     }
-    /// Moves on every write or delete of a saved plan execution: read it
-    /// before `executions()`, so a change between the two reads them again.
+    /// Moves on every write or delete of a saved plan execution, failed ones
+    /// included: read it before `executions()`, so a change between the two
+    /// reads them again.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn executions_revision(&self) -> u64 {
         self.saved_revision.load(Ordering::SeqCst)
@@ -555,16 +583,11 @@ impl PlanStore {
             .map(|attempt| attempt.execution_id.clone())
             .collect())
     }
-    /// Newest first, as the database lists them.
+    /// Newest first by `started_at`, then id.
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
         let mut executions = self
-            .saved()
-            .await?
-            .read()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+            .saved(|saved| saved.values().cloned().collect::<Vec<_>>())
+            .await?;
         executions.sort_by(|a, b| (&b.started_at, &b.id).cmp(&(&a.started_at, &a.id)));
         Ok(executions)
     }
@@ -1050,15 +1073,16 @@ impl PlanStore {
         if matches!(execution.source, ExecutionSource::Docker { .. }) {
             self.remove_docker_folder(id).await;
         }
-        self.persistence()?
-            .delete_execution_receipt(
+        self.change_saved(
+            self.persistence()?.delete_execution_receipt(
                 id,
                 matches!(execution.source, ExecutionSource::Github { .. }),
-            )
-            .await?;
-        self.saved().await?.write().unwrap().remove(id);
-        self.saved_revision.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+            ),
+            |saved| {
+                saved.remove(id);
+            },
+        )
+        .await
     }
 
     /// Whether this GitHub run's execution was deleted since it was last
@@ -2472,6 +2496,7 @@ pub(crate) mod tests {
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
             saved: Default::default(),
+            saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
         })
     }
@@ -2547,6 +2572,7 @@ pub(crate) mod tests {
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
             saved: Default::default(),
+            saved_writes: Mutex::new(()),
             saved_revision: AtomicU64::new(0),
         });
         let suite = manager
@@ -4241,6 +4267,83 @@ esac"#,
             [("plan-stub", Some("Kept"))]
         );
         assert!(restarted.read_execution(&deleted.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_copy_in_memory_is_what_a_new_store_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let first = manager(root.path(), runner.clone());
+        // Read back, it ran in Docker and resolved the version it requested.
+        let written = PlanExecution {
+            state: "completed".into(),
+            parameters: Some(suite_parameters("pr")),
+            source: ExecutionSource::Docker {
+                attempt: 1,
+                phase: "done".into(),
+                image: None,
+                groups: Vec::new(),
+            },
+            stack: vec![StackWorker {
+                name: "harness".into(),
+                source: WorkerSource::Package,
+                requested: Some("1.8.31".into()),
+                resolved: None,
+                observed: None,
+                commit: None,
+                dirty: None,
+                groups: Vec::new(),
+            }],
+            ..import_stub()
+        };
+        first.write_execution(&written).await.unwrap();
+
+        let restarted = manager(root.path(), runner);
+        assert_eq!(
+            serde_json::to_value(first.executions().await.unwrap()).unwrap(),
+            serde_json::to_value(restarted.executions().await.unwrap()).unwrap()
+        );
+        let in_memory = first.read_execution(&written.id).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&in_memory).unwrap(),
+            serde_json::to_value(restarted.read_execution(&written.id).await.unwrap()).unwrap()
+        );
+        // Else the two would agree without proving the copy is transformed.
+        assert_ne!(
+            serde_json::to_value(written).unwrap(),
+            serde_json::to_value(in_memory).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_drops_the_copy_in_memory_and_moves_the_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let store = manager(root.path(), runner.clone());
+        let kept = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        store.write_execution(&kept).await.unwrap();
+        let revision = store.executions_revision();
+
+        database(root.path()).refuse_writes();
+        let lost = PlanExecution {
+            id: "plan-lost".into(),
+            idempotency_key: "lost".into(),
+            ..kept.clone()
+        };
+        // A write whose commit landed though its reply said otherwise.
+        store_raw(root.path(), &lost.id, serde_json::to_string(&lost).unwrap());
+        assert!(store.write_execution(&lost).await.is_err());
+        assert_eq!(store.executions_revision(), revision + 1);
+
+        let listed = store.executions().await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            serde_json::to_value(listed).unwrap(),
+            serde_json::to_value(manager(root.path(), runner).executions().await.unwrap()).unwrap()
+        );
     }
 
     #[tokio::test]
