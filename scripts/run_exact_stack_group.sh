@@ -211,7 +211,7 @@ project_trigger() {
 }
 
 load_profile_assets() {
-  local package worker request receipt error_log
+  local package worker request receipt error_log skill_namespace skill_relative
   mkdir -p "$artifact_dir/stack/skills"
   while IFS= read -r package; do
     worker=$(jq -r '.worker' <<<"$package")
@@ -220,6 +220,13 @@ load_profile_assets() {
     error_log="$artifact_dir/stack/skills/$worker.log"
     if project_trigger directory::skills::download_from_registry "$request" 60000 >"$receipt" 2>"$error_log"; then
       jq -e --arg version "$(jq -r '.version' <<<"$package")" '.source.version == $version' "$receipt" >/dev/null
+      while IFS=$'\t' read -r skill_namespace skill_relative; do
+        case "$skill_namespace:$skill_relative" in
+          :*|.:*|..:*|*/*:*|*:/*|*:..|*:../*|*:*/../*|*:*/..) fail "Pinned skill receipt contains an unsafe path" ;;
+        esac
+        [[ -f "$project_dir/.iii/registry-skills/$skill_namespace/$skill_relative" ]] \
+          || fail "Pinned skill $skill_namespace/$skill_relative was not written below the frozen skill root"
+      done < <(jq -r '.namespace as $namespace | .skills_written[]? | [$namespace, .] | @tsv' "$receipt")
     else
       # A worker may legitimately publish no skill bundle. Other failures must
       # not turn a requested profile into an execution with different assets.
@@ -693,7 +700,11 @@ if [[ -n "$assemble_only" ]]; then
   fi
 
   failure_phase=project_start
-  start_compose "$(jq -cn --arg file "$compose_file" '{file:$file,frozen:false}')"
+  # compose::add already started the Directory from its resolved graph. A
+  # project-wide restart forgets the cached manifest and reloads the profile
+  # roots above; a named restart or another compose::up keeps the old config.
+  compose_trigger compose::restart "file=$compose_file" >"$artifact_dir/stack/profile-root-restart.json"
+  cp "$artifact_dir/stack/profile-root-restart.json" "$artifact_dir/stack/up.json"
   jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
   compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
   iii_trigger 30000 engine::workers::list --json '{}' >"$artifact_dir/stack/workers.json"

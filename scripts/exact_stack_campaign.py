@@ -1232,8 +1232,8 @@ def kit_assets(project_root: Path, output_root: Path) -> dict[str, Any]:
                 raise ValueError(f"kit assets must not contain symlinks: {source.relative_to(project)}")
             if source.is_dir():
                 continue
-            if not source.is_file() or source.suffix != ".md":
-                raise ValueError(f"kit assets must be Markdown files: {source.relative_to(project)}")
+            if not source.is_file() or (source.suffix != ".md" and source.name != ".iii-skill-complete"):
+                raise ValueError(f"kit assets must be Markdown files or native skill markers: {source.relative_to(project)}")
             relative = source.relative_to(project)
             destination = output_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1308,8 +1308,12 @@ def restore_kit_assets(contract: dict[str, Any], source_root: Path, project_root
         if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
             raise ValueError("kit asset path must stay inside its snapshot")
         allowed = relative == Path("kits.lock") or (
-            relative.suffix == ".md"
-            and (relative.parts[:1] == ("agents",) or relative.parts[:2] == (".iii", "registry-skills"))
+            relative.parts[:1] == ("agents",) and relative.suffix == ".md"
+        ) or (
+            relative.parts[:2] == (".iii", "registry-skills")
+            and (relative.suffix == ".md" or (
+                len(relative.parts) >= 4 and relative.name == ".iii-skill-complete"
+            ))
         )
         if not allowed:
             raise ValueError(f"unsupported kit asset path: {relative}")

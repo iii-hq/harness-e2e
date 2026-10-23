@@ -506,7 +506,7 @@ scaffold() { mkdir -p "$4"; for folder in $SHIPPED; do mkdir -p "$4/$folder"; do
         function = source[source.index("load_profile_assets() {"):source.index("wait_for_profiles() {")]
         start = source.index('if [[ "$profile_assets" == true ]]', source.index('failure_phase=project_start'))
         block = source[start:source.index("if jq -e '.suite.agent_profile != null'", start)]
-        for mode in ("ok", "missing", "broken"):
+        for mode in ("ok", "missing", "broken", "misplaced"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "project/agents").mkdir(parents=True)
@@ -532,23 +532,32 @@ project_trigger() {
   test "$1" = directory::skills::download_from_registry
   test "$(jq -r '.version' <<<"$2")" = 1.2.3
   # As iii_trigger names a call that failed.
-  if [[ "$MODE" != ok ]]; then printf '%s' "$1" >"$iii_failed"; fi
+  if [[ "$MODE" == missing || "$MODE" == broken ]]; then printf '%s' "$1" >"$iii_failed"; fi
   if [[ "$MODE" == missing ]]; then echo 'D310 not_found: registry worker "harness" has no published skills bundle.' >&2; return 1; fi
   if [[ "$MODE" == broken ]]; then echo 'registry unavailable' >&2; return 1; fi
   printf 'downloaded profile' >"$project_dir/agents/tech-lead.md"
-  printf '{"source":{"version":"1.2.3"}}\\n'
+  root="$project_dir/.iii/registry-skills"
+  [[ "$MODE" == misplaced ]] && root="$project_dir/skills"
+  mkdir -p "$root/harness"
+  printf '# Harness\\n' >"$root/harness/SKILL.md"
+  printf '{"namespace":"harness","skills_written":["SKILL.md"],"source":{"version":"1.2.3"}}\\n'
 }
 '''
                 result = subprocess.run(["bash", "-c", shell + function + block, "runner", str(root), str(SCRIPT)],
                     env={**os.environ, "MODE": mode}, capture_output=True, text=True)
-                if mode == "broken":
+                if mode in ("broken", "misplaced"):
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("Could not load pinned skills", result.stderr)
-                    # The failure that ends the group stays named.
-                    self.assertTrue((root / "iii-failed").exists())
+                    if mode == "broken":
+                        self.assertIn("Could not load pinned skills", result.stderr)
+                        # The failure that ends the group stays named.
+                        self.assertTrue((root / "iii-failed").exists())
+                    else:
+                        self.assertIn("was not written below the frozen skill root", result.stderr)
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual((root / "project/agents/tech-lead.md").read_text(), "selected template")
+                    if mode == "ok":
+                        self.assertTrue((root / "project/.iii/registry-skills/harness/SKILL.md").is_file())
                     # A worker with no skills bundle is no cause of a later failure.
                     self.assertFalse((root / "iii-failed").exists())
 
@@ -1851,6 +1860,55 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
 
 
 class KitAssetTests(unittest.TestCase):
+    def test_multiple_bundle_receipts_preserve_the_compose_namespace(self):
+        source = RUNNER_SCRIPT.read_text()
+        function = source[source.index("load_profile_assets() {"):source.index("wait_for_profiles() {")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "artifacts/stack").mkdir(parents=True)
+            (root / "artifacts/stack/declared-workers.json").write_text(json.dumps([
+                {"worker": "harness", "version": "1.2.3"},
+                {"worker": "browser", "version": "2.3.4"},
+            ]))
+            shell = r'''set -Eeuo pipefail
+run_root=$1
+artifact_dir=$1/artifacts
+project_dir=$1/project
+namespace=group-namespace
+iii_failed=$1/iii-failed
+fail() { printf '%s\n' "$1" >&2; return 1; }
+project_trigger() {
+  test "$namespace" = group-namespace
+  worker=$(jq -r .worker <<<"$2")
+  version=$(jq -r .version <<<"$2")
+  printf '%s\n' "$worker" >>"$artifact_dir/calls"
+  mkdir -p "$project_dir/.iii/registry-skills/$worker"
+  printf '# Skill\n' >"$project_dir/.iii/registry-skills/$worker/SKILL.md"
+  jq -cn --arg namespace "$worker" --arg version "$version" \
+    '{namespace:$namespace,skills_written:["SKILL.md"],source:{version:$version}}'
+}
+'''
+            result = subprocess.run(
+                ["bash", "-c", shell + function +
+                 'load_profile_assets\ntest "$namespace" = group-namespace\n', "runner", str(root)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "artifacts/calls").read_text().splitlines(), ["harness", "browser"])
+
+    def test_kit_preparation_reloads_profile_roots_before_downloading_assets(self):
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index('if [[ -n "$assemble_only" ]]; then', source.index("failure_phase=project_assembly"))
+        block = source[start:source.index("export_compose", start)]
+        configured = block.index("configure-profile-root")
+        restarted = block.index("compose::restart", configured)
+        bundles = block.index("load_profile_assets", restarted)
+        installed = block.index("directory::download-kit", bundles)
+        self.assertLess(configured, restarted)
+        self.assertLess(restarted, bundles)
+        self.assertLess(bundles, installed)
+        self.assertNotIn("compose::down", block[configured:bundles])
+
     def test_native_kit_profiles_include_owned_children_and_selected_wrapper(self):
         with tempfile.TemporaryDirectory() as directory:
             lock = Path(directory) / "kits.lock"
@@ -1965,9 +2023,12 @@ containers:
             project = root / "project"
             (project / "agents").mkdir(parents=True)
             (project / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
+            (project / ".iii/registry-skills/harness").mkdir(parents=True)
             (project / "kits.lock").write_text("version: 1\nkits: {}\n")
             (project / "agents/deepwork.md").write_text("---\nid: deepwork\n---\n")
             (project / ".iii/registry-skills/iii/deepwork/SKILL.md").write_text("# Deepwork\n")
+            marker = project / ".iii/registry-skills/harness/.iii-skill-complete"
+            marker.write_text('{"worker":"harness","version":"1.8.61"}\n')
 
             snapshot = root / "snapshot"
             manifest = MODULE.kit_assets(project, snapshot)
@@ -1982,9 +2043,11 @@ containers:
             restored = root / "restored"
             (restored / "agents").mkdir(parents=True)
             (restored / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
+            (restored / ".iii/registry-skills/harness").mkdir(parents=True)
             (restored / "kits.lock").write_text("old lock")
             (restored / "agents/deepwork.md").write_text("template profile")
             (restored / ".iii/registry-skills/iii/deepwork/SKILL.md").write_text("old skill")
+            (restored / ".iii/registry-skills/harness/.iii-skill-complete").write_text("old marker")
             MODULE.restore_kit_assets(contract, snapshot, restored)
 
             self.assertEqual((restored / "kits.lock").read_bytes(), (project / "kits.lock").read_bytes())
@@ -1992,9 +2055,11 @@ containers:
                              (project / "agents/deepwork.md").read_bytes())
             self.assertEqual((restored / ".iii/registry-skills/iii/deepwork/SKILL.md").read_bytes(),
                              (project / ".iii/registry-skills/iii/deepwork/SKILL.md").read_bytes())
+            self.assertEqual((restored / ".iii/registry-skills/harness/.iii-skill-complete").read_bytes(),
+                             marker.read_bytes())
             self.assertNotIn(str(root), json.dumps(contract["runtime"]["kits"]))
 
-            (snapshot / "agents/deepwork.md").write_text("changed")
+            (snapshot / ".iii/registry-skills/harness/.iii-skill-complete").write_text("changed")
             other = root / "other"
             other.mkdir()
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
@@ -2008,6 +2073,16 @@ containers:
             (project / "kits.lock").write_text("version: 1\nkits: {}\n")
             (project / "agents/deepwork.md").symlink_to(project / "kits.lock")
             with self.assertRaisesRegex(ValueError, "symlinks"):
+                MODULE.kit_assets(project, root / "snapshot")
+
+    def test_kit_asset_export_rejects_other_non_markdown_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / ".iii/registry-skills/harness").mkdir(parents=True)
+            (project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (project / ".iii/registry-skills/harness/unexpected.json").write_text("{}")
+            with self.assertRaisesRegex(ValueError, "Markdown files or native skill markers"):
                 MODULE.kit_assets(project, root / "snapshot")
 
     def test_kit_restore_rejects_symlink_destinations_and_parents(self):
