@@ -782,6 +782,13 @@
         "engine_version": {
           "type": "string"
         },
+        "harness_binary_sha256": {
+          "description": "Digest of the running Harness executable, captured by the local runner. Absent when the host or Compose process cannot be observed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "harness_version": {
           "type": "string"
         },

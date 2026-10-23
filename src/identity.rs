@@ -50,6 +50,10 @@ pub struct SystemUnderTestIdentity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
     pub harness_version: String,
+    /// Digest of the running Harness executable, captured by the local runner.
+    /// Absent when the host or Compose process cannot be observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_binary_sha256: Option<String>,
     pub e2e_repository: String,
     pub e2e_revision: String,
     pub contract_hashes: BTreeMap<String, String>,
@@ -101,6 +105,7 @@ impl SystemUnderTestIdentity {
             engine_version: required_value(engine_version, "engine version")?,
             engine_revision: nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
             harness_version: required_value(harness_version, "Harness version")?,
+            harness_binary_sha256: None,
             e2e_repository: identity_value(
                 "HARNESS_E2E_REPOSITORY",
                 env!("HARNESS_E2E_BUILD_REPOSITORY"),
@@ -118,6 +123,9 @@ impl SystemUnderTestIdentity {
     pub fn validate(&self) -> Result<()> {
         required_value(self.engine_version.clone(), "engine version")?;
         required_value(self.harness_version.clone(), "Harness version")?;
+        if let Some(digest) = &self.harness_binary_sha256 {
+            validate_sha256(digest, "Harness binary digest")?;
+        }
         if let Some(revision) = &self.engine_revision {
             required_value(revision.clone(), "engine revision")?;
         }

@@ -237,12 +237,16 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .runtime_versions()
         .await
         .context("discover iii and Harness versions")?;
-    let system_under_test = SystemUnderTestIdentity::from_environment(
+    let mut system_under_test = SystemUnderTestIdentity::from_environment(
         runtime_versions.engine,
         runtime_versions.harness,
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    match crate::runtime_artifact::observe(&context, &config.url).await {
+        Ok(digest) => system_under_test.harness_binary_sha256 = Some(digest),
+        Err(error) => tracing::warn!(%error, "Harness binary digest is unavailable"),
+    }
     config.subject.agent = pinned_agent_profile(&config.scenarios, config.subject.agent.take())?;
     let agent = match config.subject.agent.as_deref() {
         Some(id) => Some(
@@ -3831,6 +3835,7 @@ mod tests {
             engine_version: "0.22.0".into(),
             engine_revision: None,
             harness_version: "1.8.0".into(),
+            harness_binary_sha256: None,
             e2e_repository: "iii-hq/harness-e2e".into(),
             e2e_revision: "0".repeat(40),
             contract_hashes: Default::default(),

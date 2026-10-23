@@ -2863,6 +2863,7 @@ mod tests {
                 engine_version: "test".into(),
                 engine_revision: None,
                 harness_version: "test".into(),
+                harness_binary_sha256: None,
                 e2e_repository: "iii-hq/harness-e2e".into(),
                 e2e_revision: "a".repeat(40),
                 contract_hashes: BTreeMap::from([(

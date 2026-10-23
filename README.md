@@ -964,6 +964,11 @@ Every completed execution records the subject and E2E revisions, observed wire
 contracts, definition digest, materialized inputs, seed, policies, artifacts,
 and raw structural evidence.
 
+On a local Linux Compose stack, `system_under_test.harness_binary_sha256`
+records the running Harness executable before the suite starts. It stays in
+the report after teardown. It is absent when the process cannot be observed;
+a version or source revision does not substitute for this executable digest.
+
 Deterministic assessment has one payload shape, written only to `results.json`.
 Scenario contracts are the only versioned domain. Before cleanup, asset
 capture applies explicit safety limits and writes an unversioned sidecar with
