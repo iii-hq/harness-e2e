@@ -158,6 +158,25 @@ counts. A diamond over a release marks a combination that joined or left. A
 strip counts the **CI runs outside Release Control** and links to them in the
 Executions list.
 
+The overview is the page's address (`#/`): a link to it names no series, and
+`&metric=<id>` keeps the measure in front across a reload. **More options**
+opens the series view Trends used to start on, drawn by release and over all
+time unless the hash says otherwise (`&range=30d` and `&group=execution` ask for
+the old defaults): the suite, model, profile, stack, period and baseline pickers
+over one series, and a choice left open prefers a series Release Control ran. **Back to release overview**
+puts every one of those controls back where the first screen starts and keeps
+the measure. **Details** holds what sits behind the chart: the latest release's
+executions on the overview, the by-test grid and the executions table on a
+series. Beside **Harness evolution**, one line follows CI sync. **Download CI
+results** turns it on (`e2e::dashboard::ci-sync-set`); the line then reads its
+phase (the newest runs first, then older ones once the verdict is ready, then
+the time of the last check), the imports that failed and a GitHub rate limit's
+end, or `gh auth login` when `gh` is not signed in on the worker's machine.
+**Check now** asks GitHub at once (`ci-sync-check`); **Turn off sync**, under
+Sync options, stops it and keeps what was imported. The page reads
+`ci-sync-status-get` every 15 s while sync is on, and again when an execution
+changes.
+
 **Trends** (`e2e::dashboard::trends-get`) follows one series (suite id, or the
 digest of an unsaved suite, × provider × model × agent profile) over time, from
 what the read model already holds. `model: "any"` or `profile: "any"` joins
@@ -203,13 +222,16 @@ summed. A local or Docker execution sits beside its release (the Harness it
 ran, else the release current when it started) and never counts; other CI runs
 are only counted, as `outside_release_control`.
 
-**Group by** (`&group=day|release` in the hash) draws one point per day, on the
-reader's clock, or per Harness release, in the order they first ran, instead of
-one per execution. A group reads its executions together: means weighted by
-counted runs, tests completed per execution, the function calls summed, its
-versions its last execution's. Its panel lists its executions and says when they
-did not all run the same versions. An execution with no recorded Harness version
-is in no release, and the page says how many are left out.
+**Group by** (`&group=execution|day|release` in the hash; release is the default
+and is named only when asked for) draws one point per day, on the reader's
+clock, or per Harness release, in version order, instead of one per execution. A
+group reads its executions together: means weighted by counted runs, tests
+completed per execution, the function calls summed, its versions its last
+execution's. Its panel lists its executions and says when they did not all run
+the same versions. An execution with no recorded Harness version
+is in no release, and the page says how many are left out; a series that
+recorded none draws each execution instead, and says so unless the hash asks for
+the release grouping.
 
 On the page, an execution can be pinned as the **baseline**, from the Baseline
 picker next to Period or from a point's panel (`&base=<execution id>` in the
