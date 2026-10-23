@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -17,7 +18,7 @@ use crate::control::{
 };
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
-    import_id, ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest,
+    import_id, native_runs, ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest,
     GithubRunsListRequest, SuiteView,
 };
 use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
@@ -284,23 +285,100 @@ impl Controller {
             .records()
             .await?;
         for record in &mut records {
-            if let Some(projection) = &mut record.dashboard_projection {
-                let available = record.result_path.as_ref().is_some_and(|path| {
-                    let result = super::run_sessions::results_file(self.runs_dir.join(path));
-                    result.is_file()
-                        && result
-                            .parent()
-                            .is_some_and(|parent| parent.join("manifest.json").is_file())
-                });
-                if !available {
-                    projection["summary"]["availability"] = json!("unavailable");
-                }
-            }
+            self.mark_unavailable(record);
         }
         let discarded = self.plan_store.previous_attempts().await?;
         let model = Arc::new(DashboardReadModel::from_records(records, &discarded)?);
         *self.read_model.write().await = Some((attempts, model.clone()));
         Ok(model)
+    }
+
+    /// Marks a record's projection unavailable when its native results or
+    /// their manifest are gone.
+    fn mark_unavailable(&self, record: &mut ExecutionRecord) {
+        if let Some(projection) = &mut record.dashboard_projection {
+            let available = record.result_path.as_ref().is_some_and(|path| {
+                let result = super::run_sessions::results_file(self.runs_dir.join(path));
+                result.is_file()
+                    && result
+                        .parent()
+                        .is_some_and(|parent| parent.join("manifest.json").is_file())
+            });
+            if !available {
+                projection["summary"]["availability"] = json!("unavailable");
+            }
+        }
+    }
+
+    /// Adds the native runs a finished import installed to the cached read
+    /// model, as a new model. `false` when no model is cached, the previous
+    /// attempts moved, the import failed, or the model changed meanwhile.
+    async fn grow_read_model(&self, id: &str) -> Result<bool> {
+        let attempts = self.plan_store.attempts_revision();
+        let base = match self.read_model.read().await.as_ref() {
+            Some((revision, model)) if *revision == attempts => model.clone(),
+            _ => return Ok(false),
+        };
+        let execution = self.plan_store.read_execution(id).await?;
+        // A failed import may have installed runs its slots do not name.
+        if execution.state == "failed" {
+            return Ok(false);
+        }
+        let natives = execution
+            .slots
+            .iter()
+            .map(|slot| slot.execution_id.as_str())
+            .filter(|native| {
+                !native.is_empty()
+                    && !base
+                        .summaries
+                        .iter()
+                        .any(|summary| summary["id"] == *native)
+            })
+            .collect::<BTreeSet<_>>();
+        let Some(grown) = self.with_native_runs(&base, natives).await? else {
+            return Ok(false);
+        };
+        // Two imports can finish at once: only the model this one grew is
+        // replaced.
+        let mut cached = self.read_model.write().await;
+        let unchanged = cached
+            .as_ref()
+            .is_some_and(|(revision, model)| *revision == attempts && Arc::ptr_eq(model, &base));
+        if !unchanged || self.plan_store.attempts_revision() != attempts {
+            return Ok(false);
+        }
+        *cached = Some((attempts, Arc::new(grown)));
+        Ok(true)
+    }
+
+    /// `base` with these native runs added, read as `read_model()` reads them.
+    async fn with_native_runs(
+        &self,
+        base: &DashboardReadModel,
+        natives: BTreeSet<&str>,
+    ) -> Result<Option<DashboardReadModel>> {
+        #[cfg(test)]
+        if self.control.is_none() {
+            let stored = natives
+                .iter()
+                .filter_map(|native| {
+                    super::store::read_stored_run(&self.runs_dir.join(native)).transpose()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return base.with_stored(stored);
+        }
+        let control = self
+            .control
+            .as_ref()
+            .context("the E2E control plane is not available")?;
+        let mut records = Vec::new();
+        for native in natives {
+            let mut record = control.stored_record(native).await?;
+            self.mark_unavailable(&mut record);
+            records.push(record);
+        }
+        base.with_records(records, &self.plan_store.previous_attempts().await?)
     }
 
     /// A page of a test's history, with each run's sessions read from its
@@ -504,12 +582,28 @@ impl Controller {
         self.plan_store.read_execution(&id).await.map(Some)
     }
 
-    /// Download and install a begun import, then tell the Console.
+    /// Download and install a begun import, grow the read model by its runs,
+    /// then tell the Console.
     async fn finish_import(&self, id: &str) {
-        if let Err(error) = self.plan_store.finish_github_import(id).await {
+        // Imported again, its runs may replace or remove ones the model holds.
+        let first = self
+            .plan_store
+            .read_execution(id)
+            .await
+            .is_ok_and(|execution| native_runs(&execution).all(str::is_empty));
+        let finished = self.plan_store.finish_github_import(id).await;
+        if let Err(error) = &finished {
             tracing::error!(execution_id = %id, error = %format!("{error:#}"), "record the GitHub import outcome");
         }
-        self.invalidate_summaries().await;
+        let grown = first
+            && finished.is_ok()
+            && self.grow_read_model(id).await.unwrap_or_else(|error| {
+                tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "the read model is built again after an import");
+                false
+            });
+        if !grown {
+            self.invalidate_summaries().await;
+        }
         self.emit_change("finished", id).await;
     }
 
@@ -793,7 +887,9 @@ pub(super) mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::plans::store::tests::{fake_gh, manager, manager_with_gh, FakeRunner};
+    use crate::plans::store::tests::{
+        exact_stack_bundle, fake_gh, manager, manager_with_gh, FakeRunner,
+    };
     use crate::plans::store::PlanStore;
 
     /// A controller without a control plane, on this plan store.
@@ -950,6 +1046,71 @@ esac"#,
         let again = import().await.unwrap();
         assert_eq!(again["state"], "importing");
         assert!(!controller.plan_store.import_deleted(&id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_import_grows_the_read_model_instead_of_rebuilding_it() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let (bundle, contract, native) =
+            exact_stack_bundle(&root.path().join("fixture"), "rc:e2e:grown", "1.8.8");
+        let gh = fake_gh(
+            root.path(),
+            &format!(
+                r#"case "$*" in
+  "api repos/o/r/actions/runs/42") printf '%s' '{{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","conclusion":"success","created_at":"2026-09-20T10:00:00Z","updated_at":"2026-09-20T11:00:00Z","html_url":"https://github.com/o/r/actions/runs/42"}}' ;;
+  "api --paginate"*) printf 'e2e-contract-rc-1-gh-1\ne2e-observation-rc-1-gh-1\n' ;;
+  "run download"*) case "$7" in
+      e2e-contract-*) cp -R '{contract}' "$9" ;;
+      *) cp -R '{bundle}' "$9" ;;
+    esac ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac"#,
+                contract = contract.display(),
+                bundle = bundle.display(),
+            ),
+        );
+        let controller = without_control_plane(
+            manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
+            &data,
+        );
+        let before = controller.read_model().await.unwrap();
+        // A run only a rebuild reads.
+        let (decoy_bundle, _, decoy) =
+            exact_stack_bundle(&root.path().join("decoy"), "rc:e2e:decoy", "1.8.8");
+        fs::rename(
+            decoy_bundle
+                .join("smoke-r01/groups/case-context/native")
+                .join(&decoy),
+            data.join(&decoy),
+        )
+        .unwrap();
+
+        let imported = controller.sync_import("o/r", 42).await.unwrap().unwrap();
+        assert_eq!(imported.state, "completed");
+        let model = controller.read_model().await.unwrap();
+        assert!(!Arc::ptr_eq(&model, &before));
+        let ids = model
+            .summaries
+            .iter()
+            .map(|summary| summary["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [native.as_str()]);
+
+        fs::remove_dir_all(data.join(&decoy)).unwrap();
+        let built = DashboardReadModel::load(&data).unwrap();
+        assert_eq!(model.revision, built.revision);
+        assert_eq!(model.summaries, built.summaries);
+        assert_eq!(model.trend_runs(), built.trend_runs());
+        let tests = |model: &DashboardReadModel| {
+            serde_json::to_value(
+                model
+                    .tests_list(crate::dashboard::read_model::TestsListRequest::default())
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(tests(&model), tests(&built));
     }
 
     /// A controller whose `gh` answers run 1 and lists its artifacts as
