@@ -34,6 +34,10 @@ on:
         description: Token the run title carries, so whoever dispatched it can find it when GitHub fails to answer the dispatch (optional)
         required: false
         type: string
+      slots:
+        description: 'Only these slots of the suite, to run them again (optional): JSON [{"scenario_id":"timer_wake","repetition":2}], the repetition as the ledger numbers it, from 0'
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -111,6 +115,7 @@ jobs:
           DISPATCH_MODEL: ${{ inputs.model }}
           DISPATCH_PROFILE: ${{ inputs.profile }}
           DISPATCH_EXECUTION_ID: ${{ inputs.execution_id }}
+          DISPATCH_SLOTS: ${{ inputs.slots }}
           GITHUB_TOKEN: ${{ github.token }}
           FIXTURE_TOKEN: ${{ steps.fixture_token.outputs.token }}
         run: |
@@ -191,6 +196,18 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
         run: python3 scripts/exact_stack_campaign.py credentials-file --output "$RUNNER_TEMP/provider-credentials.env"
+
+      # Before the stack is assembled and any group starts: the model's
+      # provider takes its key, the Kanban fixture's catalog reads and the
+      # Registry answers, each asked again for a few minutes while it does
+      # not (scripts/preflight.py), for the repository variable
+      # HARNESS_E2E_PREFLIGHT_SECONDS or 300 seconds. What still does not
+      # fails preparation here, with the cause Release Control reports,
+      # rather than every group hours later.
+      - name: Check the provider key, the Kanban fixture and the Registry
+        env:
+          HARNESS_E2E_PREFLIGHT_SECONDS: ${{ vars.HARNESS_E2E_PREFLIGHT_SECONDS || '300' }}
+        run: scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" prepare preflight
 
       # The other half writes one contract per campaign and assembles the
       # stack once, with the credentials the groups get and one more try:

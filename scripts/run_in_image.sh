@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one phase of an execution in the executor image.
 #
-#   scripts/run_in_image.sh [--env-file FILE] prepare [resolve|build|materialize|assemble|fixtures]
+#   scripts/run_in_image.sh [--env-file FILE] prepare [resolve|build|materialize|preflight|assemble|fixtures]
 #   scripts/run_in_image.sh [--env-file FILE] group
 #   scripts/run_in_image.sh [--env-file FILE] finalize
 #   scripts/run_in_image.sh image    print the image this checkout runs in

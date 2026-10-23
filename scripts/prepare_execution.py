@@ -8,6 +8,8 @@ reports go to. Everything else is resolved here, once for the whole execution:
     dispatch   the inputs as one execution: `execution.json`, the requested
                `stack.yaml`, and `plan.json`, the plan shape older Console
                imports and `report_execution.py` read.
+    slots      the materialized suite cut down to the slots the dispatch
+               re-runs, when it names some; numbered as the whole suite is.
     runtime    `iii: latest` becomes the newest iii release candidate, with
                its archive digest, a template one commit, every container
                pinned to a `commit:` its repository, folder, full commit and
@@ -50,6 +52,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from exact_stack_campaign import load_yaml, merged, worker_name  # noqa: E402
+from report_execution import round_offset  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,6 +152,56 @@ def compose_of(stack: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
 
 
+def read_slots(value: str) -> list[dict[str, Any]] | None:
+    """The slots a dispatch re-runs, `[{"scenario_id": ..., "repetition": n}]`
+    (other keys are ignored); None when it names none."""
+    if not value.strip():
+        return None
+    try:
+        slots = json.loads(value)
+    except ValueError as error:
+        raise ResolutionError(f"slots is not JSON: {error}") from error
+    if not isinstance(slots, list) or not slots or not all(
+        isinstance(slot, dict)
+        and isinstance(slot.get("scenario_id"), str) and slot["scenario_id"]
+        and type(slot.get("repetition")) is int and slot["repetition"] >= 0
+        for slot in slots
+    ):
+        raise ResolutionError('slots must be a JSON list of {"scenario_id": "<id>", "repetition": <n from 0>}')
+    return [{"scenario_id": slot["scenario_id"], "repetition": slot["repetition"]} for slot in slots]
+
+
+def select_slots(snapshot: dict[str, Any], slots: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The materialized suite cut down to the groups that run `slots`, and
+    the slots none of its groups runs.
+
+    A slot's repetition is the one the reports give its run: the campaign's
+    place in the suite times its group's runs, plus the run
+    (report_execution.round_offset). So every campaign keeps its place, one
+    left without a group too, and the re-run reports each slot under the
+    shard and slot id it had. A group runs whole: a scenario paired with
+    another needs it, and a group's runs are one invocation.
+    """
+    wanted = {(slot["scenario_id"], slot["repetition"]) for slot in slots}
+    found: set[tuple[str, int]] = set()
+    campaigns = []
+    for campaign in snapshot.get("campaigns") or []:
+        groups = []
+        for group in campaign.get("groups") or []:
+            offset = round_offset(snapshot, campaign.get("campaign_id"), group.get("id"))
+            runs = group["runs"] if isinstance(group.get("runs"), int) and group["runs"] > 0 else 1
+            covered = {(scenario, offset + run) for scenario in group.get("scenarios") or [] for run in range(runs)}
+            if covered & wanted:
+                groups.append(group)
+                found |= covered & wanted
+        campaigns.append({**campaign, "groups": groups})
+    planned = sum(len(group.get("scenarios") or []) * (group.get("runs") or 1)
+                  for campaign in campaigns for group in campaign["groups"])
+    budget = {**snapshot["budget"], "scenario_runs": planned, "planned_runs": planned} if snapshot.get("budget") else None
+    selected = {**snapshot, "campaigns": campaigns, **({"budget": budget} if budget else {})}
+    return selected, [slot for slot in slots if (slot["scenario_id"], slot["repetition"]) not in found]
+
+
 def stack_kits(stack: dict[str, Any]) -> list[str]:
     """Registry kits the stack asks Directory to install natively."""
     kits = stack.get("kits") or []
@@ -170,6 +223,8 @@ def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:
         "model": (inputs.get("model") or "").strip(),
         "profile": (inputs.get("profile") or "").strip() or None,
     }
+    if slots := read_slots(inputs.get("slots") or ""):
+        execution["slots"] = slots
     if not execution["suite"]:
         raise ResolutionError("suite is required: a suite id of config/test-plan.json or one suite as JSON")
     provider, _, model = execution["model"].partition("/")
@@ -719,11 +774,26 @@ def write_json(path: Path, value: Any) -> None:
 def command_dispatch(args: argparse.Namespace) -> None:
     import yaml
 
-    names = ("suite", "stack", "model", "profile", "execution_id")
+    names = ("suite", "stack", "model", "profile", "execution_id", "slots")
     dispatch = read_dispatch({name: os.environ.get(f"DISPATCH_{name.upper()}", "") for name in names})
     write_json(args.contract_dir / "execution.json", dispatch["execution"])
     write_json(args.contract_dir / "plan.json", dispatch["plan"])
     (args.contract_dir / "stack.yaml").write_text(yaml.safe_dump(dispatch["stack"], sort_keys=False))
+
+
+def command_slots(args: argparse.Namespace) -> None:
+    """Cut `suite.json` down to the slots the dispatch re-runs, if it names any."""
+    slots = json.loads((args.contract_dir / "execution.json").read_text()).get("slots")
+    if not slots:
+        return
+    path = args.contract_dir / "suite.json"
+    selected, missing = select_slots(json.loads(path.read_text()), slots)
+    for slot in missing:
+        print(f"::warning::the suite has no slot {slot['scenario_id']} repetition {slot['repetition']}; "
+              "it is not run", file=sys.stderr)
+    if len(missing) == len(slots):
+        raise ResolutionError("slots names no slot of the suite")
+    write_json(path, selected)
 
 
 def command_runtime(args: argparse.Namespace) -> None:
@@ -815,9 +885,11 @@ def command_contracts(args: argparse.Namespace) -> None:
     snapshot = json.loads((directory / "suite.json").read_text())
     stack = load_yaml((directory / "stack.yaml").read_text())
     cli, template = execution["cli"], execution.get("template")
+    # A campaign the slots left without a group runs nothing.
+    campaigns = [campaign for campaign in snapshot["campaigns"] if campaign.get("groups")]
 
     include = []
-    for campaign in snapshot["campaigns"]:
+    for campaign in campaigns:
         contract = build_contract(
             campaign,
             execution_key=args.execution_key,
@@ -855,7 +927,7 @@ def command_contracts(args: argparse.Namespace) -> None:
         {
             "matrix": {"include": include},
             "cli_version": cli["version"],
-            "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
+            "campaign_ids": [campaign["campaign_id"] for campaign in campaigns],
             **({"template": template} if template else {}),
             # What a worker built from a commit reports is its Cargo version;
             # the reports name it by the commit.
@@ -986,6 +1058,7 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     dispatch = commands.add_parser("dispatch", help="read the DISPATCH_* inputs")
     runtime = commands.add_parser("runtime")
+    slots = commands.add_parser("slots", help="cut suite.json down to the slots the dispatch re-runs")
     commits = commands.add_parser("commits")
     commits.add_argument("--cache-dir", type=Path, required=True, help="builds by repository/commit/folder")
     runner = commands.add_parser("runner")
@@ -995,7 +1068,7 @@ def main() -> int:
     contracts.add_argument("--oidc-audience", required=True)
     lock = commands.add_parser("lock")
     lock.add_argument("--assembled", type=Path, required=True, help="directory with the assembled worker-compose.{yaml,lock}")
-    for command in (dispatch, runtime, commits, runner, contracts, lock):
+    for command in (dispatch, runtime, slots, commits, runner, contracts, lock):
         command.add_argument("--contract-dir", type=Path, required=True)
     runner_binary = commands.add_parser("runner-binary")
     runner_binary.add_argument("--lock", type=Path, required=True)
@@ -1004,7 +1077,8 @@ def main() -> int:
     failure.add_argument("--directory", type=Path, required=True, help="where run_in_image.sh kept the steps")
     args = parser.parse_args()
     handlers = {
-        "dispatch": command_dispatch, "runtime": command_runtime, "commits": command_commits,
+        "dispatch": command_dispatch, "runtime": command_runtime, "slots": command_slots,
+        "commits": command_commits,
         "runner": command_runner,
         "contracts": command_contracts, "lock": command_lock, "runner-binary": command_runner_binary,
         "failure": command_failure,
