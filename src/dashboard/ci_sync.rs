@@ -15,7 +15,7 @@ use tokio::sync::Notify;
 
 use super::controller::Controller;
 use crate::plans::store::{
-    github_started, import_id, rate_limited, ExecutionSource, PlanExecution,
+    github_started, import_id, rate_limited, ExecutionSource, PlanExecution, NOT_SIGNED_IN,
 };
 
 /// Days GitHub keeps a run's artifacts.
@@ -46,9 +46,11 @@ pub(super) enum CiSyncPhase {
 pub(super) struct CiSyncStatus {
     pub enabled: bool,
     pub phase: CiSyncPhase,
-    /// Whether `gh` was signed in at the last check; null before one.
+    /// Whether `gh` was signed in at the last check; null before one, and
+    /// when `gh` could not tell (missing, or not answering).
     pub signed_in: Option<bool>,
-    /// What stopped the last check short.
+    /// What stopped the last check short: `gh` not ready, a listing that
+    /// failed. A run whose import failed only counts in `failed`.
     pub message: Option<String>,
     pub checked_at: Option<String>,
     pub next_check_at: Option<String>,
@@ -184,16 +186,18 @@ pub(super) async fn tick(controller: &Arc<Controller>) -> Duration {
     }
     let github = controller.github_status().await;
     let ready = github["ready"] == json!(true);
+    let message = github["message"].as_str().unwrap_or_default();
     {
         let mut status = sync.lock();
-        status.signed_in = Some(ready);
+        // Only a signed-out `gh` asks for `gh auth login`; a missing or
+        // stuck one says so in its message.
+        status.signed_in = if ready {
+            Some(true)
+        } else {
+            (message == NOT_SIGNED_IN).then_some(false)
+        };
         status.paused_until = None;
-        status.message = (!ready).then(|| {
-            github["message"]
-                .as_str()
-                .unwrap_or_default()
-                .replace(", then reopen this dialog", "")
-        });
+        status.message = (!ready).then(|| message.replace(", then reopen this dialog", ""));
     }
     if !ready {
         return sync.schedule(interval);
@@ -220,27 +224,26 @@ async fn pass(
     let mut seen = HashSet::new();
     let (rows, next, wait) = match phase {
         CiSyncPhase::Off => return Ok(interval),
-        // A day at a time, until the two newest Harness releases each have
-        // a Release Control run.
+        // Release Control runs a day at a time, until the two newest Harness
+        // releases each have one; then the newest other runs listed, so the
+        // strip outside Release Control has a count.
         CiSyncPhase::Quick => {
-            let mut others = 0;
+            let mut others = Vec::new();
             for n in 0..=WINDOW_DAYS {
                 if controller.release_overview().await?.verdict.is_some() {
                     break;
                 }
-                let mut rows = window(controller, n, n, &mut seen).await?;
-                rows.retain(|row| {
-                    if release_control(row) {
-                        return true;
-                    }
-                    others += 1;
-                    others <= PER_PAGE as usize
-                });
+                let (rows, other): (Vec<_>, Vec<_>) = window(controller, n, n, &mut seen)
+                    .await?
+                    .into_iter()
+                    .partition(release_control);
+                others.extend(other);
                 if let Some(wait) = import(controller, rows).await? {
                     return Ok(wait);
                 }
             }
-            (Vec::new(), CiSyncPhase::Backfill, Duration::ZERO)
+            others.truncate(PER_PAGE as usize);
+            (others, CiSyncPhase::Backfill, Duration::ZERO)
         }
         CiSyncPhase::Backfill => {
             let mut rows = Vec::new();
@@ -332,10 +335,10 @@ async fn import(controller: &Arc<Controller>, mut rows: Vec<Value>) -> Result<Op
                 }
                 Ok(Some(_)) => sync.lock().failed += 1,
                 Err(error) if rate_limited(&format!("{error:#}")) => return Ok(Some(sync.pause())),
+                // One run's failure only counts: the progress line stays.
                 Err(error) => {
-                    let mut status = sync.lock();
-                    status.failed += 1;
-                    status.message = Some(format!("{error:#}"));
+                    tracing::warn!(run_id, error = %format!("{error:#}"), "CI sync could not import a run");
+                    sync.lock().failed += 1;
                 }
             }
         }
@@ -427,7 +430,9 @@ mod tests {
 
     use super::*;
     use crate::dashboard::controller::tests::without_control_plane;
-    use crate::plans::store::tests::{fake_gh, import_stub, manager_with_gh, FakeRunner};
+    use crate::plans::store::tests::{
+        exact_stack_bundle, fake_gh, import_stub, manager_with_gh, FakeRunner,
+    };
     use crate::plans::store::{import_id, ExecutionSource, PlanExecution};
 
     /// Heads each `gh` stand-in: it logs every call, `run <id> <title>
@@ -446,6 +451,16 @@ case "$*" in
             manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
             &data,
         )
+    }
+
+    /// The runs whose artifacts `gh` listed, in the order it listed them.
+    fn artifacts_listed(root: &Path) -> Vec<String> {
+        fs::read_to_string(root.join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| Some(line.split("runs/").nth(1)?.split_once("/artifacts")?.0))
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The `gh` calls holding `needle`.
@@ -564,6 +579,93 @@ case "$*" in
         assert_eq!(
             fs::read_to_string(data.join("ci-sync.json")).unwrap(),
             r#"{"enabled":false}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn ci_sync_without_gh_says_so_instead_of_asking_to_sign_in() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(root, "exit 0");
+        fs::remove_file(root.join("gh")).unwrap();
+        controller.ci_sync_set(true).unwrap();
+
+        tick(&controller).await;
+        let status = controller.ci_sync_status();
+        assert_eq!(status.signed_in, None);
+        assert_eq!(
+            status.message.as_deref(),
+            Some("The GitHub CLI (`gh`) is not installed for the Harness E2E worker. Install it, then run `gh auth login`.")
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_imports_release_control_runs_day_by_day_before_the_newest_other_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(
+            root,
+            &[
+                &format!("D0={} D1={}\n", day(0), day(1)),
+                GH,
+                r#"
+  *"created=$D0..$D0"*) printf '{"total_count":2,"workflow_runs":['; run 1 'E2E · rc-1'; printf ,; run 2 'E2E run · pr · flash'; printf ']}' ;;
+  *"created=$D1..$D1"*) printf '{"total_count":2,"workflow_runs":['; run 3 'E2E · rc-3'; printf ,; run 4 'E2E run · pr · flash'; printf ']}' ;;
+  *workflows/*) printf '{"total_count":0,"workflow_runs":[]}' ;;
+  *artifacts*) ;;
+  *runs/1) run 1 'E2E · rc-1' ;;
+  *runs/2) run 2 'E2E run · pr · flash' ;;
+  *runs/3) run 3 'E2E · rc-3' ;;
+  *runs/4) run 4 'E2E run · pr · flash' ;;
+esac"#,
+            ]
+            .concat(),
+        );
+        controller.ci_sync_set(true).unwrap();
+
+        // No verdict ever comes: every day's Release Control run, then the
+        // newest other runs, then the backfill.
+        assert_eq!(tick(&controller).await, Duration::ZERO);
+        assert_eq!(artifacts_listed(root), ["1", "3", "2", "4"]);
+        assert_eq!(controller.ci_sync_status().phase, CiSyncPhase::Backfill);
+    }
+
+    #[tokio::test]
+    async fn one_failed_import_counts_as_failed_and_leaves_the_progress_line_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let (bundle, contract, _) =
+            exact_stack_bundle(&root.join("fixture"), "rc:e2e:synced", "1.8.8");
+        let controller = controller_on(
+            root,
+            &[
+                GH,
+                &format!(
+                    r#"
+  *workflows/*) printf '{{"total_count":2,"workflow_runs":['; run 1 'E2E · rc-1'; printf ,; run 2 'E2E · rc-2'; printf ']}}' ;;
+  "api repos/o/r/actions/runs/1") echo 'HTTP 502: Bad Gateway' >&2; exit 1 ;;
+  "api repos/o/r/actions/runs/2") run 2 'E2E · rc-2' ;;
+  "api --paginate"*) printf 'e2e-contract-rc-2-gh-1
+e2e-observation-rc-2-gh-1
+' ;;
+  "run download"*) case "$7" in
+      e2e-contract-*) cp -R '{contract}' "$9" ;;
+      *) cp -R '{bundle}' "$9" ;;
+    esac ;;
+esac"#,
+                    contract = contract.display(),
+                    bundle = bundle.display(),
+                ),
+            ]
+            .concat(),
+        );
+        controller.ci_sync_set(true).unwrap();
+
+        tick(&controller).await;
+        let status = controller.ci_sync_status();
+        assert_eq!(
+            (status.message, status.failed, status.imported),
+            (None, 1, 1)
         );
     }
 

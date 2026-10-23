@@ -27,6 +27,12 @@ use crate::report::{E2eRunReport, E2eScenarioReport};
 
 const DATABASE_QUERY: &str = "database::query";
 const DATABASE_TRANSACTION: &str = "database::transaction";
+/// Rows per reply of a list that grows with the executions: about 4 MiB at
+/// the ~20 KB an execution record takes, under the engine's 16 MiB message cap.
+const PAGE_ROWS: usize = 200;
+/// What one transaction of rebuilt projections holds at most, a quarter of
+/// the engine's 16 MiB message cap.
+const TRANSACTION_BYTES: usize = 4 * 1024 * 1024;
 
 const SCHEMA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS harness_e2e_storage (name TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)",
@@ -113,7 +119,10 @@ fn layout_statements() -> impl Iterator<Item = Value> {
 /// Rows that survive the recreation of stale tables, and what did not.
 #[derive(Default)]
 struct Salvage {
+    /// The rows of the recreated tables, written with them.
     statements: Vec<Value>,
+    /// Each execution's rebuilt projection, written in batches after them.
+    projections: Vec<Vec<Value>>,
     executions: usize,
     suites: usize,
     stacks: usize,
@@ -192,6 +201,7 @@ impl Persistence {
             .collect::<Vec<_>>();
 
         let mut statements = Vec::new();
+        let mut projections = Vec::new();
         let mut summary = json!({});
         if !stale.is_empty() || !legacy.is_empty() {
             let salvage = self.salvage(&present, &stale, data_dir).await?;
@@ -200,7 +210,9 @@ impl Persistence {
                     .push(json!({"sql": format!("DROP TABLE IF EXISTS {table}"), "params": []}));
             }
             statements.extend(layout_statements());
+            // shortcut: the rows of a recreated table are copied in this one transaction, so a moved executions or receipts layout over ~16 MiB of rows cannot start; copy through a staging table before moving those layouts
             statements.extend(salvage.statements);
+            projections = salvage.projections;
             summary = json!({
                 "recreated": stale,
                 "legacy_dropped": legacy,
@@ -218,17 +230,29 @@ impl Persistence {
             .iter()
             .map(|layout| &layout.name)
             .collect::<Vec<_>>();
-        statements.push(json!({
+        let mut fingerprints = vec![json!({
             "sql": format!("DELETE FROM {STORAGE_TABLE} WHERE name NOT IN ({})", vec!["?"; names.len()].join(", ")),
             "params": names,
-        }));
+        })];
         for layout in &layouts {
-            statements.push(json!({
+            fingerprints.push(json!({
                 "sql": format!("INSERT INTO {STORAGE_TABLE}(name, fingerprint) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET fingerprint = excluded.fingerprint"),
                 "params": [layout.name, layout.fingerprint()]
             }));
         }
-        self.transaction(statements).await?;
+        // The layout first, then the rebuilt projections in batches that stay
+        // under the engine's message cap, then the fingerprints: a start cut
+        // short leaves them stale, and the next start rebuilds the projections
+        // again over the same upserts. With nothing rebuilt, one transaction.
+        let mut transactions = vec![statements];
+        transactions.extend(batches(projections));
+        match transactions.as_mut_slice() {
+            [layout] => layout.extend(fingerprints),
+            _ => transactions.push(fingerprints),
+        }
+        for statements in transactions {
+            self.transaction(statements).await?;
+        }
         if !summary
             .as_object()
             .is_some_and(|summary| summary.is_empty())
@@ -253,7 +277,10 @@ impl Persistence {
         // from the native bundles when a projection table moved.
         if (is_stale("executions") || projections_stale) && present.contains("executions") {
             let mut records = Vec::new();
-            for row in self.query("SELECT * FROM executions", json!([])).await? {
+            for row in self
+                .rows("SELECT * FROM executions", "requested_at", "execution_id")
+                .await?
+            {
                 match decode_record(&row) {
                     Ok(record) => records.push(record),
                     Err(error) => {
@@ -264,6 +291,9 @@ impl Persistence {
             }
             salvage.executions = records.len();
             for mut record in records {
+                if is_stale("executions") {
+                    salvage.statements.push(execution_statement(&record)?);
+                }
                 if projections_stale {
                     if let Some(path) = record
                         .result_path
@@ -295,10 +325,8 @@ impl Persistence {
                         record.dashboard_projection = None;
                     }
                     salvage
-                        .statements
-                        .extend(terminal_projection_statements(&record)?);
-                } else {
-                    salvage.statements.push(execution_statement(&record)?);
+                        .projections
+                        .push(terminal_projection_statements(&record)?);
                 }
             }
         }
@@ -334,7 +362,7 @@ impl Persistence {
         }
         if is_stale("saved_plan_executions") && present.contains("saved_plan_executions") {
             for row in self
-                .query("SELECT * FROM saved_plan_executions", json!([]))
+                .rows("SELECT * FROM saved_plan_executions", "started_at", "id")
                 .await?
             {
                 match decode_hashed_payload::<PlanExecution>(&row, "execution")
@@ -406,27 +434,29 @@ impl Persistence {
     }
 
     pub(crate) async fn saved_execution(&self, id: &str) -> Result<Option<PlanExecution>> {
-        Ok(self
-            .retained_executions(
+        let rows = self
+            .query(
                 "SELECT id, payload_json, payload_sha256 FROM saved_plan_executions WHERE id = ?",
                 json!([id]),
             )
-            .await?
-            .pop())
+            .await?;
+        Ok(self.retained_executions(rows).await?.pop())
     }
 
     pub(crate) async fn saved_executions(&self) -> Result<Vec<PlanExecution>> {
-        self.retained_executions(
-            "SELECT id, payload_json, payload_sha256 FROM saved_plan_executions ORDER BY started_at DESC",
-            json!([]),
-        )
-        .await
+        let rows = self
+            .rows(
+                "SELECT id, started_at, payload_json, payload_sha256 FROM saved_plan_executions",
+                "started_at",
+                "id",
+            )
+            .await?;
+        self.retained_executions(rows).await
     }
 
     async fn retained_suites(&self, sql: &str, params: Value) -> Result<Vec<LocalSuite>> {
         self.retained(
-            sql,
-            params,
+            self.query(sql, params).await?,
             "local suite",
             |_| Ok(()),
             |id| vec![json!({"sql": "DELETE FROM local_suites WHERE id = ?", "params": [id]})],
@@ -436,8 +466,7 @@ impl Persistence {
 
     async fn retained_stacks(&self, sql: &str, params: Value) -> Result<Vec<LocalStack>> {
         self.retained(
-            sql,
-            params,
+            self.query(sql, params).await?,
             "local stack",
             |_| Ok(()),
             |id| vec![json!({"sql": "DELETE FROM local_stacks WHERE id = ?", "params": [id]})],
@@ -445,8 +474,8 @@ impl Persistence {
         .await
     }
 
-    async fn retained_executions(&self, sql: &str, params: Value) -> Result<Vec<PlanExecution>> {
-        self.retained(sql, params, "execution", validate_saved_execution, |id| {
+    async fn retained_executions(&self, rows: Vec<Value>) -> Result<Vec<PlanExecution>> {
+        self.retained(rows, "execution", validate_saved_execution, |id| {
             vec![json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]})]
         })
         .await
@@ -456,15 +485,14 @@ impl Persistence {
     /// under another layout and is deleted instead of carried along.
     async fn retained<T: DeserializeOwned>(
         &self,
-        sql: &str,
-        params: Value,
+        rows: Vec<Value>,
         kind: &str,
         validate: fn(&T) -> Result<()>,
         discard: fn(&str) -> Vec<Value>,
     ) -> Result<Vec<T>> {
         let mut values = Vec::new();
         let mut discarded = Vec::new();
-        for row in self.query(sql, params).await? {
+        for row in rows {
             match decode_hashed_payload::<T>(&row, kind)
                 .and_then(|value| validate(&value).map(|()| value))
             {
@@ -564,18 +592,22 @@ impl Persistence {
     }
 
     pub async fn executions(&self) -> Result<Vec<ExecutionRecord>> {
-        self.records_query(
-            "SELECT execution_id, record_json, record_sha256 FROM executions ORDER BY requested_at DESC",
-            json!([]),
-        )
-        .await
+        let rows = self
+            .rows(
+                "SELECT execution_id, requested_at, record_json, record_sha256 FROM executions",
+                "requested_at",
+                "execution_id",
+            )
+            .await?;
+        self.records(rows).await
     }
 
     pub async fn active_executions(&self) -> Result<Vec<ExecutionRecord>> {
-        self.records_query(
+        let rows = self.query(
             "SELECT execution_id, record_json, record_sha256 FROM executions WHERE terminal = 0 ORDER BY requested_at DESC",
             json!([]),
-        ).await
+        ).await?;
+        self.records(rows).await
     }
 
     pub async fn active_count(&self) -> Result<u64> {
@@ -613,10 +645,10 @@ impl Persistence {
     /// Decode the records this runner can read. A record it cannot read
     /// (one naming a removed scenario, say) is deleted with a warning, as
     /// suites are, so it never fails the start or a list.
-    async fn records_query(&self, sql: &str, params: Value) -> Result<Vec<ExecutionRecord>> {
+    async fn records(&self, rows: Vec<Value>) -> Result<Vec<ExecutionRecord>> {
         let mut records = Vec::new();
         let mut discarded = Vec::new();
-        for row in self.query(sql, params).await? {
+        for row in rows {
             match decode_record(&row) {
                 Ok(record) => records.push(record),
                 Err(error) => {
@@ -636,6 +668,33 @@ impl Persistence {
             self.transaction(discarded).await?;
         }
         Ok(records)
+    }
+
+    /// Every row of `select` (a `SELECT … FROM <table>` naming `order` and
+    /// `id`), the newest `order` first and `id` breaking ties, a page at a
+    /// time, so no reply grows with the table.
+    async fn rows(&self, select: &str, order: &str, id: &str) -> Result<Vec<Value>> {
+        let mut rows: Vec<Value> = Vec::new();
+        loop {
+            let (after, params) = match rows.last() {
+                None => (String::new(), json!([])),
+                Some(last) => (
+                    format!(" WHERE {order} < ? OR ({order} = ? AND {id} < ?)"),
+                    json!([last[order], last[order], last[id]]),
+                ),
+            };
+            let page = self
+                .query(
+                    &format!("{select}{after} ORDER BY {order} DESC, {id} DESC LIMIT {PAGE_ROWS}"),
+                    params,
+                )
+                .await?;
+            let last_page = page.len() < PAGE_ROWS;
+            rows.extend(page);
+            if last_page {
+                return Ok(rows);
+            }
+        }
     }
 
     pub(crate) async fn query(&self, sql: &str, params: Value) -> Result<Vec<Value>> {
@@ -690,6 +749,28 @@ impl Persistence {
             .await
             .map_err(|error| anyhow::anyhow!("{function_id}: {error}"))
     }
+}
+
+/// Each execution's statements whole, in transactions of at most
+/// `TRANSACTION_BYTES`; an execution larger than that goes alone.
+fn batches(executions: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
+    let mut batches: Vec<Vec<Value>> = Vec::new();
+    let mut bytes = 0;
+    for statements in executions {
+        let size = statements
+            .iter()
+            .map(|statement| statement.to_string().len())
+            .sum::<usize>();
+        match batches.last_mut() {
+            Some(batch) if bytes + size <= TRANSACTION_BYTES => batch.extend(statements),
+            _ => {
+                batches.push(statements);
+                bytes = 0;
+            }
+        }
+        bytes += size;
+    }
+    batches
 }
 
 fn terminal_projection_statements(record: &ExecutionRecord) -> Result<Vec<Value>> {
@@ -912,6 +993,8 @@ pub(crate) mod tests {
         /// Each table's rows in insertion order, as SQLite's rowid keeps them.
         rows: BTreeMap<String, Vec<Value>>,
         refuse_writes: bool,
+        /// The most rows one query answered.
+        largest_reply: usize,
     }
 
     /// Ends the client's connection loop when the server answering it goes.
@@ -988,6 +1071,11 @@ pub(crate) mod tests {
                 .cloned()
         }
 
+        /// The most rows one query answered.
+        pub(crate) fn largest_reply(&self) -> usize {
+            self.0.lock().unwrap().largest_reply
+        }
+
         /// Keep a row as another runner wrote it.
         pub(crate) fn insert(&self, table: &str, row: Value) {
             self.0
@@ -1009,7 +1097,9 @@ pub(crate) mod tests {
             };
             if function_id == DATABASE_QUERY {
                 let (sql, params) = statement(data);
-                return Ok(json!({"rows": execute(&mut tables.rows, &sql, &params)?}));
+                let rows = execute(&mut tables.rows, &sql, &params)?;
+                tables.largest_reply = tables.largest_reply.max(rows.len());
+                return Ok(json!({"rows": rows}));
             }
             if function_id != DATABASE_TRANSACTION {
                 return Err(format!("unexpected function {function_id}"));
@@ -1051,7 +1141,29 @@ pub(crate) mod tests {
                 found.retain(|row| row["id"] == params[0]);
                 return Ok(found);
             }
-            let order = clause.strip_prefix("ORDER BY ").ok_or_else(unexpected)?;
+            let (clause, limit) = match clause.split_once(" LIMIT ") {
+                Some((clause, limit)) => (clause, limit.parse().map_err(|_| unexpected())?),
+                None => (clause, usize::MAX),
+            };
+            // A page after the last row read: `WHERE a < ? OR (a = ? AND b < ?)`.
+            let order = match clause.split_once(" ORDER BY ") {
+                Some((after, order)) => {
+                    let (column, rest) = after
+                        .strip_prefix("WHERE ")
+                        .and_then(|after| after.split_once(" < ? OR ("))
+                        .ok_or_else(unexpected)?;
+                    let tie = rest
+                        .strip_prefix(&format!("{column} = ? AND "))
+                        .and_then(|rest| rest.strip_suffix(" < ?)"))
+                        .ok_or_else(unexpected)?;
+                    found.retain(|row| {
+                        (row[column].as_str(), row[tie].as_str())
+                            < (params[0].as_str(), params[2].as_str())
+                    });
+                    order
+                }
+                None => clause.strip_prefix("ORDER BY ").ok_or_else(unexpected)?,
+            };
             // Stable: ties keep insertion order.
             found.sort_by(|a, b| {
                 order
@@ -1069,6 +1181,7 @@ pub(crate) mod tests {
                     })
                     .fold(std::cmp::Ordering::Equal, std::cmp::Ordering::then)
             });
+            found.truncate(limit);
             return Ok(found);
         }
         if let Some(rest) = sql.strip_prefix("DELETE FROM ") {
@@ -1276,15 +1389,16 @@ pub(crate) mod tests {
     }
 
     /// Answers the database calls one start makes from `rows_for` and hands
-    /// back the statements of its one transaction.
+    /// back the statements of each transaction once the client is gone.
     async fn fake_database(
         rows_for: impl Fn(&str) -> Value + Send + 'static,
-    ) -> (iii_sdk::IIIClient, tokio::task::JoinHandle<Vec<Value>>) {
+    ) -> (iii_sdk::IIIClient, tokio::task::JoinHandle<Vec<Vec<Value>>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let mut transactions = Vec::new();
             while let Some(Ok(frame)) = socket.next().await {
                 let Message::Text(message) = frame else {
                     continue;
@@ -1312,10 +1426,10 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
                 if transaction {
-                    return message["data"]["statements"].as_array().unwrap().clone();
+                    transactions.push(message["data"]["statements"].as_array().unwrap().clone());
                 }
             }
-            panic!("database transaction was not invoked");
+            transactions
         });
         let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1328,30 +1442,178 @@ pub(crate) mod tests {
         (client, server)
     }
 
+    /// The transactions the fake database saw, once `client` is gone.
+    async fn transactions(
+        client: iii_sdk::IIIClient,
+        server: tokio::task::JoinHandle<Vec<Vec<Value>>>,
+    ) -> Vec<Vec<Value>> {
+        client.shutdown_async().await;
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the fake database should see the client go")
+            .unwrap()
+    }
+
+    /// An execution record as the `executions` table keeps it.
+    fn record_row(id: &str, requested_at: &str, scenario: &str, error: &str) -> Value {
+        let body = json!({
+            "execution_id": id, "idempotency_key": id, "phase": "completed",
+            "requested_at": requested_at, "updated_at": requested_at,
+            "request": {"idempotency_key": id, "model": "model", "provider": "provider", "scenarios": [scenario]},
+            "lane_budget": {"max_cases": 1, "max_runs_per_case": 1, "max_technical_retries": 0, "max_declared_turns": 1},
+            "transitions": [], "cancel_requested": false, "error": error,
+        })
+        .to_string();
+        json!({"execution_id": id, "requested_at": requested_at, "record_sha256": crate::artifact::sha256_bytes(body.as_bytes()), "record_json": body})
+    }
+
     #[tokio::test]
-    async fn a_record_of_a_removed_scenario_is_deleted_and_the_rest_listed() {
-        let record = |id: &str, scenario: &str| {
-            let body = json!({
-                "execution_id": id, "idempotency_key": id, "phase": "completed",
-                "requested_at": "2026-09-20T12:00:00Z", "updated_at": "2026-09-20T12:00:02Z",
-                "request": {"idempotency_key": id, "model": "model", "provider": "provider", "scenarios": [scenario]},
-                "lane_budget": {"max_cases": 1, "max_runs_per_case": 1, "max_technical_retries": 0, "max_declared_turns": 1},
-                "transitions": [], "cancel_requested": false,
+    async fn every_execution_and_receipt_is_listed_once_in_order_a_page_at_a_time() {
+        let database = MemoryDatabase::default();
+        let persistence = database.persistence();
+        // Three rows a time: the newest first, the id breaking a tie.
+        let at = |n: usize| format!("2026-09-{:02}T{:02}:00:00Z", 1 + n / 72, n / 3 % 24);
+        let count = PAGE_ROWS * 2 + 50;
+        for n in 0..count {
+            let id = format!("{n:032x}");
+            database.insert(
+                "executions",
+                record_row(&id, &at(n), "context_pressure", ""),
+            );
+            let receipt = json!({
+                "id": format!("plan-{n:04}"), "idempotency_key": id, "state": "completed",
+                "started_at": at(n), "updated_at": at(n), "finished_at": at(n),
+                "cancel_requested": false, "error": null, "slots": [], "measurements": null,
             })
             .to_string();
-            json!({"execution_id": id, "record_sha256": crate::artifact::sha256_bytes(body.as_bytes()), "record_json": body})
+            database.insert(
+                "saved_plan_executions",
+                json!({"id": format!("plan-{n:04}"), "started_at": at(n), "payload_sha256": crate::artifact::sha256_bytes(receipt.as_bytes()), "payload_json": receipt}),
+            );
+        }
+        let newest_first = |ids: &mut Vec<(String, String)>| {
+            ids.sort();
+            ids.reverse();
+            ids.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>()
         };
+
+        let listed = persistence.executions().await.unwrap();
+        let expected =
+            newest_first(&mut (0..count).map(|n| (at(n), format!("{n:032x}"))).collect());
+        assert_eq!(
+            listed
+                .iter()
+                .map(|record| record.execution_id.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let receipts = persistence.saved_executions().await.unwrap();
+        let expected = newest_first(
+            &mut (0..count)
+                .map(|n| (at(n), format!("plan-{n:04}")))
+                .collect(),
+        );
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|receipt| receipt.id.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(database.largest_reply(), PAGE_ROWS);
+    }
+
+    #[tokio::test]
+    async fn a_reprojection_rebuilds_in_batches_under_the_bound_and_records_the_layout_last() {
+        // A moved `runs` layout over more executions than one transaction
+        // holds: each record is about 40 KB.
+        let count = 150;
+        let rows = json!((0..count)
+            .map(|n| record_row(
+                &format!("{n:032x}"),
+                "2026-09-20T12:00:00Z",
+                "context_pressure",
+                &"x".repeat(40_000)
+            ))
+            .collect::<Vec<_>>());
+        let (client, server) = fake_database(move |sql| {
+            let layouts = table_layouts();
+            if sql.contains("sqlite_master") {
+                json!(layouts
+                    .iter()
+                    .map(|layout| json!({"name": layout.name}))
+                    .collect::<Vec<_>>())
+            } else if sql == format!("SELECT * FROM {STORAGE_TABLE}") {
+                json!(layouts
+                    .iter()
+                    .map(|layout| {
+                        let fingerprint = if layout.name == "runs" {
+                            "sha256:before".into()
+                        } else {
+                            layout.fingerprint()
+                        };
+                        json!({"name": layout.name, "fingerprint": fingerprint})
+                    })
+                    .collect::<Vec<_>>())
+            } else if sql.starts_with("SELECT * FROM executions ORDER BY") {
+                rows.clone()
+            } else {
+                panic!("unexpected start query: {sql}")
+            }
+        })
+        .await;
+        let root = tempfile::tempdir().unwrap();
+        let summary = Persistence::new(client.clone(), "harness_e2e".into(), "default".into())
+            .initialize(root.path())
+            .await
+            .unwrap();
+        let transactions = transactions(client, server).await;
+
+        assert_eq!(summary["executions"], json!(count));
+        assert!(
+            transactions.len() > 3,
+            "{} transactions",
+            transactions.len()
+        );
+        for statements in &transactions {
+            assert!(json!(statements).to_string().len() <= TRANSACTION_BYTES);
+        }
+        let sql = |statement: &Value| statement["sql"].as_str().unwrap().to_owned();
+        assert!(transactions[0]
+            .iter()
+            .any(|statement| sql(statement) == "DROP TABLE IF EXISTS runs"));
+        // The fingerprints only once every batch committed.
+        let records_layout = |statements: &Vec<Value>| {
+            statements
+                .iter()
+                .any(|statement| sql(statement).starts_with("INSERT INTO harness_e2e_storage"))
+        };
+        let (last, before) = transactions.split_last().unwrap();
+        assert!(records_layout(last));
+        assert!(!before.iter().any(records_layout));
+        assert_eq!(
+            transactions
+                .concat()
+                .iter()
+                .filter(|statement| sql(statement).starts_with("INSERT INTO executions"))
+                .count(),
+            count
+        );
+    }
+
+    #[tokio::test]
+    async fn a_record_of_a_removed_scenario_is_deleted_and_the_rest_listed() {
+        let at = "2026-09-20T12:00:00Z";
         let rows = json!([
-            record("current", "context_pressure"),
-            record("removed", "security_review")
+            record_row("current", at, "context_pressure", ""),
+            record_row("removed", at, "security_review", "")
         ]);
         let (client, server) = fake_database(move |_| rows.clone()).await;
         let records = Persistence::new(client.clone(), "harness_e2e".into(), "default".into())
             .executions()
             .await
             .unwrap();
-        let statements = server.await.unwrap();
-        client.shutdown_async().await;
+        let statements = transactions(client, server).await;
 
         assert_eq!(
             records
@@ -1360,7 +1622,7 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             vec!["current"]
         );
-        assert_eq!(statements, delete_execution_statements("removed"));
+        assert_eq!(statements, [delete_execution_statements("removed")]);
     }
 
     #[tokio::test]
@@ -1377,8 +1639,7 @@ pub(crate) mod tests {
             .save_local_stack(&stack)
             .await
             .unwrap();
-        let saved = server.await.unwrap();
-        client.shutdown_async().await;
+        let [saved] = transactions(client, server).await.try_into().unwrap();
         assert_eq!(saved, vec![local_stack_statement(&stack).unwrap()]);
         assert!(saved[0]["sql"]
             .as_str()
@@ -1399,8 +1660,7 @@ pub(crate) mod tests {
             .local_stacks()
             .await
             .unwrap();
-        let deleted = server.await.unwrap();
-        client.shutdown_async().await;
+        let [deleted] = transactions(client, server).await.try_into().unwrap();
         assert_eq!(listed, vec![stack]);
         assert_eq!(
             deleted,
@@ -1493,7 +1753,7 @@ pub(crate) mod tests {
                 suites.clone()
             } else if sql == "SELECT * FROM local_stacks" {
                 stacks.clone()
-            } else if sql == "SELECT * FROM saved_plan_executions" {
+            } else if sql.starts_with("SELECT * FROM saved_plan_executions ORDER BY") {
                 executions.clone()
             } else {
                 panic!("unexpected start query: {sql}")
@@ -1505,8 +1765,7 @@ pub(crate) mod tests {
             .initialize(root.path())
             .await
             .unwrap();
-        let statements = server.await.unwrap();
-        client.shutdown_async().await;
+        let statements = transactions(client, server).await.concat();
 
         assert_eq!(summary["legacy_dropped"], json!(legacy));
         assert_eq!(

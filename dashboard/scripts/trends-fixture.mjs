@@ -1,11 +1,19 @@
-// The worker's answers to trends-get and version-compare over the Trends
-// canvas's series (src/test-fixtures/trends.json: real executions of the dev
-// Console on Sep 28), for the browser checks and captures. No worker runs.
+// The worker's answers to trends-get, version-compare, release-overview-get
+// and ci-sync-status-get over the Trends canvas's series
+// (src/test-fixtures/trends.json: real executions of the dev Console on
+// Sep 28), for the browser checks and captures. No worker runs.
 import { readFileSync } from 'node:fs'
 
-export const fixture = JSON.parse(
-  readFileSync(new URL('../src/test-fixtures/trends.json', import.meta.url)),
-)
+const read = (name) =>
+  JSON.parse(
+    readFileSync(new URL(`../src/test-fixtures/${name}`, import.meta.url)),
+  )
+
+export const fixture = read('trends.json')
+/** The release overview (release-overview.json) and CI sync's status in
+ *  each state (ci-sync.json). */
+export const overview = read('release-overview.json')
+export const ciSync = read('ci-sync.json')
 
 const stackOf = (point) => point.stack.name ?? 'not_recorded'
 const key = ({ suite, provider, model, profile }) => ({
@@ -136,3 +144,10 @@ export function compareAnswer({ name, base, head }) {
       null,
   }
 }
+
+/** release-overview-get: the fixture's overview, a copy to change. */
+export const overviewAnswer = () => structuredClone(overview)
+
+/** ci-sync-status-get (and set and check): CI sync's status in a state,
+ *  `off`, `quick`, `backfill`, `keeping_up`, `signed_out` or `paused`. */
+export const ciSyncAnswer = (key = 'off') => structuredClone(ciSync[key])

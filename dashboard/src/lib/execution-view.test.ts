@@ -350,4 +350,20 @@ describe('an execution in the list', () => {
       executionOrigin(execution({ source: { kind: 'docker', groups: [] } })),
     ).toEqual({ label: 'Docker', href: null })
   })
+
+  it('names the Release Control execution behind a GitHub run', () => {
+    const github = (release: string | null) =>
+      executionOrigin(
+        execution({
+          source: {
+            kind: 'github',
+            run_id: 7,
+            url: 'u',
+            release_control_execution_id: release,
+          },
+        }),
+      ).label
+    expect(github('366030b3')).toBe('GitHub #7 · Release Control')
+    expect(github(null)).toBe('GitHub #7')
+  })
 })

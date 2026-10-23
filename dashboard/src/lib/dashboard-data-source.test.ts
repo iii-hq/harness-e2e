@@ -1,3 +1,6 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import {
   getDashboardDataBridge,
@@ -180,6 +183,48 @@ describe('live dashboard transport', () => {
     expect(
       trigger.mock.calls.filter(([id]) => id === 'version-compare'),
     ).toEqual([['version-compare', range]])
+  })
+
+  it('reads the release overview and drives CI sync through the Console client', async () => {
+    const trigger = vi.fn(async () => ({}))
+    installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
+    installDashboardRuntimeConfig({
+      functions: {
+        release_overview_get: 'release-overview-get',
+        ci_sync_status_get: 'ci-sync-status-get',
+        ci_sync_set: 'ci-sync-set',
+        ci_sync_check: 'ci-sync-check',
+      },
+    } as RuntimeConfig)
+    const live = await getDashboardDataBridge()
+    await live.getReleaseOverview()
+    await live.getReleaseOverview()
+    await live.getCiSyncStatus()
+    await live.setCiSync(true)
+    await live.checkCiSync()
+    // Never cached: an import moves the overview.
+    expect(trigger.mock.calls).toEqual([
+      ['release-overview-get', {}],
+      ['release-overview-get', {}],
+      ['ci-sync-status-get', {}],
+      ['ci-sync-set', { enabled: true }],
+      ['ci-sync-check', {}],
+    ])
+  })
+
+  it('lets the preview bundle read the overview and the sync status, never change the sync', () => {
+    const script = readFileSync(
+      new URL('../../scripts/preview-bundle.mjs', import.meta.url),
+      'utf8',
+    )
+    const reads = script.slice(
+      script.indexOf('const READS = ['),
+      script.indexOf('].map('),
+    )
+    expect(reads).toContain("'release-overview-get'")
+    expect(reads).toContain("'ci-sync-status-get'")
+    expect(reads).not.toContain("'ci-sync-set'")
+    expect(reads).not.toContain("'ci-sync-check'")
   })
 
   it('does not retry iii failures through HTTP', async () => {

@@ -5,8 +5,11 @@ import {
   groupFromParams,
   periodFromParams,
   type TrendGroupBy,
+  type TrendMetricId,
   type TrendPeriod,
   type TrendsRequest,
+  trendMetric,
+  trendsModeFromParams,
   trendsRequestFromParams,
 } from '@/lib/trends'
 
@@ -33,8 +36,8 @@ export type DashboardRoute =
   | { page: 'test-history'; testId: string; compare?: boolean }
   | { page: 'suites' }
   | { page: 'stacks' }
-  /** One series over time; the series, its stack and the period in the
-   *  hash's params. */
+  /** The release overview, or one series over time; the series, its
+   *  stack, the period and the measure in the hash's params. */
   | {
       page: 'trends'
       request: TrendsRequest
@@ -43,10 +46,32 @@ export type DashboardRoute =
       base: string | null
       /** One point per execution, day or Harness release. */
       group: TrendGroupBy
+      /** The hash names group=release: a series with no release keeps to
+       *  releases instead of drawing each execution. */
+      groupAsked?: true
+      /** Any series param in the hash means the series view. */
+      mode: 'overview' | 'series'
+      /** The measure the large chart draws. */
+      metric: TrendMetricId
     }
 
 const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
-const defaultRoute: DashboardRoute = { page: 'workspace', view: 'executions' }
+
+function trendsRoute(params: URLSearchParams): DashboardRoute {
+  return {
+    page: 'trends',
+    request: trendsRequestFromParams(params),
+    period: periodFromParams(params),
+    base: baseFromParams(params),
+    group: groupFromParams(params),
+    groupAsked: params.get('group') === 'release' || undefined,
+    mode: trendsModeFromParams(params),
+    metric: trendMetric(params.get('metric')).id,
+  }
+}
+
+/** The worker opens on Trends' release overview. */
+const defaultRoute = trendsRoute(new URLSearchParams())
 
 function decodeSegment(segment: string): string {
   try {
@@ -72,25 +97,29 @@ export function hashWithParams(hash: string, params: URLSearchParams): string {
   return query ? `${base}?${query}` : base
 }
 
+// The hash the route was last read from or written to. Another one in the
+// address bar is a link whose hashchange has not been handled yet: a page
+// writing its view over it, a render behind, would undo the link.
+// shortcut: a hash the host changes without a hashchange (pushState) holds
+// these writes until the next hashchange, upgrade to the Navigation API's
+// navigate event once every browser the Console supports has it.
+let routedHash: string | null = null
+
 /** Rewrites the whole hash without a navigation (no hashchange, no reload). */
 export function replaceDashboardHash(targetHash: string) {
   if (targetHash === window.location.hash) return
+  if (routedHash !== null && window.location.hash !== routedHash) return
   window.history.replaceState(
     window.history.state,
     '',
     `${window.location.pathname}${window.location.search}${targetHash}`,
   )
+  routedHash = targetHash
 }
 
 /** Rewrites the current hash's params without a navigation or a scroll reset. */
 export function replaceRouteParams(params: URLSearchParams) {
-  const target = hashWithParams(window.location.hash, params)
-  if (target === window.location.hash) return
-  window.history.replaceState(
-    window.history.state,
-    '',
-    `${window.location.pathname}${window.location.search}${target}`,
-  )
+  replaceDashboardHash(hashWithParams(window.location.hash, params))
 }
 
 export function routeFromHash(rawHash: string): DashboardRoute | null {
@@ -99,7 +128,7 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   if (routedHash === null) return null
   rawHash = routedHash
   if (rawHash === '' || rawHash === '#' || rawHash === '#/') {
-    return defaultRoute
+    return trendsRoute(params)
   }
 
   if (!rawHash.startsWith('#/')) return null
@@ -147,20 +176,14 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   }
   if (head === 'suites' && !rest[0]) return { page: 'suites' }
   if (head === 'stacks' && !rest[0]) return { page: 'stacks' }
-  if (head === 'trends' && !rest[0])
-    return {
-      page: 'trends',
-      request: trendsRequestFromParams(params),
-      period: periodFromParams(params),
-      base: baseFromParams(params),
-      group: groupFromParams(params),
-    }
+  if (head === 'trends' && !rest[0]) return trendsRoute(params)
   return null
 }
 
 export function currentDashboardRoute(): DashboardRoute {
   if (typeof window === 'undefined') return defaultRoute
-  return routeFromHash(window.location.hash) ?? defaultRoute
+  routedHash = window.location.hash
+  return routeFromHash(routedHash) ?? defaultRoute
 }
 
 export function hashForTests(params?: URLSearchParams): string {
@@ -286,7 +309,8 @@ export function useHashRoute(): [DashboardRoute, (targetHash: string) => void] {
 
   useEffect(() => {
     const handle = () => {
-      const next = routeFromHash(window.location.hash)
+      routedHash = window.location.hash
+      const next = routeFromHash(routedHash)
       if (!next) return
 
       setRoute(next)

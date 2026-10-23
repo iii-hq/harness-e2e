@@ -27,7 +27,7 @@ use crate::test_plan::{self, ProfileSnapshot};
 mod docker;
 mod github;
 mod github_start;
-pub(crate) use github_start::{github_started, GithubFollow};
+pub(crate) use github_start::{github_started, GithubFollow, NOT_SIGNED_IN};
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
@@ -3278,7 +3278,7 @@ pub(crate) mod tests {
 
     /// A campaign bundle as the exact-stack workflow uploads it: one group
     /// with its native run, one that left only `failure.json`.
-    pub(super) fn exact_stack_bundle(
+    pub(crate) fn exact_stack_bundle(
         root: &Path,
         key: &str,
         observed: &str,

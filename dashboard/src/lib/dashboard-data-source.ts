@@ -5,6 +5,7 @@ import type {
 } from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
 import type { PlanExecution } from '@/lib/plan-execution'
+import type { ReleaseOverview } from '@/lib/release-overview'
 import type {
   EvaluatedVersionsResponse,
   TestHistoryInput,
@@ -144,6 +145,30 @@ export type GithubStatus = {
   account: string | null
   /** How to fix it when not ready. */
   message: string | null
+}
+
+/** Where CI sync is: off, importing the latest releases' runs first
+ *  (`quick`), then every run GitHub keeps (`backfill`), then the recent runs
+ *  at each check (`keeping_up`). */
+export type CiSyncPhase = 'off' | 'quick' | 'backfill' | 'keeping_up'
+
+/** What CI sync did and does next; times are RFC 3339, counters count since
+ *  the worker started. */
+export type CiSyncStatus = {
+  enabled: boolean
+  phase: CiSyncPhase
+  /** Whether `gh` was signed in at the last check; null before one. */
+  signed_in: boolean | null
+  /** What stopped the last check short. */
+  message: string | null
+  checked_at: string | null
+  next_check_at: string | null
+  imported: number
+  failed: number
+  /** Runs the current pass has yet to import. */
+  remaining: number
+  /** Until when a GitHub rate limit holds every check. */
+  paused_until: string | null
 }
 
 /** The suite an execution ran; `id` is absent for an unnamed suite. The
@@ -431,6 +456,8 @@ export type DashboardExecutionSummary = JsonObject & {
   lane?: string
   /** Execution state (`importing`, `completed`, …) of a composed execution. */
   state?: string
+  /** Why it failed, when it did and no report says. */
+  first_failure?: { kind: string; message: string } | null
   parameters?: ExecutionParameters | null
   stack?: JsonObject | StackWorker[]
   subjects: DashboardSubjectSummary[]
@@ -740,7 +767,11 @@ export type RuntimeConfig = {
     credential_set: string
     credential_delete: string
     trends_get: string
+    release_overview_get: string
     version_compare: string
+    ci_sync_status_get: string
+    ci_sync_set: string
+    ci_sync_check: string
     changed_trigger: string
   }
 }
@@ -781,6 +812,9 @@ export type DashboardDataBridge = {
   /** One series' executions over time, the series chosen by the request
    *  (else the one with the latest execution) and its stack filter. */
   getTrends(request: TrendsRequest): Promise<TrendsResponse>
+  /** A step per Harness release with Release Control results, and the
+   *  verdict of the latest against the previous one. */
+  getReleaseOverview(): Promise<ReleaseOverview>
   /** The GitHub compare between two versions or commits of iii, the runner
    *  or a worker, and how many commits it holds when GitHub answers. */
   compareVersions(
@@ -831,6 +865,12 @@ export type DashboardDataBridge = {
   getCatalog(url?: string): Promise<JsonObject>
   /** Whether `gh` on the worker's machine can dispatch to GitHub. */
   getGithubStatus(): Promise<GithubStatus>
+  /** What CI sync did and does next. */
+  getCiSyncStatus(): Promise<CiSyncStatus>
+  /** Turns CI sync on or off; the status after. */
+  setCiSync(enabled: boolean): Promise<CiSyncStatus>
+  /** Checks GitHub for new runs now when CI sync is on; the status after. */
+  checkCiSync(): Promise<CiSyncStatus>
   /** Starts an execution on this harness, in Docker or on GitHub; Run tests
    *  and Run again alike. */
   startExecution(request: {
@@ -926,6 +966,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       ),
     getTrends: (request) =>
       call(runtime.functions.trends_get, request as JsonObject),
+    // Never cached: an import moves the overview.
+    getReleaseOverview: () => call(runtime.functions.release_overview_get, {}),
     compareVersions: (request) =>
       cachedCall(runtime.functions.version_compare, request),
     listSuites: () => call(runtime.functions.suites_list, {}),
@@ -941,6 +983,9 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       ),
     listStacks: () => call(runtime.functions.stacks_list, {}),
     getGithubStatus: () => call(runtime.functions.github_status_get, {}),
+    getCiSyncStatus: () => call(runtime.functions.ci_sync_status_get, {}),
+    setCiSync: (enabled) => call(runtime.functions.ci_sync_set, { enabled }),
+    checkCiSync: () => call(runtime.functions.ci_sync_check, {}),
     createStack: (from, label = '') =>
       call(runtime.functions.stack_create, { from, label }),
     createStackFromYaml: (label, yaml) =>
