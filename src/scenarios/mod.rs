@@ -39,6 +39,7 @@ pub mod linkly;
 pub mod mechanical_reaction;
 pub mod minimal_path;
 pub mod moving_target;
+pub mod onboarding_tour;
 pub mod performance_regression;
 pub mod persistent_state;
 pub mod poison_message;
@@ -133,8 +134,25 @@ pub trait Scenario: Send + Sync {
     fn allowed_functions(&self, _run_id: &str) -> Option<Vec<String>> {
         None
     }
+    /// The Directory agent profile the subject session runs as, when the
+    /// product this test reproduces fixes one. An execution that names no
+    /// profile takes it; one that names another is refused.
+    fn agent_profile(&self) -> Option<&'static str> {
+        None
+    }
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         Vec::new()
+    }
+    /// Called once exchange `exchange` has its answer and before the next
+    /// follow-up goes out. A dialogue paced by something other than the turn
+    /// (a tour card that moves on when its step closes) waits here.
+    async fn before_followup(
+        &self,
+        _context: &E2eContext,
+        _run_id: &str,
+        _session_id: &str,
+        _exchange: usize,
+    ) {
     }
     /// The attempt-owned filesystem root that `setup` prepared for the
     /// subject, when the scenario allocates one.
@@ -525,6 +543,7 @@ scenarios! {
     KanbanC6Discussion = "kanban_c6_discussion" => kanban::Kanban(5),
     KanbanC7Live = "kanban_c7_live" => kanban::Kanban(6),
     LinklyTutorial = "linkly_tutorial" => linkly::LinklyTutorial,
+    OnboardingTour = "onboarding_tour" => onboarding_tour::OnboardingTour,
     ContextPressure = "context_pressure" => context_pressure::ContextPressure,
     MinimalPath = "minimal_path" => minimal_path::MinimalPath,
     PersistentState = "persistent_state" => persistent_state::PersistentState,
@@ -823,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_fifty_nine_unique_valid_scenarios() {
+    fn registry_contains_sixty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -832,7 +851,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 59);
+        assert_eq!(ids.len(), 60);
     }
 
     #[test]

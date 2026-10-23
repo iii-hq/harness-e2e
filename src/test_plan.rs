@@ -161,13 +161,14 @@ pub struct UncoveredTag {
 }
 
 /// Left out of every selection by tag: the registry pair runs 17 to 34 min
-/// a test, and Linkly needs a stack of its own.
+/// a test, and Linkly and the onboarding tour need a stack of their own.
 // ponytail: a fixed list; a ceiling from run durations belongs where the
 // durations are (Release Control's deploy check).
-const IMPACT_EXCLUDED: [ScenarioId; 3] = [
+const IMPACT_EXCLUDED: [ScenarioId; 4] = [
     ScenarioId::RegistryImplementation,
     ScenarioId::RegistryVerification,
     ScenarioId::LinklyTutorial,
+    ScenarioId::OnboardingTour,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -713,13 +714,15 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 7);
+        assert_eq!(plan.suites.len(), 9);
         for (id, cases, runs) in [
             ("regression", 9, 27),
             ("null-canary", 9, 9),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
+            ("deepwork", 3, 3),
             ("linkly", 1, 1),
+            ("onboarding", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {
@@ -848,8 +851,9 @@ mod tests {
                 "timer_wake"
             ]
         );
-        // Linkly carries state but needs a stack of its own.
-        assert_eq!(impact.excluded, ["linkly_tutorial"]);
+        // Linkly and the onboarding tour carry state but need a stack of
+        // their own.
+        assert_eq!(impact.excluded, ["linkly_tutorial", "onboarding_tour"]);
         assert!(impact.uncovered.is_empty());
         // The tags stay out of the profile, and so out of every digest.
         let profile = serde_json::to_value(&state.profile).unwrap();
@@ -905,7 +909,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:bbf812ecaf9c629811c9494cb206f71e88afc256ad97db422ebb1f0e17997bae"
+            "sha256:eaf7d56ef3d1358e41903fcd654e55146edeca51bf5d68da7efb5a6ada0f4e51"
         );
     }
 
@@ -940,6 +944,7 @@ mod tests {
                 "contention_ledger",
                 "linkly_tutorial",
                 "minimal_path",
+                "onboarding_tour",
                 "persistent_state",
                 "timer_wake"
             ])
@@ -955,7 +960,8 @@ mod tests {
                 "kanban_c2_persistence",
                 "kanban_c4_ticket_flow",
                 "kanban_c6_discussion",
-                "linkly_tutorial"
+                "linkly_tutorial",
+                "onboarding_tour"
             ])
         );
     }
@@ -1003,6 +1009,27 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn deepwork_reuses_native_build_contracts_that_allow_delegation() {
+        let plan = embedded().unwrap();
+        let snapshot = plan.materialize("deepwork").unwrap();
+        assert_eq!(
+            snapshot.scenario_ids,
+            [
+                "chess_engine_build",
+                "form_flow_build",
+                "state_machine_canvas_build"
+            ]
+        );
+        for id in snapshot.scenario_ids {
+            let scenario = id.parse::<ScenarioId>().unwrap();
+            let case = scenario.materialize("attempt", 4404).unwrap();
+            assert!(case.spec.filesystem_root.is_some());
+            assert!(case.module.allowed_functions("attempt").is_none());
+            assert!(!case.spec.denied_functions.contains(&"harness::spawn"));
         }
     }
 

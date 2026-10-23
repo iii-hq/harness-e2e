@@ -1,5 +1,5 @@
 //! Stacks this Console keeps. A stack is where a suite runs: an iii Compose
-//! project plus the executor's keys `iii` and optional `template`, written as
+//! project plus the executor's keys `iii`, optional `template` and `kits`, written as
 //! `stacks/*.yaml` writes it. The repository's stacks are read-only; a local
 //! one starts as a copy of another stack and is edited here, its YAML kept
 //! exactly as written. Only YAML that does not parse, or a stack without a
@@ -17,12 +17,15 @@ pub(crate) const REPOSITORY: &[(&str, &str)] = &[
         include_str!("../../stacks/harness-template.yaml"),
     ),
     ("linkly", include_str!("../../stacks/linkly.yaml")),
+    ("onboarding", include_str!("../../stacks/onboarding.yaml")),
+    ("deepwork", include_str!("../../stacks/deepwork.yaml")),
 ];
 
 /// Top-level keys something reads: the executor's, then Compose's.
 const KNOWN_KEYS: &[&str] = &[
     "iii",
     "template",
+    "kits",
     "containers",
     "namespace",
     "startup_timeout",

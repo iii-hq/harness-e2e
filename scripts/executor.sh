@@ -122,6 +122,14 @@ assemble() {
   HARNESS_E2E_CONTRACT="$contracts/$(jq -r '.campaign_ids[0]' "$contracts/resolution.json").json"
   HARNESS_E2E_CAMPAIGN_GROUP_ID=$(jq -r '.matrix.include[0].group_id' "$contracts/resolution.json")
   export HARNESS_E2E_CONTRACT HARNESS_E2E_CAMPAIGN_GROUP_ID HARNESS_E2E_ASSEMBLE_ONLY=1
+  # Kit planning must see the template's files so native collision handling
+  # can either apply cleanly or fail preparation with its review plan.
+  local template_revision
+  template_revision=""
+  if jq -e '.runtime.kits.requested | length > 0' "$HARNESS_E2E_CONTRACT" >/dev/null; then
+    template_revision=$(jq -r '.template.revision // empty' "$contracts/resolution.json")
+  fi
+  [[ -z "$template_revision" ]] || checkout iii-hq/templates "$template_revision" target/execution-template
   local attempt assembled=""
   for attempt in 1 2; do
     export HARNESS_E2E_ARTIFACTS_DIR="$PWD/target/harness-e2e-assembly/attempt-$attempt"
@@ -294,8 +302,15 @@ group() {
     stop_daemon
     return 1
   fi
+  # A worker that boots a VM needs KVM: the group runs in the device's group.
+  local groups=(--clear-groups)
+  if [[ -c /dev/kvm ]]; then
+    groups=(--groups "$(stat -c %g /dev/kvm)")
+  else
+    echo "::warning::this host has no /dev/kvm: a worker that boots a VM will not start" >&2
+  fi
   # The launcher may remove every container of this daemon: all are the group's.
-  setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups \
+  setpriv --reuid "${user%:*}" --regid "${user#*:}" "${groups[@]}" \
     env --default-signal=INT,QUIT HARNESS_E2E_OWN_DOCKER=1 bash scripts/run_exact_stack_group.sh &
   launcher=$!
   # A stopped container stops the group first: the launcher takes its stack

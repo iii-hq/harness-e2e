@@ -52,6 +52,13 @@
         },
         "id": {
           "type": "string"
+        },
+        "unavailable_functions": {
+          "description": "Functions the profile preloads that this stack does not register. The Harness skips them, as it does in any project without their worker; listed so a report says the session ran without them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -382,6 +389,7 @@
         "kanban_c6_discussion",
         "kanban_c7_live",
         "linkly_tutorial",
+        "onboarding_tour",
         "context_pressure",
         "minimal_path",
         "persistent_state",

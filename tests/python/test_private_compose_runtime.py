@@ -47,12 +47,21 @@ if args[0] == 'project':
     sys.exit(0)
 if args[0] != 'trigger':
     record('daemon', args=args, state=os.environ.get('III_COMPOSE_STATE_DIR'))
+    if os.environ.get('FAKE_EXIT') == ('compose' if args[0] == 'compose' else 'engine'):
+        # A daemon that dies before it is ready, saying why in its own log.
+        print('[INFO] starting', file=sys.stderr)
+        print(os.environ['FAKE_EXIT_SAID'], file=sys.stderr)
+        sys.exit(1)
     while True:
         time.sleep(1)
 function = args[1]
 def error(code, message):
     print('Error: ' + json.dumps({'code': code, 'message': message, 'stacktrace': None}, indent=2), file=sys.stderr)
     sys.exit(1)
+gone = {'engine::workers::list': 'engine', 'compose::list': 'compose'}
+if os.environ.get('FAKE_EXIT') and gone.get(function) == os.environ['FAKE_EXIT']:
+    # What a probe of a daemon that is gone answers: nothing about why.
+    error('function_not_found', f'Function {function} not found in namespace e2e.')
 if os.environ.get('FAKE_HANG') == function:
     # A call that never answers: only the launcher's own bound ends it.
     if os.environ.get('FAKE_BREAK_LOCK'):
@@ -591,6 +600,27 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
                 # The rest is the launcher starting and taking the stack down.
                 self.assertLess(elapsed, wait + 6 + 1 + 10)
                 self.assertEqual(failure['function'], hung)
+
+    def test_a_daemon_that_exits_before_it_is_ready_says_why_in_its_own_words(self):
+        self.env['HARNESS_E2E_GROUP_ATTEMPT'] = '2'
+        for daemon, phase, said in (
+            ('compose', 'compose_start',
+             "error[UNKNOWN_DEPENDENCY]: container 'onboarding' depends on 'state', which is not declared"),
+            ('engine', 'engine_start', '[12:59:43.748 PM] [ERROR] iii::config could not bind 0.0.0.0:49134'),
+        ):
+            with self.subTest(daemon=daemon):
+                shutil.rmtree(self.artifacts)
+                self.artifacts.mkdir()
+                self.env['FAKE_EXIT'] = daemon
+                self.env['FAKE_EXIT_SAID'] = said
+                result = self.launch()
+                self.assertNotEqual(result.returncode, 0)
+                failure = json.loads((self.artifacts / 'failure.json').read_text())
+                self.assertEqual(failure['phase'], phase)
+                self.assertEqual(failure['error'], f'iii {daemon} exited before becoming ready: {said}')
+                # The probe that found it gone is not the cause.
+                self.assertNotIn('function', failure)
+                self.assertNotIn('code', failure)
 
     def test_a_stack_that_cannot_start_is_tried_once_more_and_says_what_iii_answered(self):
         self.env['FAKE_FAIL'] = 'up'
