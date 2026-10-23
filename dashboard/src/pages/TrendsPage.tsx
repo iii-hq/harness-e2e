@@ -146,6 +146,8 @@ export function pageParams(view: {
 }
 
 const OPTIONS_SCENT = 'suite · model · profile · stack · period · baseline'
+/** The fewest ms between two reloads that follow run changes. */
+const RELOAD_INTERVAL_MS = 10_000
 
 /** More options' closed row: what it holds, or the series it shows. */
 export function optionsScent(
@@ -764,7 +766,8 @@ export function TrendsPage({
     void load()
     void loadOverview()
   }, [load, loadOverview])
-  useRunChanges(bridge, reload)
+  // CI sync imports run after run, and each reload reads everything again.
+  useRunChanges(bridge, reload, 400, RELOAD_INTERVAL_MS)
   const sync = useCiSync(bridge)
 
   // The hash names what is on screen, once the worker said what that is.

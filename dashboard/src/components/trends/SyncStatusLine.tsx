@@ -14,22 +14,25 @@ export function syncText(status: CiSyncStatus, verdict = false): string {
   if (status.paused_until)
     return `GitHub rate limit reached · resumes at ${formatTime(status.paused_until)}`
   if (status.message) return status.message
-  const failed =
-    status.failed > 0 ? ` · ${plural(status.failed, 'import')} failed` : ''
+  const counts =
+    (status.failed > 0 ? ` · ${plural(status.failed, 'import')} failed` : '') +
+    (status.skipped > 0
+      ? ` · ${formatCount(status.skipped)} without results`
+      : '')
   const progress = `${formatCount(status.imported)} of ${formatCount(status.imported + status.remaining)}`
   switch (status.phase) {
     case 'quick':
-      return `Importing the newest runs first: ${progress}${failed}`
+      return `Importing the newest runs first: ${progress}${counts}`
     case 'backfill':
       return verdict
-        ? `Verdict ready · importing older runs: ${progress}${failed}`
-        : `Importing older runs: ${progress}${failed}`
+        ? `Verdict ready · importing older runs: ${progress}${counts}`
+        : `Importing older runs: ${progress}${counts}`
     case 'keeping_up':
       return status.checked_at
-        ? `Synced from CI at ${formatTime(status.checked_at)}${failed}`
-        : `Checking CI…${failed}`
+        ? `Synced from CI at ${formatTime(status.checked_at)}${counts}`
+        : `Checking CI…${counts}`
     default:
-      return `Starting sync…${failed}`
+      return `Starting sync…${counts}`
   }
 }
 

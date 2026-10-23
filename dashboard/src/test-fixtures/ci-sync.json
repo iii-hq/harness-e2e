@@ -8,6 +8,7 @@
     "next_check_at": null,
     "imported": 0,
     "failed": 0,
+    "skipped": 0,
     "remaining": 0,
     "paused_until": null
   },
@@ -20,6 +21,7 @@
     "next_check_at": null,
     "imported": 3,
     "failed": 0,
+    "skipped": 0,
     "remaining": 9,
     "paused_until": null
   },
@@ -32,6 +34,7 @@
     "next_check_at": null,
     "imported": 120,
     "failed": 2,
+    "skipped": 0,
     "remaining": 2880,
     "paused_until": null
   },
@@ -44,6 +47,7 @@
     "next_check_at": "2026-09-28T15:05:00-03:00",
     "imported": 3000,
     "failed": 4,
+    "skipped": 0,
     "remaining": 0,
     "paused_until": null
   },
@@ -56,6 +60,7 @@
     "next_check_at": null,
     "imported": 0,
     "failed": 0,
+    "skipped": 0,
     "remaining": 0,
     "paused_until": null
   },
@@ -68,6 +73,7 @@
     "next_check_at": null,
     "imported": 1200,
     "failed": 3,
+    "skipped": 0,
     "remaining": 1800,
     "paused_until": "2026-09-28T15:40:00-03:00"
   }

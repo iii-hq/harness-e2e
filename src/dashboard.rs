@@ -408,6 +408,11 @@ pub(crate) mod tests {
         .unwrap();
         let summaries = controller.execution_summaries().await.unwrap();
         assert_eq!(summaries[0]["live_progress"]["committed_events"], 0);
+        // Nor is an overview of a live run kept: each call reads it again.
+        assert!(!std::sync::Arc::ptr_eq(
+            &controller.release_overview().await.unwrap(),
+            &controller.release_overview().await.unwrap()
+        ));
         journal
             .append(
                 metadata.started_at.clone(),

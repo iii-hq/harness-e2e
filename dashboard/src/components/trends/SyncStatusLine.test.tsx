@@ -36,6 +36,13 @@ describe('sync status text', () => {
     expect(syncText(ciSync.backfill)).toBe(
       'Importing older runs: 120 of 3,000 · 2 imports failed',
     )
+    // Runs skipped for leaving no results are named, not left out silently.
+    expect(syncText({ ...ciSync.backfill, skipped: 5 }, true)).toBe(
+      'Verdict ready · importing older runs: 120 of 3,000 · 2 imports failed · 5 without results',
+    )
+    expect(syncText({ ...k, failed: 0, skipped: 1 })).toBe(
+      'Synced from CI at 2:55 PM · 1 without results',
+    )
     expect(syncText({ ...k, checked_at: null, failed: 0 })).toBe('Checking CI…')
     expect(syncText({ ...k, phase: 'off', failed: 0 })).toBe('Starting sync…')
     expect(syncText(ciSync.signed_out)).toBe(

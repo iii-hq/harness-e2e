@@ -408,6 +408,8 @@ try {
   // A reload that fails keeps the trend and says so over it.
   failing = 1
   await change()
+  // Trends reloads at most every 10 s: skip the wait for the last one.
+  await page.clock.fastForward(10_000)
   await page.getByText('Couldn’t reload the trend').waitFor()
   await summary.getByText('15 executions ', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Retry' }).click()
@@ -526,14 +528,20 @@ try {
   await hashMatches(/stack=any&range=30d&group=execution$/)
 
   // The period: all time, a custom one, From after To said and not asked,
-  // then one with nothing in it and the way back to all time.
+  // then one with nothing in it and the way back to all time. A run change
+  // the 10 s interval postponed outlives the period change: the release
+  // overview is asked again too.
   const period = page.locator('[data-picker="period"]')
+  const overviews = requests('release-overview-get').length
+  await change()
   await period.click()
   await page.getByRole('menuitemradio', { name: 'All time' }).click()
   await summary
     .getByText('14 executions over all time ·', { exact: false })
     .waitFor()
   assert.equal(requests('trends-get').at(-1).since, undefined)
+  await page.clock.fastForward(10_000)
+  await askedAfter('release-overview-get', overviews)
   await hashMatches(/stack=any&range=all&group=execution$/)
   await period.click()
   await page.getByRole('menuitemradio', { name: 'Custom' }).click()

@@ -165,6 +165,8 @@ export type CiSyncStatus = {
   next_check_at: string | null
   imported: number
   failed: number
+  /** Runs that left no results, skipped until GitHub runs them again. */
+  skipped: number
   /** Runs the current pass has yet to import. */
   remaining: number
   /** Until when a GitHub rate limit holds every check. */
