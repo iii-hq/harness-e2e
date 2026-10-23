@@ -4,6 +4,8 @@ use std::process::Command;
 use std::time::SystemTime;
 
 fn main() {
+    println!("cargo:rerun-if-changed=stacks");
+    println!("cargo:rerun-if-changed=config/agents");
     ensure_console_bundle();
     println!(
         "cargo:rustc-env=TARGET={}",
