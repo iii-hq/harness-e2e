@@ -151,7 +151,11 @@ start) limit the points and the stacks' counts; the series listed and the
 stack each execution joins are still read over all time. A worker is named by its commit
 (`@sha7`, `*` when dirty), else the version its compose lock resolved (on this
 harness, a concrete version its compose file pins), never the version the
-engine observed (a binary's Cargo version, which releases did not always move). `e2e::dashboard::version-compare` links
+engine observed (a binary's Cargo version, which releases did not always move). `source.role` says who ran
+the execution: `release_control` (a GitHub run Release Control started, which
+validates a release), `ci_other` (any other GitHub run), `local` or `docker`;
+`release` is the Harness's identity when it is one plain semver (a leading `v`
+removed), else null: a commit, builds joined by a comma, or none recorded. `e2e::dashboard::version-compare` links
 two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.

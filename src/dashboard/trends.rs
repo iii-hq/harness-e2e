@@ -15,6 +15,8 @@ pub(super) const ANY: &str = "any";
 /// Stack rows that are the runner and the engine, not workers of the stack.
 const RUNNER: &str = "harness-e2e";
 const ENGINE: &str = "compose";
+/// The stack row that is the Harness under test.
+pub(super) const HARNESS: &str = "harness";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub(super) struct TrendsRequest {
@@ -105,10 +107,25 @@ pub(super) struct TrendsResponse {
     pub points: Vec<TrendPoint>,
 }
 
+/// Who ran an execution, and whether it speaks for a release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TrendRole {
+    /// A GitHub run Release Control started: it validates a release.
+    ReleaseControl,
+    /// Any other GitHub run (a pull request, a manual dispatch, a schedule).
+    CiOther,
+    /// Run by this worker on the machine.
+    Local,
+    /// Run in Docker by this worker.
+    Docker,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct TrendSource {
     /// `local`, `docker` or `github`.
     pub kind: String,
+    pub role: TrendRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +157,9 @@ pub(super) struct TrendPoint {
     pub engine: Option<String>,
     /// Identity per worker, runner and engine left out; null: not recorded.
     pub workers: Option<BTreeMap<String, String>>,
+    /// The Harness release as one plain semver, without a leading `v`; null
+    /// for a commit (`@sha7`), joined builds (`a, b`) or none recorded.
+    pub release: Option<String>,
     pub planned: Option<Vec<String>>,
     /// Runs observed.
     pub runs: usize,
@@ -538,6 +558,22 @@ fn workers(rows: &[StackWorker], local: bool) -> Option<BTreeMap<String, String>
     })
 }
 
+/// A plain release: an optional leading `v`, then exactly three numbers.
+/// A pre-release, a commit and joined builds are not releases.
+pub(super) fn semver_key(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.strip_prefix('v').unwrap_or(version).split('.');
+    let mut number = || parts.next()?.parse().ok();
+    let key = (number()?, number()?, number()?);
+    parts.next().is_none().then_some(key)
+}
+
+/// The Harness's identity when it is one plain release, else none.
+pub(super) fn release_of(workers: Option<&BTreeMap<String, String>>) -> Option<String> {
+    let identity = workers?.get(HARNESS)?;
+    semver_key(identity)?;
+    Some(identity.strip_prefix('v').unwrap_or(identity).to_owned())
+}
+
 /// The engine its native runs reported, else the `iii:` its stack pinned,
 /// else the compose row.
 fn engine(execution: &Execution, natives: &[&Value]) -> Option<String> {
@@ -559,29 +595,37 @@ fn engine(execution: &Execution, natives: &[&Value]) -> Option<String> {
 fn source(summary: &Value) -> TrendSource {
     let source =
         serde_json::from_value::<ExecutionSource>(summary["source"].clone()).unwrap_or_default();
-    let kind = |kind: &str| TrendSource {
+    let kind = |kind: &str, role| TrendSource {
         kind: kind.into(),
+        role,
         run_id: None,
         run_attempt: None,
         release_control_execution_id: None,
         url: None,
     };
     match source {
-        ExecutionSource::Local => kind("local"),
-        ExecutionSource::Docker { .. } => kind("docker"),
+        ExecutionSource::Local => kind("local", TrendRole::Local),
+        ExecutionSource::Docker { .. } => kind("docker", TrendRole::Docker),
         ExecutionSource::Github {
             run_id,
             run_attempt,
             url,
             release_control_execution_id,
             ..
-        } => TrendSource {
-            run_id: Some(run_id),
-            run_attempt: Some(run_attempt),
-            release_control_execution_id,
-            url: Some(url).filter(|url| !url.is_empty()),
-            ..kind("github")
-        },
+        } => {
+            let role = if release_control_execution_id.is_some() {
+                TrendRole::ReleaseControl
+            } else {
+                TrendRole::CiOther
+            };
+            TrendSource {
+                run_id: Some(run_id),
+                run_attempt: Some(run_attempt),
+                release_control_execution_id,
+                url: Some(url).filter(|url| !url.is_empty()),
+                ..kind("github", role)
+            }
+        }
     }
 }
 
@@ -634,6 +678,7 @@ fn point(
     let summary = execution.summary;
     let source = source(summary);
     let local = source.kind == "local";
+    let workers = workers(&execution.workers, local);
     TrendPoint {
         execution_id: execution.id.to_owned(),
         label: summary["label"]
@@ -647,7 +692,8 @@ fn point(
         source,
         stack,
         engine: engine(execution, natives),
-        workers: workers(&execution.workers, local),
+        release: release_of(workers.as_ref()),
+        workers,
         planned: (!planned.is_empty()).then(|| planned.clone()),
         runs: runs.len(),
         counted: counted.len(),
@@ -922,6 +968,90 @@ mod tests {
             Some(BTreeMap::from([("harness".into(), "1.8.36".into())]))
         );
         assert_eq!(workers(&[], false), None);
+    }
+
+    #[test]
+    fn a_release_is_one_plain_semver_ordered_by_its_numbers() {
+        assert_eq!(semver_key("1.9.3"), Some((1, 9, 3)));
+        assert_eq!(semver_key("v1.9.3"), Some((1, 9, 3)));
+        assert!(semver_key("1.10.0") > semver_key("1.9.3"));
+        for not_a_release in [
+            "@abc1234",
+            "@abc1234*",
+            "latest",
+            "1.9.3, 1.9.4",
+            "1.9",
+            "1.9.3-rc.1",
+            "",
+        ] {
+            assert_eq!(semver_key(not_a_release), None, "{not_a_release:?}");
+        }
+        let harness = |id: &str| BTreeMap::from([(HARNESS.to_owned(), id.to_owned())]);
+        for (id, release) in [
+            ("1.9.3", Some("1.9.3")),
+            ("v1.9.3", Some("1.9.3")),
+            ("@3f2a9c1", None),
+            ("1.9.3, 1.9.4", None),
+        ] {
+            assert_eq!(release_of(Some(&harness(id))).as_deref(), release, "{id:?}");
+        }
+        let other = BTreeMap::from([("state".to_owned(), "1.9.3".to_owned())]);
+        assert_eq!(release_of(Some(&other)), None);
+        assert_eq!(release_of(None), None);
+    }
+
+    #[test]
+    fn a_point_carries_its_role_and_its_release() {
+        let github = json!({
+            "kind": "github", "repository": "o/r", "run_id": 7, "run_attempt": 1, "url": "",
+            "release_control_execution_id": "75b03d86",
+        });
+        let mut rc = listed("rc", "2026-09-20T10:00:00Z", None, &["harness"]);
+        rc["source"] = github.clone();
+        let mut pr = listed("pr", "2026-09-21T10:00:00Z", None, &["harness"]);
+        pr["source"] = json!({
+            "kind": "github", "repository": "o/r", "run_id": 8, "run_attempt": 1, "url": "",
+            "release_control_execution_id": null,
+        });
+        pr["stack"][0]["commit"] = json!(format!("3f2a9c1{}", "d".repeat(33)));
+        let mut docker = listed(
+            "docker",
+            "2026-09-22T10:00:00Z",
+            None,
+            &["harness", "harness"],
+        );
+        docker["source"] = json!({"kind": "docker", "attempt": 1, "phase": "done", "groups": []});
+        docker["stack"][1]["resolved"] = json!("1.0.1");
+        let local = listed("local", "2026-09-23T10:00:00Z", None, &[]);
+        let response = trends(
+            &TrendsRequest::default(),
+            &[rc, pr, docker, local],
+            &BTreeMap::new(),
+        );
+        let seen = response
+            .points
+            .iter()
+            .map(|point| {
+                (
+                    point.execution_id.as_str(),
+                    point.source.role,
+                    point.release.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            seen,
+            [
+                ("rc", TrendRole::ReleaseControl, Some("1.0.0")),
+                ("pr", TrendRole::CiOther, None),
+                ("docker", TrendRole::Docker, None),
+                ("local", TrendRole::Local, None),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(TrendRole::CiOther).unwrap(),
+            json!("ci_other")
+        );
     }
 
     #[test]

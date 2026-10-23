@@ -1334,11 +1334,12 @@ mod response_contract_tests {
         let point = &response["points"][0];
         assert_eq!(
             keys(point),
-            "counted,engine,execution_id,label,measures,model,planned,profile,provider,reason,runs,source,stack,started_at,tests,workers"
+            "counted,engine,execution_id,label,measures,model,planned,profile,provider,reason,release,runs,source,stack,started_at,tests,workers"
         );
         assert_eq!(
             point["source"],
-            json!({"kind": "github", "run_id": 42, "run_attempt": 1, "release_control_execution_id": "75b03d86",
+            json!({"kind": "github", "role": "release_control", "run_id": 42, "run_attempt": 1,
+                "release_control_execution_id": "75b03d86",
                 "url": "https://github.com/iii-hq/harness-e2e/actions/runs/42"})
         );
         assert_eq!(
@@ -1346,6 +1347,7 @@ mod response_contract_tests {
             json!({"name": "default", "matched_by_workers": false})
         );
         assert_eq!(point["workers"], json!({"harness": "1.8.31"}));
+        assert_eq!(point["release"], "1.8.31");
         assert_eq!(
             keys(&point["measures"]),
             "cache_read_tokens_mean,cache_write_tokens_mean,completed,cost_usd_mean,duration_ms_mean,function_call_errors,function_calls,function_calls_mean,input_tokens_mean,output_tokens_mean,planned,reasoning_tokens_mean,score_mean,technical_retries_mean,turns_mean,validation_retries_mean"
