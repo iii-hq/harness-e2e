@@ -118,6 +118,31 @@
         }
       }
     },
+    "HarnessSourceIdentity": {
+      "description": "A validated source build, bound to the executable the runner observed.",
+      "type": "object",
+      "required": [
+        "binary_sha256",
+        "path",
+        "repository",
+        "revision"
+      ],
+      "properties": {
+        "binary_sha256": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "ModelArtifact": {
       "type": "object",
       "required": [
@@ -527,6 +552,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "harness_source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HarnessSourceIdentity"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "harness_version": {

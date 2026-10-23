@@ -247,6 +247,15 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .await
         .inspect_err(|error| tracing::warn!(%error, "Harness binary identity is unavailable"))
         .ok();
+    let source_build = crate::identity::HarnessSourceIdentity::from_environment()?
+        .map(|source| {
+            source.attest(
+                initial_artifact
+                    .as_ref()
+                    .map(|observed| observed.digest.as_str()),
+            )
+        })
+        .transpose()?;
     config.subject.agent = pinned_agent_profile(&config.scenarios, config.subject.agent.take())?;
     let agent = match config.subject.agent.as_deref() {
         Some(id) => Some(
@@ -480,6 +489,9 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .ok();
     system_under_test.harness_binary_sha256 =
         crate::runtime_artifact::confirmed_digest(initial_artifact, final_artifact);
+    system_under_test.harness_source = source_build.filter(|source| {
+        Some(source.binary_sha256.as_str()) == system_under_test.harness_binary_sha256.as_deref()
+    });
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let execution = ExecutionIdentity {
         execution_id,
@@ -3841,6 +3853,7 @@ mod tests {
             engine_revision: None,
             harness_version: "1.8.0".into(),
             harness_binary_sha256: None,
+            harness_source: None,
             e2e_repository: "iii-hq/harness-e2e".into(),
             e2e_revision: "0".repeat(40),
             contract_hashes: Default::default(),

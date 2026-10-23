@@ -60,17 +60,91 @@ pub(crate) async fn observe(context: &E2eContext, engine_url: &str) -> Result<Ob
         .find(|container| container["container"] == "harness" && container["state"] == "ready")
         .and_then(|container| container["pid"].as_u64())
         .context("Compose has no ready Harness process")?;
-    tokio::task::spawn_blocking(move || capture(pid)).await?
+    tokio::task::spawn_blocking(move || capture_compose(pid)).await?
+}
+
+fn capture_compose(supervisor: u64) -> Result<Observation> {
+    let started = start_ticks(supervisor)?;
+    let mut pending = vec![(supervisor, None)];
+    let mut seen = std::collections::HashSet::new();
+    let mut harnesses = Vec::new();
+    while let Some((pid, expected_parent)) = pending.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        ensure!(
+            seen.len() <= 256,
+            "Compose process tree is too large to attest"
+        );
+        let (parent, discovered_start) = process_identity(pid)?;
+        ensure!(
+            expected_parent.is_none_or(|expected| parent == expected),
+            "Compose child changed parent during capture"
+        );
+        let executable = std::fs::read_link(format!("/proc/{pid}/exe"))?;
+        if executable
+            .file_name()
+            .is_some_and(|name| name == "harness" || name == "harness (deleted)")
+        {
+            let captured = capture(pid)?;
+            ensure!(
+                captured.start_ticks == discovered_start,
+                "Harness PID was reused after discovery"
+            );
+            harnesses.push(captured);
+        }
+        let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))?;
+        for child in children.split_whitespace() {
+            pending.push((child.parse()?, Some(pid)));
+        }
+    }
+    ensure!(
+        harnesses.len() == 1,
+        "Compose must own exactly one Harness executable"
+    );
+    let observation = harnesses.pop().context("Harness was not observed")?;
+    let mut ancestor = observation.pid;
+    for _ in 0..256 {
+        if ancestor == supervisor || ancestor == 0 {
+            break;
+        }
+        ancestor = process_identity(ancestor)?.0;
+    }
+    ensure!(
+        ancestor == supervisor,
+        "Harness left the Compose process tree"
+    );
+    ensure!(
+        start_ticks(observation.pid)? == observation.start_ticks,
+        "Harness PID was reused after capture"
+    );
+    ensure!(
+        start_ticks(supervisor)? == started,
+        "Compose supervisor PID was reused"
+    );
+    Ok(observation)
+}
+
+fn process_identity(pid: u64) -> Result<(u64, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    // The command name may contain spaces and parentheses; fields 4 and 22.
+    let fields: Vec<_> = stat
+        .rsplit_once(')')
+        .context("invalid process stat")?
+        .1
+        .split_whitespace()
+        .collect();
+    Ok((
+        fields.get(1).context("process parent is absent")?.parse()?,
+        fields
+            .get(19)
+            .context("process start time is absent")?
+            .parse()?,
+    ))
 }
 
 fn start_ticks(pid: u64) -> Result<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    // The command name may contain spaces and parentheses. Field 22 is starttime.
-    stat.rsplit_once(')')
-        .and_then(|(_, fields)| fields.split_whitespace().nth(19))
-        .context("process start time is absent")?
-        .parse()
-        .context("invalid process start time")
+    Ok(process_identity(pid)?.1)
 }
 
 fn capture(pid: u64) -> Result<Observation> {
@@ -136,6 +210,56 @@ mod tests {
         ] {
             assert_eq!(confirmed_digest(Some(sample()), Some(changed)), None);
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_compose_shell_wrapper_attests_the_harness_child_not_the_shell() {
+        let directory = std::env::temp_dir().join(format!("e2e-wrapper-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("harness");
+        std::fs::copy("/bin/bash", &executable).unwrap();
+        let mut wrapper = std::process::Command::new("/bin/sh")
+            .args(["-c", "\"$1\" -c 'sleep 30; :' & wait", "fixture"])
+            .arg(&executable)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let observed = loop {
+            match capture_compose(u64::from(wrapper.id())) {
+                Ok(observed) => break observed,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("{error:#}"),
+            }
+        };
+        assert_ne!(observed.pid, u64::from(wrapper.id()));
+        assert_eq!(
+            observed.digest,
+            crate::artifact::sha256_bytes(&std::fs::read(&executable).unwrap())
+        );
+        let children = std::fs::read_to_string(format!(
+            "/proc/{}/task/{}/children",
+            observed.pid, observed.pid
+        ))
+        .unwrap_or_default();
+        for child in children.split_whitespace() {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", child])
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &observed.pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = wrapper.kill();
+        wrapper.wait().unwrap();
+        std::fs::remove_file(executable).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]

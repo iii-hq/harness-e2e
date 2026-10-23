@@ -375,6 +375,9 @@ impl Runner for ControlPlane {
             .await
             .ok()
             .map(|current| current.digest);
+        identity.harness_source = crate::identity::HarnessSourceIdentity::from_environment()?
+            .map(|source| source.attest(identity.harness_binary_sha256.as_deref()))
+            .transpose()?;
         Ok(serde_json::to_value(identity)?)
     }
     async fn cancel(&self, id: &str) -> Result<()> {
@@ -2134,6 +2137,7 @@ pub(crate) mod tests {
                 engine_revision: None,
                 harness_version: harness.into(),
                 harness_binary_sha256: Some(artifact::sha256_bytes(harness.as_bytes())),
+                harness_source: None,
                 e2e_repository: "iii-hq/harness-e2e".into(),
                 e2e_revision: "0123456789abcdef0123456789abcdef01234567".into(),
                 contract_hashes: BTreeMap::from([(

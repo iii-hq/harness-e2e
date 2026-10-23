@@ -1118,9 +1118,60 @@ fail() {
         contract["runtime"]["lock"] = lock_of({"llm-router": "1.4.27", "harness-e2e": "0.15.1"})
         contract["runtime"]["commits"] = {"app": {
             "worker": "harness", "repository": "iii-hq/workers", "path": "harness",
-            "commit": "3f2a9c1" + "d" * 33, "dependencies": ["llm-router"],
+            "commit": "3f2a9c1" + "d" * 33, "binary_sha256": "sha256:" + "b" * 64, "dependencies": ["llm-router"],
             "config": {"max_depth": 3, "mode": "loop"}, "env": {"RUST_LOG": "info"}}}
         return contract, built
+
+    def test_only_the_runner_is_told_the_verified_harness_source(self):
+        contract, _ = self.pinned_contract()
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None,
+                                          {"harness-e2e.HARNESS_E2E_HARNESS_SOURCE": "forged"})
+        containers = project["containers"]
+        source = json.loads(containers["harness-e2e"]["environment"]["HARNESS_E2E_HARNESS_SOURCE"])
+        self.assertEqual(source, {"repository": "iii-hq/workers", "path": "harness",
+                                  "revision": "3f2a9c1" + "d" * 33, "binary_sha256": "sha256:" + "b" * 64})
+        # Not the candidate Harness, nor any other container.
+        for name, container in containers.items():
+            if name != "harness-e2e":
+                self.assertNotIn("HARNESS_E2E_HARNESS_SOURCE", container.get("environment") or {}, name)
+        # Assembling the stack tells nobody: no group runs yet.
+        assembled = MODULE.project_scaffold(contract, "e2e-prepare", Path("/data"), None, {}, assembling=True)
+        self.assertNotIn("HARNESS_E2E_HARNESS_SOURCE",
+                         assembled["containers"]["harness-e2e"].get("environment") or {})
+        # No Harness built from a commit, no source.
+        plain = campaign_contract()
+        plain["runtime"]["lock"] = lock_of({"harness": "1.8.17", "harness-e2e": "0.15.1"})
+        runner = MODULE.project_scaffold(plain, "project-one", Path("/data"), None, {})["containers"]["harness-e2e"]
+        self.assertNotIn("HARNESS_E2E_HARNESS_SOURCE", runner.get("environment") or {})
+
+    def test_a_harness_pin_without_a_verified_build_is_refused(self):
+        for key, value, message in [
+            ("binary_sha256", None, "no verified binary_sha256"),
+            ("binary_sha256", "b" * 64, "no verified binary_sha256"),
+            ("commit", "3f2a9c1", "full commit sha"),
+            ("path", "../elsewhere", "inside its repository"),
+            ("repository", "https://github.com/iii-hq/workers", "<owner>/<name>"),
+        ]:
+            with self.subTest(key=key, value=value):
+                contract, _ = self.pinned_contract()
+                contract["runtime"]["commits"]["app"][key] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
+
+    def test_two_commits_sharing_a_short_sha_stay_two_sources(self):
+        """`@<sha7>` names a build for display; the source the runner checks
+        is the full commit and its binary."""
+        sources, versions = [], []
+        for tail, digest in (("d" * 33, "b" * 64), ("e" * 33, "c" * 64)):
+            contract, _ = self.pinned_contract()
+            contract["runtime"]["commits"]["app"].update(commit="3f2a9c1" + tail, binary_sha256=f"sha256:{digest}")
+            runner = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})["containers"]["harness-e2e"]
+            sources.append(json.loads(runner["environment"]["HARNESS_E2E_HARNESS_SOURCE"]))
+            versions.append(runner["environment"]["HARNESS_E2E_STACK_VERSIONS"])
+        self.assertEqual(versions[0], versions[1])
+        self.assertNotEqual(sources[0]["revision"], sources[1]["revision"])
+        self.assertNotEqual(sources[0]["binary_sha256"], sources[1]["binary_sha256"])
+        self.assertTrue(all(len(source["revision"]) == 40 for source in sources))
 
     def test_a_worker_built_from_a_commit_is_still_the_package_it_was_built_from(self):
         contract, built = self.pinned_contract()
