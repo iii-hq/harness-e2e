@@ -1,0 +1,26 @@
+# Select suite=deepwork and profile=deepwork-e2e.
+iii: latest
+kits:
+  - iii/deepwork@0.4.3
+
+containers:
+  harness:
+    worker: package://harness
+    version: latest
+    config_override:
+      filesystem_boundary: workspace
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+  fp:
+    worker: package://fp
+    version: latest
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

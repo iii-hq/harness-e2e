@@ -503,7 +503,8 @@ scaffold() { mkdir -p "$4"; for folder in $SHIPPED; do mkdir -p "$4/$folder"; do
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
-        start = source.index('if [[ "$profile_assets" == true ]]; then', source.index('failure_phase=project_start'))
+        function = source[source.index("load_profile_assets() {"):source.index("wait_for_profiles() {")]
+        start = source.index('if [[ "$profile_assets" == true ]]', source.index('failure_phase=project_start'))
         block = source[start:source.index("if jq -e '.suite.agent_profile != null'", start)]
         for mode in ("ok", "missing", "broken"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -538,7 +539,7 @@ project_trigger() {
   printf '{"source":{"version":"1.2.3"}}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
+                result = subprocess.run(["bash", "-c", shell + function + block, "runner", str(root), str(SCRIPT)],
                     env={**os.environ, "MODE": mode}, capture_output=True, text=True)
                 if mode == "broken":
                     self.assertNotEqual(result.returncode, 0)
@@ -566,7 +567,11 @@ project_trigger() {
 
     def test_runner_waits_for_an_existing_profile_and_fails_if_it_stays_missing(self):
         source = RUNNER_SCRIPT.read_text()
-        block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=runner_readiness")]
+        function_start = source.index("wait_for_profiles() {")
+        function = source[function_start:source.index("# `compose::add`", function_start)]
+        group_start = source.index("# Group stack is now up")
+        block = source[source.index("if jq -e '.suite.agent_profile != null'", group_start):
+                       source.index("failure_phase=runner_readiness", group_start)]
         for available_after in [0, 1, 99]:
             with self.subTest(available_after=available_after), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -585,7 +590,7 @@ project_trigger() {
   printf '{"id":"console-ui"}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
+                result = subprocess.run(["bash", "-c", shell + function + block, "runner", str(root), str(SCRIPT)],
                                         env={**os.environ, "AVAILABLE_AFTER": str(available_after)},
                                         capture_output=True, text=True)
                 calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
@@ -593,10 +598,11 @@ project_trigger() {
                 self.assertEqual(len(calls), min(available_after + 1, 3))
                 if available_after == 99:
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("Directory profile console-ui is unavailable after 120s", result.stderr)
+                    self.assertIn("Directory profile console-ui has unresolved inheritance", result.stderr)
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(json.loads((root / "stack/agent-profile.json").read_text()), {"id": "console-ui"})
+                    self.assertEqual(json.loads((root / "stack/profiles/console-ui.json").read_text()),
+                                     {"id": "console-ui"})
 
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -1685,7 +1691,7 @@ exit "$status"
         source = RUNNER_SCRIPT.read_text()
         decide = source[source.index("if [[ -n \"$assemble_only\" ]]; then"):source.index("profile_assets=")]
         start = source.index("failure_phase=project_assembly")
-        assembly = source[start:source.index("jq -e '.status == \"ok\"' \"$artifact_dir/stack/up.json\"")]
+        assembly = source[start:source.index("# Group stack is now up", start)]
         stubs = """set -Eeuo pipefail
 artifact_dir=$1
 contract_path=$1/contract.json
@@ -1694,6 +1700,9 @@ contract_tool=$2
 log() { :; }
 await_compose_add() { :; }
 export_compose() { :; }
+python3() {
+  if [[ "$2" == locked-workers ]]; then printf '[]\n'; else command python3 "$@"; fi
+}
 compose_trigger() {
   printf '%s\\n' "$*" >>"$artifact_dir/calls"
   # Harness's graph brings the Directory when the case says so.
@@ -1839,6 +1848,199 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
                 target[path[-1]] = value
                 with self.assertRaisesRegex(ValueError, expected):
                     MODULE.validate_contract(contract)
+
+
+class KitAssetTests(unittest.TestCase):
+    def test_native_kit_profiles_include_owned_children_and_selected_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / "kits.lock"
+            lock.write_text("""version: 1
+kits:
+  iii/deepwork:
+    files:
+      agents/deepwork-lead.md: {sha256: abc}
+      agents/deepwork-worker.md: {sha256: def}
+      agents/template-owned.md: {sha256: 123, skipped: true}
+      skills/iii/deepwork/SKILL.md: {sha256: 456}
+""")
+            self.assertEqual(MODULE.kit_agent_ids(lock, "deepwork-e2e"),
+                             ["deepwork-e2e", "deepwork-lead", "deepwork-worker"])
+
+    def test_profile_preflight_checks_every_id_and_rejects_invalid_child(self):
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index("wait_for_profiles() {")
+        function = source[start:source.index("# `compose::add`", start)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "stack").mkdir()
+            shell = r'''set -Eeuo pipefail
+artifact_dir=$1
+sleep() { SECONDS=$((SECONDS + 60)); }
+fail() { printf '%s\n' "$1" >&2; return 1; }
+project_trigger() {
+  id=$(jq -r .id <<<"$2")
+  printf '%s\n' "$id" >>"$artifact_dir/calls"
+  if [[ "$id" == deepwork-worker ]]; then
+    jq -cn --arg id "$id" '{id:$id,unknown_functions:["missing::fn"]}'
+  else
+    jq -cn --arg id "$id" '{id:$id}'
+  fi
+}
+'''
+            result = subprocess.run(
+                ["bash", "-c", shell + function +
+                 "wait_for_profiles <<'EOF'\ndeepwork-lead\ndeepwork-impl\ndeepwork-worker\nEOF\n",
+                 "runner", str(root)], capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("deepwork-worker has unresolved inheritance", result.stderr)
+            self.assertEqual(set((root / "calls").read_text().splitlines()),
+                             {"deepwork-lead", "deepwork-impl", "deepwork-worker"})
+
+    def test_kit_cannot_change_an_existing_worker_source_or_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = root / "before.lock"
+            after = root / "after.lock"
+            before.write_text("""version: 1
+containers:
+  harness:
+    worker: package://harness
+    resolved: {version: 1.8.54}
+""")
+            after.write_text("""version: 1
+containers:
+  harness:
+    worker: package://harness
+    resolved: {version: 1.8.54}
+  kanban:
+    worker: package://kanban
+    resolved: {version: 0.1.21}
+""")
+            MODULE.assert_lock_preserves_workers(before, after)
+            after.write_text(after.read_text().replace("1.8.54", "1.9.0"))
+            with self.assertRaisesRegex(ValueError, "harness"):
+                MODULE.assert_lock_preserves_workers(before, after)
+
+    def test_locked_workers_use_resolved_versions_instead_of_requested_ranges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / "worker-compose.lock"
+            lock.write_text("""version: 1
+containers:
+  harness:
+    worker: package://harness
+    requested: latest
+    resolved: {name: harness, version: 1.8.54}
+  kanban:
+    worker: package://kanban
+    requested: ^0.1.21
+    resolved: {name: kanban, version: 0.1.24}
+  local:
+    worker: path://./local
+    resolved: {name: local, version: 0.0.1}
+""")
+            self.assertEqual(MODULE.locked_registry_workers(lock), [
+                {"worker": "harness", "version": "1.8.54"},
+                {"worker": "kanban", "version": "0.1.24"},
+            ])
+
+    def test_kit_assembly_configures_the_directory_brought_by_the_native_graph(self):
+        manifest = {"containers": {"directory": {
+            "worker": "package://api.workers.iii.dev/iii-directory", "version": "1.2.29",
+        }}}
+        MODULE.configure_directory_profile_root(manifest, Path("/private/project"), "e2e-prepare")
+        directory = manifest["containers"]["directory"]
+        self.assertEqual(directory["config_name"], "e2e-prepare-directory")
+        self.assertEqual(directory["config_override"]["agents_folder"], "/private/project/agents")
+        self.assertEqual(directory["config_override"]["skills_folder"],
+                         "/private/project/.iii/registry-skills")
+        MODULE.clear_directory_profile_root(manifest)
+        self.assertNotIn("config_override", directory)
+        with self.assertRaisesRegex(ValueError, "brings no iii-directory"):
+            MODULE.configure_directory_profile_root({"containers": {}}, Path("/private/project"), "e2e-prepare")
+
+    def test_kit_assets_are_hashed_exported_and_restored_without_runtime_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / "agents").mkdir(parents=True)
+            (project / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
+            (project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (project / "agents/deepwork.md").write_text("---\nid: deepwork\n---\n")
+            (project / ".iii/registry-skills/iii/deepwork/SKILL.md").write_text("# Deepwork\n")
+
+            snapshot = root / "snapshot"
+            manifest = MODULE.kit_assets(project, snapshot)
+            contract = campaign_contract()
+            contract["runtime"]["kits"] = {
+                "requested": ["iii/deepwork@0.4.3"],
+                "lock": {"version": 1, "kits": {}},
+                "lock_sha256": manifest["lock_sha256"],
+                "assets": manifest["files"],
+            }
+            MODULE.validate_contract(contract)
+            restored = root / "restored"
+            (restored / "agents").mkdir(parents=True)
+            (restored / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
+            (restored / "kits.lock").write_text("old lock")
+            (restored / "agents/deepwork.md").write_text("template profile")
+            (restored / ".iii/registry-skills/iii/deepwork/SKILL.md").write_text("old skill")
+            MODULE.restore_kit_assets(contract, snapshot, restored)
+
+            self.assertEqual((restored / "kits.lock").read_bytes(), (project / "kits.lock").read_bytes())
+            self.assertEqual((restored / "agents/deepwork.md").read_bytes(),
+                             (project / "agents/deepwork.md").read_bytes())
+            self.assertEqual((restored / ".iii/registry-skills/iii/deepwork/SKILL.md").read_bytes(),
+                             (project / ".iii/registry-skills/iii/deepwork/SKILL.md").read_bytes())
+            self.assertNotIn(str(root), json.dumps(contract["runtime"]["kits"]))
+
+            (snapshot / "agents/deepwork.md").write_text("changed")
+            other = root / "other"
+            other.mkdir()
+            with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                MODULE.restore_kit_assets(contract, snapshot, other)
+
+    def test_kit_asset_export_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / "agents").mkdir(parents=True)
+            (project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (project / "agents/deepwork.md").symlink_to(project / "kits.lock")
+            with self.assertRaisesRegex(ValueError, "symlinks"):
+                MODULE.kit_assets(project, root / "snapshot")
+
+    def test_kit_restore_rejects_symlink_destinations_and_parents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_project = root / "source-project"
+            (source_project / "agents").mkdir(parents=True)
+            (source_project / "kits.lock").write_text("version: 1\nkits: {}\n")
+            (source_project / "agents/deepwork.md").write_text("deepwork profile")
+            snapshot = root / "snapshot"
+            manifest = MODULE.kit_assets(source_project, snapshot)
+            contract = campaign_contract()
+            contract["runtime"]["kits"] = {
+                "requested": ["iii/deepwork@0.4.3"], "lock": {"version": 1, "kits": {}},
+                "lock_sha256": manifest["lock_sha256"], "assets": manifest["files"],
+            }
+            outside = root / "outside"
+            outside.mkdir()
+            sentinel = outside / "sentinel"
+            sentinel.write_text("untouched")
+
+            file_link = root / "file-link"
+            (file_link / "agents").mkdir(parents=True)
+            (file_link / "agents/deepwork.md").symlink_to(sentinel)
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                MODULE.restore_kit_assets(contract, snapshot, file_link)
+
+            parent_link = root / "parent-link"
+            parent_link.mkdir()
+            (parent_link / "agents").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "unsafe parent"):
+                MODULE.restore_kit_assets(contract, snapshot, parent_link)
+            self.assertEqual(sentinel.read_text(), "untouched")
 
 
 if __name__ == "__main__":

@@ -253,6 +253,25 @@
       ]
     },
     {
+      "id": "deepwork",
+      "label": "Application builds with Deepwork",
+      "purpose": "Can Deepwork delegate the implementation and verification of real Workers and deliver working Console applications? Runs the existing chess, form-flow and state-machine build contracts on the deepwork stack with the deepwork-e2e profile. These native workspaces support delegation; the separate Kanban, Registry and trending-topics tests restrict execution to their own fixture tools and are not included. This suite exercises the plain flow, without Git worktrees or interactive approval.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [],
+      "scenarios": [
+        "chess_engine_build",
+        "form_flow_build",
+        "state_machine_canvas_build"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-deepwork"
+    },
+    {
       "id": "linkly",
       "label": "Build Linkly from the tutorial",
       "purpose": "Does the agentic tutorial we point users to still work? One long session builds the Linkly link shortener on a fresh linkly-agentic scaffold, chapter by chapter, adding workers through Compose. It then checks that a request to restart the whole project is refused. Not covered: other templates or tutorials. The seven chapters are one test with one score, so the result does not say which chapter broke unless you open the criteria.",

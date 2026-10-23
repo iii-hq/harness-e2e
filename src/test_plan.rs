@@ -714,12 +714,13 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 8);
+        assert_eq!(plan.suites.len(), 9);
         for (id, cases, runs) in [
             ("regression", 9, 27),
             ("null-canary", 9, 9),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
+            ("deepwork", 3, 3),
             ("linkly", 1, 1),
             ("onboarding", 1, 1),
             ("pr", 4, 4),
@@ -908,7 +909,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:4910e06f4873cbff9f123a90d44d290d369c0aa000a86636005978a626f6da02"
+            "sha256:eaf7d56ef3d1358e41903fcd654e55146edeca51bf5d68da7efb5a6ada0f4e51"
         );
     }
 
@@ -1008,6 +1009,27 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn deepwork_reuses_native_build_contracts_that_allow_delegation() {
+        let plan = embedded().unwrap();
+        let snapshot = plan.materialize("deepwork").unwrap();
+        assert_eq!(
+            snapshot.scenario_ids,
+            [
+                "chess_engine_build",
+                "form_flow_build",
+                "state_machine_canvas_build"
+            ]
+        );
+        for id in snapshot.scenario_ids {
+            let scenario = id.parse::<ScenarioId>().unwrap();
+            let case = scenario.materialize("attempt", 4404).unwrap();
+            assert!(case.spec.filesystem_root.is_some());
+            assert!(case.module.allowed_functions("attempt").is_none());
+            assert!(!case.spec.denied_functions.contains(&"harness::spawn"));
         }
     }
 

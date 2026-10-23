@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,7 +44,7 @@ DATABASE_PRIMARY_URL = "sqlite:./data/iii.db"
 #: The stack an execution runs on when it names none.
 DEFAULT_STACK = Path(__file__).resolve().parents[1] / "stacks" / "default.yaml"
 #: Stack keys the executor reads; the rest of a stack is the Compose project.
-EXECUTOR_KEYS = ("iii", "template")
+EXECUTOR_KEYS = ("iii", "template", "kits")
 #: The key each provider reads, and the other credentials workers read.
 CREDENTIAL_CATALOG = Path(__file__).resolve().parents[1] / "config" / "provider-credentials.json"
 #: A credential is an environment variable.
@@ -394,6 +395,25 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         require_keys(template, {"id", "revision"}, "runtime.template")
         require_text(template["id"], "runtime.template.id")
         require_text(template["revision"], "runtime.template.revision")
+    kits = contract["runtime"].get("kits")
+    if kits is not None:
+        requested = kits.get("requested") if isinstance(kits, dict) else None
+        if not isinstance(requested, list) or not requested or len(requested) != len(set(requested)):
+            raise ValueError("runtime.kits.requested must be a non-empty unique array")
+        for kit in requested:
+            if not isinstance(kit, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?", kit
+            ):
+                raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range]")
+        assets = kits.get("assets")
+        if assets is not None:
+            require_digest(kits.get("lock_sha256"), "runtime.kits.lock_sha256")
+            if not isinstance(kits.get("lock"), dict) or not isinstance(assets, list):
+                raise ValueError("runtime.kits lock and assets must be frozen objects")
+            for index, item in enumerate(assets):
+                require_keys(item, {"path", "sha256"}, f"runtime.kits.assets[{index}]")
+                require_text(item["path"], f"runtime.kits.assets[{index}].path")
+                require_digest(item["sha256"], f"runtime.kits.assets[{index}].sha256")
 
     security = require_keys(contract.get("security"), {"oidc_audience"}, "security")
     audience = require_text(security.get("oidc_audience"), "security.oidc_audience")
@@ -586,6 +606,27 @@ def project_dependencies(compose_path: Path) -> list[str]:
     )
 
 
+def locked_registry_workers(lock_path: Path) -> list[dict[str, str]]:
+    """Exact registry versions in a Compose lock, one per worker package."""
+    lock = require_keys(load_yaml(lock_path.read_text()), {"containers"}, "worker lock")
+    containers = lock.get("containers")
+    if not isinstance(containers, dict):
+        raise ValueError("worker lock containers must be an object")
+    workers: dict[str, str] = {}
+    for entry in containers.values():
+        if not isinstance(entry, dict) or not str(entry.get("worker", "")).startswith("package://"):
+            continue
+        resolved = entry.get("resolved")
+        if not isinstance(resolved, dict):
+            raise ValueError("registry worker lock entries must have resolved metadata")
+        name = require_text(resolved.get("name"), "resolved worker name")
+        version = require_text(resolved.get("version"), f"resolved worker {name} version")
+        if name in workers and workers[name] != version:
+            raise ValueError(f"worker lock resolves {name} at multiple versions")
+        workers[name] = version
+    return [{"worker": name, "version": version} for name, version in sorted(workers.items())]
+
+
 def project_engine_config(project: dict[str, Any], port: int) -> dict[str, Any]:
     workers = [{"name": "iii" + "-worker-manager", "config": {"host": "127.0.0.1", "port": port}}]
     workers.extend({"name": name, "config": config}
@@ -622,6 +663,48 @@ def scoped_config_name(namespace: str, name: str) -> str:
         return candidate
     digest = hashlib.sha256(candidate.encode()).hexdigest()[:8]
     return f"{candidate[:55].rstrip('-')}-{digest}"
+
+
+def directory_profile_config(profile_root: Path) -> dict[str, Any]:
+    if not profile_root.is_absolute():
+        raise ValueError("profile root must be absolute")
+    return {
+        "auto_download": False,
+        "skills_folder": str(profile_root / ".iii/registry-skills"),
+        "local_skills_folder": str(profile_root / "skills"),
+        "agents_folder": str(profile_root / "agents"),
+        "global_agents_folder": str(profile_root / ".iii/empty/agents"),
+        "agents_skills_folder": str(profile_root / ".agents/skills"),
+        "global_agents_skills_folder": str(profile_root / ".iii/empty/skills"),
+    }
+
+
+def configure_directory_profile_root(manifest: dict[str, Any], profile_root: Path, namespace: str) -> None:
+    """Point the Directory already present in an assembled graph at one project."""
+    directories = [
+        container for container in (manifest.get("containers") or {}).values()
+        if worker_name(container.get("worker", "")) == "iii-directory"
+    ]
+    if not directories:
+        raise ValueError("the assembled stack brings no iii-directory; a kit needs one")
+    config = directory_profile_config(profile_root)
+    for container in directories:
+        container["config_name"] = scoped_config_name(namespace, "directory")
+        container.setdefault("config_override", {}).update(config)
+
+
+def clear_directory_profile_root(manifest: dict[str, Any]) -> None:
+    """Remove preparation-only paths before the assembled project is frozen."""
+    keys = directory_profile_config(Path("/unused")).keys()
+    for container in (manifest.get("containers") or {}).values():
+        if worker_name(container.get("worker", "")) != "iii-directory":
+            continue
+        config = container.get("config_override") or {}
+        for key in keys:
+            config.pop(key, None)
+        if not config:
+            container.pop("config_override", None)
+
 
 def project_scaffold(
     contract: dict[str, Any],
@@ -853,8 +936,7 @@ def project_scaffold(
         if "config_name" not in container and len(f"{namespace}-{name}") > 64:
             container["config_name"] = scoped_config_name(namespace, name)
     if profile_root is not None and not assembling:
-        if not profile_root.is_absolute():
-            raise ValueError("profile root must be absolute")
+        config = directory_profile_config(profile_root)
         if "iii-directory" not in package_names and template is None and runtime.get("lock"):
             # A frozen start cannot add a worker its lock does not name.
             raise ValueError("the assembled stack brings no iii-directory; an agent profile needs one")
@@ -866,15 +948,7 @@ def project_scaffold(
             package_names["iii-directory"] = ["iii-directory"]
         for name in package_names["iii-directory"]:
             containers[name]["config_name"] = scoped_config_name(namespace, "directory")
-            containers[name].setdefault("config_override", {}).update({
-                "auto_download": False,
-                "skills_folder": str(profile_root / ".iii/registry-skills"),
-                "local_skills_folder": str(profile_root / "skills"),
-                "agents_folder": str(profile_root / "agents"),
-                "global_agents_folder": str(profile_root / ".iii/empty/agents"),
-                "agents_skills_folder": str(profile_root / ".agents/skills"),
-                "global_agents_skills_folder": str(profile_root / ".iii/empty/skills"),
-            })
+            containers[name].setdefault("config_override", {}).update(config)
     # One env file, every container. A worker reads the keys it knows and
     # ignores the rest; the template's own `./.env` reference is replaced by it.
     if env_file:
@@ -1134,6 +1208,146 @@ def export_compose_files(
         shutil.copyfile(source, destination)
 
 
+def kit_assets(project_root: Path, output_root: Path) -> dict[str, Any]:
+    """Copy the files a native kit install produced and bind every byte."""
+    import shutil
+
+    project = project_root.resolve(strict=True)
+    if output_root.exists():
+        raise ValueError("kit asset output already exists")
+    lock = project / "kits.lock"
+    if lock.is_symlink() or not lock.is_file():
+        raise ValueError("an applied kit must produce a regular kits.lock")
+    output_root.mkdir(parents=True)
+    shutil.copyfile(lock, output_root / "kits.lock")
+    files = []
+    for relative_root in (Path("agents"), Path(".iii/registry-skills")):
+        source_root = project / relative_root
+        if not source_root.exists():
+            continue
+        if source_root.is_symlink() or not source_root.is_dir():
+            raise ValueError(f"kit asset root must be a directory: {relative_root}")
+        for source in sorted(source_root.rglob("*")):
+            if source.is_symlink():
+                raise ValueError(f"kit assets must not contain symlinks: {source.relative_to(project)}")
+            if source.is_dir():
+                continue
+            if not source.is_file() or source.suffix != ".md":
+                raise ValueError(f"kit assets must be Markdown files: {source.relative_to(project)}")
+            relative = source.relative_to(project)
+            destination = output_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            files.append({
+                "path": relative.as_posix(),
+                "sha256": f"sha256:{hashlib.sha256(source.read_bytes()).hexdigest()}",
+            })
+    manifest = {
+        "lock_sha256": f"sha256:{hashlib.sha256(lock.read_bytes()).hexdigest()}",
+        "files": files,
+    }
+    (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+def kit_agent_ids(lock_path: Path, selected: str | None = None) -> list[str]:
+    """Profiles the installed kits own, plus the profile selected by the suite."""
+    lock = load_yaml(lock_path.read_text())
+    kits = require_keys(lock, {"version", "kits"}, "kits.lock").get("kits")
+    if not isinstance(kits, dict):
+        raise ValueError("kits.lock.kits must be an object")
+    ids = {selected} if selected else set()
+    for kit, installed in kits.items():
+        installed = require_keys(installed, {"files"}, f"kits.lock.kits.{kit}")
+        files = installed.get("files")
+        if not isinstance(files, dict):
+            raise ValueError(f"kits.lock.kits.{kit}.files must be an object")
+        for path, owner in files.items():
+            match = re.fullmatch(r"agents/([A-Za-z0-9][A-Za-z0-9._-]*)\.md", path)
+            if match and isinstance(owner, dict) and owner.get("skipped") is not True:
+                ids.add(match.group(1))
+    if not all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value) for value in ids):
+        raise ValueError("agent profile ids must be safe file names")
+    return sorted(ids)
+
+
+def assert_lock_preserves_workers(before_path: Path, after_path: Path) -> None:
+    """A kit may add workers, but cannot replace one the stack already resolved."""
+    before = require_keys(load_yaml(before_path.read_text()), {"containers"}, "worker lock before kit")
+    after = require_keys(load_yaml(after_path.read_text()), {"containers"}, "worker lock after kit")
+    before_containers = before.get("containers")
+    after_containers = after.get("containers")
+    if not isinstance(before_containers, dict) or not isinstance(after_containers, dict):
+        raise ValueError("worker locks must contain container objects")
+    changed = []
+    for name, entry in before_containers.items():
+        current = after_containers.get(name)
+        old_resolved = entry.get("resolved") if isinstance(entry, dict) else None
+        new_resolved = current.get("resolved") if isinstance(current, dict) else None
+        old = (entry.get("worker"), old_resolved.get("version") if isinstance(old_resolved, dict) else None)
+        new = (current.get("worker"), new_resolved.get("version") if isinstance(new_resolved, dict) else None) \
+            if isinstance(current, dict) else None
+        if new != old:
+            changed.append(name)
+    if changed:
+        raise ValueError("kit changed existing worker source or version: " + ", ".join(sorted(changed)))
+
+
+def restore_kit_assets(contract: dict[str, Any], source_root: Path, project_root: Path) -> None:
+    """Restore exactly the kit lock, profiles and skills frozen at preparation."""
+    identity = (contract.get("runtime") or {}).get("kits") or {}
+    expected = identity.get("assets")
+    if expected is None:
+        return
+    source = source_root.resolve(strict=True)
+    project = project_root.resolve(strict=True)
+    entries = [(Path("kits.lock"), identity.get("lock_sha256"))]
+    entries.extend((Path(item["path"]), item["sha256"]) for item in expected)
+    copies = []
+    for relative, digest in entries:
+        if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
+            raise ValueError("kit asset path must stay inside its snapshot")
+        allowed = relative == Path("kits.lock") or (
+            relative.suffix == ".md"
+            and (relative.parts[:1] == ("agents",) or relative.parts[:2] == (".iii", "registry-skills"))
+        )
+        if not allowed:
+            raise ValueError(f"unsupported kit asset path: {relative}")
+        item = source / relative
+        if item.is_symlink() or not item.is_file() or not item.resolve().is_relative_to(source):
+            raise ValueError(f"kit asset is not a regular snapshot file: {relative}")
+        observed = f"sha256:{hashlib.sha256(item.read_bytes()).hexdigest()}"
+        if observed != digest:
+            raise ValueError(f"kit asset digest mismatch: {relative}")
+        destination = project / relative
+        parents = []
+        parent = destination.parent
+        while parent != project:
+            if not parent.is_relative_to(project):
+                raise ValueError(f"kit asset destination escapes its project: {relative}")
+            parents.append(parent)
+            parent = parent.parent
+        if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+            raise ValueError(f"kit asset destination must be a regular file: {relative}")
+        for parent in parents:
+            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+                raise ValueError(f"kit asset destination contains an unsafe parent: {relative}")
+        copies.append((item, destination, relative, parents))
+    for item, destination, relative, parents in copies:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if any(parent.is_symlink() or not parent.resolve().is_relative_to(project) for parent in parents):
+            raise ValueError(f"kit asset destination escapes its project: {relative}")
+        staged = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
+                staged = Path(temporary.name)
+                temporary.write(item.read_bytes())
+            os.replace(staged, destination)
+        finally:
+            if staged is not None:
+                staged.unlink(missing_ok=True)
+
+
 def iii_error(stderr: str) -> dict[str, str]:
     """The code and message of the last error `iii trigger` printed; an error
     in plain text is its message. Nothing when it printed none."""
@@ -1308,6 +1522,8 @@ def main() -> int:
     roots = commands.add_parser("roots")
     roots.add_argument("--compose", type=Path, required=True)
     roots.add_argument("--dependencies", action="store_true", help="only the workers another declared one starts after")
+    locked_workers = commands.add_parser("locked-workers")
+    locked_workers.add_argument("--lock", type=Path, required=True)
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
     project.add_argument("--group-id", help="omit to scaffold the stack the whole suite shares")
@@ -1359,6 +1575,24 @@ def main() -> int:
     export.add_argument("--artifact-root", type=Path, required=True)
     export.add_argument("--allowed-root", type=Path, required=True)
     export.add_argument("--final", action="store_true")
+    export_kits = commands.add_parser("export-kit-assets")
+    export_kits.add_argument("--project-root", type=Path, required=True)
+    export_kits.add_argument("--output-root", type=Path, required=True)
+    restore_kits = commands.add_parser("restore-kit-assets")
+    restore_kits.add_argument("--contract", type=Path, required=True)
+    restore_kits.add_argument("--source-root", type=Path, required=True)
+    restore_kits.add_argument("--project-root", type=Path, required=True)
+    kit_profiles = commands.add_parser("kit-agent-ids")
+    kit_profiles.add_argument("--lock", type=Path, required=True)
+    kit_profiles.add_argument("--selected")
+    preserve_workers = commands.add_parser("assert-lock-preserves-workers")
+    preserve_workers.add_argument("--before", type=Path, required=True)
+    preserve_workers.add_argument("--after", type=Path, required=True)
+    configure_profiles = commands.add_parser("configure-profile-root")
+    configure_profiles.add_argument("--compose", type=Path, required=True)
+    configure_profiles.add_argument("--profile-root", type=Path, required=True)
+    configure_profiles.add_argument("--namespace", required=True)
+    configure_profiles.add_argument("--clear", action="store_true")
     failure = commands.add_parser("failure", help="a group's failure.json")
     failure.add_argument("--output", type=Path, required=True)
     failure.add_argument("--phase", required=True)
@@ -1389,6 +1623,28 @@ def main() -> int:
         if args.command == "export-compose":
             export_compose_files(args.compose, args.runtime_root, args.artifact_root, args.allowed_root, args.final)
             return 0
+        if args.command == "export-kit-assets":
+            kit_assets(args.project_root, args.output_root)
+            return 0
+        if args.command == "kit-agent-ids":
+            print("\n".join(kit_agent_ids(args.lock, args.selected)))
+            return 0
+        if args.command == "assert-lock-preserves-workers":
+            assert_lock_preserves_workers(args.before, args.after)
+            return 0
+        if args.command == "locked-workers":
+            print(json.dumps(locked_registry_workers(args.lock)))
+            return 0
+        if args.command == "configure-profile-root":
+            import yaml
+
+            manifest = load_yaml(args.compose.read_text())
+            if args.clear:
+                clear_directory_profile_root(manifest)
+            else:
+                configure_directory_profile_root(manifest, args.profile_root, args.namespace)
+            args.compose.write_text(yaml.safe_dump(manifest, sort_keys=False))
+            return 0
         if args.command == "validate-layout":
             validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root, args.compose)
             return 0
@@ -1403,6 +1659,9 @@ def main() -> int:
             print("provider credentials: " + (", ".join(values) or "none"))
             return 0
         contract = validate_contract(load_object(args.contract, "contract"))
+        if args.command == "restore-kit-assets":
+            restore_kit_assets(contract, args.source_root, args.project_root)
+            return 0
         if args.command == "validate":
             print(canonical(contract))
         elif args.command == "digest":
