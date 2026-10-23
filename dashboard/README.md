@@ -147,9 +147,11 @@ measures that moved, better or worse, then what it compared. The line below
 plots one measure (six tabs, the rest under More), one point per release with
 Release Control results, oldest first. Each step reads against the release
 before it, over the combinations of suite, model, profile and stack both ran
-and, within them, the tests whose definition did not change. Every combination
-weighs the same, the Completed share and the error rate included; a count such
-as "41 of 48" is a sum. A point's label and panel give its step, and the callout
+and, within them, the tests both planned whose definition did not change; a
+test one release planned but never ran counts as not completed there. Every
+combination weighs the same, the Completed share and the error rate included,
+and each measure reads the combinations both releases have it for; a count
+such as "41 of 48" is a sum. A point's label and panel give its step, and the callout
 beside the line gives the latest one on every main measure; **What changed**
 opens the latest release's panel: its versions against the previous release and
 each combination the verdict compared. A hollow ring is a local or Docker
@@ -215,10 +217,14 @@ by a comma or none recorded is `unversioned` and counted as such), pooled per
 combination of suite, provider, model, profile and stack; a re-run id counts
 its latest attempt. Each point is read against the one before it (the latest
 pair is the `verdict`) over the combinations both ran and, within them, the
-tests whose `behavior_sha256` matches; what one ran and the other did not is
-listed as joined, left or left out. Means, the Completed share and the error
-rate give every combination the same weight however often it ran; counts are
-summed. A local or Docker execution sits beside its release (the Harness it
+tests both planned or ran whose `behavior_sha256` does not differ: a test one
+release counted no run of stays planned there, lowering its Completed share
+without entering its means. A test only one release planned, or whose
+definition changed or is unknown, is in `tests_left_out`; a combination one ran
+and the other did not is listed as joined, left or left out. Means, the
+Completed share and the error rate give every combination the same weight
+however often it ran, each over the combinations both releases have it for;
+counts are summed. A local or Docker execution sits beside its release (the Harness it
 ran, else the release current when it started) and never counts; other CI runs
 are only counted, as `outside_release_control`.
 

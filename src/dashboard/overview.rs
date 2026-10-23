@@ -84,7 +84,7 @@ pub(super) struct Verdict {
     /// Over `compared`; null when it is empty.
     pub latest_aggregate: Option<Aggregate>,
     pub previous_aggregate: Option<Aggregate>,
-    /// The combinations both releases ran, over the tests both ran alike.
+    /// The combinations both releases ran, over the tests both planned alike.
     pub compared: Vec<CombinationDelta>,
     pub left_out: Vec<LeftOutCombination>,
 }
@@ -94,8 +94,9 @@ pub(super) struct CombinationDelta {
     pub combination: Combination,
     pub latest: TrendMeasures,
     pub previous: TrendMeasures,
-    /// Tests that ran but do not compare: their definition changed, or one
-    /// release counted no run of them.
+    /// Tests that do not compare: their definition changed (or is unknown),
+    /// or only one release planned or ran them. A test both planned that one
+    /// release never ran compares, as not completed there.
     pub tests_left_out: Vec<String>,
 }
 
@@ -231,6 +232,7 @@ pub(super) fn overview(
             .values()
             .filter_map(|(_, group)| measured(group, |_| true))
             .collect::<Vec<_>>();
+        let measured = measured.iter().collect::<Vec<_>>();
         points.push(ReleasePoint {
             release: line.release.to_owned(),
             first_started_at: line.kept[0].execution.started_at.to_owned(),
@@ -244,7 +246,7 @@ pub(super) fn overview(
                 .values()
                 .map(|(combination, _)| combination.clone())
                 .collect(),
-            aggregate: aggregate(&measured),
+            aggregate: aggregate(&measured, &measured),
             joined: before
                 .map(|before| missing(line, before))
                 .unwrap_or_default(),
@@ -431,27 +433,34 @@ fn compare(latest: &Line, previous: &Line) -> (Vec<CombinationDelta>, Vec<LeftOu
     (compared, left_out)
 }
 
-/// A combination both releases ran, measured over only the tests both
-/// counted under one same definition; none when no test was.
+/// A combination both releases ran, measured over the tests both planned
+/// or ran under one same definition; none when no test was. A release that
+/// counted no run of such a test keeps it planned: it adds nothing to the
+/// means and lowers Completed.
 fn delta(
     combination: &Combination,
     latest: &[&Ran],
     previous: &[&Ran],
 ) -> Option<CombinationDelta> {
     let (latest_counted, previous_counted) = (counted(latest), counted(previous));
-    let tests = latest
-        .iter()
-        .chain(previous)
-        .flat_map(|ran| &ran.runs)
-        .map(|run| run.test.as_str())
-        .collect::<BTreeSet<_>>();
-    let alike = tests
-        .iter()
+    let (latest_tests, previous_tests) = (tests(latest), tests(previous));
+    let alike = latest_tests
+        .intersection(&previous_tests)
         .copied()
         .filter(|test| {
-            let kept = definition(&latest_counted, test);
-            kept.is_some() && kept == definition(&previous_counted, test)
+            match (
+                definition(&latest_counted, test),
+                definition(&previous_counted, test),
+            ) {
+                (Some(Some(latest)), Some(Some(previous))) => latest == previous,
+                (Some(None), _) | (_, Some(None)) => false,
+                _ => true,
+            }
         })
+        .collect::<BTreeSet<_>>();
+    let tests = latest_tests
+        .union(&previous_tests)
+        .copied()
         .collect::<BTreeSet<_>>();
     let keep = |test: &str| alike.contains(test);
     Some(CombinationDelta {
@@ -465,6 +474,19 @@ fn delta(
     })
 }
 
+/// The tests a release's executions of a combination planned or ran.
+fn tests<'a>(group: &[&'a Ran]) -> BTreeSet<&'a str> {
+    group
+        .iter()
+        .flat_map(|ran| {
+            let planned = ran.execution.parameters.scenarios.iter();
+            planned
+                .map(String::as_str)
+                .chain(ran.runs.iter().map(|run| run.test.as_str()))
+        })
+        .collect()
+}
+
 fn counted<'a>(group: &[&Ran<'a>]) -> Vec<&'a TrendRun> {
     group
         .iter()
@@ -473,18 +495,16 @@ fn counted<'a>(group: &[&Ran<'a>]) -> Vec<&'a TrendRun> {
         .collect()
 }
 
-/// The one `behavior_sha256` all of a test's counted runs carry; none when
-/// they differ, one is unknown, or none counted.
-fn definition<'a>(counted: &[&'a TrendRun], test: &str) -> Option<&'a str> {
+/// The one `behavior_sha256` all of a test's counted runs carry:
+/// `Some(None)` when they differ or one is unknown, none when none counted.
+fn definition<'a>(counted: &[&'a TrendRun], test: &str) -> Option<Option<&'a str>> {
     let mut definitions = counted
         .iter()
         .copied()
         .filter(|run| run.test == test)
         .map(|run| run.behavior_sha256.as_deref());
-    let first = definitions.next()??;
-    definitions
-        .all(|definition| definition == Some(first))
-        .then_some(first)
+    let first = definitions.next()?;
+    Some(first.filter(|_| definitions.all(|definition| definition == first)))
 }
 
 /// A combination's executions pooled: the runs of the tests kept, against
@@ -518,19 +538,28 @@ fn planned(execution: &Execution, runs: &[&TrendRun], keep: impl Fn(&str) -> boo
     }
 }
 
-/// Each delta's latest and previous measures, aggregated.
+/// Each delta's latest and previous measures, aggregated: each measure over
+/// the combinations both releases have it for.
 fn aggregates(compared: &[CombinationDelta]) -> (Option<Aggregate>, Option<Aggregate>) {
-    (
-        aggregate(compared.iter().map(|delta| &delta.latest)),
-        aggregate(compared.iter().map(|delta| &delta.previous)),
-    )
+    let latest = compared
+        .iter()
+        .map(|delta| &delta.latest)
+        .collect::<Vec<_>>();
+    let previous = compared
+        .iter()
+        .map(|delta| &delta.previous)
+        .collect::<Vec<_>>();
+    (aggregate(&latest, &previous), aggregate(&previous, &latest))
 }
 
 /// Combinations weighing the same: the mean of their means and of their
-/// shares; their counts added up, to show, never to divide.
-fn aggregate<'a>(measures: impl IntoIterator<Item = &'a TrendMeasures>) -> Option<Aggregate> {
-    let all = measures.into_iter().collect::<Vec<_>>();
-    let mean_of = |of: fn(&TrendMeasures) -> Option<f64>| mean(all.iter().map(|m| of(m)));
+/// shares, each over the combinations `other` (one per combination, in the
+/// same order) has it for too; their counts added up, to show, never to
+/// divide.
+fn aggregate(all: &[&TrendMeasures], other: &[&TrendMeasures]) -> Option<Aggregate> {
+    let mean_of = |of: fn(&TrendMeasures) -> Option<f64>| {
+        mean(all.iter().zip(other).map(|(m, o)| of(o).and(of(m))))
+    };
     (!all.is_empty()).then(|| Aggregate {
         measures: TrendMeasures {
             score_mean: mean_of(|m| m.score_mean),
@@ -550,17 +579,13 @@ fn aggregate<'a>(measures: impl IntoIterator<Item = &'a TrendMeasures>) -> Optio
             validation_retries_mean: mean_of(|m| m.validation_retries_mean),
             technical_retries_mean: mean_of(|m| m.technical_retries_mean),
         },
-        completed_share: mean(
-            all.iter()
-                .map(|m| (m.planned > 0).then(|| m.completed as f64 / m.planned as f64)),
-        ),
-        error_rate: mean(
-            all.iter()
-                .map(|m| match (m.function_call_errors, m.function_calls) {
-                    (Some(errors), Some(calls)) if calls > 0.0 => Some(errors / calls),
-                    _ => None,
-                }),
-        ),
+        completed_share: mean_of(|m| {
+            (m.planned > 0).then(|| m.completed as f64 / m.planned as f64)
+        }),
+        error_rate: mean_of(|m| match (m.function_call_errors, m.function_calls) {
+            (Some(errors), Some(calls)) if calls > 0.0 => Some(errors / calls),
+            _ => None,
+        }),
     })
 }
 
@@ -870,6 +895,93 @@ pub(super) mod tests {
             (1, 2, Some(90.0))
         );
         assert_eq!(overview.verdict.unwrap().latest, "1.9.3");
+    }
+
+    #[test]
+    fn a_test_both_releases_planned_that_the_latest_never_ran_lowers_its_completed_share() {
+        let summaries = [
+            rc("p", 1, "1.9.2"),
+            with(rc("l", 2, "1.9.3"), |summary| {
+                summary["state"] = json!("interrupted");
+                summary["parameters"]["scenarios"] = json!(["t1", "t2", "t3"]);
+            }),
+        ]
+        .concat();
+        let overview = overview(
+            &summaries,
+            &runs(vec![
+                ("p", vec![scored("t1", 80.0), scored("t2", 60.0)]),
+                ("l", vec![scored("t1", 90.0)]),
+            ]),
+        );
+        let verdict = overview.verdict.as_ref().unwrap();
+        let [delta] = verdict.compared.as_slice() else {
+            panic!("one delta: {:?}", verdict.compared);
+        };
+        // t2 stays planned on both sides; only the latest planned t3.
+        assert_eq!(delta.tests_left_out, ["t3"]);
+        assert_eq!((delta.latest.completed, delta.latest.planned), (1, 2));
+        assert_eq!((delta.previous.completed, delta.previous.planned), (2, 2));
+        let share = |aggregate: &Option<Aggregate>| aggregate.as_ref()?.completed_share;
+        assert_eq!(
+            (
+                share(&verdict.latest_aggregate),
+                share(&verdict.previous_aggregate)
+            ),
+            (Some(0.5), Some(1.0))
+        );
+        let step = overview.releases[1].step.as_ref().unwrap();
+        assert_eq!(share(&step.latest_aggregate), Some(0.5));
+    }
+
+    #[test]
+    fn each_measure_compares_only_the_combinations_both_releases_measured() {
+        let priced = |cost: Option<f64>, run: TrendRun| TrendRun {
+            cost_usd: cost,
+            ..run
+        };
+        let summaries = [
+            rc("p1", 1, "1.9.2"),
+            with(rc("p2", 1, "1.9.2"), suite("onboarding", "Onboarding")),
+            rc("l1", 2, "1.9.3"),
+            with(rc("l2", 2, "1.9.3"), suite("onboarding", "Onboarding")),
+        ]
+        .concat();
+        let overview = overview(
+            &summaries,
+            &runs(vec![
+                ("p1", vec![priced(Some(0.25), scored("t1", 80.0))]),
+                ("p2", vec![priced(Some(1.0), scored("t9", 40.0))]),
+                ("l1", vec![priced(Some(0.5), scored("t1", 90.0))]),
+                // Onboarding's model has no price on the latest release.
+                ("l2", vec![priced(None, scored("t9", 60.0))]),
+            ]),
+        );
+        let verdict = overview.verdict.as_ref().unwrap();
+        let measures = |aggregate: &Option<Aggregate>| aggregate.as_ref().unwrap().measures.clone();
+        let (latest, previous) = (
+            measures(&verdict.latest_aggregate),
+            measures(&verdict.previous_aggregate),
+        );
+        // The cost over regression alone on both sides; the score over both.
+        assert_eq!(
+            (latest.cost_usd_mean, previous.cost_usd_mean),
+            (Some(0.5), Some(0.25))
+        );
+        assert_eq!(
+            (latest.score_mean, previous.score_mean),
+            (Some(75.0), Some(60.0))
+        );
+        // A release's own point still reads every combination it measured.
+        assert_eq!(
+            overview.releases[0]
+                .aggregate
+                .as_ref()
+                .unwrap()
+                .measures
+                .cost_usd_mean,
+            Some(0.625)
+        );
     }
 
     #[test]
