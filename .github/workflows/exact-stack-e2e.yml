@@ -222,6 +222,7 @@ jobs:
         with:
           name: e2e-contract-${{ env.EXECUTION_KEY }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-contract/
+          include-hidden-files: true
           retention-days: 90
           if-no-files-found: error
 
