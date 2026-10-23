@@ -622,8 +622,27 @@ again offers as recorded), the workers each group resolved and observed, and
 its GitHub origin. Contracts from before the workflow stated its execution (plan and
 profile only) import too. A group that left only `failure.json` is kept as a slot with
 that error. Importing a run again replaces the runs of the earlier import; the
-execution keeps its name. Imported and local executions are the same record:
+execution keeps its name.
+A run GitHub ended other than `success` (cancelled, failed) imports as
+`interrupted`, with `The GitHub run ended <conclusion>.`, as an execution
+started from here does. Deleting an imported execution remembers its run, so
+the worker does not import it again on its own; **Import** of that run does,
+and forgets the delete. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
+
+CI sync imports the workflow's runs in the background. It is off by default
+(a full backfill of the public repository is about 3 GB);
+`e2e::dashboard::ci-sync-set` turns it on or off and keeps the switch in
+`ci-sync.json` in the data directory, so a restart resumes. It imports through
+**Import**'s path, one run at a time: Release Control runs newest first until
+the two newest Harness releases each have one, with the newest 100 other runs;
+then the rest GitHub keeps (90 days), Release Control first; then, every 10
+minutes, the runs created in the last 7 days, so a re-run of an older run comes
+in only by **Import**. It skips a run being imported, one started here, one
+imported at the same GitHub `updated_at`, one whose artifacts are gone or that
+left no bundle, and one deleted here; it tries other failures 3 times. A `gh`
+rate limit pauses it an hour without counting an attempt. `gh` needs read
+access to the repository.
 
 ### Run in Docker
 

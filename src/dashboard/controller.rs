@@ -17,8 +17,8 @@ use crate::control::{
 };
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
-    ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
-    SuiteView,
+    import_id, ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest,
+    GithubRunsListRequest, SuiteView,
 };
 use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
@@ -35,7 +35,7 @@ struct ControllerState {
 
 pub(super) struct Controller {
     pub(super) plan_store: Arc<crate::plans::store::PlanStore>,
-    github_repository: String,
+    pub(super) github_repository: String,
     runs_dir: PathBuf,
     defaults: Defaults,
     control: Option<ControlPlane>,
@@ -45,6 +45,7 @@ pub(super) struct Controller {
     events: Option<Arc<DashboardEvents>>,
     /// Turns for the GitHub imports in the background (`GITHUB_IMPORTS`).
     github_imports: Semaphore,
+    pub(super) ci_sync: super::ci_sync::CiSync,
 }
 
 impl Controller {
@@ -79,6 +80,7 @@ impl Controller {
         let controller = Arc::new(Self {
             plan_store,
             github_repository,
+            ci_sync: super::ci_sync::CiSync::load(&runs_dir),
             runs_dir,
             defaults: Defaults {
                 url,
@@ -103,6 +105,9 @@ impl Controller {
             controller.observe_control_plane();
         }
         controller.observe_docker_executions();
+        if controller.control.is_some() {
+            super::ci_sync::spawn(&controller);
+        }
         Ok(controller)
     }
 
@@ -445,7 +450,9 @@ impl Controller {
 
     /// Answers with the execution at once; the download and installation
     /// continue in the background, `GITHUB_IMPORTS` at a time, and end in
-    /// `completed` or `failed`.
+    /// `completed`, `interrupted` (a run GitHub did not conclude `success`)
+    /// or `failed`. Importing a run by hand forgets that its execution was
+    /// deleted.
     pub(super) async fn github_run_import(
         self: &Arc<Self>,
         request: GithubRunImportRequest,
@@ -453,6 +460,9 @@ impl Controller {
         let repository = request
             .repository
             .unwrap_or_else(|| self.github_repository.clone());
+        self.plan_store
+            .clear_deleted_import(&import_id(&repository, request.run_id))
+            .await?;
         let (execution, started) = self
             .plan_store
             .begin_github_import(&repository, request.run_id)
@@ -463,14 +473,44 @@ impl Controller {
             let id = execution.id.clone();
             tokio::spawn(async move {
                 let _turn = controller.github_imports.acquire().await;
-                if let Err(error) = controller.plan_store.finish_github_import(&id).await {
-                    tracing::error!(execution_id = %id, error = %format!("{error:#}"), "record the GitHub import outcome");
-                }
-                controller.invalidate_summaries().await;
-                controller.emit_change("finished", &id).await;
+                controller.finish_import(&id).await;
             });
         }
         Ok(json!({"execution_id": execution.id, "state": execution.state}))
+    }
+
+    /// Import a run for CI sync: it waits its turn before it begins, so a
+    /// run deleted or imported by hand meanwhile is left alone (`None`).
+    /// Answers the execution once the import ended.
+    pub(super) async fn sync_import(
+        self: &Arc<Self>,
+        repository: &str,
+        run_id: u64,
+    ) -> Result<Option<crate::plans::store::PlanExecution>> {
+        let _turn = self.github_imports.acquire().await?;
+        let id = import_id(repository, run_id);
+        if self.plan_store.import_deleted(&id).await? {
+            return Ok(None);
+        }
+        let (execution, started) = self
+            .plan_store
+            .begin_github_import(repository, run_id)
+            .await?;
+        if !started {
+            return Ok(None);
+        }
+        self.emit_change("started", &execution.id).await;
+        self.finish_import(&id).await;
+        self.plan_store.read_execution(&id).await.map(Some)
+    }
+
+    /// Download and install a begun import, then tell the Console.
+    async fn finish_import(&self, id: &str) {
+        if let Err(error) = self.plan_store.finish_github_import(id).await {
+            tracing::error!(execution_id = %id, error = %format!("{error:#}"), "record the GitHub import outcome");
+        }
+        self.invalidate_summaries().await;
+        self.emit_change("finished", id).await;
     }
 
     pub(super) async fn delete_execution(&self, id: &str) -> Result<()> {
@@ -778,6 +818,7 @@ pub(super) mod tests {
             read_model: RwLock::new(None),
             events: None,
             github_imports: Semaphore::new(GITHUB_IMPORTS),
+            ci_sync: crate::dashboard::ci_sync::CiSync::load(runs_dir),
         })
     }
 
@@ -862,5 +903,151 @@ esac"#,
             assert_eq!(ended.state, "failed");
         }
         assert_eq!(downloads(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_manual_import_forgets_a_deleted_run() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        // Every run answers and lists no artifact, so each import ends failed.
+        let gh = fake_gh(
+            root.path(),
+            r#"case "$*" in
+  *artifacts*) ;;
+  *) printf '%s' '{"run_attempt":1,"display_title":"E2E · rc","html_url":"https://github.com/o/r/actions/runs/1","created_at":"2026-09-20T10:00:00Z"}' ;;
+esac"#,
+        );
+        let controller = without_control_plane(
+            manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
+            &data,
+        );
+        let import = || {
+            controller.github_run_import(GithubRunImportRequest {
+                repository: None,
+                run_id: 1,
+            })
+        };
+
+        let accepted = import().await.unwrap();
+        let id = accepted["execution_id"].as_str().unwrap().to_owned();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while controller
+                .plan_store
+                .read_execution(&id)
+                .await
+                .unwrap()
+                .state
+                == "importing"
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the import should end");
+        controller.delete_execution(&id).await.unwrap();
+        assert!(controller.plan_store.import_deleted(&id).await.unwrap());
+
+        let again = import().await.unwrap();
+        assert_eq!(again["state"], "importing");
+        assert!(!controller.plan_store.import_deleted(&id).await.unwrap());
+    }
+
+    /// A controller whose `gh` answers run 1 and lists its artifacts as
+    /// `artifacts` says.
+    fn importing_run_1(root: &Path, artifacts: &str) -> Arc<Controller> {
+        let data = root.join("data");
+        let gh = fake_gh(
+            root,
+            &format!(
+                r#"case "$*" in
+  *artifacts*) {artifacts} ;;
+  *) printf '%s' '{{"run_attempt":1,"display_title":"E2E · rc","html_url":"https://github.com/o/r/actions/runs/1","created_at":"2026-09-20T10:00:00Z","updated_at":"2026-09-20T11:00:00Z"}}' ;;
+esac"#
+            ),
+        );
+        without_control_plane(
+            manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
+            &data,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_sync_import_takes_its_turn_before_it_begins() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = importing_run_1(root.path(), "");
+
+        let turns = controller
+            .github_imports
+            .acquire_many(GITHUB_IMPORTS as u32)
+            .await
+            .unwrap();
+        let importing = tokio::spawn({
+            let controller = controller.clone();
+            async move { controller.sync_import("o/r", 1).await }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(controller.plan_store.executions().await.unwrap().is_empty());
+
+        drop(turns);
+        let imported = tokio::time::timeout(Duration::from_secs(10), importing)
+            .await
+            .expect("the import should end")
+            .unwrap()
+            .unwrap()
+            .expect("the run should be imported");
+        assert_eq!(
+            (imported.id, imported.state.as_str()),
+            (import_id("o/r", 1), "failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_deleted_while_its_sync_import_waits_stays_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = importing_run_1(root.path(), "echo 'connection reset' >&2; exit 1");
+        let id = import_id("o/r", 1);
+        controller
+            .plan_store
+            .begin_github_import("o/r", 1)
+            .await
+            .unwrap();
+        controller
+            .plan_store
+            .finish_github_import(&id)
+            .await
+            .unwrap();
+        let failed = controller.plan_store.read_execution(&id).await.unwrap();
+        assert_eq!(failed.state, "failed");
+
+        let turns = controller
+            .github_imports
+            .acquire_many(GITHUB_IMPORTS as u32)
+            .await
+            .unwrap();
+        let importing = tokio::spawn({
+            let controller = controller.clone();
+            async move { controller.sync_import("o/r", 1).await }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        controller.delete_execution(&id).await.unwrap();
+        drop(turns);
+        let imported = tokio::time::timeout(Duration::from_secs(10), importing)
+            .await
+            .expect("the import should end")
+            .unwrap()
+            .unwrap();
+        assert!(imported.is_none(), "{imported:?}");
+        assert!(controller.plan_store.read_execution(&id).await.is_err());
+        assert!(controller.plan_store.import_deleted(&id).await.unwrap());
+
+        let again = controller
+            .github_run_import(GithubRunImportRequest {
+                repository: None,
+                run_id: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(again["state"], "importing");
+        assert!(!controller.plan_store.import_deleted(&id).await.unwrap());
     }
 }

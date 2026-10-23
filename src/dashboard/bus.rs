@@ -46,6 +46,9 @@ pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
 pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
 pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
 pub(super) const GITHUB_STATUS_GET: &str = "e2e::dashboard::github-status-get";
+pub(super) const CI_SYNC_STATUS_GET: &str = "e2e::dashboard::ci-sync-status-get";
+pub(super) const CI_SYNC_SET: &str = "e2e::dashboard::ci-sync-set";
+pub(super) const CI_SYNC_CHECK: &str = "e2e::dashboard::ci-sync-check";
 pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
 pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
@@ -174,6 +177,11 @@ struct DashboardEmptyRequest {
     #[serde(rename = "_caller_worker_id", default)]
     #[schemars(skip)]
     _caller_worker_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct CiSyncSetRequest {
+    enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -558,6 +566,46 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(accepted).map_err(handler_error)
                 }
+            })
+        },
+    );
+    register(
+        iii,
+        CI_SYNC_STATUS_GET,
+        "Read CI sync: whether it is on, its phase, whether gh is signed in, the last and next check, imported, failed and remaining runs, and a rate-limit pause.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
+                let controller = controller.clone();
+                async move { Ok::<_, Error>(controller.ci_sync_status()) }
+            })
+        },
+    );
+    register(
+        iii,
+        CI_SYNC_SET,
+        "Turn CI sync on or off for this worker: on, it imports the exact-stack workflow's runs in the background, the latest releases first, then keeps up every 10 minutes. Answers its status.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: CiSyncSetRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .ci_sync_set(request.enabled)
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        CI_SYNC_CHECK,
+        "Check GitHub for new runs now when CI sync is on. Answers its status.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
+                let controller = controller.clone();
+                async move { Ok::<_, Error>(controller.ci_sync_check()) }
             })
         },
     );

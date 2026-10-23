@@ -1,5 +1,6 @@
 mod assessment_projection;
 mod bus;
+mod ci_sync;
 mod controller;
 mod live_progress;
 mod overview;

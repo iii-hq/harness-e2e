@@ -26,7 +26,7 @@ use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
 use crate::report::{E2eManifest, E2eReport};
 
 const WORKFLOW: &str = "exact-stack-e2e.yml";
-const PAGE_SIZE: usize = 20;
+const PAGE_SIZE: u32 = 20;
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub(crate) struct GithubRunsListRequest {
@@ -89,6 +89,8 @@ pub(crate) struct GithubCli {
     pub download_timeout: Duration,
     /// How often an execution started on GitHub looks at its run.
     pub follow_interval: Duration,
+    /// How often the background import looks for runs GitHub updated.
+    pub sync_interval: Duration,
 }
 
 impl Default for GithubCli {
@@ -98,6 +100,7 @@ impl Default for GithubCli {
             api_timeout: Duration::from_secs(60),
             download_timeout: Duration::from_secs(30 * 60),
             follow_interval: Duration::from_secs(30),
+            sync_interval: Duration::from_secs(600),
         }
     }
 }
@@ -198,11 +201,59 @@ impl Bundles {
 const CONTRACT_DOWNLOADS: usize = 4;
 
 impl PlanStore {
+    /// How often the background import looks for runs GitHub updated.
+    pub(crate) fn sync_interval(&self) -> Duration {
+        self.github.sync_interval
+    }
+
     /// Completed runs of the exact-stack workflow, newest first, with the
     /// local execution that already imported them. Only one `gh api` call:
     /// a run whose contract was read before carries its suite and subject,
     /// the others are `contract_pending` until `github_run_contracts`.
     pub(crate) async fn github_runs(&self, repository: &str, page: u32) -> Result<Value> {
+        self.runs_page(repository, "", page, PAGE_SIZE).await
+    }
+
+    /// Completed runs as `github_runs` lists them, created on or after a day
+    /// (`YYYY-MM-DD`) or within a closed range of days
+    /// (`YYYY-MM-DD..YYYY-MM-DD`; one day is `{day}..{day}`), up to 100 a page.
+    pub(crate) async fn github_runs_window(
+        &self,
+        repository: &str,
+        created_from: &str,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Value> {
+        ensure!((1..=100).contains(&per_page), "per_page is 1 to 100");
+        let day = |day: &str| {
+            ensure!(
+                day.len() == 10 && chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok(),
+                "'{created_from}' is not a YYYY-MM-DD day or a YYYY-MM-DD..YYYY-MM-DD range"
+            );
+            Ok(())
+        };
+        let filter = match created_from.split_once("..") {
+            Some((from, to)) => {
+                day(from)?;
+                day(to)?;
+                format!("&created={from}..{to}")
+            }
+            None => {
+                day(created_from)?;
+                format!("&created=%3E%3D{created_from}")
+            }
+        };
+        self.runs_page(repository, &filter, page, per_page).await
+    }
+
+    /// One page of completed runs; `filter` adds query parameters.
+    async fn runs_page(
+        &self,
+        repository: &str,
+        filter: &str,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Value> {
         validate_repository(repository)?;
         ensure!(page >= 1, "page starts at 1");
         let response: Value = serde_json::from_slice(
@@ -212,7 +263,7 @@ impl PlanStore {
                     &[
                         "api",
                         &format!(
-                            "repos/{repository}/actions/workflows/{WORKFLOW}/runs?status=completed&per_page={PAGE_SIZE}&page={page}"
+                            "repos/{repository}/actions/workflows/{WORKFLOW}/runs?status=completed{filter}&per_page={per_page}&page={page}"
                         ),
                     ],
                 )
@@ -231,7 +282,7 @@ impl PlanStore {
         // An empty page ends the list even when the count says more: GitHub
         // counts runs its pages no longer reach.
         let more = !runs.is_empty()
-            && total.is_some_and(|total| total > u64::from(page) * PAGE_SIZE as u64);
+            && total.is_some_and(|total| total > u64::from(page) * u64::from(per_page));
         Ok(json!({
             "repository": repository,
             "page": page,
@@ -253,6 +304,7 @@ impl PlanStore {
             "title": title,
             "created_at": run["created_at"].as_str().or(run["run_started_at"].as_str()),
             "attempt_started_at": run["run_started_at"],
+            "updated_at": run["updated_at"],
             "conclusion": run["conclusion"],
             "head_branch": run["head_branch"],
             "head_sha": run["head_sha"],
@@ -284,7 +336,7 @@ impl PlanStore {
     ) -> Result<Value> {
         validate_repository(repository)?;
         ensure!(
-            runs.len() <= PAGE_SIZE,
+            runs.len() <= PAGE_SIZE as usize,
             "read at most {PAGE_SIZE} contracts at once"
         );
         let runs = runs
@@ -392,6 +444,16 @@ impl PlanStore {
         if let Some(previous) = previous.as_ref().filter(|e| e.state == "importing") {
             return Ok((previous.clone(), false));
         }
+        let updated_at = run["updated_at"].as_str().map(str::to_owned);
+        // Failed imports count while GitHub has not updated the run since.
+        let sync_attempts = match previous.as_ref().map(|e| &e.source) {
+            Some(ExecutionSource::Github {
+                run_updated_at,
+                sync_attempts,
+                ..
+            }) if *run_updated_at == updated_at => *sync_attempts,
+            _ => 0,
+        };
         let title = run["display_title"].as_str().unwrap_or_default();
         // A new import keeps the name and, until they are replaced, the runs
         // the previous import installed.
@@ -421,6 +483,9 @@ impl PlanStore {
             url: run["html_url"].as_str().unwrap_or_default().to_owned(),
             release_control_execution_id: title.strip_prefix("E2E · ").map(str::to_owned),
             stack: None,
+            run_updated_at: updated_at.clone(),
+            sync_attempts,
+            conclusion: run["conclusion"].as_str().map(str::to_owned),
             status: None,
             follow: Default::default(),
         };
@@ -432,22 +497,34 @@ impl PlanStore {
             .or(run["run_started_at"].as_str())
             .map(str::to_owned)
             .unwrap_or_else(now);
-        execution.finished_at = run["updated_at"].as_str().map(str::to_owned);
+        execution.finished_at = updated_at;
         execution.updated_at = now();
         self.write_execution(&execution).await?;
         Ok((execution, true))
     }
 
     /// Download and install the highest attempt of an import begun with
-    /// `begin_github_import`. The execution always ends terminal: `completed`,
-    /// or `failed` with the reason and whatever an earlier import installed.
+    /// `begin_github_import`. The execution always ends terminal: `completed`
+    /// (`interrupted`, with why, for a run GitHub did not conclude `success`),
+    /// or `failed` with the reason and whatever an earlier import installed;
+    /// a failure other than a rate limit counts in `sync_attempts`.
     pub(crate) async fn finish_github_import(&self, id: &str) -> Result<()> {
-        if let Err(error) = self.download_and_install(id, None).await {
-            tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "GitHub import failed");
+        let stopped = match &self.read_execution(id).await?.source {
+            ExecutionSource::Github { conclusion, .. } => stopped_by(conclusion.as_deref()),
+            _ => None,
+        };
+        if let Err(error) = self.download_and_install(id, stopped).await {
+            let error = format!("{error:#}");
+            tracing::warn!(execution_id = %id, %error, "GitHub import failed");
             let _guard = self.lock.lock().await;
             let mut execution = self.read_execution(id).await?;
+            if let ExecutionSource::Github { sync_attempts, .. } = &mut execution.source {
+                if !rate_limited(&error) {
+                    *sync_attempts += 1;
+                }
+            }
             execution.state = "failed".into();
-            execution.error = Some(format!("{error:#}"));
+            execution.error = Some(error);
             execution.updated_at = now();
             self.write_execution(&execution).await?;
         }
@@ -1033,9 +1110,22 @@ fn compare_refs(name: &str, base: &str, head: &str) -> Result<(String, String, S
 }
 
 /// One execution per repository and run: importing again replaces it.
-pub(super) fn import_id(repository: &str, run_id: u64) -> String {
+pub(crate) fn import_id(repository: &str, run_id: u64) -> String {
     let digest = artifact::sha256_bytes(format!("github:{repository}#{run_id}").as_bytes());
     format!("plan-{}", &digest[7..39])
+}
+
+/// Why a run GitHub concluded other than `success` did not run to its end.
+pub(super) fn stopped_by(conclusion: Option<&str>) -> Option<String> {
+    conclusion
+        .filter(|conclusion| *conclusion != "success")
+        .map(|conclusion| format!("The GitHub run ended {conclusion}."))
+}
+
+/// Whether a failed `gh` call hit GitHub's rate limit (primary or
+/// secondary): it says nothing about the run.
+pub(crate) fn rate_limited(error: &str) -> bool {
+    error.to_lowercase().contains("rate limit")
 }
 
 /// The artifact named `<stem>-gh-<attempt>` with the highest attempt among
@@ -1333,6 +1423,17 @@ mod tests {
             Some(("e2e-contract-exec-gh-1", 1))
         );
         assert_eq!(highest_attempt(names, |stem| stem == "missing"), None);
+    }
+
+    #[test]
+    fn a_rate_limit_is_told_apart_from_other_gh_failures() {
+        assert!(rate_limited(
+            "`gh api x` failed: gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+        ));
+        assert!(rate_limited(
+            "HTTP 403: You have exceeded a secondary rate limit."
+        ));
+        assert!(!rate_limited("`gh api x` failed: HTTP 502: Bad Gateway"));
     }
 
     #[test]
