@@ -1,5 +1,6 @@
 """What `iii: latest` resolves to when the newest candidate is not out yet."""
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -115,6 +116,53 @@ class LatestCliTests(unittest.TestCase):
         # A version the stack names is that version or nothing.
         with self.assertRaisesRegex(prepare_execution.ResolutionError, "iii/v0.24.4-rc.2 publishes no"):
             self.resolve({"0.24.4-rc.1": [ARCHIVE], "0.24.4-rc.2": []}, selector="0.24.4-rc.2")
+
+
+class KitStackTests(unittest.TestCase):
+    def test_kits_are_executor_inputs_not_compose_keys(self):
+        stack = {"iii": "latest", "kits": ["iii/deepwork@0.4.3"], "containers": {}}
+        self.assertEqual(prepare_execution.stack_kits(stack), ["iii/deepwork@0.4.3"])
+        self.assertEqual(prepare_execution.compose_of(stack), {"containers": {}})
+        for invalid in ("iii/deepwork", ["deepwork"], ["iii/deepwork", "iii/deepwork"]):
+            with self.subTest(invalid=invalid), self.assertRaises(prepare_execution.ResolutionError):
+                prepare_execution.stack_kits({"kits": invalid})
+
+    def test_lock_freezes_the_native_kit_lock_and_assets_into_every_contract(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contracts = root / "contracts"
+            assembled = root / "assembled"
+            contracts.mkdir()
+            (assembled / "kit-assets/agents").mkdir(parents=True)
+            profile = b"---\nid: deepwork\n---\n"
+            (assembled / "kit-assets/agents/deepwork.md").write_bytes(profile)
+            kits_lock = b"version: 1\nkits:\n  iii/deepwork:\n    requested: 0.4.3\n    version: 0.4.3\n"
+            (assembled / "kit-assets/kits.lock").write_bytes(kits_lock)
+            manifest = {
+                "lock_sha256": "sha256:" + hashlib.sha256(kits_lock).hexdigest(),
+                "files": [{"path": "agents/deepwork.md", "sha256": "sha256:" + hashlib.sha256(profile).hexdigest()}],
+            }
+            (assembled / "kit-assets/manifest.json").write_text(json.dumps(manifest))
+            compose = {"containers": {"kanban": {"worker": "package://kanban", "version": "^1.4"}}}
+            lock = {"containers": {"kanban": {"worker": "package://kanban", "resolved": {"version": "1.4.2"}}}}
+            (assembled / "worker-compose.yaml").write_text(yaml.safe_dump(compose))
+            (assembled / "worker-compose.lock").write_text(yaml.safe_dump(lock))
+            contract = {"runtime": {"kits": {"requested": ["iii/deepwork@0.4.3"]}}}
+            (contracts / "deepwork.json").write_text(json.dumps(contract))
+            (contracts / "resolution.json").write_text("{}")
+            (root / "execution.json").write_text(json.dumps({"iii": "0.25.0-rc.1"}))
+
+            prepare_execution.command_lock(SimpleNamespace(contract_dir=root, assembled=assembled))
+
+            frozen = json.loads((contracts / "deepwork.json").read_text())["runtime"]["kits"]
+            self.assertEqual(frozen["requested"], ["iii/deepwork@0.4.3"])
+            self.assertEqual(frozen["lock"]["kits"]["iii/deepwork"]["version"], "0.4.3")
+            self.assertEqual(frozen["assets"], manifest["files"])
+            self.assertEqual((root / "kit-assets/agents/deepwork.md").read_bytes(), profile)
+            self.assertEqual(json.loads((contracts / "resolution.json").read_text())["kits"], frozen)
+            self.assertEqual(yaml.safe_load((root / "stack.yaml").read_text())["kits"], ["iii/deepwork@0.4.3"])
 
 
 if __name__ == "__main__":

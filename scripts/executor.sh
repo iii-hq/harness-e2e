@@ -113,6 +113,14 @@ assemble() {
   HARNESS_E2E_CONTRACT="$contracts/$(jq -r '.campaign_ids[0]' "$contracts/resolution.json").json"
   HARNESS_E2E_CAMPAIGN_GROUP_ID=$(jq -r '.matrix.include[0].group_id' "$contracts/resolution.json")
   export HARNESS_E2E_CONTRACT HARNESS_E2E_CAMPAIGN_GROUP_ID HARNESS_E2E_ASSEMBLE_ONLY=1
+  # Kit planning must see the template's files so native collision handling
+  # can either apply cleanly or fail preparation with its review plan.
+  local template_revision
+  template_revision=""
+  if jq -e '.runtime.kits.requested | length > 0' "$HARNESS_E2E_CONTRACT" >/dev/null; then
+    template_revision=$(jq -r '.template.revision // empty' "$contracts/resolution.json")
+  fi
+  [[ -z "$template_revision" ]] || checkout iii-hq/templates "$template_revision" target/execution-template
   local attempt assembled=""
   for attempt in 1 2; do
     export HARNESS_E2E_ARTIFACTS_DIR="$PWD/target/harness-e2e-assembly/attempt-$attempt"
