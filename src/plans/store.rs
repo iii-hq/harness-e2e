@@ -680,7 +680,7 @@ impl PlanStore {
     /// Every stack: the repository's, read-only, then this Console's, newest
     /// first, each with what it declares and its warnings.
     pub(crate) async fn stacks(&self) -> Result<Vec<StackView>> {
-        let mut listed = stacks::REPOSITORY
+        let mut listed = stacks::repository()
             .iter()
             .map(|(id, yaml)| StackView::new(id, id, "repository", yaml, None))
             .collect::<Vec<_>>();
@@ -1361,7 +1361,7 @@ fn local_only(id: &str) -> Result<()> {
 /// Only a stack of this Console changes; the repository's are read-only.
 fn stack_local_only(id: &str) -> Result<()> {
     ensure!(
-        !stacks::REPOSITORY.iter().any(|(name, _)| *name == id),
+        !stacks::repository().contains_key(id),
         "{id} is a repository stack, read-only; copy it to edit a stack of this Console."
     );
     Ok(())
@@ -2910,13 +2910,10 @@ pub(crate) mod tests {
                 .iter()
                 .map(|stack| (stack.id.as_str(), stack.source.as_str()))
                 .collect::<Vec<_>>(),
-            vec![
-                ("default", "repository"),
-                ("harness-template", "repository"),
-                ("linkly", "repository"),
-                ("onboarding", "repository"),
-                ("deepwork", "repository")
-            ]
+            stacks::repository()
+                .keys()
+                .map(|id| (id.as_str(), "repository"))
+                .collect::<Vec<_>>()
         );
         assert!(listed.iter().all(|stack| stack.warnings.is_empty()));
         let copy = manager
@@ -2932,8 +2929,9 @@ pub(crate) mod tests {
             ("default copy", "local")
         );
         assert!(copy.id.starts_with("stack-"));
-        assert_eq!(copy.yaml, listed[0].yaml);
-        assert_eq!(copy.containers, listed[0].containers);
+        let default = listed.iter().find(|stack| stack.id == "default").unwrap();
+        assert_eq!(copy.yaml, default.yaml);
+        assert_eq!(copy.containers, default.containers);
 
         // The text stays as written; what may not run as written is a warning.
         let yaml = "# mine\niii: latest\ncontainers:\n  harness:\n    worker: path://../harness # a local build\n";
@@ -3028,14 +3026,10 @@ pub(crate) mod tests {
                 .into_iter()
                 .map(|stack| stack.id)
                 .collect::<Vec<_>>(),
-            vec![
-                "default".to_owned(),
-                "harness-template".into(),
-                "linkly".into(),
-                "onboarding".into(),
-                "deepwork".into(),
-                again.id
-            ]
+            stacks::repository()
+                .into_keys()
+                .chain([again.id])
+                .collect::<Vec<_>>()
         );
     }
 
@@ -3119,7 +3113,10 @@ pub(crate) mod tests {
             let error = manager.create_stack(request).await.unwrap_err();
             assert!(error.to_string().contains(reason), "{error}");
         }
-        assert_eq!(manager.stacks().await.unwrap().len(), 6);
+        assert_eq!(
+            manager.stacks().await.unwrap().len(),
+            stacks::repository().len() + 1
+        );
     }
 
     #[tokio::test]
@@ -5193,12 +5190,14 @@ esac"#,
     }
 
     fn github_parameters() -> ExecutionParameters {
-        let (name, yaml) = crate::plans::stacks::REPOSITORY[0];
+        let yaml = crate::plans::stacks::repository()
+            .remove("default")
+            .unwrap();
         ExecutionParameters {
             r#where: Where::Github,
             stack: Some(ExecutionStack {
-                name: name.into(),
-                yaml: yaml.into(),
+                name: "default".into(),
+                yaml,
                 sha256: String::new(),
             }),
             ..suite_parameters("pr")
@@ -5292,10 +5291,7 @@ esac"#,
         assert!(dispatch.contains("return_run_details=true"));
         assert!(dispatch.contains("ref=main"));
         assert!(dispatch.contains("inputs[suite]=pr"));
-        assert!(dispatch.contains(&format!(
-            "inputs[stack]={}",
-            crate::plans::stacks::REPOSITORY[0].0
-        )));
+        assert!(dispatch.contains("inputs[stack]=default"));
         assert!(dispatch.contains("inputs[model]=provider/model"));
         assert!(!dispatch.contains("execution_id"));
         assert!(log.contains("api repos/o/r/actions/runs/77"));
