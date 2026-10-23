@@ -408,8 +408,9 @@ try {
   // A reload that fails keeps the trend and says so over it.
   failing = 1
   await change()
-  // Trends reloads at most every 10 s: this change waits out the last one.
-  await page.getByText('Couldn’t reload the trend').waitFor({ timeout: 15_000 })
+  // Trends reloads at most every 10 s: skip the wait for the last one.
+  await page.clock.fastForward(10_000)
+  await page.getByText('Couldn’t reload the trend').waitFor()
   await summary.getByText('15 executions ', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Retry' }).click()
   await page
