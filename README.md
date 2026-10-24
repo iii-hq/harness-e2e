@@ -235,8 +235,8 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
-| Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | Proposal: the same tests nine independent times, to compare two Harness versions. |
-| Core runtime regression ×11 (harness comparison) | `regression-x11` | Proposal: the regression eleven independent times, to compare two Harness versions. |
+| Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | All 14 cases nine independent times, on demand when a Harness release is judged, to compare two Harness versions. |
+| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Context capacity (compaction) | `context-capacity` | Kanban chapters 1, 4 and 7 and context pressure, on the `context-capacity` stack. |
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
@@ -253,6 +253,14 @@ the current Harness. See [suites](dashboard/README.md#suites).
 cargo run --locked -- test-plan list
 cargo run --locked -- test-plan materialize --suite software-engineering
 ```
+
+The plan's digest, `definition_sha256`, covers the whole document, and every
+suite's `profile_sha256` folds it in. Any edit to the plan, such as adding the
+comparison and capacity suites or rewording a purpose, gives every suite a new
+`profile_sha256`, even a suite whose tests did not change. Release Control
+groups executions by `profile_sha256`, so the first release with the new plan
+starts a new cohort for every suite. Compare across that release test by test,
+by `behavior_sha256`, not suite by suite.
 
 The `software-engineering` suite runs each selected case once, with no
 technical retries: the seven Kanban cases, Registry implementation and verification,
@@ -286,10 +294,33 @@ null delivery (no call, one turn, a reply of `done` or one that only claims the
 result), which must earn 0 and stay `task_incomplete`, and a reference
 delivery, which must complete with 100; both run ten times and a result that
 changes between rounds fails as drift.
-The evaluators of the Registry, trending-topics, chess, form-flow,
-state-machine, Linkly and onboarding tests score what a live stack, Docker or
-a browser left behind, so the test names each of them, with the reason and the
-controls it has instead (`LIVE_CONTROLS` in `src/test_plan.rs`).
+The evaluators of the seven Kanban chapters and of the Registry,
+trending-topics, chess, form-flow, state-machine, Linkly and onboarding tests
+score what a live stack, Docker or a browser left behind. For each of them the
+test names the reason and the deterministic controls CI runs instead
+(`LIVE_CONTROLS` in `src/test_plan.rs`), and checks that CI runs every control
+it names:
+
+- Registry implementation and verification: `tests/python/test_registry_validation.py`
+  scores the empty, the claim-only and the all-passing report, and
+  `tests/python/test_registry_feature_probe.py` the feature probe's failure
+  regressions.
+- Trending topics: the evaluator, lifecycle and focus controls
+  (`evaluator.test.mjs`, `test_lifecycle.py`,
+  `tests/python/test_trending_focus_eval_regressions.py`). The reference app
+  in `validate-controls.mjs` needs the private e2e-fixture app and runs by
+  hand.
+- Chess: the browser controls of `tests/fixtures/chess-eval/negative-control.mjs`,
+  through `tests/python/test_chess_eval_regressions.py`.
+- Form flow and state machine: the browser controls of
+  `tests/fixtures/visual-worker-eval/regressions.mjs`, through
+  `tests/python/test_visual_worker_eval_regressions.py`.
+- Kanban, all seven chapters: the browser controls and scoring regressions in
+  `tests/python/test_kanban_browser_flows.py` and
+  `tests/python/test_kanban_scoring_regressions.py`. The base and reference
+  controls of `scripts/kanban_eval/run.py` need Docker and the fixture and run
+  by hand.
+- Linkly and onboarding: no CI control.
 
 The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 `case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
