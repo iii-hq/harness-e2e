@@ -15,24 +15,42 @@ Also write `output/checks.json` with one entry per required check ID:
     {
       "id": "implementation.same_version",
       "status": "pass",
-      "command": "curl -sS http://127.0.0.1:<api_port>/w/orders-worker/compare/1.0.0...1.0.0 > output/same-version-response.json",
+      "command": "python verify-same-version.py",
       "steps": "GET /w/orders-worker/compare/1.0.0...1.0.0; verify HTTP 200 and changes=[]",
-      "evidence": ["output/same-version-response.json"]
+      "evidence": ["execution-evidence/<receipt_id>/implementation.same_version.json"]
     }
   ]
 }
 ```
 
-Use `pass`, `fail`, or `blocked` for status. Evidence paths must name real files under `output/`, relative to `/workspace`. The `command` must exactly match a command you executed through the scenario tool; record expected/observed results in `steps`. A blocked check is not an executed check. Report each ID once; multiple symptoms of the same check belong in that entry.
+Each scenario-tool call receives a private `HARNESS_EVIDENCE_DIR`. Write one JSON proof per check there. The tool accepts at most 64 regular files, 256 total directory entries, 1 MiB per file and 8 MiB total; directories and files must not be symbolic links. It collects a bounded snapshot and materializes those exact bytes at controller-owned `execution-evidence/<receipt_id>/` paths, then returns their final paths, sizes, and SHA-256 values in `artifacts`; use those returned paths in `checks.json`. Files written directly to `output/` are deliverables but are not execution evidence.
 
-If a tool call runs a shell batch, copy its entire `command` argument verbatim, including setup lines, newlines, and redirects. A subcommand or script filename alone does not identify that recorded call. Several checks may reference the same complete command when its evidence covers each check.
+Use `pass`, `fail`, or `blocked` for status. The `command` must exactly match the scenario-tool call that produced the cited artifact; a non-zero exit is valid evidence of an observed failure. Record expected and observed results in non-empty `steps`. Report each required ID exactly once, and give each check its own proof file with this shape:
+
+```json
+{
+  "check_id": "implementation.same_version",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "http_status",
+      "passed": true,
+      "expected": {"status": 200},
+      "observed": {"status": 200}
+    }
+  ]
+}
+```
+
+Assertions must have unique IDs and contain `expected` and `observed` JSON values. Empty arrays, nulls, strings, and other JSON values are valid. Equality is exact and type-sensitive: a passing assertion has equal values, while a failing assertion has different values. Every assertion in a `pass` proof passes, while a `fail` proof contains at least one failing assertion. `checks.json`, `report.md`, screenshots, and free-form text do not count as these per-check proofs. A blocked check is not an executed check.
+
+If a tool call runs a batch that produces several proof files, multiple checks may reference that same complete command. Copy its entire `command` argument verbatim and cite the separate returned artifact for each check.
 
 Required check IDs and questions:
 
 - `implementation.same_version`: Does comparing a version with itself return no changes?
 - `implementation.function_removal`: Does the API identify a removed function?
 - `implementation.required_impact`: Does a newly required input property receive the prescribed impact?
-- `implementation.object_order`: Does changing only object-key order preserve equality?
 - `implementation.required_order`: Does changing only schema required-array order preserve equality?
 - `implementation.enum_order`: Does changing only schema enum-array order preserve equality?
 - `implementation.config_array_order`: Does changing configuration-array order produce a difference?

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   comparisonOrigin,
+  currentDashboardRoute,
   hashForComparison,
   hashForExecution,
   hashForStacks,
@@ -10,10 +11,22 @@ import {
   hashForVersionComparison,
   hashForWorkspace,
   hashFrom,
+  replaceDashboardHash,
+  replaceRouteParams,
   routeFromHash,
   routeRenderIdentity,
   trendsOrigin,
 } from '@/hooks/use-hash-route'
+
+const TRENDS = {
+  page: 'trends',
+  request: {},
+  period: { range: 'all' },
+  base: null,
+  group: 'release',
+  mode: 'overview',
+  metric: 'score',
+}
 
 describe('a comparison opened from Trends', () => {
   it('goes back to the Trends view it came from, and to nothing else', () => {
@@ -53,8 +66,16 @@ describe('a run page opened from a comparison', () => {
 })
 
 describe('dashboard hash routes', () => {
-  it('opens executions in the Console and rejects standalone routes', () => {
-    expect(routeFromHash('#/ext/harness-e2e')).toEqual({
+  it('opens the release overview in the Console and rejects standalone routes', () => {
+    expect(routeFromHash('#/ext/harness-e2e')).toEqual(TRENDS)
+    expect(routeFromHash('#/ext/harness-e2e?metric=turns')).toMatchObject({
+      mode: 'overview',
+      metric: 'turns',
+    })
+    expect(routeFromHash('#/ext/harness-e2e?metric=nope')).toMatchObject({
+      metric: 'score',
+    })
+    expect(routeFromHash('#/ext/harness-e2e/executions')).toEqual({
       page: 'workspace',
       view: 'executions',
     })
@@ -136,13 +157,7 @@ describe('dashboard hash routes', () => {
     expect(hashForStacks()).toBe('#/ext/harness-e2e/stacks')
     expect(routeFromHash(hashForStacks())).toEqual({ page: 'stacks' })
     expect(hashForTrends()).toBe('#/ext/harness-e2e/trends')
-    expect(routeFromHash(hashForTrends())).toEqual({
-      page: 'trends',
-      request: {},
-      period: { range: '30d' },
-      base: null,
-      group: 'execution',
-    })
+    expect(routeFromHash(hashForTrends())).toEqual(TRENDS)
     expect(
       routeFromHash(
         hashForTrends(
@@ -169,7 +184,9 @@ describe('dashboard hash routes', () => {
       },
       period: { since: '2026-09-01', until: '2026-09-10' },
       base: 'github-35821773226-2',
-      group: 'execution',
+      group: 'release',
+      mode: 'series',
+      metric: 'score',
     })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()
@@ -185,5 +202,39 @@ describe('dashboard hash routes', () => {
     expect(routeRenderIdentity({ page: 'workspace', view: 'tests' })).toBe(
       'workspace:tests',
     )
+  })
+})
+
+describe('a page writing its view into the hash', () => {
+  it('leaves a link that landed before the route read it', () => {
+    const location = { pathname: '/', search: '', hash: hashForTrends() }
+    vi.stubGlobal('window', {
+      location,
+      history: {
+        state: null,
+        replaceState: (_state: unknown, _title: string, url: string) => {
+          location.hash = url.slice(url.indexOf('#'))
+        },
+      },
+    })
+    try {
+      currentDashboardRoute()
+      // A link lands on a series; its hashchange is still queued when the
+      // overview, a render behind, writes its own view.
+      const series = hashForTrends(new URLSearchParams({ range: '30d' }))
+      location.hash = series
+      replaceRouteParams(new URLSearchParams())
+      replaceDashboardHash(hashForTrends())
+      expect(location.hash).toBe(series)
+      // The hashchange: the route reads the link, and the page writes again.
+      currentDashboardRoute()
+      const pinned = new URLSearchParams({ suite: 'regression', range: '30d' })
+      replaceRouteParams(pinned)
+      expect(location.hash).toBe(hashForTrends(pinned))
+      replaceRouteParams(new URLSearchParams({ range: '30d' }))
+      expect(location.hash).toBe(series)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

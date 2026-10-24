@@ -8,12 +8,14 @@
 import { shortDefinition } from '@/lib/definition-digest'
 import { betterWhen } from '@/lib/execution-comparison'
 import {
+  formatCost,
   formatDateTime,
   formatDay,
   formatDuration,
   formatTokens,
   plural,
 } from '@/lib/format'
+import { compareVersions } from '@/lib/stack-sheet'
 
 /* ------------------------------------------------------------- contract */
 
@@ -62,6 +64,20 @@ export type TrendMeasures = {
   function_calls: number | null
   function_call_errors: number | null
   turns_mean: number | null
+  /** Output tokens per run. */
+  output_tokens_mean: number | null
+  /** Tokens read from the prompt cache per run. */
+  cache_read_tokens_mean: number | null
+  /** Tokens written to the prompt cache per run. */
+  cache_write_tokens_mean: number | null
+  /** Reasoning tokens per run. */
+  reasoning_tokens_mean: number | null
+  /** USD per run; null when the model has no pricing. */
+  cost_usd_mean: number | null
+  /** Harness retries per run. */
+  validation_retries_mean: number | null
+  /** Invalid attempts re-run, per run. */
+  technical_retries_mean: number | null
 }
 
 export type TrendTestState =
@@ -78,6 +94,9 @@ export type TrendTest = {
   behavior_sha256: string | null
 }
 
+/** Who ran an execution, and whether it speaks for a release. */
+export type TrendRole = 'release_control' | 'ci_other' | 'local' | 'docker'
+
 export type TrendPoint = {
   execution_id: string
   label: string | null
@@ -88,6 +107,7 @@ export type TrendPoint = {
   profile: string | null
   source: {
     kind: 'local' | 'docker' | 'github'
+    role: TrendRole
     run_id?: number
     run_attempt?: number
     release_control_execution_id?: string
@@ -98,6 +118,9 @@ export type TrendPoint = {
   /** Identity per worker, the engine and harness-e2e left out; null = not
    *  recorded. */
   workers: Record<string, string> | null
+  /** The Harness release as one plain semver, without a leading `v`; null
+   *  for a commit (`@sha7`), joined builds or none recorded. */
+  release: string | null
   planned: string[] | null
   runs: number
   /** Technically valid runs. */
@@ -268,7 +291,7 @@ export type TrendPeriod =
   | { range: TrendRange }
   | { since: string; until: string }
 
-export const DEFAULT_PERIOD: TrendPeriod = { range: '30d' }
+export const DEFAULT_PERIOD: TrendPeriod = { range: 'all' }
 
 const RANGE_DAYS: Record<Exclude<TrendRange, 'all'>, number> = {
   '7d': 7,
@@ -712,11 +735,20 @@ export type TrendMetricId =
   | 'duration'
   | 'error_rate'
   | 'input_tokens'
-  | 'function_calls'
   | 'turns'
+  | 'output_tokens'
+  | 'cache_read_tokens'
+  | 'cache_write_tokens'
+  | 'reasoning_tokens'
+  | 'cost'
+  | 'validation_retries'
+  | 'technical_retries'
+  | 'function_calls'
 
 export type TrendMetric = {
   id: TrendMetricId
+  /** `main` measures are charted up front, `more` ones under More. */
+  tier: 'main' | 'more'
   label: string
   note: string
   better: 'higher' | 'lower' | 'neither'
@@ -738,10 +770,12 @@ const measure =
     return typeof value === 'number' && Number.isFinite(value) ? value : null
   }
 
-/** Score first; the large chart shows one, the six small ones the rest. */
+/** Score first; the large chart shows one. The six `main` measures lead,
+ *  the `more` ones follow under More. */
 export const TREND_METRICS: TrendMetric[] = [
   {
     id: 'score',
+    tier: 'main',
     label: 'Score',
     note: 'mean of the counted runs',
     better: betterWhen('score'),
@@ -752,6 +786,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'completed',
+    tier: 'main',
     label: 'Tests completed',
     note: 'counted runs that completed their task',
     better: betterWhen('completed'),
@@ -763,6 +798,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'duration',
+    tier: 'main',
     label: 'Run duration',
     note: 'mean per run',
     better: betterWhen('duration'),
@@ -773,6 +809,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'error_rate',
+    tier: 'main',
     label: 'Error call rate',
     note: 'failed function calls ÷ calls',
     better: betterWhen('function_errors'),
@@ -787,6 +824,7 @@ export const TREND_METRICS: TrendMetric[] = [
   },
   {
     id: 'input_tokens',
+    tier: 'main',
     label: 'Input tokens',
     note: 'mean per run',
     better: betterWhen('tokens'),
@@ -796,21 +834,100 @@ export const TREND_METRICS: TrendMetric[] = [
     delta: 'percent',
   },
   {
-    id: 'function_calls',
-    label: 'Function calls',
+    id: 'turns',
+    tier: 'main',
+    label: 'Turns',
     note: 'mean per run',
-    better: betterWhen('function_calls'),
-    value: measure('function_calls_mean'),
+    better: betterWhen('turns'),
+    value: measure('turns_mean'),
     figure: fixed1,
     axis: whole,
     delta: 'percent',
   },
   {
-    id: 'turns',
-    label: 'Turns',
+    id: 'output_tokens',
+    tier: 'more',
+    label: 'Output tokens',
     note: 'mean per run',
-    better: betterWhen('turns'),
-    value: measure('turns_mean'),
+    better: betterWhen('output_tokens'),
+    value: measure('output_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'cache_read_tokens',
+    tier: 'more',
+    label: 'Cache read tokens',
+    note: 'mean per run',
+    better: betterWhen('cache_read'),
+    value: measure('cache_read_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'cache_write_tokens',
+    tier: 'more',
+    label: 'Cache write tokens',
+    note: 'mean per run',
+    better: betterWhen('cache_write'),
+    value: measure('cache_write_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'reasoning_tokens',
+    tier: 'more',
+    label: 'Reasoning tokens',
+    note: 'mean per run',
+    better: betterWhen('reasoning_tokens'),
+    value: measure('reasoning_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'cost',
+    tier: 'more',
+    label: 'Cost',
+    note: 'mean per run, USD; none without model pricing',
+    better: betterWhen('cost'),
+    value: measure('cost_usd_mean'),
+    figure: formatCost,
+    axis: formatCost,
+    delta: 'percent',
+  },
+  {
+    id: 'validation_retries',
+    tier: 'more',
+    label: 'Validation retries',
+    note: 'Harness retries, mean per run',
+    better: betterWhen('validation_retries'),
+    value: measure('validation_retries_mean'),
+    figure: fixed1,
+    axis: fixed1,
+    delta: 'points',
+  },
+  {
+    id: 'technical_retries',
+    tier: 'more',
+    label: 'Technical retries',
+    note: 'invalid attempts re-run, mean per run',
+    better: betterWhen('technical_retries'),
+    value: measure('technical_retries_mean'),
+    figure: fixed1,
+    axis: fixed1,
+    delta: 'points',
+  },
+  {
+    id: 'function_calls',
+    tier: 'more',
+    label: 'Function calls',
+    note: 'mean per run',
+    better: betterWhen('function_calls'),
+    value: measure('function_calls_mean'),
     figure: fixed1,
     axis: whole,
     delta: 'percent',
@@ -951,7 +1068,8 @@ export function majorsFirst(changes: TrendChange[]) {
 /* ---------------------------------------------------------------- axes */
 
 /** The value axis: scores around what was scored, tests from 0 to the
- *  plan, the error rate from 0, anything else padded by 30% of its span. */
+ *  plan (a share of them from 0 to 100), the error rate from 0, anything
+ *  else padded by 30% of its span. */
 export function domain(
   metric: TrendMetric,
   values: number[],
@@ -965,9 +1083,12 @@ export function domain(
     if (hi - lo < 4) lo = Math.max(0, hi - 4)
   } else if (metric.id === 'completed') {
     // `planned` counts runs (planned tests × runs per test), as `completed`
-    // does; the plan's test list does not.
+    // does; the plan's test list does not. A share runs to 100.
     lo = 0
-    hi = Math.max(hi, ...points.map((point) => point.measures?.planned ?? 0))
+    hi =
+      metric.delta === 'tests'
+        ? Math.max(hi, ...points.map((point) => point.measures?.planned ?? 0))
+        : 100
   } else if (metric.id === 'error_rate') {
     lo = 0
     hi = Math.max(1, Math.ceil(hi * 1.25))
@@ -1025,12 +1146,17 @@ export type ChartSegment = {
   faded: boolean
 }
 
-/** The line between consecutive points with a value. */
-export function segments(values: Array<number | null>): ChartSegment[] {
+/** The line between consecutive points with a value; a skipped point is
+ *  left out without fading the line across it. */
+export function segments(
+  values: Array<number | null>,
+  skip?: (index: number) => boolean,
+): ChartSegment[] {
   const out: ChartSegment[] = []
   let last = -1
   let gap = false
   values.forEach((value, index) => {
+    if (skip?.(index)) return
     if (value === null) {
       gap = true
       return
@@ -1186,7 +1312,7 @@ export const GROUP_CHOICES: Array<{
   {
     value: 'release',
     label: 'Harness release',
-    sub: 'one point per Harness version, in the order they first ran',
+    sub: 'one point per Harness release, in version order',
   },
 ]
 
@@ -1204,21 +1330,69 @@ export type TrendGroup = {
 
 export function groupFromParams(params: URLSearchParams): TrendGroupBy {
   const group = params.get('group')
-  return group === 'day' || group === 'release' ? group : 'execution'
+  return group === 'execution' || group === 'day' ? group : 'release'
 }
 
-export function withGroup(params: URLSearchParams, group: TrendGroupBy) {
-  if (group !== 'execution') params.set('group', group)
+/** The release grouping is the default, named only when it was asked for. */
+export function withGroup(
+  params: URLSearchParams,
+  group: TrendGroupBy,
+  asked = false,
+) {
+  if (group !== 'release' || asked) params.set('group', group)
   return params
 }
 
-/** Executions with no recorded Harness version: no release holds them. */
-export function unversioned(points: TrendPoint[]) {
-  return points.filter((point) => !point.workers?.harness)
+/** Whether Trends opens on the release overview or on one series: any
+ *  series, stack, period, grouping or baseline in the hash names a series. */
+export function trendsModeFromParams(
+  params: URLSearchParams,
+): 'overview' | 'series' {
+  const period = periodFromParams(params)
+  return Object.keys(trendsRequestFromParams(params)).length > 0 ||
+    !('range' in period && period.range === 'all') ||
+    groupFromParams(params) !== 'release' ||
+    baseFromParams(params) !== null
+    ? 'series'
+    : 'overview'
 }
 
-/** One point per day or per Harness release (an execution with no recorded
- *  version is in none); each execution as it is when grouping by execution. */
+/** Executions with no single Harness release: no release holds them. */
+export function unversioned(points: TrendPoint[]) {
+  return points.filter((point) => !point.release)
+}
+
+/** What the charts group by, and the quiet line on what that leaves out:
+ *  the default release grouping draws each execution of a series that
+ *  recorded no Harness release; one asked for keeps to releases. */
+export function shownGroup(
+  points: TrendPoint[],
+  group: TrendGroupBy,
+  asked: boolean,
+): { by: TrendGroupBy; note: string | null } {
+  const without = group === 'release' ? unversioned(points).length : 0
+  if (!asked && without > 0 && without === points.length)
+    return {
+      by: 'execution',
+      note: 'No Harness release is recorded in this series, so each execution is drawn.',
+    }
+  return {
+    by: group,
+    note: without
+      ? `${plural(without, 'execution')} recorded no single Harness release, so no release holds ${without === 1 ? 'it' : 'them'}.`
+      : null,
+  }
+}
+
+/** `1.8.36` as `v1.8.36`; a commit (`@852b87e*`) as it is. */
+export function releaseText(version: string) {
+  return /^\d+\.\d+\.\d+$/.test(version) ? `v${version}` : version
+}
+
+/** One point per day, or per Harness release in version order (an
+ *  execution with no single release is in none); each execution as it is
+ *  when grouping by execution. A local or Docker run never counts in a
+ *  release: it stays a point of its own after the release it ran. */
 export function groupPoints(
   points: TrendPoint[],
   by: TrendGroupBy,
@@ -1226,24 +1400,28 @@ export function groupPoints(
 ): TrendPoint[] {
   if (by === 'execution') return points
   const groups = new Map<string, TrendPoint[]>()
+  const rings = new Map<string, TrendPoint[]>()
   for (const point of points) {
     const key =
-      by === 'day'
-        ? localDay(new Date(point.started_at))
-        : point.workers?.harness
+      by === 'day' ? localDay(new Date(point.started_at)) : point.release
     if (!key) continue
-    const members = groups.get(key)
+    const into =
+      by === 'release' && point.source.kind !== 'github' ? rings : groups
+    const members = into.get(key)
     if (members) members.push(point)
-    else groups.set(key, [point])
+    else into.set(key, [point])
   }
-  return [...groups].map(([key, members]) =>
-    consolidate(
-      by,
-      key,
-      by === 'day' ? formatDay(members[0].started_at, now) : `harness ${key}`,
-      members,
-    ),
-  )
+  const keys = [...new Set([...groups.keys(), ...rings.keys()])]
+  if (by === 'release') keys.sort((one, two) => compareVersions(one, two) ?? 0)
+  return keys.flatMap((key) => {
+    const members = groups.get(key)
+    const group = !members
+      ? []
+      : by === 'day'
+        ? [consolidate(by, key, formatDay(members[0].started_at, now), members)]
+        : [consolidate(by, releaseText(key), releaseText(key), members)]
+    return [...group, ...(rings.get(key) ?? [])]
+  })
 }
 
 /** A group's measures over its counted runs: means weighted by each
@@ -1339,6 +1517,13 @@ function consolidate(
           function_calls: total((m) => m.function_calls),
           function_call_errors: total((m) => m.function_call_errors),
           turns_mean: weighted((m) => m.turns_mean),
+          output_tokens_mean: weighted((m) => m.output_tokens_mean),
+          cache_read_tokens_mean: weighted((m) => m.cache_read_tokens_mean),
+          cache_write_tokens_mean: weighted((m) => m.cache_write_tokens_mean),
+          reasoning_tokens_mean: weighted((m) => m.reasoning_tokens_mean),
+          cost_usd_mean: weighted((m) => m.cost_usd_mean),
+          validation_retries_mean: weighted((m) => m.validation_retries_mean),
+          technical_retries_mean: weighted((m) => m.technical_retries_mean),
         }
       : null,
     tests,
@@ -1357,7 +1542,7 @@ function consolidate(
 
 /** Under the plot: where each day starts, or each release's version. */
 export function axisMarks(points: TrendPoint[], now = new Date()) {
-  if (points[0]?.group?.by === 'release')
+  if (points.some((point) => point.group?.by === 'release'))
     return points.map((point, index) => ({
       index,
       text: point.group?.key ?? '',

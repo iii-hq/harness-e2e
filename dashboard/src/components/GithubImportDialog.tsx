@@ -325,7 +325,7 @@ function conclusionOf(conclusion: string | null): {
 }
 
 /** `gh` text with its `commands` set in mono. */
-function withCode(text: string): ReactNode {
+export function withCode(text: string): ReactNode {
   return text.split('`').map((part, index) =>
     index % 2 ? (
       // biome-ignore lint/suspicious/noArrayIndexKey: fixed pieces of one message

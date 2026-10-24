@@ -67,6 +67,13 @@ use crate::test_plan::{self, MasterPlan};
 #[exclude = "*/__pycache__/*"]
 struct Scripts;
 
+/// Runner-owned profiles copied into the isolated Directory by the executor.
+#[derive(rust_embed::Embed)]
+#[folder = "config/agents/"]
+#[include = "*.md"]
+#[exclude = "*/*"]
+struct Agents;
+
 /// The executor image's definition: its digest names the image.
 const DOCKERFILE: &str = include_str!("../../../Dockerfile");
 
@@ -494,13 +501,18 @@ impl PlanStore {
             .with_context(|| format!("create {}", checkout.display()))?;
         fs::create_dir_all(folder.join("logs"))?;
         fs::write(checkout.join("Dockerfile"), DOCKERFILE)?;
-        let stacks = stacks::REPOSITORY
-            .iter()
-            .map(|(id, yaml)| (format!("stacks/{id}.yaml"), *yaml));
+        let stacks = stacks::repository()
+            .into_iter()
+            .map(|(id, yaml)| (format!("stacks/{id}.yaml"), yaml.into_bytes()));
+        let agents = Agents::iter().map(|name| {
+            let file = Agents::get(&name).expect("embedded agent profile");
+            (format!("config/agents/{name}"), file.data.into_owned())
+        });
         for (path, content) in SUPPORT
             .iter()
-            .map(|(path, content)| ((*path).to_owned(), *content))
+            .map(|(path, content)| ((*path).to_owned(), content.as_bytes().to_vec()))
             .chain(stacks)
+            .chain(agents)
         {
             let path = checkout.join(path);
             fs::create_dir_all(path.parent().context("support file path")?)?;
@@ -2038,6 +2050,10 @@ mod tests {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_writes: Mutex::new(()),
+            saved_revision: AtomicU64::new(0),
+            saved_stale: Default::default(),
         })
     }
 
@@ -2047,7 +2063,7 @@ mod tests {
             r#where: Where::Docker,
             stack: Some(ExecutionStack {
                 name: "default".into(),
-                yaml: stacks::REPOSITORY[0].1.into(),
+                yaml: stacks::repository().remove("default").unwrap(),
                 sha256: "sha256:ignored".into(),
             }),
             ..suite_parameters(suite)
@@ -2136,7 +2152,7 @@ mod tests {
         let inputs = read_json(&folder.join("inputs.json")).unwrap();
         assert_eq!(inputs["suite"], "pr");
         assert_eq!(inputs["model"], "provider/model");
-        assert_eq!(inputs["stack"], stacks::REPOSITORY[0].1);
+        assert_eq!(inputs["stack"], stacks::repository()["default"]);
         assert!(!fs::read_to_string(folder.join("inputs.json"))
             .unwrap()
             .contains("9f1c"));
@@ -2206,7 +2222,7 @@ mod tests {
         );
         // The stack as its contract recorded it, named as it was picked.
         let stack = parameters.stack.as_ref().unwrap();
-        let recorded = format!("# assembled\n{}", stacks::REPOSITORY[0].1);
+        let recorded = format!("# assembled\n{}", stacks::repository()["default"]);
         assert_eq!(
             (stack.name.as_str(), stack.yaml.as_str()),
             ("default", recorded.as_str())
@@ -3636,6 +3652,90 @@ mod tests {
             assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
         }
         assert_eq!(done.slots[1].state, "not_run");
+    }
+
+    #[tokio::test]
+    async fn checkout_packages_all_stacks_and_profiles_outside_the_repository() {
+        const CHILD_ROOT: &str = "HARNESS_E2E_CHECKOUT_ASSETS_TEST_ROOT";
+        let Some(root) = std::env::var_os(CHILD_ROOT) else {
+            // Isolate the working directory change from parallel Rust tests.
+            let root = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "plans::store::docker::tests::checkout_packages_all_stacks_and_profiles_outside_the_repository",
+                    "--nocapture",
+                ])
+                .current_dir(root.path())
+                .env(CHILD_ROOT, root.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(root
+                .path()
+                .join("override/checkout/config/agents/deepwork-e2e.md")
+                .is_file());
+            return;
+        };
+        let root = PathBuf::from(root);
+        assert_eq!(std::env::current_dir().unwrap(), root);
+        let scripts = root.join("custom-scripts");
+        fs::create_dir(&scripts).unwrap();
+        fs::write(scripts.join("executor.sh"), "echo custom\n").unwrap();
+        for (name, scripts_dir) in [("embedded", None), ("override", Some(scripts.clone()))] {
+            let folder = root.join(name);
+            let data = folder.join("data");
+            let store = docker_store(
+                &data,
+                Arc::new(FakeRunner::new(data.clone())),
+                Arc::new(FakeLauncher::default()),
+                DockerSettings {
+                    scripts_dir,
+                    ..DockerSettings::default()
+                },
+            );
+            store.write_checkout(&folder).await.unwrap();
+            for (directory, extension) in [("stacks", "yaml"), ("config/agents", "md")] {
+                let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(directory);
+                let mut expected = fs::read_dir(&source)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| {
+                        path.is_file() && path.extension().is_some_and(|ext| ext == extension)
+                    })
+                    .map(|path| path.file_name().unwrap().to_owned())
+                    .collect::<Vec<_>>();
+                expected.sort();
+                let destination = folder.join("checkout").join(directory);
+                let mut exported = fs::read_dir(&destination)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect::<Vec<_>>();
+                exported.sort();
+                assert_eq!(exported, expected, "{name}/{directory}");
+                for file in expected {
+                    assert_eq!(
+                        fs::read(source.join(&file)).unwrap(),
+                        fs::read(destination.join(&file)).unwrap(),
+                        "{file:?}"
+                    );
+                }
+            }
+            if name == "override" {
+                assert_eq!(
+                    fs::read_to_string(folder.join("checkout/scripts/executor.sh")).unwrap(),
+                    "echo custom\n"
+                );
+                assert!(!folder.join("checkout/scripts/run_in_image.sh").exists());
+            } else {
+                assert!(folder.join("checkout/scripts/run_in_image.sh").is_file());
+            }
+        }
     }
 
     #[tokio::test]

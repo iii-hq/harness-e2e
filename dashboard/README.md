@@ -24,9 +24,9 @@ pnpm test
 pnpm build
 ```
 
-The Console routes live under `#/ext/harness-e2e`. The page exposes Tests,
-Executions, Suites and Stacks and keeps entity detail inside the same extension
-route.
+The Console routes live under `#/ext/harness-e2e`. The page opens on
+**Trends**, the release overview (see below), and exposes Tests, Executions,
+Suites and Stacks besides; entity detail stays inside the same extension route.
 
 **Run tests** executes a suite, or scenarios ticked by hand, against the
 Harness already running at `III_URL`. Its first field is the suite (see
@@ -121,12 +121,20 @@ an `importing` execution at once; the worker downloads the run's bundle and
 installs its native runs like finished local runs. An imported execution is the
 same record as one run here: the list, the report, evidence and
 `e2e::dashboard::execution-rename` treat both alike, and its origin is shown as
-text (`local` or `GitHub #<run>` with a link). `gh` errors are shown as they come.
+text (`This harness`, `Docker` or `GitHub #<run>` with a link, plus
+`· Release Control` when Release Control started the run). In the list,
+`&origin=release-control` or `&origin=outside-release-control` filters by it
+(the second is every other GitHub run: pull requests, runs started here, hand
+dispatches), and a failed import nothing else explains reads its error.
+`gh` errors are shown as they come.
 `e2e::dashboard::ci-sync-set` turns CI sync on or off, `ci-sync-check` checks
 GitHub now, and `ci-sync-status-get` reads its status: the phase (`off`,
-`quick`, `backfill`, `keeping_up`), whether `gh` is signed in, the last and
-next check, imported, failed and remaining runs, and a rate-limit pause. The
-status is kept in memory and filled again on the first check after a restart.
+`quick`, `backfill`, `keeping_up`), whether `gh` is signed in (null when `gh`
+is missing or does not answer), the last and next check, imported, failed,
+skipped (left no results) and remaining runs, a rate-limit pause, and a
+message only for what stopped a whole check (`gh` not ready, a listing that
+failed; a run whose import failed only counts as failed). The status is kept
+in memory and filled again on the first check after a restart.
 
 Tick two executions and **compare** (`#/compare/<a>/<b>`): the first is A, the
 base. Both are read with `e2e::dashboard::execution-get` and compared the way
@@ -138,6 +146,49 @@ again. Screenshots a run's deliverables declare are read on demand through
 `e2e::dashboard::evidence-read`, which serves only files the run's report
 declares, inside that execution's directory, up to 10 MB. **Rerun selected**
 opens Run again with B's parameters and only the ticked scenarios.
+
+**Trends** opens on the release overview. Under **Harness evolution**, the
+verdict names the latest Harness release against the previous one and the main
+measures that moved, better or worse ("no measure moved" only when some were
+compared), then what it compared. The line below
+plots one measure (six tabs, the rest under More), one point per release with
+Release Control results, oldest first. Each step reads against the release
+before it, over the combinations of suite, model, profile and stack both ran
+and, within them, the tests both planned whose definition did not change; a
+test one release planned but never ran counts as not completed there. Every
+combination weighs the same, the Completed share and the error rate included,
+and each measure reads the combinations both releases have it for; a count
+such as "41 of 48" is a sum. A point's label and panel give its step, and the callout
+beside the line gives the latest one on every main measure, or says there is
+nothing to compare; **What changed**
+opens the latest release's panel: its versions against the previous release and
+each combination the verdict compared. A hollow ring is a local or Docker
+execution, beside the release it ran with; the line leaves it out and it never
+counts. A diamond over a release marks a combination that joined or left. A
+strip counts the **CI runs outside Release Control** and links to them in the
+Executions list.
+
+The overview is the page's address (`#/`): a link to it names no series, and
+`&metric=<id>` keeps the measure in front across a reload. **More options**
+opens the series view Trends used to start on, drawn by release and over all
+time unless the hash says otherwise (`&range=30d` and `&group=execution` ask for
+the old defaults): the suite, model, profile, stack, period and baseline pickers
+over one series, and a choice left open prefers a series Release Control ran. **Back to release overview**
+puts every one of those controls back where the first screen starts and keeps
+the measure. **Details** holds what sits behind the chart: the latest release's
+executions on the overview, the by-test grid and the executions table on a
+series. Beside **Harness evolution**, one line follows CI sync. **Download CI
+results** turns it on (`e2e::dashboard::ci-sync-set`); the line then reads its
+phase (the newest runs first, then older ones, with *Verdict ready* once the
+page has a verdict, then the time of the last check), the imports that failed
+and a GitHub rate limit's end, `gh auth login` when `gh` is not signed in on the
+worker's machine, or what else stopped a check (no `gh` installed, a listing
+that failed). The line stays when the release overview fails to load, and the
+series view under More options does not wait for the overview.
+**Check now** asks GitHub at once (`ci-sync-check`); **Turn off sync**, under
+Sync options, stops it and keeps what was imported. The page reads
+`ci-sync-status-get` every 15 s while sync is on, and again when an execution
+changes.
 
 **Trends** (`e2e::dashboard::trends-get`) follows one series (suite id, or the
 digest of an unsaved suite, × provider × model × agent profile) over time, from
@@ -177,20 +228,28 @@ by a comma or none recorded is `unversioned` and counted as such), pooled per
 combination of suite, provider, model, profile and stack; a re-run id counts
 its latest attempt. Each point is read against the one before it (the latest
 pair is the `verdict`) over the combinations both ran and, within them, the
-tests whose `behavior_sha256` matches; what one ran and the other did not is
-listed as joined, left or left out. Means, the Completed share and the error
-rate give every combination the same weight however often it ran; counts are
-summed. A local or Docker execution sits beside its release (the Harness it
+tests both planned or ran whose `behavior_sha256` does not differ: a test one
+release counted no run of stays planned there, lowering its Completed share
+without entering its means. A test only one release planned, or whose
+definition changed or is unknown, is in `tests_left_out`; a combination one ran
+and the other did not is listed as joined, left or left out. Means, the
+Completed share and the error rate give every combination the same weight
+however often it ran, each over the combinations both releases have it for;
+counts are summed. A local or Docker execution sits beside its release (the Harness it
 ran, else the release current when it started) and never counts; other CI runs
 are only counted, as `outside_release_control`.
 
-**Group by** (`&group=day|release` in the hash) draws one point per day, on the
-reader's clock, or per Harness release, in the order they first ran, instead of
-one per execution. A group reads its executions together: means weighted by
-counted runs, tests completed per execution, the function calls summed, its
-versions its last execution's. Its panel lists its executions and says when they
-did not all run the same versions. An execution with no recorded Harness version
-is in no release, and the page says how many are left out.
+**Group by** (`&group=execution|day|release` in the hash; release is the default
+and is named only when asked for) draws one point per day, on the reader's
+clock, or per Harness release, in version order, instead of one per execution. A
+group reads its executions together: means weighted by counted runs, tests
+completed per execution, the function calls summed, its versions its last
+execution's. Its panel lists its executions and says when they did not all run
+the same versions. An execution with no recorded Harness version
+is in no release, and the page says how many are left out; a local or Docker
+execution is never grouped into a release: it is a ring of its own after it; a series that
+recorded none draws each execution instead, and says so unless the hash asks for
+the release grouping.
 
 On the page, an execution can be pinned as the **baseline**, from the Baseline
 picker next to Period or from a point's panel (`&base=<execution id>` in the

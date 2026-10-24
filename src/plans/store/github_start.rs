@@ -22,7 +22,7 @@ use crate::test_plan::MasterPlan;
 const WORKFLOW: &str = "exact-stack-e2e.yml";
 
 const NOT_INSTALLED: &str = "The GitHub CLI (`gh`) is not installed for the Harness E2E worker. Install it, then run `gh auth login`.";
-const NOT_SIGNED_IN: &str =
+pub(crate) const NOT_SIGNED_IN: &str =
     "`gh` is not signed in on the worker's machine. Run `gh auth login` there, then reopen this dialog.";
 
 /// One job of the run's latest attempt, as the follow loop last saw it.
@@ -95,9 +95,9 @@ fn jobs_of(value: &Value) -> Vec<GithubJob> {
 /// is that stack as written (the workflow reads `stacks/<name>.yaml` from the
 /// branch), any other stack as its YAML.
 pub(super) fn dispatch_stack(name: &str, yaml: &str) -> String {
-    if stacks::REPOSITORY
-        .iter()
-        .any(|(id, listed)| *id == name && listed.trim() == yaml.trim())
+    if stacks::repository()
+        .get(name)
+        .is_some_and(|listed| listed.trim() == yaml.trim())
     {
         name.to_owned()
     } else {

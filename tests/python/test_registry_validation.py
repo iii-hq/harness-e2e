@@ -62,6 +62,35 @@ class ValidationTests(unittest.TestCase):
         (task / "source.patch").write_bytes(b"")
         return task, {"initial_patch_sha256": module.hashlib.sha256(b"").hexdigest()}
 
+    def command_receipt(self, task, name, command, evidence=(), exit_code=0):
+        artifacts = []
+        for reference in evidence:
+            path = task / reference if reference.startswith("execution-evidence/") else task / "workspace" / reference
+            contents = path.read_bytes()
+            artifacts.append({"path": reference,
+                              "sha256": module.hashlib.sha256(contents).hexdigest(),
+                              "size_bytes": len(contents)})
+        (task / "commands" / f"{name}.json").write_text(json.dumps({
+            "command": command, "exit_code": exit_code, "artifacts": artifacts,
+        }))
+
+    def evidence_proof(self, task, check_id, status, name="proof"):
+        reference = f"execution-evidence/{name}/proof.json"
+        path = task / reference
+        path.parent.mkdir(parents=True, exist_ok=True)
+        passed = status == "pass"
+        path.write_text(json.dumps({
+            "check_id": check_id,
+            "status": status,
+            "assertions": [{
+                "id": "observed_result",
+                "passed": passed,
+                "expected": {"result": "pass"},
+                "observed": {"result": "pass" if passed else "fail"},
+            }],
+        }))
+        return reference
+
     def feature(self, failed=(), unavailable=()):
         return {"observations": [
             {"id": metric, "status": "unavailable", "reason": "blocked"}
@@ -73,19 +102,20 @@ class ValidationTests(unittest.TestCase):
     def test_verification_uses_probe_observations_and_bounded_ids(self):
         task, state = self.verification_task()
         check_id = "implementation.function_removal"
-        command = "curl -fsS http://api/check"
-        (task / "workspace" / "output" / "evidence.json").write_text("{}")
+        command = "python verify.py"
+        real_evidence = self.evidence_proof(task, check_id, "fail", "real")
+        invented_evidence = self.evidence_proof(task, "invented.check", "fail", "invented")
         (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
-            {"id": check_id, "status": "fail", "command": command, "evidence": ["output/evidence.json"]},
-            {"id": "invented.check", "status": "fail", "command": command, "evidence": ["output/evidence.json"]},
+            {"id": check_id, "status": "fail", "command": command, "steps": "expected failure; observed failure", "evidence": [real_evidence]},
+            {"id": "invented.check", "status": "fail", "command": command, "steps": "expected failure; observed failure", "evidence": [invented_evidence]},
         ]}))
-        (task / "commands" / "one.json").write_text(json.dumps({"command": command, "exit_code": 0}))
+        self.command_receipt(task, "one", command, [real_evidence, invented_evidence])
         with patch.object(module, "feature_probe", return_value=(self.feature(failed={check_id}), None)):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (1, 1))
         self.assertEqual((found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), (1, 2))
-        self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (1, 24))
-        self.assertEqual(found["verification.evidence_coverage"]["denominator"], 2)
+        self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (1, 23))
+        self.assertEqual(found["verification.evidence_coverage"]["denominator"], 23)
 
     def test_missing_or_invalid_subject_checks_leave_precision_unassessed(self):
         task, state = self.verification_task()
@@ -100,51 +130,192 @@ class ValidationTests(unittest.TestCase):
                 with patch.object(module, "feature_probe", return_value=(self.feature(failed=failed), None)):
                     found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
                 self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (0, 1))
-                self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (0, 24))
+                self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (0, 23))
                 self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), ("not_applicable", 0, 0))
                 self.assertEqual((found["verification.evidence_coverage"]["numerator"], found["verification.evidence_coverage"]["denominator"], found["verification.evidence_coverage"]["value"]), (0, 0, 0))
-                self.assertEqual(found["verification.source_preservation"]["value"], 0)
+                self.assertEqual(found["verification.source_preservation"]["value"], 1)
 
-    def test_no_report_earns_nothing_even_when_nothing_fails(self):
+    def test_no_report_only_earns_independent_source_preservation(self):
         task, state = self.verification_task()
         (task / "workspace" / "output" / "checks.json").unlink(missing_ok=True)
         with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual(len(found), 5)
         self.assertEqual(found.pop("verification.precision")["status"], "not_applicable")
+        self.assertEqual(found.pop("verification.source_preservation")["value"], 1)
         for metric, item in found.items():
             self.assertEqual(item["status"], "measured", metric)
             self.assertEqual(item.get("value", item.get("numerator")), 0, metric)
 
-    def test_all_passing_implementation_has_full_recall_and_unassessed_precision(self):
+    def test_empty_checks_array_only_earns_source_preservation(self):
         task, state = self.verification_task()
-        command = "curl -fsS http://api/check"
-        evidence = task / "workspace" / "output" / "evidence.json"
-        evidence.write_text("{}")
-        (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
-            {"id": metric, "status": "pass", "command": command, "evidence": ["output/evidence.json"]}
-            for metric in module.PUBLIC_VERIFICATION_IDS
-        ]}))
-        (task / "commands" / "one.json").write_text(json.dumps({"command": command, "exit_code": 0}))
+        (task / "workspace" / "output" / "checks.json").write_text('{"checks": []}')
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual(found.pop("verification.precision")["status"], "not_applicable")
+        self.assertEqual(found.pop("verification.source_preservation")["value"], 1)
+        self.assertTrue(all(item.get("value", item.get("numerator")) == 0
+                            for item in found.values()))
+        (task / "source.patch").write_text("changed")
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            changed = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual(changed["verification.source_preservation"]["value"], 0)
+
+    def test_all_passing_implementation_can_score_every_verification_metric(self):
+        task, state = self.verification_task()
+        checks = []
+        for index, metric in enumerate(module.PUBLIC_VERIFICATION_IDS):
+            evidence = self.evidence_proof(task, metric, "pass", str(index))
+            command = f"curl -fsS http://api/{index} > {evidence}"
+            self.command_receipt(task, str(index), command, [evidence])
+            checks.append({"id": metric, "status": "pass", "command": command,
+                           "steps": "expected pass; observed pass", "evidence": [evidence]})
+        (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": checks}))
         with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"], found["verification.recall"]["value"]), (0, 0, 1))
-        self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), ("not_applicable", 0, 0))
+        self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"], found["verification.precision"]["value"]), ("measured", 0, 0, 1))
+        self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.evidence_coverage"]["numerator"]), (23, 23))
+
+    def test_empty_reused_evidence_and_unrelated_command_do_not_count(self):
+        task, state = self.verification_task()
+        evidence = task / "workspace" / "output" / "empty.txt"
+        evidence.write_bytes(b"")
+        command = "true"
+        self.command_receipt(task, "one", command)
+        (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
+            {"id": metric, "status": "pass", "command": command,
+             "steps": "claims success without an observation", "evidence": ["output/empty.txt"]}
+            for metric in module.PUBLIC_VERIFICATION_IDS
+        ]}))
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual(found["verification.execution_coverage"]["numerator"], 0)
+        self.assertEqual(found["verification.evidence_coverage"]["numerator"], 0)
+        receipt = json.loads((task / "validation" / "verification-evidence.json").read_text())
+        self.assertTrue(receipt["checks"])
+        self.assertTrue(all(not check["evidence"] for check in receipt["checks"]))
+
+    def test_receipt_provenance_rejects_stale_files_and_accepts_internal_script_output(self):
+        task, state = self.verification_task()
+        check_id = "implementation.function_removal"
+        reference = self.evidence_proof(task, check_id, "pass", "receipt")
+        evidence = task / reference
+        stale_command = "true output/evidence.json"
+        self.command_receipt(task, "stale", stale_command)
+
+        def observe(command):
+            (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [{
+                "id": check_id, "status": "pass", "command": command,
+                "steps": "expected pass; observed pass", "evidence": [reference],
+            }]}))
+            with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+                return {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+
+        self.assertEqual(observe(stale_command)["verification.execution_coverage"]["numerator"], 0)
+
+        script_command = "python verify.py"
+        self.command_receipt(task, "script", script_command, [reference])
+        self.assertEqual(observe(script_command)["verification.execution_coverage"]["numerator"], 1)
+        evidence.write_text(json.dumps({"check_id": check_id, "status": "pass", "assertions": [{
+            "id": "observed_result", "passed": True,
+            "expected": {"result": "pass"}, "observed": {"result": "pass"},
+        }], "tampered": True}))
+        self.assertEqual(observe(script_command)["verification.execution_coverage"]["numerator"], 0)
+
+    def test_evidence_requires_unique_consistent_assertions(self):
+        task, state = self.verification_task()
+        check_id = "implementation.function_removal"
+        reference = "execution-evidence/schema/proof.json"
+        path = task / reference
+        path.parent.mkdir(parents=True)
+        invalid = {
+            "empty": {"check_id": check_id, "status": "pass", "assertions": []},
+            "duplicate": {"check_id": check_id, "status": "pass", "assertions": [
+                {"id": "same", "passed": True, "expected": {"ok": True}, "observed": {"ok": True}},
+                {"id": "same", "passed": True, "expected": {"ok": True}, "observed": {"ok": True}},
+            ]},
+            "missing-expected": {"check_id": check_id, "status": "pass", "assertions": [
+                {"id": "claim", "passed": True, "observed": []},
+            ]},
+            "missing-observed": {"check_id": check_id, "status": "pass", "assertions": [
+                {"id": "claim", "passed": True, "expected": []},
+            ]},
+            "typed-mismatch": {"check_id": check_id, "status": "pass", "assertions": [
+                {"id": "claim", "passed": True, "expected": True, "observed": 1},
+            ]},
+            "inconsistent": {"check_id": check_id, "status": "fail", "assertions": [
+                {"id": "claim", "passed": False, "expected": {"ok": True}, "observed": {"ok": True}},
+            ]},
+        }
+        for name, proof in invalid.items():
+            with self.subTest(name):
+                path.write_text(json.dumps(proof))
+                command = f"python {name}.py"
+                self.command_receipt(task, name, command, [reference])
+                (task / "workspace/output/checks.json").write_text(json.dumps({"checks": [{
+                    "id": check_id, "status": proof["status"], "command": command,
+                    "steps": "claimed result", "evidence": [reference],
+                }]}))
+                with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+                    found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+                self.assertEqual(found["verification.evidence_coverage"]["numerator"], 0)
+                self.assertEqual(found["verification.execution_coverage"]["numerator"], 0)
+
+        self_reference = "output/checks.json"
+        command = "python circular.py"
+        (task / "workspace/output/checks.json").write_text(json.dumps({"checks": [{
+            "id": check_id, "status": "pass", "command": command,
+            "steps": "self-reported result", "evidence": [self_reference],
+        }]}))
+        self.command_receipt(task, "circular", command, [self_reference])
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual(found["verification.evidence_coverage"]["numerator"], 0)
+
+    def test_evidence_accepts_equal_empty_null_and_string_json_values(self):
+        task, state = self.verification_task()
+        check_id = "implementation.function_removal"
+        reference = "execution-evidence/json-values/proof.json"
+        path = task / reference
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({
+            "check_id": check_id,
+            "status": "pass",
+            "assertions": [
+                {"id": "empty-array", "passed": True, "expected": [], "observed": []},
+                {"id": "null", "passed": True, "expected": None, "observed": None},
+                {"id": "string", "passed": True, "expected": "ok", "observed": "ok"},
+            ],
+        }))
+        command = "python json-values.py"
+        self.command_receipt(task, "json-values", command, [reference])
+        (task / "workspace/output/checks.json").write_text(json.dumps({"checks": [{
+            "id": check_id, "status": "pass", "command": command,
+            "steps": "compared exact JSON values", "evidence": [reference],
+        }]}))
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual(found["verification.evidence_coverage"]["numerator"], 1)
+        self.assertEqual(found["verification.execution_coverage"]["numerator"], 1)
 
     def test_false_positive_and_missed_failure_are_scored_independently(self):
         task, state = self.verification_task()
-        command = "curl -fsS http://api/check"
-        (task / "workspace" / "output" / "evidence.json").write_text("{}")
-        (task / "commands" / "one.json").write_text(json.dumps({"command": command, "exit_code": 0}))
         case_id = "implementation.function_removal"
         for name, actual_failures, reported_status, expected_recall, expected_precision in (
             ("false positive", set(), "fail", (0, 0, 1), (0, 1, None)),
             ("missed failure", {case_id}, "pass", (0, 1, None), (0, 0, None)),
         ):
             with self.subTest(name):
+                evidence = self.evidence_proof(task, case_id, reported_status,
+                                               name.replace(" ", "-"))
+                command = f"python {name.replace(' ', '-')}.py"
+                self.command_receipt(task, name.replace(" ", "-"), command, [evidence],
+                                     exit_code=1 if reported_status == "fail" else 0)
                 (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
                     {"id": case_id, "status": reported_status, "command": command,
-                     "evidence": ["output/evidence.json"]},
+                     "steps": "expected and observed result",
+                     "evidence": [evidence]},
                 ]}))
                 with patch.object(module, "feature_probe", return_value=(self.feature(failed=actual_failures), None)):
                     found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}

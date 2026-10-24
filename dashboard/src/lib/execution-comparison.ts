@@ -250,9 +250,17 @@ const METRICS: Array<[MetricId, string, MetricFormat]> = [
 
 /** Which way each measure is better, the one place that says it: more
  *  score, completed tasks and coverage; fewer invalid runs, tokens, cost,
- *  time, turns, calls and errors (Compare.dc.html paints fewer function calls
- *  as better); cache figures neither. Only the colour follows it. */
-const BETTER_WHEN: Record<MetricId, 'higher' | 'lower' | 'neither'> = {
+ *  time, turns, retries, calls and errors (Compare.dc.html paints fewer
+ *  function calls as better); cache figures neither. Only the colour follows
+ *  it. */
+const BETTER_WHEN: Record<
+  | MetricId
+  | 'output_tokens'
+  | 'reasoning_tokens'
+  | 'validation_retries'
+  | 'technical_retries',
+  'higher' | 'lower' | 'neither'
+> = {
   score: 'higher',
   completed: 'higher',
   coverage: 'higher',
@@ -266,10 +274,14 @@ const BETTER_WHEN: Record<MetricId, 'higher' | 'lower' | 'neither'> = {
   turns: 'lower',
   function_calls: 'lower',
   function_errors: 'lower',
+  output_tokens: 'lower',
+  reasoning_tokens: 'lower',
+  validation_retries: 'lower',
+  technical_retries: 'lower',
 }
 
 export function betterWhen(id: string): 'higher' | 'lower' | 'neither' {
-  return BETTER_WHEN[id as MetricId] ?? 'neither'
+  return BETTER_WHEN[id as keyof typeof BETTER_WHEN] ?? 'neither'
 }
 
 const SIDES = ['a', 'b'] as const

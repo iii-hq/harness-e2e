@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { pointInvestigation } from '@/components/trends/PointPanel'
+import { overviewMetric } from '@/lib/release-overview'
 import {
   axisMarks,
   baseFromParams,
@@ -38,12 +39,14 @@ import {
   stackNote,
   suiteChoices,
   summaryText,
+  TREND_METRICS,
   type TrendMeasures,
   type TrendMetric,
   type TrendPoint,
   testCell,
   testIds,
   trendMetric,
+  trendsModeFromParams,
   trendsParams,
   trendsRequestFromParams,
   unversioned,
@@ -233,6 +236,41 @@ describe('measures', () => {
     expect(previous?.execution_id).toBe('github-36296751640-1')
   })
 
+  it('leads with six measures and keeps the rest under More', () => {
+    const ids = (tier: TrendMetric['tier']) =>
+      TREND_METRICS.filter((item) => item.tier === tier).map((item) => item.id)
+    expect(ids('main')).toEqual([
+      'score',
+      'completed',
+      'duration',
+      'error_rate',
+      'input_tokens',
+      'turns',
+    ])
+    expect(ids('more')).toEqual([
+      'output_tokens',
+      'cache_read_tokens',
+      'cache_write_tokens',
+      'reasoning_tokens',
+      'cost',
+      'validation_retries',
+      'technical_retries',
+      'function_calls',
+    ])
+  })
+
+  it('reads tokens, cost and retries like the other measures, a cost without pricing as none', () => {
+    const latest = regression[at(regression, 'github-36381232467-1')]
+    const cost = metric('cost')
+    expect(delta('output_tokens', regression)).toBe(-9.6)
+    expect(delta('cost', regression)).toBe(-9.7)
+    expect(delta('validation_retries', regression)).toBe(-0.1)
+    expect(cost.figure(cost.value(latest) as number, latest)).toBe('$0.0540')
+    expect(metric('output_tokens').figure(3600, latest)).toBe('3.6K')
+    expect(deltaFormat(metric('validation_retries'))(0.1)).toBe('0.1')
+    expect(cost.value(seriesPoints('local')[0])).toBeNull()
+  })
+
   it('skips executions without a counted run', () => {
     const index = at(regression, 'github-36285373498-1')
     expect(previousCounted(regression, index)?.execution_id).toBe(
@@ -247,10 +285,17 @@ describe('measures', () => {
       'duration',
       'error_rate',
       'input_tokens',
+      'output_tokens',
+      'reasoning_tokens',
+      'cost',
+      'validation_retries',
+      'technical_retries',
       'function_calls',
       'turns',
     ])
       expect(metric(id).better).toBe('lower')
+    for (const id of ['cache_read_tokens', 'cache_write_tokens'])
+      expect(metric(id).better).toBe('neither')
   })
 
   it('formats a difference as points, tests, points of a rate or a share', () => {
@@ -483,6 +528,9 @@ describe('grouping', () => {
           score_mean: 10,
           function_calls: 10,
           function_call_errors: 5,
+          output_tokens_mean: 100,
+          validation_retries_mean: 0,
+          cost_usd_mean: null,
         },
       },
       {
@@ -494,12 +542,22 @@ describe('grouping', () => {
           score_mean: 50,
           function_calls: 90,
           function_call_errors: 0,
+          output_tokens_mean: 500,
+          validation_retries_mean: 2,
+          cost_usd_mean: 0.25,
         },
       },
     ]
     const [grouped] = groupPoints(pair, 'day', NOW)
     expect(grouped.measures?.score_mean).toBe(40)
     expect(trendMetric('error_rate').value(grouped)).toBe(5)
+    const keys = Object.keys(one.measures as TrendMeasures).sort()
+    expect(keys).toHaveLength(16)
+    expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(keys)
+    expect(grouped.measures?.output_tokens_mean).toBe(400)
+    expect(grouped.measures?.validation_retries_mean).toBe(1.5)
+    // A member without pricing leaves the mean to the priced ones.
+    expect(grouped.measures?.cost_usd_mean).toBe(0.25)
   })
 
   it('says a day mixed versions, and a day with no counted run has no measures', () => {
@@ -518,19 +576,10 @@ describe('grouping', () => {
     expect(failed[0].reason).toBe('None of its 2 executions has a counted run.')
   })
 
-  it('draws one point per Harness release in the order they first ran, the unrecorded left out', () => {
-    expect(byRelease.map((point) => pointTime(point))).toEqual([
-      'harness 1.8.31',
-      'harness 1.8.34',
-      'harness 1.8.35',
-      'harness 1.8.36',
-    ])
-    expect(axisMarks(byRelease).map((mark) => mark.text)).toEqual([
-      '1.8.31',
-      '1.8.34',
-      '1.8.35',
-      '1.8.36',
-    ])
+  it('draws one point per Harness release in semver order, the unversioned left out', () => {
+    const releases = ['v1.8.31', 'v1.8.34', 'v1.8.35', 'v1.8.36']
+    expect(byRelease.map((point) => pointTime(point))).toEqual(releases)
+    expect(axisMarks(byRelease).map((mark) => mark.text)).toEqual(releases)
     expect(unversioned(all)).toHaveLength(5)
     expect(
       byRelease.reduce(
@@ -545,14 +594,73 @@ describe('grouping', () => {
     ).toBe('1.8.31 → 1.8.34')
   })
 
+  it('orders releases by semver and never reads a commit build as one', () => {
+    const copy = (release: string | null, day: number) => ({
+      ...all[1],
+      execution_id: `copy-${day}`,
+      started_at: `2026-09-${day}T10:00:00-03:00`,
+      release,
+    })
+    const commit = copy(null, 23)
+    commit.workers = { ...commit.workers, harness: '@3f9c2a1' }
+    const points = [
+      copy('1.9.3', 22),
+      commit,
+      copy('1.10.0', 24),
+      copy('1.9.2', 25),
+    ]
+    const grouped = groupPoints(points, 'release', NOW)
+    const releases = ['v1.9.2', 'v1.9.3', 'v1.10.0']
+    expect(grouped.map((point) => point.group?.key)).toEqual(releases)
+    expect(axisMarks(grouped).map((mark) => mark.text)).toEqual(releases)
+    expect(unversioned(points).map((p) => p.workers?.harness)).toEqual([
+      '@3f9c2a1',
+    ])
+  })
+
+  it('keeps a local or Docker run that recorded a release out of it, a ring of its own after it', () => {
+    const local: TrendPoint = {
+      ...all[8],
+      execution_id: 'local-pinned',
+      started_at: '2026-09-28T12:00:00-03:00',
+      source: { kind: 'local', role: 'local' },
+      release: '1.8.35',
+    }
+    const grouped = groupPoints([...all, local], 'release', NOW)
+    expect(grouped.map((point) => point.execution_id)).toEqual([
+      'release:v1.8.31',
+      'release:v1.8.34',
+      'release:v1.8.35',
+      'local-pinned',
+      'release:v1.8.36',
+    ])
+    const release = grouped[2]
+    expect(release.source.kind).toBe('github')
+    expect(release.group?.members.map((member) => member.execution_id)).toEqual(
+      [all[8].execution_id],
+    )
+    expect(grouped[3]).toBe(local)
+    expect(axisMarks(grouped).map((mark) => mark.text)).toEqual([
+      'v1.8.31',
+      'v1.8.34',
+      'v1.8.35',
+      '',
+      'v1.8.36',
+    ])
+  })
+
   it('keeps the baseline on the group that holds it, set by its last execution', () => {
     const sep23 = 'github-35821773226-2'
     expect(baselineOf(byDay, sep23).index).toBe(1)
     expect(baselineId(byDay[1])).toBe(sep23)
     expect(baselineId(all[3])).toBe(all[3].execution_id)
     expect(groupFromParams(withGroup(new URLSearchParams(), 'day'))).toBe('day')
-    expect(withGroup(new URLSearchParams(), 'execution').toString()).toBe('')
-    expect(groupFromParams(new URLSearchParams('group=week'))).toBe('execution')
+    expect(withGroup(new URLSearchParams(), 'release').toString()).toBe('')
+    expect(withGroup(new URLSearchParams(), 'execution').toString()).toBe(
+      'group=execution',
+    )
+    expect(groupFromParams(new URLSearchParams(''))).toBe('release')
+    expect(groupFromParams(new URLSearchParams('group=week'))).toBe('release')
   })
 })
 
@@ -615,6 +723,23 @@ describe('axes', () => {
       { from: 0, to: 3, faded: true },
       { from: 3, to: 4, faded: false },
     ])
+  })
+
+  it('leaves skipped points out of the line without fading it', () => {
+    expect(segments([1, 2, 3, 4], (i) => i === 1 || i === 2)).toEqual([
+      { from: 0, to: 3, faded: false },
+    ])
+    expect(segments([1, null, 3, 4], (i) => i === 3)).toEqual([
+      { from: 0, to: 2, faded: true },
+    ])
+  })
+
+  it('draws a share of completed runs from 0 to 100, whatever the plan', () => {
+    expect(
+      domain(overviewMetric(trendMetric('completed')), [88.9, 100], [
+        { measures: { planned: 150 } },
+      ] as unknown as TrendPoint[]),
+    ).toEqual([0, 100])
   })
 })
 
@@ -769,7 +894,7 @@ describe('the period', () => {
     })
   })
 
-  it('keeps the period in the hash, a bad one falling back to 30 days', () => {
+  it('keeps the period in the hash, a bad one falling back to all time', () => {
     const at = (query: string) => periodFromParams(new URLSearchParams(query))
     expect(at('range=7d')).toEqual({ range: '7d' })
     expect(at('since=2026-09-01&until=2026-09-10')).toEqual({
@@ -784,6 +909,7 @@ describe('the period', () => {
       'since=yesterday&until=today',
     ])
       expect(at(bad)).toEqual(DEFAULT_PERIOD)
+    expect(DEFAULT_PERIOD).toEqual({ range: 'all' })
     expect(
       withPeriod(new URLSearchParams('stack=any'), {
         since: '2026-09-01',
@@ -843,8 +969,24 @@ describe('the view', () => {
     )
   })
 
+  it('opens the overview unless the hash names a series view', () => {
+    const mode = (query: string) =>
+      trendsModeFromParams(new URLSearchParams(query))
+    for (const query of ['', 'range=all', 'metric=turns'])
+      expect(mode(query), query).toBe('overview')
+    for (const query of [
+      'range=30d',
+      'suite=regression',
+      'stack=any',
+      'group=execution',
+      'base=x',
+      'since=2026-09-01&until=2026-09-10',
+    ])
+      expect(mode(query), query).toBe('series')
+  })
+
   it('sums the executions and counted runs up in one line', () => {
-    expect(summaryText(regression, DEFAULT_PERIOD, 'UTC−3', NOW)).toBe(
+    expect(summaryText(regression, { range: '30d' }, 'UTC−3', NOW)).toBe(
       '11 executions in the last 30 days · 9 with counted runs, 2 without · 81 counted runs · Sep 22 – Sep 28 · times in UTC−3',
     )
     expect(stackNote(regression, 'default')).toBe(

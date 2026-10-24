@@ -27,6 +27,8 @@ type Row = {
   /** When an untitled execution was created: its title is dated by it. */
   started?: string
   origin: 'local' | 'docker' | { github: number }
+  /** The Release Control execution behind a GitHub run. */
+  releaseControl?: string
   result: 'running' | 'importing' | 'passed' | 'failed' | 'incomplete'
   subject: { provider: string; model: string }
   profile: string | null
@@ -49,7 +51,11 @@ function group(index: number, state: DockerGroup['state']): DockerGroup {
   }
 }
 
-function source(origin: Row['origin'], groups: DockerGroup[] = []) {
+function source(
+  origin: Row['origin'],
+  groups: DockerGroup[] = [],
+  releaseControl?: string,
+) {
   if (origin === 'local') return { kind: 'local' }
   if (origin === 'docker')
     return { kind: 'docker', attempt: 1, phase: 'groups', groups }
@@ -59,7 +65,7 @@ function source(origin: Row['origin'], groups: DockerGroup[] = []) {
     run_id: origin.github,
     run_attempt: 1,
     url: `https://github.com/iii-hq/harness-e2e/actions/runs/${origin.github}`,
-    release_control_execution_id: null,
+    release_control_execution_id: releaseControl ?? null,
   }
 }
 
@@ -91,7 +97,7 @@ function summary(row: Row): DashboardExecutionSummary {
     availability: 'available',
     started_at: row.started ?? row.at,
     completed_at: live ? '' : row.at,
-    source: source(row.origin, row.groups),
+    source: source(row.origin, row.groups, row.releaseControl),
     parameters: {
       scenarios: scenarios.map((scenario) => scenario.id),
       runs: 1,
@@ -270,6 +276,7 @@ const ROWS: Row[] = [
     title: 'Software engineering',
     at: at(23, 20, 0),
     origin: { github: 35925167026 },
+    releaseControl: '366030b3-4a4e-4b1a-9f3e-9f7e0c1d2e3f',
     result: 'failed',
     subject: FLASH,
     profile: 'ade-worker-builder',

@@ -15,7 +15,8 @@ use tokio::sync::Notify;
 
 use super::controller::Controller;
 use crate::plans::store::{
-    github_started, import_id, rate_limited, ExecutionSource, PlanExecution,
+    github_started, import_id, left_no_results, rate_limited, ExecutionSource, PlanExecution,
+    NOT_SIGNED_IN,
 };
 
 /// Days GitHub keeps a run's artifacts.
@@ -46,14 +47,19 @@ pub(super) enum CiSyncPhase {
 pub(super) struct CiSyncStatus {
     pub enabled: bool,
     pub phase: CiSyncPhase,
-    /// Whether `gh` was signed in at the last check; null before one.
+    /// Whether `gh` was signed in at the last check; null before one, and
+    /// when `gh` could not tell (missing, or not answering).
     pub signed_in: Option<bool>,
-    /// What stopped the last check short.
+    /// What stopped the last check short: `gh` not ready, a listing that
+    /// failed. A run whose import failed only counts in `failed`.
     pub message: Option<String>,
     pub checked_at: Option<String>,
     pub next_check_at: Option<String>,
     pub imported: usize,
     pub failed: usize,
+    /// Runs that left no results (no e2e-contract artifact), skipped until
+    /// GitHub runs them again; their executions are deleted.
+    pub skipped: usize,
     /// Runs the current pass has yet to import.
     pub remaining: usize,
     /// Until when a GitHub rate limit holds every check.
@@ -184,16 +190,18 @@ pub(super) async fn tick(controller: &Arc<Controller>) -> Duration {
     }
     let github = controller.github_status().await;
     let ready = github["ready"] == json!(true);
+    let message = github["message"].as_str().unwrap_or_default();
     {
         let mut status = sync.lock();
-        status.signed_in = Some(ready);
+        // Only a signed-out `gh` asks for `gh auth login`; a missing or
+        // stuck one says so in its message.
+        status.signed_in = if ready {
+            Some(true)
+        } else {
+            (message == NOT_SIGNED_IN).then_some(false)
+        };
         status.paused_until = None;
-        status.message = (!ready).then(|| {
-            github["message"]
-                .as_str()
-                .unwrap_or_default()
-                .replace(", then reopen this dialog", "")
-        });
+        status.message = (!ready).then(|| message.replace(", then reopen this dialog", ""));
     }
     if !ready {
         return sync.schedule(interval);
@@ -220,27 +228,26 @@ async fn pass(
     let mut seen = HashSet::new();
     let (rows, next, wait) = match phase {
         CiSyncPhase::Off => return Ok(interval),
-        // A day at a time, until the two newest Harness releases each have
-        // a Release Control run.
+        // Release Control runs a day at a time, until the two newest Harness
+        // releases each have one; then the newest other runs listed, so the
+        // strip outside Release Control has a count.
         CiSyncPhase::Quick => {
-            let mut others = 0;
+            let mut others = Vec::new();
             for n in 0..=WINDOW_DAYS {
                 if controller.release_overview().await?.verdict.is_some() {
                     break;
                 }
-                let mut rows = window(controller, n, n, &mut seen).await?;
-                rows.retain(|row| {
-                    if release_control(row) {
-                        return true;
-                    }
-                    others += 1;
-                    others <= PER_PAGE as usize
-                });
+                let (rows, other): (Vec<_>, Vec<_>) = window(controller, n, n, &mut seen)
+                    .await?
+                    .into_iter()
+                    .partition(release_control);
+                others.extend(other);
                 if let Some(wait) = import(controller, rows).await? {
                     return Ok(wait);
                 }
             }
-            (Vec::new(), CiSyncPhase::Backfill, Duration::ZERO)
+            others.truncate(PER_PAGE as usize);
+            (others, CiSyncPhase::Backfill, Duration::ZERO)
         }
         CiSyncPhase::Backfill => {
             let mut rows = Vec::new();
@@ -330,12 +337,20 @@ async fn import(controller: &Arc<Controller>, mut rows: Vec<Value>) -> Result<Op
                 {
                     return Ok(Some(sync.pause()))
                 }
+                Ok(Some(execution)) if left_no_results(&execution) => {
+                    skip(
+                        controller,
+                        &execution,
+                        row["updated_at"].as_str().unwrap_or_default(),
+                    )
+                    .await;
+                }
                 Ok(Some(_)) => sync.lock().failed += 1,
                 Err(error) if rate_limited(&format!("{error:#}")) => return Ok(Some(sync.pause())),
+                // One run's failure only counts: the progress line stays.
                 Err(error) => {
-                    let mut status = sync.lock();
-                    status.failed += 1;
-                    status.message = Some(format!("{error:#}"));
+                    tracing::warn!(run_id, error = %format!("{error:#}"), "CI sync could not import a run");
+                    sync.lock().failed += 1;
                 }
             }
         }
@@ -351,23 +366,74 @@ async fn decide(controller: &Controller, row: &Value) -> Result<bool> {
         &controller.github_repository,
         row["run_id"].as_u64().unwrap_or_default(),
     );
-    let execution = controller
+    let mut execution = controller
         .plan_store
         .github_execution(
             &controller.github_repository,
             row["run_id"].as_u64().unwrap_or_default(),
         )
         .await;
+    let mut skipped = controller.plan_store.import_skipped(&id).await?;
+    // An import that left no results before CI sync skipped such runs is
+    // skipped as GitHub had updated the run then; one made by hand after a
+    // skip keeps its error.
+    if skipped.is_none() {
+        if let Some(failed) = execution.take_if(|execution| left_no_results(execution)) {
+            let at = match &failed.source {
+                ExecutionSource::Github { run_updated_at, .. } => {
+                    run_updated_at.clone().unwrap_or_default()
+                }
+                _ => String::new(),
+            };
+            if skip(controller, &failed, &at).await {
+                skipped = Some(at);
+            } else {
+                execution = Some(failed);
+            }
+        }
+    }
     let deleted = controller.plan_store.import_deleted(&id).await?;
-    Ok(needs_import(row, execution.as_ref(), deleted))
+    Ok(needs_import(
+        row,
+        execution.as_ref(),
+        deleted,
+        skipped.as_deref(),
+    ))
 }
 
-/// A listed run needs an import unless it was deleted here, is being
-/// imported, or was started here; it does when GitHub updated it since its
-/// import, and when its import failed, `MAX_ATTEMPTS` times, unless its
-/// artifacts are gone or it left no bundle.
-fn needs_import(row: &Value, execution: Option<&PlanExecution>, deleted: bool) -> bool {
-    if deleted {
+/// Skip a run that left no results, as GitHub updated it at `run_updated_at`:
+/// its execution goes, and the Console hears so. `false` when it could not
+/// (an import of it began meanwhile, or the write failed): one run's skip
+/// only goes to the log, and the pass goes on.
+async fn skip(controller: &Controller, failed: &PlanExecution, run_updated_at: &str) -> bool {
+    if let Err(error) = controller
+        .plan_store
+        .skip_import(
+            &failed.id,
+            run_updated_at,
+            failed.error.as_deref().unwrap_or_default(),
+        )
+        .await
+    {
+        tracing::warn!(execution_id = %failed.id, error = %format!("{error:#}"), "CI sync could not skip a run that left no results");
+        return false;
+    }
+    controller.ci_sync.lock().skipped += 1;
+    controller.emit_change("deleted", &failed.id).await;
+    true
+}
+
+/// A listed run needs an import unless it was deleted here, skipped as GitHub
+/// last updated it (`skipped`), is being imported, or was started here; it
+/// does when GitHub updated it since its import, and when its import failed,
+/// `MAX_ATTEMPTS` times, unless its artifacts are gone or it left no bundle.
+fn needs_import(
+    row: &Value,
+    execution: Option<&PlanExecution>,
+    deleted: bool,
+    skipped: Option<&str>,
+) -> bool {
+    if deleted || skipped.is_some_and(|at| row["updated_at"].as_str() == Some(at)) {
         return false;
     }
     let Some(execution) = execution else {
@@ -433,7 +499,9 @@ mod tests {
 
     use super::*;
     use crate::dashboard::controller::tests::without_control_plane;
-    use crate::plans::store::tests::{fake_gh, import_stub, manager_with_gh, FakeRunner};
+    use crate::plans::store::tests::{
+        exact_stack_bundle, fake_gh, import_stub, manager_with_gh, FakeRunner,
+    };
     use crate::plans::store::{import_id, ExecutionSource, PlanExecution};
 
     /// Heads each `gh` stand-in: it logs every call, `run <id> <title>
@@ -452,6 +520,16 @@ case "$*" in
             manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
             &data,
         )
+    }
+
+    /// The runs whose artifacts `gh` listed, in the order it listed them.
+    fn artifacts_listed(root: &Path) -> Vec<String> {
+        fs::read_to_string(root.join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| Some(line.split("runs/").nth(1)?.split_once("/artifacts")?.0))
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The `gh` calls holding `needle`.
@@ -505,7 +583,10 @@ case "$*" in
             "The run produced no bundle: Root artifact validation failed",
         ];
 
-        assert!(needs_import(&row, None, false));
+        assert!(needs_import(&row, None, false, None));
+        // Skipped as GitHub last updated it, a run waits for a re-run.
+        assert!(!needs_import(&row, None, false, same));
+        assert!(needs_import(&row, None, false, earlier));
         let mut needed = vec![
             imported("completed", None, earlier, 0),
             imported("failed", reset, same, 2),
@@ -530,11 +611,68 @@ case "$*" in
             not_needed.push(imported("failed", Some(gone), same, 0));
         }
         for execution in &needed {
-            assert!(needs_import(&row, Some(execution), false), "{execution:?}");
+            assert!(
+                needs_import(&row, Some(execution), false, None),
+                "{execution:?}"
+            );
         }
-        assert!(!needs_import(&row, None, true));
+        assert!(!needs_import(&row, None, true, None));
         for execution in &not_needed {
-            assert!(!needs_import(&row, Some(execution), false), "{execution:?}");
+            assert!(
+                !needs_import(&row, Some(execution), false, None),
+                "{execution:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_failed_import_that_left_nothing_is_skipped() {
+        let failed = |error: &str| PlanExecution {
+            state: "failed".into(),
+            error: Some(error.into()),
+            source: ExecutionSource::Github {
+                repository: "o/r".into(),
+                run_id: 1,
+                run_attempt: 1,
+                url: "https://github.com/o/r/actions/runs/1".into(),
+                release_control_execution_id: None,
+                stack: None,
+                run_updated_at: None,
+                sync_attempts: 1,
+                conclusion: None,
+                status: None,
+                follow: Default::default(),
+            },
+            ..import_stub()
+        };
+        let none = "This run keeps no e2e-contract artifact; GitHub keeps artifacts for 90 days";
+        let mut kept_runs = failed(none);
+        kept_runs.slots.push(
+            serde_json::from_value(json!({"round": 1, "group_id": "g", "scenario_id": "s",
+                "execution_id": "0123456789abcdef0123456789abcdef", "request": {}, "state": "completed",
+                "result_path": null, "error": null, "observed": 1, "completed": 1, "passed": 1,
+                "technical_valid": 1, "eligible": true}))
+            .unwrap(),
+        );
+
+        assert!(left_no_results(&failed(none)));
+        for kept in [
+            PlanExecution {
+                state: "completed".into(),
+                ..failed(none)
+            },
+            failed("The run produced no bundle: Root artifact validation failed"),
+            {
+                let mut execution = failed(none);
+                let ExecutionSource::Github { follow, .. } = &mut execution.source else {
+                    unreachable!()
+                };
+                follow.followed = true;
+                execution
+            },
+            kept_runs,
+        ] {
+            assert!(!left_no_results(&kept), "{kept:?}");
         }
     }
 
@@ -547,7 +685,7 @@ case "$*" in
 
         assert_eq!(
             serde_json::to_string(&controller.ci_sync_status()).unwrap(),
-            r#"{"enabled":false,"phase":"off","signed_in":null,"message":null,"checked_at":null,"next_check_at":null,"imported":0,"failed":0,"remaining":0,"paused_until":null}"#
+            r#"{"enabled":false,"phase":"off","signed_in":null,"message":null,"checked_at":null,"next_check_at":null,"imported":0,"failed":0,"skipped":0,"remaining":0,"paused_until":null}"#
         );
         assert_eq!(tick(&controller).await, Duration::from_secs(42));
         assert_eq!(calls(root, ""), 0);
@@ -578,6 +716,272 @@ case "$*" in
     }
 
     #[tokio::test]
+    async fn ci_sync_without_gh_says_so_instead_of_asking_to_sign_in() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(root, "exit 0");
+        fs::remove_file(root.join("gh")).unwrap();
+        controller.ci_sync_set(true).unwrap();
+
+        tick(&controller).await;
+        let status = controller.ci_sync_status();
+        assert_eq!(status.signed_in, None);
+        assert_eq!(
+            status.message.as_deref(),
+            Some("The GitHub CLI (`gh`) is not installed for the Harness E2E worker. Install it, then run `gh auth login`.")
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_imports_release_control_runs_day_by_day_before_the_newest_other_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(
+            root,
+            &[
+                &format!("D0={} D1={}\n", day(0), day(1)),
+                GH,
+                r#"
+  *"created=$D0..$D0"*) printf '{"total_count":2,"workflow_runs":['; run 1 'E2E · rc-1'; printf ,; run 2 'E2E run · pr · flash'; printf ']}' ;;
+  *"created=$D1..$D1"*) printf '{"total_count":2,"workflow_runs":['; run 3 'E2E · rc-3'; printf ,; run 4 'E2E run · pr · flash'; printf ']}' ;;
+  *workflows/*) printf '{"total_count":0,"workflow_runs":[]}' ;;
+  *artifacts*) ;;
+  *runs/1) run 1 'E2E · rc-1' ;;
+  *runs/2) run 2 'E2E run · pr · flash' ;;
+  *runs/3) run 3 'E2E · rc-3' ;;
+  *runs/4) run 4 'E2E run · pr · flash' ;;
+esac"#,
+            ]
+            .concat(),
+        );
+        controller.ci_sync_set(true).unwrap();
+
+        // No verdict ever comes: every day's Release Control run, then the
+        // newest other runs, then the backfill.
+        assert_eq!(tick(&controller).await, Duration::ZERO);
+        assert_eq!(artifacts_listed(root), ["1", "3", "2", "4"]);
+        assert_eq!(controller.ci_sync_status().phase, CiSyncPhase::Backfill);
+    }
+
+    #[tokio::test]
+    async fn one_failed_import_counts_as_failed_and_leaves_the_progress_line_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let (bundle, contract, _) =
+            exact_stack_bundle(&root.join("fixture"), "rc:e2e:synced", "1.8.8");
+        let controller = controller_on(
+            root,
+            &[
+                GH,
+                &format!(
+                    r#"
+  *workflows/*) printf '{{"total_count":2,"workflow_runs":['; run 1 'E2E · rc-1'; printf ,; run 2 'E2E · rc-2'; printf ']}}' ;;
+  "api repos/o/r/actions/runs/1") echo 'HTTP 502: Bad Gateway' >&2; exit 1 ;;
+  "api repos/o/r/actions/runs/2") run 2 'E2E · rc-2' ;;
+  "api --paginate"*) printf 'e2e-contract-rc-2-gh-1
+e2e-observation-rc-2-gh-1
+' ;;
+  "run download"*) case "$7" in
+      e2e-contract-*) cp -R '{contract}' "$9" ;;
+      *) cp -R '{bundle}' "$9" ;;
+    esac ;;
+esac"#,
+                    contract = contract.display(),
+                    bundle = bundle.display(),
+                ),
+            ]
+            .concat(),
+        );
+        controller.ci_sync_set(true).unwrap();
+
+        tick(&controller).await;
+        let status = controller.ci_sync_status();
+        assert_eq!(
+            (status.message, status.failed, status.imported),
+            (None, 1, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_without_a_contract_is_skipped_not_kept_as_a_failed_execution() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(
+            root,
+            &[
+                GH,
+                r#"
+  *workflows/*) printf '{"total_count":1,"workflow_runs":['; run 7 'E2E · rc-7' "$(cat "$here/updated")"; printf ']}' ;;
+  *runs/7/artifacts*) printf 'e2e-observation-rc-7-gh-1\n' ;;
+  *runs/7) run 7 'E2E · rc-7' "$(cat "$here/updated")" ;;
+esac"#,
+            ]
+            .concat(),
+        );
+        fs::write(root.join("updated"), "2026-10-20T11:00:00Z").unwrap();
+        controller.ci_sync_set(true).unwrap();
+        let id = import_id("o/r", 7);
+        let model = controller.read_model().await.unwrap();
+
+        tick(&controller).await;
+        // The import installed nothing: the read model is kept, not built again.
+        assert!(Arc::ptr_eq(&model, &controller.read_model().await.unwrap()));
+        assert!(controller.plan_store.read_execution(&id).await.is_err());
+        assert_eq!(
+            controller
+                .plan_store
+                .import_skipped(&id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-20T11:00:00Z")
+        );
+        let status = controller.ci_sync_status();
+        assert_eq!((status.imported, status.failed, status.skipped), (0, 0, 1));
+
+        // Listed again as GitHub left it, it is not tried again.
+        tick(&controller).await;
+        assert_eq!(calls(root, "runs/7/artifacts"), 1);
+
+        // Run again on GitHub, it is.
+        fs::write(root.join("updated"), "2026-10-21T09:00:00Z").unwrap();
+        tick(&controller).await;
+        assert_eq!(calls(root, "runs/7/artifacts"), 2);
+        assert_eq!(
+            controller
+                .plan_store
+                .import_skipped(&id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-21T09:00:00Z")
+        );
+        let status = controller.ci_sync_status();
+        assert_eq!((status.failed, status.skipped), (0, 2));
+    }
+
+    #[tokio::test]
+    async fn an_old_failed_execution_without_a_contract_turns_into_a_skip() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(
+            root,
+            &[
+                GH,
+                r#"
+  *workflows/*) printf '{"total_count":2,"workflow_runs":['; run 8 'E2E · rc-8'; printf ,; run 9 'E2E · rc-9' "$(cat "$here/updated")"; printf ']}' ;;
+  *artifacts*) ;;
+  *runs/8) run 8 'E2E · rc-8' ;;
+  *runs/9) run 9 'E2E · rc-9' "$(cat "$here/updated")" ;;
+esac"#,
+            ]
+            .concat(),
+        );
+        // Imported before CI sync skipped such runs: each ended failed.
+        fs::write(root.join("updated"), "2026-10-20T11:00:00Z").unwrap();
+        for run in [8, 9] {
+            let (begun, _) = controller
+                .plan_store
+                .begin_github_import("o/r", run)
+                .await
+                .unwrap();
+            controller
+                .plan_store
+                .finish_github_import(&begun.id)
+                .await
+                .unwrap();
+        }
+        // GitHub ran 9 again since.
+        fs::write(root.join("updated"), "2026-10-21T09:00:00Z").unwrap();
+        controller.ci_sync_set(true).unwrap();
+
+        tick(&controller).await;
+        for run in [8, 9] {
+            assert!(controller
+                .plan_store
+                .read_execution(&import_id("o/r", run))
+                .await
+                .is_err());
+        }
+        assert_eq!(
+            (
+                controller
+                    .plan_store
+                    .import_skipped(&import_id("o/r", 8))
+                    .await
+                    .unwrap(),
+                controller
+                    .plan_store
+                    .import_skipped(&import_id("o/r", 9))
+                    .await
+                    .unwrap()
+            ),
+            (
+                Some("2026-10-20T11:00:00Z".into()),
+                Some("2026-10-21T09:00:00Z".into())
+            )
+        );
+        // 8 is not tried again; 9, run again, is.
+        assert_eq!(
+            (
+                calls(root, "runs/8/artifacts"),
+                calls(root, "runs/9/artifacts")
+            ),
+            (1, 2)
+        );
+        let status = controller.ci_sync_status();
+        assert_eq!((status.failed, status.skipped), (0, 3));
+    }
+
+    #[tokio::test]
+    async fn a_run_ci_sync_could_not_skip_stays_failed_and_the_pass_goes_on() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let controller = controller_on(
+            root,
+            &[
+                GH,
+                r#"
+  *workflows/*) printf '{"total_count":1,"workflow_runs":['; run 8 'E2E · rc-8'; printf ']}' ;;
+  *artifacts*) ;;
+  *runs/8) run 8 'E2E · rc-8' ;;
+esac"#,
+            ]
+            .concat(),
+        );
+        // Imported before CI sync skipped such runs, it ended failed.
+        let (begun, _) = controller
+            .plan_store
+            .begin_github_import("o/r", 8)
+            .await
+            .unwrap();
+        controller
+            .plan_store
+            .finish_github_import(&begun.id)
+            .await
+            .unwrap();
+        controller.ci_sync_set(true).unwrap();
+        // Its skip cannot be written.
+        crate::plans::store::tests::database(&root.join("data")).refuse_writes();
+
+        assert_eq!(tick(&controller).await, Duration::ZERO);
+        let status = controller.ci_sync_status();
+        assert_eq!(
+            (status.message, status.phase, status.skipped),
+            (None, CiSyncPhase::Backfill, 0)
+        );
+        assert_eq!(
+            controller
+                .plan_store
+                .read_execution(&begun.id)
+                .await
+                .unwrap()
+                .state,
+            "failed"
+        );
+    }
+
+    #[tokio::test]
     async fn ci_sync_tries_a_failed_import_three_times_and_never_one_whose_artifacts_are_gone() {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
@@ -587,7 +991,7 @@ case "$*" in
                 GH,
                 r#"
   *workflows/*) printf '{"total_count":2,"workflow_runs":['; run 1 'E2E · rc-1'; printf ,; run 2 'E2E · rc-2'; printf ']}' ;;
-  *runs/1/artifacts*) ;;
+  *runs/1/artifacts*) printf 'e2e-contract-rc-1-gh-1\n' ;;
   *runs/2/artifacts*) echo 'connection reset' >&2; exit 1 ;;
   *runs/1) run 1 'E2E · rc-1' ;;
   *runs/2) run 2 'E2E · rc-2' ;;

@@ -44,7 +44,11 @@ const runtimeConfig: RuntimeConfig = {
     credential_set: 'e2e::dashboard::credential-set',
     credential_delete: 'e2e::dashboard::credential-delete',
     trends_get: 'e2e::dashboard::trends-get',
+    release_overview_get: 'e2e::dashboard::release-overview-get',
     version_compare: 'e2e::dashboard::version-compare',
+    ci_sync_status_get: 'e2e::dashboard::ci-sync-status-get',
+    ci_sync_set: 'e2e::dashboard::ci-sync-set',
+    ci_sync_check: 'e2e::dashboard::ci-sync-check',
     changed_trigger: 'e2e::dashboard::changed',
   },
 }

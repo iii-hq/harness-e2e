@@ -35,7 +35,7 @@ const SUMMARIES: [&str; 4] = [
     "Create an evidence-based plan for adding version comparison to a pinned Registry codebase.",
     "In a private container with the Registry code at a pinned commit, implement version comparison from the requirements and a reference plan: a compare API, a Changelog tab with version pickers, and shareable URLs. Test it against the running app and write a report with real screenshots.",
     "Reproduce the Registry test environment, including build, startup, isolation, restart, and cleanup.",
-    "Run the feature that registry_implementation just delivered, check its 24 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
+    "Run the feature that registry_implementation just delivered, check its 23 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
 ];
 const PROTECTS: [Option<&str>; 4] = [
     None,
@@ -159,13 +159,6 @@ fn function_id(scenario_id: &str, run_id: &str) -> String {
 pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
     vec![function_id(scenario_id, run_id)]
 }
-pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
-    vec![
-        function_id(scenario_id, run_id),
-        "engine::functions::list".into(),
-        "engine::functions::info".into(),
-    ]
-}
 fn registrations() -> &'static Mutex<HashMap<String, FunctionRef>> {
     static FUNCTIONS: OnceLock<Mutex<HashMap<String, FunctionRef>>> = OnceLock::new();
     FUNCTIONS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -238,8 +231,8 @@ impl Scenario for Registry {
         required_functions(self.id(), run_id)
     }
 
-    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
-        Some(allowed_functions(self.id(), run_id))
+    fn prepared_root(&self, run_id: &str) -> Result<Option<PathBuf>> {
+        Ok(Some(root(self.0, run_id).join("workspace").canonicalize()?))
     }
 
     async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -297,7 +290,7 @@ fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
     let id = IDS[usize::from(N - 1)];
     ScenarioSpec {
         id,
-        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
+        prompt: format!("{}\n\nUse any available tools and delegate work as needed. The `{}` tool executes commands at /workspace inside this attempt's private container; supply command and timeout_ms (1..=120000). Native filesystem tools share this workspace at the session's filesystem root. Share this tool and the workspace instructions with subagents. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
         filesystem_root: None,
         execution: ExecutionPolicy { max_turns: Some(128), max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
         denied_functions: &[],
@@ -321,7 +314,16 @@ struct ExecOutput {
     stdout: String,
     stderr: String,
     exit_code: i32,
+    artifacts: Vec<ExecArtifact>,
 }
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct ExecArtifact {
+    path: String,
+    sha256: String,
+    size_bytes: u64,
+}
+
 async fn checked(command: &mut Command) -> Result<Value> {
     command.kill_on_drop(true);
     let out = command.output().await?;
@@ -463,6 +465,7 @@ fn evidence_files(directory: &std::path::Path) -> Result<Value> {
         &[
             "validation",
             "commands",
+            "execution-evidence",
             "screenshots",
             "delivery",
             "workspace/output",
@@ -880,9 +883,15 @@ mod tests {
                 "implementation.function_removal",
             ],
             &["environment.build", "environment.api_readiness"],
-            &["verification.recall"],
+            &[
+                "verification.recall",
+                "verification.precision",
+                "verification.execution_coverage",
+                "verification.evidence_coverage",
+                "verification.source_preservation",
+            ],
         ];
-        // Finding one real failure is the verification's purpose.
+        // Verification completes only after it finds every known failure.
         assert_eq!(
             Registry(4)
                 .spec("test")
@@ -890,7 +899,7 @@ mod tests {
                 .iter()
                 .find(|c| c.id == "verification.recall")
                 .and_then(|c| c.gate_minimum),
-            Some(1)
+            None
         );
         for n in 1..=4 {
             let scenario = Registry(n).spec("test");
@@ -1031,10 +1040,26 @@ mod tests {
     }
 
     #[test]
-    fn scenario_workspaces_and_tools_do_not_overlap() {
+    fn scenario_workspaces_are_isolated_and_tools_are_unrestricted() {
         assert_ne!(root(1, "same"), root(2, "same"));
         assert_ne!(root(2, "first-a"), root(2, "first-b"));
-        assert_eq!(allowed_functions(PLANNING_ID, "run").len(), 3);
+        for test in 1..=4 {
+            let scenario = Registry(test);
+            assert!(scenario.allowed_functions("run").is_none());
+            assert!(scenario.spec("run").denied_functions.is_empty());
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let workspace = root(test, &run_id).join("workspace");
+            std::fs::create_dir_all(&workspace).unwrap();
+            assert_eq!(
+                scenario.prepared_root(&run_id).unwrap(),
+                Some(workspace.canonicalize().unwrap())
+            );
+            std::fs::remove_dir_all(root(test, &run_id)).unwrap();
+            assert_eq!(
+                scenario.required_functions("run"),
+                vec![function_id(scenario.id(), "run")]
+            );
+        }
         assert!(!assets(1, "run").starts_with(root(1, "run")));
     }
 }

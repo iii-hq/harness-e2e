@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type {
   DashboardDataBridge,
   JsonObject,
@@ -6,19 +6,30 @@ import type {
 
 type RunChanges = Pick<DashboardDataBridge, 'subscribeRunChanges'>
 
-/** Calls `onChange` once, `delayMs` after the last run change; returns the stop. */
+/**
+ * Calls `onChange` once, `delayMs` after the last run change, and never
+ * sooner than `minIntervalMs` after its previous call: a change that comes
+ * earlier waits for that time, still with the latest payload. Returns the stop.
+ */
 export function followRunChanges(
   bridge: RunChanges,
   onChange: (payload: JsonObject) => unknown,
   delayMs = 400,
+  minIntervalMs = 0,
 ): () => void {
   let cancelled = false
   let dispose: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
+  let lastCall = Number.NEGATIVE_INFINITY
   bridge
     .subscribeRunChanges((payload) => {
       clearTimeout(timer)
-      timer = setTimeout(() => void onChange(payload), delayMs)
+      const now = Date.now()
+      const at = Math.max(now + delayMs, lastCall + minIntervalMs)
+      timer = setTimeout(() => {
+        lastCall = Date.now()
+        void onChange(payload)
+      }, at - now)
     })
     .then((off) => {
       if (cancelled) off()
@@ -32,13 +43,25 @@ export function followRunChanges(
   }
 }
 
-/** Follows run changes while `bridge` is set. Pass a stable `onChange`. */
+/** Follows run changes while `bridge` is set, calling the latest
+ *  `onChange`: a new one keeps the subscription and a call it postponed. */
 export function useRunChanges(
   bridge: RunChanges | null,
   onChange: (payload: JsonObject) => unknown,
   delayMs = 400,
+  minIntervalMs = 0,
 ) {
+  const latest = useRef(onChange)
   useEffect(() => {
-    if (bridge) return followRunChanges(bridge, onChange, delayMs)
-  }, [bridge, onChange, delayMs])
+    latest.current = onChange
+  }, [onChange])
+  useEffect(() => {
+    if (bridge)
+      return followRunChanges(
+        bridge,
+        (payload) => latest.current(payload),
+        delayMs,
+        minIntervalMs,
+      )
+  }, [bridge, delayMs, minIntervalMs])
 }

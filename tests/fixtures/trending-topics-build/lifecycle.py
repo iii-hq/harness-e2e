@@ -101,7 +101,7 @@ def prepare(args):
     (evaluator / "node_modules").symlink_to("/opt/public-deps/node_modules", target_is_directory=True)
     workspace = root / "workspace"
     workspace.mkdir()
-    task = (public / "README.md").read_text() + f"\n## This attempt\n\nClone `{REMOTE_URL}` into `/workspace/app`, on branch `build`. The initial SHA is `{BASELINE_SHA}`. All commands execute inside your isolated container, starting at `/workspace`. Dependencies and Chromium are pre-provisioned; `npm ci` uses the frozen offline cache. Internet access is disabled. Read and modify only this task's workspace.\n"
+    task = (public / "README.md").read_text() + f"\n## This attempt\n\nClone `{REMOTE_URL}` into `/workspace/app`, on branch `build`. The initial SHA is `{BASELINE_SHA}`. The scenario execution tool starts at `/workspace` inside your isolated container. Native filesystem tools share this workspace at the session's filesystem root; you may delegate work and use any available tools. Dependencies and Chromium are pre-provisioned in the container; `npm ci` uses the frozen offline cache. The container's Internet access is disabled. Read and modify only this task's workspace.\n"
     (workspace / "TASK.md").write_text(task)
     git_name = f"ttb-{state['token']}-git"
     run(container_args(state, "git") + ["-d"] + mount(root / "remote", "/remote") +

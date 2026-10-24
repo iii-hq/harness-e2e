@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use super::assessment_projection::{
     assessment_profile_sha256, contracts_for_scenario, summarize, AssessmentSummary,
@@ -515,6 +516,8 @@ pub(crate) struct DashboardReadModel {
     /// Where each execution's native results are, relative to the runs
     /// directory. An execution missing here is read from its own directory.
     result_paths: BTreeMap<String, String>,
+    /// `trend_runs()`, computed on first use.
+    trend_runs: OnceLock<Arc<BTreeMap<String, Vec<super::trends::TrendRun>>>>,
 }
 
 impl DashboardReadModel {
@@ -524,22 +527,53 @@ impl DashboardReadModel {
         records: Vec<ExecutionRecord>,
         discarded: &BTreeSet<String>,
     ) -> Result<Self> {
-        let mut model = Self::indexed(
-            records
-                .iter()
-                .map(|record| match record.dashboard_projection.as_ref() {
-                    Some(projection) => serde_json::from_value(projection.clone())
-                        .context("decode dashboard execution projection"),
-                    None => ExecutionProjection::from_record(record),
-                })
-                .collect::<Result<Vec<_>>>()?,
-            discarded,
-        )?;
-        model.result_paths = records
-            .into_iter()
-            .filter_map(|record| Some((record.execution_id, record.result_path?)))
-            .collect();
+        let mut model = Self::indexed(projections(&records)?, discarded)?;
+        model.result_paths = result_paths(records).collect();
         Ok(model)
+    }
+
+    /// This model with `records` added, as `from_records` over both builds
+    /// it; `None` when it already holds one of them.
+    pub(crate) fn with_records(
+        &self,
+        records: Vec<ExecutionRecord>,
+        discarded: &BTreeSet<String>,
+    ) -> Result<Option<Self>> {
+        let Some(mut model) = self.with_projections(projections(&records)?, discarded)? else {
+            return Ok(None);
+        };
+        model.result_paths.extend(result_paths(records));
+        Ok(Some(model))
+    }
+
+    /// Everything the model answers from but the `trend_runs` cache, for
+    /// telling two builds apart.
+    #[cfg(test)]
+    pub(crate) fn state(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                &self.revision,
+                &self.summaries,
+                &self.cohorts,
+                &self.evaluated_versions,
+                &self.tests,
+                &self.result_paths,
+            )
+        )
+    }
+
+    /// `with_records` over runs read from their directories, as `load` reads
+    /// them.
+    #[cfg(test)]
+    pub(super) fn with_stored(&self, stored: Vec<StoredRun>) -> Result<Option<Self>> {
+        self.with_projections(
+            stored
+                .iter()
+                .map(ExecutionProjection::from_stored)
+                .collect::<Result<Vec<_>>>()?,
+            &BTreeSet::new(),
+        )
     }
 
     #[cfg(test)]
@@ -548,9 +582,50 @@ impl DashboardReadModel {
     }
 
     fn indexed(
-        mut projections: Vec<ExecutionProjection>,
+        projections: Vec<ExecutionProjection>,
         discarded: &BTreeSet<String>,
     ) -> Result<Self> {
+        let mut model = Self {
+            revision: String::new(),
+            summaries: Vec::new(),
+            cohorts: BTreeMap::new(),
+            evaluated_versions: BTreeMap::new(),
+            tests: current_tests()?,
+            result_paths: BTreeMap::new(),
+            trend_runs: OnceLock::new(),
+        };
+        model.index(projections, discarded)?;
+        Ok(model)
+    }
+
+    fn with_projections(
+        &self,
+        projections: Vec<ExecutionProjection>,
+        discarded: &BTreeSet<String>,
+    ) -> Result<Option<Self>> {
+        let held = |projection: &ExecutionProjection| {
+            self.summaries
+                .iter()
+                .any(|summary| summary["id"] == projection.summary["id"])
+        };
+        if projections.iter().any(held) {
+            return Ok(None);
+        }
+        let mut model = Self {
+            trend_runs: OnceLock::new(),
+            ..self.clone()
+        };
+        model.index(projections, discarded)?;
+        Ok(Some(model))
+    }
+
+    /// Lists `projections` in their sorted place among the summaries and
+    /// indexes those a later attempt did not replace (`discarded`).
+    fn index(
+        &mut self,
+        mut projections: Vec<ExecutionProjection>,
+        discarded: &BTreeSet<String>,
+    ) -> Result<()> {
         for projection in &mut projections {
             if !projection.summary["totals"]["turns"].is_null() {
                 continue;
@@ -572,36 +647,32 @@ impl DashboardReadModel {
                 });
             projection.summary["totals"]["turns"] = json!(turns);
         }
-        let revision = artifact::sha256_value(
-            &projections
+        self.summaries.extend(
+            projections
                 .iter()
-                .map(|projection| {
-                    json!({
-                        "id": projection.summary["id"],
-                        "completed_at": projection.summary["completed_at"],
-                        "status": projection.summary["status"],
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )?;
-        let mut summaries = projections
-            .iter()
-            .map(|projection| projection.summary.clone())
-            .collect::<Vec<_>>();
-        summaries.sort_by(|left, right| {
+                .map(|projection| projection.summary.clone()),
+        );
+        self.summaries.sort_by(|left, right| {
             right["started_at"]
                 .as_str()
                 .cmp(&left["started_at"].as_str())
                 .then_with(|| right["id"].as_str().cmp(&left["id"].as_str()))
         });
-        let mut model = Self {
-            revision,
-            summaries,
-            cohorts: BTreeMap::new(),
-            evaluated_versions: BTreeMap::new(),
-            tests: current_tests()?,
-            result_paths: BTreeMap::new(),
-        };
+        // Over the sorted summaries, not the input order: a grown model cannot
+        // tell where `records()` (newest `requested_at` first) would list its runs.
+        self.revision = artifact::sha256_value(
+            &self
+                .summaries
+                .iter()
+                .map(|summary| {
+                    json!({
+                        "id": summary["id"],
+                        "completed_at": summary["completed_at"],
+                        "status": summary["status"],
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
         for projection in projections {
             if projection.summary["id"]
                 .as_str()
@@ -609,9 +680,24 @@ impl DashboardReadModel {
             {
                 continue;
             }
-            model.index_projection(projection);
+            self.index_projection(projection);
         }
-        Ok(model)
+        // Newest first, whatever order the runs were indexed in, so a grown
+        // model lists them as a full build does. Stable: an execution's own
+        // observations keep their order.
+        for version in self
+            .tests
+            .values_mut()
+            .flat_map(|test| test.versions.values_mut())
+        {
+            version.observations.sort_by(|left, right| {
+                right
+                    .completed_at
+                    .cmp(&left.completed_at)
+                    .then_with(|| right.execution_id.cmp(&left.execution_id))
+            });
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1097,8 +1183,15 @@ impl DashboardReadModel {
     }
 
     /// Every run of every test, by the native run it belongs to, as trends
-    /// measure them. Replaced attempts are already left out.
-    pub(super) fn trend_runs(&self) -> BTreeMap<String, Vec<super::trends::TrendRun>> {
+    /// measure them, computed once per model. Replaced attempts are already
+    /// left out.
+    pub(super) fn trend_runs(&self) -> Arc<BTreeMap<String, Vec<super::trends::TrendRun>>> {
+        self.trend_runs
+            .get_or_init(|| Arc::new(self.collect_trend_runs()))
+            .clone()
+    }
+
+    fn collect_trend_runs(&self) -> BTreeMap<String, Vec<super::trends::TrendRun>> {
         let mut runs = BTreeMap::<String, Vec<_>>::new();
         for (test, entry) in &self.tests {
             for observation in entry.versions.values().flat_map(|v| &v.observations) {
@@ -1283,6 +1376,25 @@ impl DashboardReadModel {
             to_observations: to_observations.iter().map(public_observation).collect(),
         })
     }
+}
+
+/// Each record's dashboard projection: the stored one, else one projected
+/// from its report.
+fn projections(records: &[ExecutionRecord]) -> Result<Vec<ExecutionProjection>> {
+    records
+        .iter()
+        .map(|record| match record.dashboard_projection.as_ref() {
+            Some(projection) => serde_json::from_value(projection.clone())
+                .context("decode dashboard execution projection"),
+            None => ExecutionProjection::from_record(record),
+        })
+        .collect()
+}
+
+fn result_paths(records: Vec<ExecutionRecord>) -> impl Iterator<Item = (String, String)> {
+    records
+        .into_iter()
+        .filter_map(|record| Some((record.execution_id, record.result_path?)))
 }
 
 fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
@@ -2233,6 +2345,71 @@ mod tests {
             (run.cost_usd, run.validation_retries, run.technical_retries),
             (Some(0.1), Some(2.0), Some(2.0))
         );
+    }
+
+    /// A completed record of the test report, started at `started_at`.
+    fn record(id: &str, started_at: &str) -> ExecutionRecord {
+        let mut record: ExecutionRecord = serde_json::from_value(json!({
+            "execution_id": id, "idempotency_key": id, "phase": "completed",
+            "requested_at": started_at, "updated_at": started_at,
+            "request": {"idempotency_key": id, "model": "model", "provider": "provider", "scenarios": ["context_pressure"]},
+            "lane_budget": {"max_cases": 1, "max_runs_per_case": 1, "max_technical_retries": 0, "max_declared_turns": 1},
+            "transitions": [], "cancel_requested": false, "result_path": format!("{id}/results.json"),
+        }))
+        .unwrap();
+        let mut report = super::super::tests::report();
+        report.execution.execution_id = id.into();
+        report.execution.started_at = started_at.into();
+        record.report = Some(report);
+        record
+    }
+
+    #[test]
+    fn appending_records_builds_the_model_a_full_load_builds() {
+        let a = || {
+            vec![
+                record("a-old", "2026-08-05T12:00:00Z"),
+                record("a-new", "2026-08-07T12:00:00Z"),
+            ]
+        };
+        // Older than every run of A, and read from its stored projection.
+        let mut oldest = record("b-oldest", "2026-08-01T12:00:00Z");
+        oldest.dashboard_projection =
+            Some(serde_json::to_value(ExecutionProjection::from_record(&oldest).unwrap()).unwrap());
+        oldest.report = None;
+        let b = || vec![record("b-newest", "2026-08-09T12:00:00Z"), oldest.clone()];
+        let none = BTreeSet::new();
+        let base = DashboardReadModel::from_records(a(), &none).unwrap();
+        // Computed before: a copy that kept them would miss B's runs.
+        base.trend_runs();
+
+        let grown = base.with_records(b(), &none).unwrap().unwrap();
+        // Listed in another order, as the database lists them.
+        let built = DashboardReadModel::from_records([b(), a()].concat(), &none).unwrap();
+        // Every test version's observations included, whose order an answer keeps.
+        assert_eq!(grown.state(), built.state());
+        let ids = grown
+            .summaries
+            .iter()
+            .map(|summary| summary["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["b-newest", "a-new", "a-old", "b-oldest"]);
+        assert_eq!(grown.trend_runs(), built.trend_runs());
+        assert_eq!(grown.trend_runs().len(), 4);
+        assert_eq!(grown.result_paths.len(), 4);
+
+        let again = record("a-new", "2026-08-10T12:00:00Z");
+        assert!(base.with_records(vec![again], &none).unwrap().is_none());
+    }
+
+    #[test]
+    fn trend_runs_are_computed_once_per_model() {
+        let model = DashboardReadModel::from_records(
+            vec![record("a", "2026-08-07T12:00:00Z")],
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&model.trend_runs(), &model.trend_runs()));
     }
 
     #[test]

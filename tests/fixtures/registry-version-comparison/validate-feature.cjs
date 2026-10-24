@@ -31,7 +31,7 @@ function change(result, predicate) { return changes(result).find(predicate); }
 function endpoint(from, to, worker = 'orders-worker') { return `/w/${worker}/compare/${from}...${to}`; }
 
 async function temporaryOrderingProbes() {
-  const ids = ['object_order', 'required_order', 'enum_order', 'config_array_order'];
+  const ids = ['required_order', 'enum_order', 'config_array_order'];
   const versions = ['9.90.0', '9.90.1'];
   const sql = postgres(process.env.DATABASE_URL, { max: 1 });
   try {
@@ -57,9 +57,7 @@ async function temporaryOrderingProbes() {
     for (const id of ids) {
       const functions = structuredClone(fromFunctions);
       const config = structuredClone(baseConfig);
-      if (id === 'object_order') {
-        functions[0].request_schema.properties = { currency: { type: 'string' }, customerId: { enum: ['one', 'two'], type: 'string' } };
-      } else if (id === 'required_order') {
+      if (id === 'required_order') {
         functions[0].request_schema.required.reverse();
       } else if (id === 'enum_order') {
         functions[0].request_schema.properties.customerId.enum.reverse();
@@ -90,7 +88,7 @@ async function apiProbes() {
   try { health = await request('/health'); } catch (error) {
     const reason = `API unreachable: ${error}`;
     for (const id of [
-      'object_order','required_order','enum_order','config_array_order','same_version','function_removal','required_impact','missing_metadata','worker_lookup',
+      'required_order','enum_order','config_array_order','same_version','function_removal','required_impact','missing_metadata','worker_lookup',
       'reverse_kinds','reverse_values','reverse_impact','invalid_version','missing_worker','missing_version'
     ]) unavailable(`implementation.${id}`, 'Live API observation', reason);
     return false;
@@ -140,10 +138,22 @@ async function browserProbes(apiHealthy) {
     const hasChangelog = /changelog/i.test(historyText);
     observe('implementation.shared_url', hasChangelog && selected.includes('1.0.0') && selected.includes('2.0.0'), 'Selected pair restored', { url: page.url(), selected, hasChangelog });
     observe('implementation.history', hasChangelog && ['0.9.0','1.0.0','1.1.0','2.0.0'].every(v => historyText.includes(v)), 'Four seeded releases visible in Changelog', historyText.slice(0,2000));
-    const detail = page.getByRole('button', { name: /timeout/i }).or(page.locator('summary').filter({ hasText: /timeout/i })).first();
+    const timeoutPath = page.getByText(/^\/?timeoutMs$/i).first();
+    const detailRow = timeoutPath.locator('xpath=ancestor::*[self::tr or self::li or self::details or @role="row" or .//button][1]');
+    const detail = detailRow.locator('button, summary').first();
     let expanded = false;
-    if (await detail.count()) { await detail.click(); const text = await page.locator('body').innerText(); expanded = /3000|3,000/.test(text) && /5000|5,000/.test(text); }
-    observe('implementation.expanded_detail', expanded, 'Expanded timeout shows 3000 and 5000', { controlFound: !!(await detail.count()), expanded });
+    let disclosure = {};
+    if (await timeoutPath.count() && await detail.count()) {
+      const state = () => detail.evaluate(node => node.tagName === 'SUMMARY'
+        ? node.parentElement?.open === true : node.getAttribute('aria-expanded') === 'true');
+      disclosure.before = await state();
+      await detail.click();
+      disclosure.after = await state();
+      disclosure.text = await detailRow.innerText();
+      expanded = !disclosure.before && disclosure.after
+        && /3000|3,000/.test(disclosure.text) && /5000|5,000/.test(disclosure.text);
+    }
+    observe('implementation.expanded_detail', expanded, 'Closed timeout row opens and shows 3000 and 5000', { controlFound: !!(await detail.count()), ...disclosure });
     const selects = page.locator('select');
     let keyboard = false;
     let staleCleared = false;
@@ -169,12 +179,15 @@ async function browserProbes(apiHealthy) {
         if (renamed.count !== 1) throw new Error('Expected one temporary stale-state probe version');
         await selects.nth(1).selectOption('0.9.0');
         if (submitsComparison) await compare.click();
-        await page.waitForLoadState('networkidle');
+        await page.waitForURL(url => url.searchParams.get('to') === '0.9.0', { waitUntil: 'domcontentloaded', timeout });
+        await page.getByRole('alert').first().waitFor({ state: 'visible', timeout });
+        await page.waitForFunction(() => !document.body.innerText.includes('orders::get'), null, { timeout });
         const afterFailure = await page.locator('body').innerText();
         staleAlertText = await page.getByRole('alert').evaluateAll(nodes => nodes
           .filter(node => node.checkVisibility()).map(node => node.innerText.trim()).filter(Boolean));
-        staleCleared = beforeFailure.includes('orders::get') && !afterFailure.includes('orders::get')
-          && (staleAlertText.length > 0 || /error|failed|unable|unavailable|not[ _]found|retry/i.test(afterFailure));
+        staleCleared = new URL(page.url()).searchParams.get('to') === '0.9.0'
+          && beforeFailure.includes('orders::get') && !afterFailure.includes('orders::get')
+          && staleAlertText.length > 0;
       } finally {
         try {
           await sql`update worker_version set version = '0.9.0'

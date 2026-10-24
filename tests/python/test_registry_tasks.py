@@ -1,9 +1,11 @@
 """Patch handoff and input-boundary checks for the Registry task lifecycle."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 ASSETS = Path(__file__).resolve().parents[2] / "tests/fixtures/registry-version-comparison"
@@ -145,6 +147,179 @@ class RegistryDeliveryTests(unittest.TestCase):
             # iii telemetry off in the runner and, through it, the fixture's services.
             self.assertIn(["-e", "III_TELEMETRY_ENABLED=false"],
                           [launch[i:i + 2] for i in range(len(launch) - 1)])
+
+    def test_evidence_collection_rejects_symlinks_and_bounds(self):
+        cases = []
+
+        target = self.root / "target"
+        target.mkdir()
+        root_link = self.root / "root-link"
+        root_link.symlink_to(target, target_is_directory=True)
+        cases.append(("root symlink", root_link, {}, "real directory"))
+
+        nested_link = self.root / "nested-link"
+        nested_link.mkdir()
+        (nested_link / "escape").symlink_to(target, target_is_directory=True)
+        cases.append(("nested symlink", nested_link, {}, "real directories"))
+
+        count = self.root / "count"
+        count.mkdir()
+        (count / "a").write_bytes(b"a")
+        (count / "b").write_bytes(b"b")
+        cases.append(("count", count, {"max_files": 1}, "too many"))
+
+        directories = self.root / "directories"
+        directories.mkdir()
+        (directories / "a").mkdir()
+        (directories / "b").mkdir()
+        cases.append(("directory count", directories, {"max_entries": 1},
+                      "too many evidence entries"))
+
+        individual = self.root / "individual"
+        individual.mkdir()
+        (individual / "a").write_bytes(b"ab")
+        cases.append(("individual size", individual, {"max_file_bytes": 1}, "size limit"))
+
+        total = self.root / "total"
+        total.mkdir()
+        (total / "a").write_bytes(b"ab")
+        (total / "b").write_bytes(b"cd")
+        cases.append(("total size", total, {"max_total_bytes": 3}, "total size"))
+
+        for name, directory, limits, message in cases:
+            with self.subTest(name=name, implementation="controller"):
+                with self.assertRaisesRegex(ValueError, message):
+                    module.artifact_manifest(directory, **limits)
+            with self.subTest(name=name, implementation="container"):
+                with self.assertRaisesRegex(RuntimeError, message):
+                    module.run([module.sys.executable, "-c",
+                                module.manifest_script(**limits), directory])
+
+        valid = self.root / "valid"
+        valid.mkdir()
+        proof = valid / "proof.json"
+        proof.write_bytes(b"{}")
+        expected = module.artifact_manifest(valid)
+        payload = json.loads(module.run([module.sys.executable, "-c",
+                                         module.manifest_script(), valid]))
+        proof.write_bytes(b"changed after collection")
+        self.assertEqual(module.base64.b64decode(payload[0].pop("data_base64")), b"{}")
+        self.assertEqual(expected, payload)
+
+    def test_exec_limit_failure_cleans_stage_without_receipt(self):
+        import argparse
+        root = self.root / "limited-run"
+        (root / "workspace/output").mkdir(parents=True)
+        module.write_json(root / "state.json", {"container": "private-runner"})
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            argv = [str(value) for value in argv]
+            calls.append(argv)
+            if argv[:3] == ["docker", "exec", "private-runner"] and "python3" in argv:
+                raise RuntimeError("too many evidence files")
+            return b""
+
+        completed = module.subprocess.CompletedProcess([], 0, b"", b"")
+        args = argparse.Namespace(root=root, command="python verify.py", timeout_ms=1000)
+        with patch.object(module, "run", side_effect=fake_run), \
+             patch.object(module.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "too many evidence files"):
+                module.execute(args)
+        self.assertTrue(any("rm" in call and "--" in call for call in calls))
+        self.assertFalse((root / "commands").exists())
+        self.assertFalse((root / "execution-evidence").exists())
+
+    def test_concurrent_execs_materialize_only_private_staged_evidence(self):
+        import argparse
+        root = self.root / "run"
+        (root / "workspace/output").mkdir(parents=True)
+        module.write_json(root / "state.json", {"container": "private-runner"})
+        proof = b'{"check_id":"example","status":"fail","assertions":[{"id":"http","passed":false,"expected":{"status":200},"observed":{"status":500}}]}'
+        staged = [{"path": "proof.json", "sha256": hashlib.sha256(proof).hexdigest(),
+                   "size_bytes": len(proof),
+                   "data_base64": module.base64.b64encode(proof).decode()}]
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            argv = [str(value) for value in argv]
+            calls.append(argv)
+            if argv[:3] == ["docker", "exec", "private-runner"] and "python3" in argv:
+                return json.dumps(staged).encode()
+            return b""
+
+        completed = module.subprocess.CompletedProcess([], 1, b"observed failure", b"")
+        args = argparse.Namespace(root=root, command="python verify.py", timeout_ms=1000)
+        with patch.object(module, "run", side_effect=fake_run), \
+             patch.object(module.subprocess, "run", return_value=completed):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda _: module.execute(args), range(2)))
+
+        self.assertEqual([result["exit_code"] for result in results], [1, 1])
+        receipts = [json.loads(path.read_text()) for path in (root / "commands").glob("*.json")]
+        self.assertEqual(len(receipts), 2)
+        paths = {receipt["artifacts"][0]["path"] for receipt in receipts}
+        self.assertEqual(len(paths), 2)
+        self.assertTrue(all(path.startswith("execution-evidence/") for path in paths))
+        self.assertTrue(all(receipt["artifacts"][0]["sha256"] == hashlib.sha256(proof).hexdigest()
+                            for receipt in receipts))
+        self.assertTrue(all((root / path).read_bytes() == proof for path in paths))
+        self.assertFalse(any(call[:2] == ["docker", "cp"] for call in calls))
+
+    def test_exec_materializes_snapshot_when_stage_changes_after_collection(self):
+        import argparse
+        root = self.root / "stage-race"
+        (root / "workspace/output").mkdir(parents=True)
+        module.write_json(root / "state.json", {"container": "private-runner"})
+        stage = self.root / "simulated-stage"
+        stage.mkdir()
+        proof = stage / "proof.json"
+        original = b'{"observed":"bounded"}'
+        proof.write_bytes(original)
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            argv = [str(value) for value in argv]
+            calls.append(argv)
+            if argv[:3] == ["docker", "exec", "private-runner"] and "python3" in argv:
+                snapshot = module.artifact_manifest(stage, include_data=True)
+                proof.write_bytes(b"changed and grown after collection" * 20)
+                return json.dumps(snapshot).encode()
+            return b""
+
+        completed = module.subprocess.CompletedProcess([], 0, b"", b"")
+        args = argparse.Namespace(root=root, command="python verify.py", timeout_ms=1000)
+        with patch.object(module, "run", side_effect=fake_run), \
+             patch.object(module.subprocess, "run", return_value=completed):
+            result = module.execute(args)
+        materialized = root / result["artifacts"][0]["path"]
+        self.assertEqual(materialized.read_bytes(), original)
+        self.assertFalse(any(call[:2] == ["docker", "cp"] for call in calls))
+
+    def test_exec_rejects_payload_that_does_not_match_the_manifest(self):
+        import argparse
+        root = self.root / "tampered-run"
+        (root / "workspace/output").mkdir(parents=True)
+        module.write_json(root / "state.json", {"container": "private-runner"})
+        expected = b'{"expected":true}'
+        staged = [{"path": "proof.json", "sha256": hashlib.sha256(expected).hexdigest(),
+                   "size_bytes": len(expected),
+                   "data_base64": module.base64.b64encode(b'{"tampered":true}').decode()}]
+
+        def fake_run(argv, **_kwargs):
+            argv = [str(value) for value in argv]
+            if argv[:3] == ["docker", "exec", "private-runner"] and "python3" in argv:
+                return json.dumps(staged).encode()
+            return b""
+
+        completed = module.subprocess.CompletedProcess([], 0, b"", b"")
+        args = argparse.Namespace(root=root, command="python verify.py", timeout_ms=1000)
+        with patch.object(module, "run", side_effect=fake_run), \
+             patch.object(module.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "does not match its manifest"):
+                module.execute(args)
+        self.assertFalse((root / "commands").exists())
+        self.assertFalse(any((root / "execution-evidence").glob("*")))
 
 
 if __name__ == "__main__":

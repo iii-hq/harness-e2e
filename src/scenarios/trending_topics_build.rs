@@ -33,7 +33,7 @@ const CRITERIA: [(&str, u8, &str, &str); 10] = [
     ("B06", 10, "Do the home, article, All topics, and browser Back navigation flows work?", "Home, article and Back navigation work"),
     ("B07", 5, "Do direct entry and reload work for every article URL?", "Article URLs work on direct entry and reload"),
     ("B08", 5, "Does every article expose a Source link with the exact input URL?", "Every article links to its exact source"),
-    ("B09", 5, "Do pages have the required semantic structure and keyboard-operable links with visible focus?", "Semantic structure and keyboard focus are correct"),
+    ("B09", 5, "Do pages have the required semantic structure and keyboard-operable links with a visible focus indicator of at least 3:1 contrast?", "Semantic structure and keyboard focus are correct"),
     ("B10", 5, "Do desktop and mobile layouts avoid horizontal overflow and keep required links unobstructed?", "Desktop and mobile layouts have no overflow"),
 ];
 
@@ -95,14 +95,6 @@ pub fn required_functions(run_id: &str) -> Vec<String> {
     vec![function_id(run_id)]
 }
 
-pub fn allowed_functions(run_id: &str) -> Vec<String> {
-    vec![
-        function_id(run_id),
-        "engine::functions::list".into(),
-        "engine::functions::info".into(),
-    ]
-}
-
 fn registrations() -> &'static Mutex<HashMap<String, FunctionRef>> {
     static FUNCTIONS: OnceLock<Mutex<HashMap<String, FunctionRef>>> = OnceLock::new();
     FUNCTIONS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -136,8 +128,8 @@ impl Scenario for TrendingTopicsBuild {
         required_functions(run_id)
     }
 
-    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
-        Some(allowed_functions(run_id))
+    fn prepared_root(&self, run_id: &str) -> Result<Option<PathBuf>> {
+        Ok(Some(root(run_id).join("workspace").canonicalize()?))
     }
 
     fn case(&self, _seed: u64) -> Result<ScenarioCase> {
@@ -174,7 +166,7 @@ impl Scenario for TrendingTopicsBuild {
         ScenarioSpec {
             id: ID,
             prompt: format!(
-                "Build the application described by `/workspace/TASK.md`. Use `{}` for every file read, edit, Git operation, build, and test command. Each command starts in `/workspace` inside your private container. Clone `git://127.0.0.1:9418/origin.git` into `/workspace/app` on branch `build`, make and commit the complete implementation there, and push the final commit to `origin/build`. Do not publish or deploy outside this attempt. Supply `command` and `timeout_ms` (1..=120000). Use function discovery only to find this exact tool.",
+                "Build the application described by `/workspace/TASK.md`. Use any available tools and delegate work as needed. The `{}` tool executes commands in `/workspace` inside this attempt's private container; supply `command` and `timeout_ms` (1..=120000). Native filesystem tools share this workspace at the session's filesystem root. Share this tool and the workspace instructions with subagents. Clone `git://127.0.0.1:9418/origin.git` into `/workspace/app` on branch `build`, make and commit the complete implementation there, and push the final commit to `origin/build`. Do not publish or deploy outside this attempt.",
                 function_id(run_id)
             ),
             filesystem_root: None,
@@ -894,12 +886,18 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_exposes_only_the_attempt_tool_and_discovery() {
-        let allowed = allowed_functions("run");
-        assert_eq!(allowed.len(), 3);
+    fn tools_and_delegation_are_unrestricted() {
+        assert!(TrendingTopicsBuild.allowed_functions("run").is_none());
+        assert!(TrendingTopicsBuild.spec("run").denied_functions.is_empty());
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let workspace = root(&run_id).join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        assert_eq!(
+            TrendingTopicsBuild.prepared_root(&run_id).unwrap(),
+            Some(workspace.canonicalize().unwrap())
+        );
+        std::fs::remove_dir_all(root(&run_id)).unwrap();
         assert_eq!(required_functions("run"), vec![function_id("run")]);
-        assert!(allowed.contains(&"engine::functions::list".to_string()));
-        assert!(allowed.contains(&"engine::functions::info".to_string()));
     }
 
     #[test]

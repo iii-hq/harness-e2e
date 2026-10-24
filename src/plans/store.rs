@@ -1,10 +1,10 @@
 //! Executions composed of native runs, and the suites and stacks this
 //! Console keeps.
 //! Every planned child and its idempotency key is durable before admission.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ use crate::test_plan::{self, ProfileSnapshot};
 mod docker;
 mod github;
 mod github_start;
-pub(crate) use github_start::{github_started, GithubFollow};
+pub(crate) use github_start::{github_started, GithubFollow, NOT_SIGNED_IN};
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
@@ -395,6 +395,15 @@ impl Runner for ControlPlane {
     }
 }
 
+/// Marks the saved executions stale when dropped: a write whose caller went
+/// before `saved` followed it.
+struct Unapplied<'a>(&'a AtomicBool);
+impl Drop for Unapplied<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 pub(crate) struct PlanStore {
     pub(crate) root: PathBuf,
     persistence: Option<Persistence>,
@@ -409,6 +418,19 @@ pub(crate) struct PlanStore {
     /// Moves whenever a slot's previous attempts change, so views that leave
     /// them out know to read them again.
     attempts: AtomicU64,
+    /// Every saved plan execution by id, as `executions()` reads them: read
+    /// from the database once, since this worker is their only writer. `None`
+    /// until then, and again after a write the database may not have kept.
+    saved: tokio::sync::RwLock<Option<BTreeMap<String, PlanExecution>>>,
+    /// Held across a saved execution's database write and its update in
+    /// `saved`, so writes apply in one order to both. Taken last.
+    saved_writes: Mutex<()>,
+    /// Moves on every write or delete of a saved plan execution, failed ones
+    /// included.
+    saved_revision: AtomicU64,
+    /// Set when a write was dropped before `saved` followed it: the next read
+    /// takes the database's word.
+    saved_stale: AtomicBool,
 }
 impl PlanStore {
     pub(crate) async fn new(
@@ -426,6 +448,10 @@ impl PlanStore {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_writes: Mutex::new(()),
+            saved_revision: AtomicU64::new(0),
+            saved_stale: AtomicBool::new(false),
         });
         if manager.runner.is_some() {
             manager.reconcile().await?;
@@ -481,17 +507,63 @@ impl PlanStore {
         Ok(stacks)
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
-        self.load_execution(id)
-            .await
-            .map(ran_where_it_came_from)
-            .map(resolved_from_lock)
-    }
-    async fn load_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
-        self.persistence()?
-            .saved_execution(id)
+        self.saved(|saved| saved.get(id).cloned())
             .await?
             .context("unknown execution")
+    }
+    /// `read` over the saved executions, read from the database on first use;
+    /// concurrent first uses wait for that one read.
+    async fn saved<T>(
+        &self,
+        read: impl FnOnce(&BTreeMap<String, PlanExecution>) -> T,
+    ) -> Result<T> {
+        if !self.saved_stale.load(Ordering::SeqCst) {
+            if let Some(saved) = &*self.saved.read().await {
+                return Ok(read(saved));
+            }
+        }
+        let mut saved = self.saved.write().await;
+        if self.saved_stale.swap(false, Ordering::SeqCst) {
+            *saved = None;
+        }
+        let executions = match saved.take() {
+            Some(executions) => executions,
+            None => self
+                .persistence()?
+                .saved_executions()
+                .await?
+                .into_iter()
+                .map(ran_where_it_came_from)
+                .map(resolved_from_lock)
+                .map(|execution| (execution.id.clone(), execution))
+                .collect(),
+        };
+        Ok(read(saved.insert(executions)))
+    }
+    /// `write` to the database, then `apply` to the saved executions, one
+    /// write at a time. Dropped between the two, it leaves them stale.
+    async fn change_saved(
+        &self,
+        write: impl std::future::Future<Output = Result<()>>,
+        apply: impl FnOnce(&mut BTreeMap<String, PlanExecution>),
+    ) -> Result<()> {
+        let _writing = self.saved_writes.lock().await;
+        // Loaded before the write: a load still reading could miss it.
+        self.saved(|_| ()).await?;
+        let unapplied = Unapplied(&self.saved_stale);
+        let written = write.await;
+        let mut saved = self.saved.write().await;
+        match saved.as_mut() {
+            Some(executions) if written.is_ok() => apply(executions),
+            // A failed write may have committed all the same, its reply lost:
+            // the next read takes the database's word.
+            _ => *saved = None,
+        }
+        std::mem::forget(unapplied);
+        // Either way, the next read may find them changed.
+        self.saved_revision.fetch_add(1, Ordering::SeqCst);
+        written
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
@@ -502,7 +574,14 @@ impl PlanStore {
         Ok(())
     }
     async fn save_execution(&self, execution: &PlanExecution) -> Result<()> {
-        self.persistence()?.save_execution_receipt(execution).await
+        let read = resolved_from_lock(ran_where_it_came_from(execution.clone()));
+        self.change_saved(
+            self.persistence()?.save_execution_receipt(execution),
+            |saved| {
+                saved.insert(read.id.clone(), read);
+            },
+        )
+        .await
     }
     /// The ids of plan executions as they change in the background.
     pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
@@ -512,24 +591,31 @@ impl PlanStore {
     pub(crate) fn attempts_revision(&self) -> u64 {
         self.attempts.load(Ordering::SeqCst)
     }
+    /// Moves on every write or delete of a saved plan execution, failed ones
+    /// included: read it before `executions()`, so a change between the two
+    /// reads them again.
+    pub(crate) fn executions_revision(&self) -> u64 {
+        self.saved_revision.load(Ordering::SeqCst)
+    }
     /// The native runs a later attempt replaced, in every execution.
     pub(crate) async fn previous_attempts(&self) -> Result<BTreeSet<String>> {
-        Ok(self
-            .executions()
-            .await?
-            .iter()
-            .flat_map(|execution| &execution.slots)
-            .flat_map(|slot| &slot.previous_attempts)
-            .map(|attempt| attempt.execution_id.clone())
-            .collect())
+        self.saved(|saved| {
+            saved
+                .values()
+                .flat_map(|execution| &execution.slots)
+                .flat_map(|slot| &slot.previous_attempts)
+                .map(|attempt| attempt.execution_id.clone())
+                .collect()
+        })
+        .await
     }
+    /// Newest first by `started_at`, then id.
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
-        let executions = self.persistence()?.saved_executions().await?;
-        Ok(executions
-            .into_iter()
-            .map(ran_where_it_came_from)
-            .map(resolved_from_lock)
-            .collect())
+        let mut executions = self
+            .saved(|saved| saved.values().cloned().collect::<Vec<_>>())
+            .await?;
+        executions.sort_by(|a, b| (&b.started_at, &b.id).cmp(&(&a.started_at, &a.id)));
+        Ok(executions)
     }
 
     /// Every suite an execution can run: the master plan's, read-only, then
@@ -697,7 +783,7 @@ impl PlanStore {
     /// Every stack: the repository's, read-only, then this Console's, newest
     /// first, each with what it declares and its warnings.
     pub(crate) async fn stacks(&self) -> Result<Vec<StackView>> {
-        let mut listed = stacks::REPOSITORY
+        let mut listed = stacks::repository()
             .iter()
             .map(|(id, yaml)| StackView::new(id, id, "repository", yaml, None))
             .collect::<Vec<_>>();
@@ -1039,12 +1125,16 @@ impl PlanStore {
         if matches!(execution.source, ExecutionSource::Docker { .. }) {
             self.remove_docker_folder(id).await;
         }
-        self.persistence()?
-            .delete_execution_receipt(
+        self.change_saved(
+            self.persistence()?.delete_execution_receipt(
                 id,
                 matches!(execution.source, ExecutionSource::Github { .. }),
-            )
-            .await
+            ),
+            |saved| {
+                saved.remove(id);
+            },
+        )
+        .await
     }
 
     /// Whether this GitHub run's execution was deleted since it was last
@@ -1056,6 +1146,36 @@ impl PlanStore {
     /// Forget that this GitHub run's execution was deleted.
     pub(crate) async fn clear_deleted_import(&self, id: &str) -> Result<()> {
         self.persistence()?.clear_deleted_import(id).await
+    }
+
+    /// Skip this GitHub run as GitHub last updated it (`run_updated_at`): its
+    /// execution goes with no tombstone, so a re-run is imported again. Only
+    /// an execution that left no results goes: an import of it begun or
+    /// ended since is not deleted under it.
+    pub(crate) async fn skip_import(
+        &self,
+        id: &str,
+        run_updated_at: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        ensure!(
+            self.saved(|saved| saved.get(id).is_none_or(left_no_results))
+                .await?,
+            "An import of this run began meanwhile; it is not skipped."
+        );
+        self.change_saved(
+            self.persistence()?.skip_import(id, run_updated_at, reason),
+            |saved| {
+                saved.remove(id);
+            },
+        )
+        .await
+    }
+
+    /// GitHub's `updated_at` for this run when CI sync last skipped it.
+    pub(crate) async fn import_skipped(&self, id: &str) -> Result<Option<String>> {
+        self.persistence()?.import_skipped(id).await
     }
 
     /// Name any execution; an empty label restores the default name.
@@ -1405,7 +1525,7 @@ fn local_only(id: &str) -> Result<()> {
 /// Only a stack of this Console changes; the repository's are read-only.
 fn stack_local_only(id: &str) -> Result<()> {
     ensure!(
-        !stacks::REPOSITORY.iter().any(|(name, _)| *name == id),
+        !stacks::repository().contains_key(id),
         "{id} is a repository stack, read-only; copy it to edit a stack of this Console."
     );
     Ok(())
@@ -1971,6 +2091,18 @@ fn stack_changes(recorded: &[StackWorker], now: &[StackWorker]) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+/// An import that ended failed because the run left no results (no
+/// e2e-contract artifact), and holds no runs of an earlier import: it
+/// installed nothing.
+pub(crate) fn left_no_results(execution: &PlanExecution) -> bool {
+    execution.state == "failed"
+        && !github_started(execution)
+        && execution
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("keeps no e2e-contract artifact"))
+        && native_runs(execution).all(str::is_empty)
+}
 /// Every native run an execution's slots ran, previous attempts included.
 pub(crate) fn native_runs(execution: &PlanExecution) -> impl Iterator<Item = &str> {
     execution.slots.iter().flat_map(|slot| {
@@ -2444,6 +2576,10 @@ pub(crate) mod tests {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_writes: Mutex::new(()),
+            saved_revision: AtomicU64::new(0),
+            saved_stale: AtomicBool::new(false),
         })
     }
     /// A stand-in `gh`: a shell script, with a short deadline.
@@ -2517,6 +2653,10 @@ pub(crate) mod tests {
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
+            saved: Default::default(),
+            saved_writes: Mutex::new(()),
+            saved_revision: AtomicU64::new(0),
+            saved_stale: AtomicBool::new(false),
         });
         let suite = manager
             .create_suite(SuiteCreateRequest {
@@ -2542,8 +2682,9 @@ pub(crate) mod tests {
             db.local_suite(&suite.id).await.unwrap().unwrap().label,
             "Essential checks before merge copy"
         );
+        let saved = db.saved_executions().await.unwrap();
         assert_eq!(
-            db.saved_execution(&id).await.unwrap().unwrap().slots.len(),
+            saved.iter().find(|e| e.id == id).unwrap().slots.len(),
             execution.slots.len()
         );
 
@@ -2957,13 +3098,10 @@ pub(crate) mod tests {
                 .iter()
                 .map(|stack| (stack.id.as_str(), stack.source.as_str()))
                 .collect::<Vec<_>>(),
-            vec![
-                ("default", "repository"),
-                ("harness-template", "repository"),
-                ("linkly", "repository"),
-                ("onboarding", "repository"),
-                ("deepwork", "repository")
-            ]
+            stacks::repository()
+                .keys()
+                .map(|id| (id.as_str(), "repository"))
+                .collect::<Vec<_>>()
         );
         assert!(listed.iter().all(|stack| stack.warnings.is_empty()));
         let copy = manager
@@ -2979,8 +3117,9 @@ pub(crate) mod tests {
             ("default copy", "local")
         );
         assert!(copy.id.starts_with("stack-"));
-        assert_eq!(copy.yaml, listed[0].yaml);
-        assert_eq!(copy.containers, listed[0].containers);
+        let default = listed.iter().find(|stack| stack.id == "default").unwrap();
+        assert_eq!(copy.yaml, default.yaml);
+        assert_eq!(copy.containers, default.containers);
 
         // The text stays as written; what may not run as written is a warning.
         let yaml = "# mine\niii: latest\ncontainers:\n  harness:\n    worker: path://../harness # a local build\n";
@@ -3075,14 +3214,10 @@ pub(crate) mod tests {
                 .into_iter()
                 .map(|stack| stack.id)
                 .collect::<Vec<_>>(),
-            vec![
-                "default".to_owned(),
-                "harness-template".into(),
-                "linkly".into(),
-                "onboarding".into(),
-                "deepwork".into(),
-                again.id
-            ]
+            stacks::repository()
+                .into_keys()
+                .chain([again.id])
+                .collect::<Vec<_>>()
         );
     }
 
@@ -3166,7 +3301,10 @@ pub(crate) mod tests {
             let error = manager.create_stack(request).await.unwrap_err();
             assert!(error.to_string().contains(reason), "{error}");
         }
-        assert_eq!(manager.stacks().await.unwrap().len(), 6);
+        assert_eq!(
+            manager.stacks().await.unwrap().len(),
+            stacks::repository().len() + 1
+        );
     }
 
     #[tokio::test]
@@ -3297,7 +3435,7 @@ pub(crate) mod tests {
 
     /// A campaign bundle as the exact-stack workflow uploads it: one group
     /// with its native run, one that left only `failure.json`.
-    pub(super) fn exact_stack_bundle(
+    pub(crate) fn exact_stack_bundle(
         root: &Path,
         key: &str,
         observed: &str,
@@ -3804,6 +3942,89 @@ esac"#,
     }
 
     #[tokio::test]
+    async fn skip_markers_survive_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let first = manager(root.path(), runner.clone());
+        let reason = "This run keeps no e2e-contract artifact; GitHub keeps artifacts for 90 days";
+        let failed = PlanExecution {
+            state: "failed".into(),
+            error: Some(reason.into()),
+            ..import_stub()
+        };
+        let kept = PlanExecution {
+            id: "plan-kept".into(),
+            idempotency_key: "kept".into(),
+            state: "completed".into(),
+            ..import_stub()
+        };
+        first.write_execution(&failed).await.unwrap();
+        first.write_execution(&kept).await.unwrap();
+        assert_eq!(first.import_skipped(&failed.id).await.unwrap(), None);
+        first
+            .skip_import(&failed.id, "2026-10-20T11:00:00Z", reason)
+            .await
+            .unwrap();
+        // Its execution goes, with no tombstone: a re-run imports again.
+        assert!(first.read_execution(&failed.id).await.is_err());
+        assert!(!first.import_deleted(&failed.id).await.unwrap());
+
+        // As a restarted worker finds them, and as the copy in memory has them.
+        let restarted = manager(root.path(), runner);
+        assert!(restarted.read_execution(&failed.id).await.is_err());
+        assert_eq!(
+            serde_json::to_value(first.executions().await.unwrap()).unwrap(),
+            serde_json::to_value(restarted.executions().await.unwrap()).unwrap()
+        );
+        assert_eq!(
+            restarted
+                .import_skipped(&failed.id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-20T11:00:00Z")
+        );
+        // Skipped again once GitHub ran it again, it keeps the later time.
+        restarted
+            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .import_skipped(&failed.id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-21T09:00:00Z")
+        );
+
+        // An import begun meanwhile is not deleted under it.
+        restarted.write_execution(&import_stub()).await.unwrap();
+        assert!(restarted
+            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .await
+            .is_err());
+        assert_eq!(
+            restarted.read_execution(&failed.id).await.unwrap().state,
+            "importing"
+        );
+        // Nor one that ended since with its results.
+        let completed = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        restarted.write_execution(&completed).await.unwrap();
+        assert!(restarted
+            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .await
+            .is_err());
+        assert_eq!(
+            restarted.read_execution(&failed.id).await.unwrap().state,
+            "completed"
+        );
+    }
+
+    #[tokio::test]
     async fn an_imported_run_github_cancelled_ends_interrupted_with_why() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
@@ -4142,6 +4363,187 @@ esac"#,
     }
 
     #[tokio::test]
+    async fn executions_are_read_from_the_database_once() {
+        let root = tempfile::tempdir().unwrap();
+        store_raw(
+            root.path(),
+            "plan-stub",
+            serde_json::to_string(&import_stub()).unwrap(),
+        );
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        assert_eq!(manager.executions().await.unwrap().len(), 1);
+        assert_eq!(manager.executions().await.unwrap().len(), 1);
+        manager.read_execution("plan-stub").await.unwrap();
+        assert_eq!(database(root.path()).queries("saved_plan_executions"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_written_or_deleted_execution_shows_without_a_reload_and_moves_the_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        assert!(manager.executions().await.unwrap().is_empty());
+        let revision = manager.executions_revision();
+        let execution = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        manager.write_execution(&execution).await.unwrap();
+        let listed = manager.executions().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].state, "completed");
+        assert_eq!(manager.executions_revision(), revision + 1);
+
+        manager.delete_execution(&execution.id).await.unwrap();
+        assert!(manager.executions().await.unwrap().is_empty());
+        assert!(manager.read_execution(&execution.id).await.is_err());
+        assert_eq!(manager.executions_revision(), revision + 2);
+        assert_eq!(database(root.path()).queries("saved_plan_executions"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_new_store_on_the_same_database_reads_what_the_last_one_wrote() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let first = manager(root.path(), runner.clone());
+        let kept = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        let deleted = PlanExecution {
+            id: "plan-deleted".into(),
+            idempotency_key: "deleted".into(),
+            ..kept.clone()
+        };
+        first.write_execution(&kept).await.unwrap();
+        first.write_execution(&deleted).await.unwrap();
+        first.rename(&kept.id, "Kept").await.unwrap();
+        first.delete_execution(&deleted.id).await.unwrap();
+
+        // As a restarted worker finds them.
+        let restarted = manager(root.path(), runner);
+        let listed = restarted.executions().await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|execution| (execution.id.as_str(), execution.label.as_deref()))
+                .collect::<Vec<_>>(),
+            [("plan-stub", Some("Kept"))]
+        );
+        assert!(restarted.read_execution(&deleted.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_copy_in_memory_is_what_a_new_store_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let first = manager(root.path(), runner.clone());
+        // Read back, it ran in Docker and resolved the version it requested.
+        let written = PlanExecution {
+            state: "completed".into(),
+            parameters: Some(suite_parameters("pr")),
+            source: ExecutionSource::Docker {
+                attempt: 1,
+                phase: "done".into(),
+                image: None,
+                groups: Vec::new(),
+            },
+            stack: vec![StackWorker {
+                name: "harness".into(),
+                source: WorkerSource::Package,
+                requested: Some("1.8.31".into()),
+                resolved: None,
+                observed: None,
+                commit: None,
+                dirty: None,
+                groups: Vec::new(),
+            }],
+            ..import_stub()
+        };
+        first.write_execution(&written).await.unwrap();
+
+        let restarted = manager(root.path(), runner);
+        assert_eq!(
+            serde_json::to_value(first.executions().await.unwrap()).unwrap(),
+            serde_json::to_value(restarted.executions().await.unwrap()).unwrap()
+        );
+        let in_memory = first.read_execution(&written.id).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&in_memory).unwrap(),
+            serde_json::to_value(restarted.read_execution(&written.id).await.unwrap()).unwrap()
+        );
+        // Else the two would agree without proving the copy is transformed.
+        assert_ne!(
+            serde_json::to_value(written).unwrap(),
+            serde_json::to_value(in_memory).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_drops_the_copy_in_memory_and_moves_the_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let store = manager(root.path(), runner.clone());
+        let kept = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        store.write_execution(&kept).await.unwrap();
+        let revision = store.executions_revision();
+
+        database(root.path()).refuse_writes();
+        let lost = PlanExecution {
+            id: "plan-lost".into(),
+            idempotency_key: "lost".into(),
+            ..kept.clone()
+        };
+        // A write whose commit landed though its reply said otherwise.
+        store_raw(root.path(), &lost.id, serde_json::to_string(&lost).unwrap());
+        assert!(store.write_execution(&lost).await.is_err());
+        assert_eq!(store.executions_revision(), revision + 1);
+
+        let listed = store.executions().await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            serde_json::to_value(listed).unwrap(),
+            serde_json::to_value(manager(root.path(), runner).executions().await.unwrap()).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_dropped_before_it_applied_reads_the_database_again() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let store = manager(root.path(), runner.clone());
+        let kept = PlanExecution {
+            state: "completed".into(),
+            ..import_stub()
+        };
+        store.write_execution(&kept).await.unwrap();
+        let lost = PlanExecution {
+            id: "plan-lost".into(),
+            idempotency_key: "lost".into(),
+            ..kept.clone()
+        };
+        // Its commit lands, then its caller is dropped before the copy follows.
+        let write = async {
+            store_raw(root.path(), &lost.id, serde_json::to_string(&lost).unwrap());
+            std::future::pending::<Result<()>>().await
+        };
+        let dropped = tokio::time::timeout(
+            Duration::from_millis(100),
+            store.change_saved(write, |_| ()),
+        );
+        assert!(dropped.await.is_err());
+
+        let listed = store.executions().await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            serde_json::to_value(listed).unwrap(),
+            serde_json::to_value(manager(root.path(), runner).executions().await.unwrap()).unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn dashboard_summaries_skip_bad_receipts_without_hiding_valid_children() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
@@ -4203,8 +4605,12 @@ esac"#,
             system_under_test: None,
             rerun: None,
         };
-        manager.write_execution(&execution).await.unwrap();
+        // Stored before the first write reads the saved executions.
         store_raw(root.path(), "corrupt", "not json".into());
+        manager.write_execution(&execution).await.unwrap();
+        assert!(database(root.path())
+            .row("saved_plan_executions", "corrupt")
+            .is_none());
 
         let (summaries, children) = manager
             .dashboard_summaries(&[json!({
@@ -4922,6 +5328,19 @@ esac"#,
                 second.slots[0].execution_id.clone()
             ])
         );
+        // Read in place, it equals the scan of every execution listed.
+        assert_eq!(
+            manager.previous_attempts().await.unwrap(),
+            manager
+                .executions()
+                .await
+                .unwrap()
+                .iter()
+                .flat_map(|execution| &execution.slots)
+                .flat_map(|slot| &slot.previous_attempts)
+                .map(|attempt| attempt.execution_id.clone())
+                .collect::<BTreeSet<_>>()
+        );
 
         // Totals, assessment and runtime count the current attempts only;
         // the previous ones are listed apart, with their reason.
@@ -5574,12 +5993,14 @@ esac"#,
     }
 
     fn github_parameters() -> ExecutionParameters {
-        let (name, yaml) = crate::plans::stacks::REPOSITORY[0];
+        let yaml = crate::plans::stacks::repository()
+            .remove("default")
+            .unwrap();
         ExecutionParameters {
             r#where: Where::Github,
             stack: Some(ExecutionStack {
-                name: name.into(),
-                yaml: yaml.into(),
+                name: "default".into(),
+                yaml,
                 sha256: String::new(),
             }),
             ..suite_parameters("pr")
@@ -5673,10 +6094,7 @@ esac"#,
         assert!(dispatch.contains("return_run_details=true"));
         assert!(dispatch.contains("ref=main"));
         assert!(dispatch.contains("inputs[suite]=pr"));
-        assert!(dispatch.contains(&format!(
-            "inputs[stack]={}",
-            crate::plans::stacks::REPOSITORY[0].0
-        )));
+        assert!(dispatch.contains("inputs[stack]=default"));
         assert!(dispatch.contains("inputs[model]=provider/model"));
         assert!(dispatch.contains(&format!("inputs[request]={}", started.id)));
         assert!(!dispatch.contains("inputs[execution_id]"));

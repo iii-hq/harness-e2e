@@ -93,5 +93,17 @@ class RegistryOutageTest(unittest.TestCase):
         self.assertFalse(module.registry_outage('Error: {"code": "PACKAGE_DIGEST_MISMATCH"}'))
 
 
+class ResolutionTest(unittest.TestCase):
+    def test_engine_workers_are_left_to_the_engine(self):
+        resolved = {"graph": [
+            {"name": "configuration", "type": "engine", "version": "0.25.0",
+             "config": {"adapter": {"name": "fs"}}},
+            {"name": "database", "type": "binary", "version": "0.5.23",
+             "binaries": {"x": {"url": "u", "sha256": "s"}}, "config": None},
+        ]}
+        self.assertEqual([worker["name"] for worker in module.binary_workers(resolved)],
+                         ["database"])
+
+
 if __name__ == "__main__":
     unittest.main()

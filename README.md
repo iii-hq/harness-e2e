@@ -289,6 +289,12 @@ A dispatch names what to test, where, and with whom:
 | `profile` | Optional Directory agent profile the subject runs as. |
 | `execution_id` | Optional Release Control execution. Without it the run only produces artifacts. |
 
+Top-level `stacks/*.yaml` presets and `config/agents/*.md` profiles are
+included automatically in the runner's build and local Docker checkouts.
+Adding one requires no separate catalog entry; publish a new runner to make
+it available as a built-in. Inline stack YAML remains available without a
+new built-in preset.
+
 A stack is an iii Compose project plus `iii` (a release, or `latest` for the
 newest `iii/v*` release candidate, as Release Control resolves it) and an
 optional `template`
@@ -535,12 +541,11 @@ profile adds no model pins. Harness uses the workspace filesystem boundary
 for the root and its children. These are the native build scenarios, not the
 Kanban fixture's Docker isolation.
 
-The suite reuses the existing prompts, criteria and scenario IDs. It excludes
-Kanban, Registry and trending-topics builds: their closed fixture tools do
-not support Deepwork's native shell, Kanban and delegation functions. Passing
-`profile=deepwork` alone to `software-engineering` does not make those tests
-compatible. This suite measures the plain multiagent flow, not Deepwork's Git
-worktree workflow.
+The suite reuses the existing prompts, criteria and scenario IDs for the three
+native builds. Registry and trending-topics tests in `software-engineering`
+also allow the selected profile's tools and delegation; their deliveries still
+belong in their per-attempt containers. Kanban keeps its closed fixture tool.
+This suite measures the plain multiagent flow, not Deepwork's Git worktree workflow.
 
 Stacks can declare other Registry kits with an optional `kits` list:
 
@@ -594,8 +599,10 @@ cargo build --locked --bin harness-e2e
 
 When Console connects to the same iii namespace, the worker registers the page
 assets and the `e2e::dashboard::*` functions for read, suites, stacks, run,
-status, and cancellation. The page lives under `#/ext/harness-e2e` and exposes
-Tests, Executions, Suites, and Stacks. See [dashboard/README.md](dashboard/README.md).
+status, and cancellation. The page lives under `#/ext/harness-e2e` and opens on
+Trends, the release overview (how the latest Harness release did against the one
+before it in Release Control); it also exposes Tests, Executions, Suites, and
+Stacks. See [dashboard/README.md](dashboard/README.md).
 
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight.
@@ -634,18 +641,33 @@ and forgets the delete. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
 
 CI sync imports the workflow's runs in the background. It is off by default
-(a full backfill of the public repository is about 3 GB);
-`e2e::dashboard::ci-sync-set` turns it on or off and keeps the switch in
-`ci-sync.json` in the data directory, so a restart resumes. It imports through
-**Import**'s path, one run at a time: Release Control runs newest first until
-the two newest Harness releases each have one, with the newest 100 other runs;
-then the rest GitHub keeps (90 days), Release Control first; then, every 10
-minutes, the runs created in the last 7 days, so a re-run of an older run comes
-in only by **Import**. It skips a run being imported, one started here, one
-imported at the same GitHub `updated_at`, one whose artifacts are gone or that
-left no bundle, and one deleted here; it tries other failures 3 times. A `gh`
-rate limit pauses it an hour without counting an attempt. `gh` needs read
-access to the repository.
+(a full backfill of the public repository is about 3 GB). On Trends,
+**Download CI results** turns it on; the status line beside the heading then
+says where it is, with **Check now** (`e2e::dashboard::ci-sync-check`) and,
+under Sync options, **Turn off sync** (it and **Download CI results** go through
+`e2e::dashboard::ci-sync-set`, which keeps the switch in `ci-sync.json` in the
+data directory, so a restart resumes). It imports through
+**Import**'s path, one run at a time: only Release Control runs first, a day at
+a time from the newest, until the two newest Harness releases each have one (or
+90 days are scanned), so the verdict comes before the pull-request backlog;
+then the newest 100 other runs it listed, so Trends can count the runs outside
+Release Control; then the rest GitHub keeps (90 days), Release Control first;
+then, every 10 minutes, the runs created in the last 7 days, so a re-run of an
+older run comes in only by **Import**. It skips a run being imported, one
+started here, one imported at the same GitHub `updated_at`, one whose artifacts
+are gone or that left no bundle, and one deleted here; it tries other failures
+3 times. A run that left no results (no `e2e-contract` artifact: cancelled
+early, or failed before its tests) is skipped, not kept as a failed execution:
+its execution is deleted, though not remembered as a delete, the status line
+counts it as without results, and CI sync leaves it alone until GitHub updates
+it (a re-run is tried again). An import of such a run that ended failed, an
+earlier one or one by hand, turns into the same skip when CI sync next lists
+the run, so **Import** shows its error until then (for a run CI sync already
+skipped, until GitHub updates it). A run whose import fails only counts as
+failed (its execution keeps why, or the worker log when none was created); the
+status says what stopped a whole check: `gh` missing, signed out or not
+answering, or a listing that failed. A `gh` rate limit pauses it an hour
+without counting an attempt. `gh` needs read access to the repository.
 
 ### Run in Docker
 

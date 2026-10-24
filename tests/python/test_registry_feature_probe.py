@@ -15,7 +15,7 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         known = {metric["id"] for test in catalog["tests"] if test["id"] == 2 for metric in test["metrics"]}
         probed = {
             "implementation.same_version", "implementation.function_removal",
-            "implementation.required_impact", "implementation.object_order",
+            "implementation.required_impact",
             "implementation.required_order", "implementation.enum_order",
             "implementation.config_array_order", "implementation.missing_metadata",
             "implementation.worker_lookup", "implementation.reverse_kinds",

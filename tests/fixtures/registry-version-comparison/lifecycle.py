@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Fixture lifecycle for the four Registry scenarios."""
 import argparse
+import base64
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,6 +19,10 @@ REGISTRY_URL = "https://github.com/iii-hq/registry.git"
 FIXTURE_URL = "https://github.com/iii-hq/e2e-fixture.git"
 RUNNER_IMAGE = "docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 TASKS = {1: "planning", 2: "implementation", 3: "environment", 4: "verification"}
+MAX_EVIDENCE_FILES = 64
+MAX_EVIDENCE_ENTRIES = 256
+MAX_EVIDENCE_FILE_BYTES = 1024 * 1024
+MAX_EVIDENCE_TOTAL_BYTES = 8 * 1024 * 1024
 
 
 def run(argv, *, cwd=None, data=None, env=None, timeout=900):
@@ -40,6 +47,83 @@ def digest(path):
 def fixture_hashes(directory):
     return {str(p.relative_to(directory)): digest(p)
             for p in sorted(directory.rglob("*")) if p.is_file() and ".git" not in p.parts}
+
+
+def artifact_manifest(directory, max_files=MAX_EVIDENCE_FILES,
+                      max_entries=MAX_EVIDENCE_ENTRIES,
+                      max_file_bytes=MAX_EVIDENCE_FILE_BYTES,
+                      max_total_bytes=MAX_EVIDENCE_TOTAL_BYTES,
+                      include_data=False):
+    if not stat.S_ISDIR(os.lstat(directory).st_mode):
+        raise ValueError("evidence root must be a real directory")
+    items = []
+    total = 0
+    entries = 0
+    pending = [Path(directory)]
+    while pending:
+        current = pending.pop()
+        if not stat.S_ISDIR(os.lstat(current).st_mode):
+            raise ValueError("evidence entries must be real directories and regular files")
+        with os.scandir(current) as children:
+            for child in children:
+                entries += 1
+                if entries > max_entries:
+                    raise ValueError("too many evidence entries")
+                path = Path(child.path)
+                metadata = child.stat(follow_symlinks=False)
+                if stat.S_ISDIR(metadata.st_mode):
+                    pending.append(path)
+                    continue
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError("evidence entries must be real directories and regular files")
+                if len(items) >= max_files:
+                    raise ValueError("too many evidence files")
+                if metadata.st_size > max_file_bytes:
+                    raise ValueError("evidence file exceeds size limit")
+                total += metadata.st_size
+                if total > max_total_bytes:
+                    raise ValueError("evidence files exceed total size limit")
+                checksum = hashlib.sha256()
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                opened = os.fstat(descriptor)
+                if ((opened.st_dev, opened.st_ino, opened.st_size)
+                        != (metadata.st_dev, metadata.st_ino, metadata.st_size)):
+                    os.close(descriptor)
+                    raise ValueError("evidence file changed while it was inspected")
+                remaining = metadata.st_size
+                data = bytearray() if include_data else None
+                with os.fdopen(descriptor, "rb") as stream:
+                    while remaining:
+                        chunk = stream.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        checksum.update(chunk)
+                        if data is not None:
+                            data.extend(chunk)
+                        remaining -= len(chunk)
+                    if remaining or stream.read(1):
+                        raise ValueError("evidence file changed while it was inspected")
+                item = {"path": path.relative_to(directory).as_posix(),
+                        "sha256": checksum.hexdigest(), "size_bytes": metadata.st_size}
+                if data is not None:
+                    item["data_base64"] = base64.b64encode(data).decode()
+                items.append(item)
+    return sorted(items, key=lambda item: item["path"])
+
+
+def manifest_script(max_files=MAX_EVIDENCE_FILES,
+                    max_entries=MAX_EVIDENCE_ENTRIES,
+                    max_file_bytes=MAX_EVIDENCE_FILE_BYTES,
+                    max_total_bytes=MAX_EVIDENCE_TOTAL_BYTES):
+    source = inspect.getsource(artifact_manifest)
+    return f"""import base64,hashlib,json,os,stat,sys
+from pathlib import Path
+MAX_EVIDENCE_FILES={MAX_EVIDENCE_FILES}
+MAX_EVIDENCE_ENTRIES={MAX_EVIDENCE_ENTRIES}
+MAX_EVIDENCE_FILE_BYTES={MAX_EVIDENCE_FILE_BYTES}
+MAX_EVIDENCE_TOTAL_BYTES={MAX_EVIDENCE_TOTAL_BYTES}
+{source}
+print(json.dumps(artifact_manifest(Path(sys.argv[1]), max_files={max_files}, max_entries={max_entries}, max_file_bytes={max_file_bytes}, max_total_bytes={max_total_bytes}, include_data=True)))"""
 
 
 def git_patch(source, base=REGISTRY_SHA):
@@ -178,19 +262,48 @@ def prepare(args):
 
 def execute(args):
     state = json.loads((args.root / "state.json").read_text())
-    # coreutils timeout kills the command inside the container, including on transport timeout.
-    result = subprocess.run(["docker", "exec", "-i", "-w", "/workspace", state["container"],
-                             "timeout", "--signal=KILL", str(args.timeout_ms / 1000),
-                             "sh", "-lc", args.command], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=args.timeout_ms / 1000 + 15)
+    receipt_id = uuid.uuid4().hex
+    stage = f"/tmp/harness-evidence-{receipt_id}"
+    destination = args.root / "execution-evidence" / receipt_id
+    run(["docker", "exec", state["container"], "mkdir", "-p", stage])
+    try:
+        # coreutils timeout kills the command inside the container, including on transport timeout.
+        result = subprocess.run(["docker", "exec", "-i", "-w", "/workspace",
+                                 "-e", f"HARNESS_EVIDENCE_DIR={stage}", state["container"],
+                                 "timeout", "--signal=KILL", str(args.timeout_ms / 1000),
+                                 "sh", "-lc", args.command], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=args.timeout_ms / 1000 + 15)
+        staged = json.loads(run(["docker", "exec", state["container"], "python3", "-c",
+                                 manifest_script(), stage]).decode())
+        artifacts = []
+        if staged:
+            destination.mkdir(parents=True)
+            for item in staged:
+                relative = Path(item["path"])
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("invalid evidence path")
+                data = base64.b64decode(item["data_base64"], validate=True)
+                if (len(data) != item["size_bytes"]
+                        or hashlib.sha256(data).hexdigest() != item["sha256"]):
+                    raise ValueError("evidence payload does not match its manifest")
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                artifacts.append({"path": f"execution-evidence/{receipt_id}/{item['path']}",
+                                  "sha256": item["sha256"], "size_bytes": item["size_bytes"]})
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+    finally:
+        run(["docker", "exec", state["container"], "rm", "-rf", "--", stage])
     evidence = {"command": args.command, "timeout_ms": args.timeout_ms,
                 "exit_code": result.returncode, "stdout": result.stdout.decode(errors="replace"),
-                "stderr": result.stderr.decode(errors="replace")}
+                "stderr": result.stderr.decode(errors="replace"), "artifacts": artifacts}
     commands = args.root / "commands"
     commands.mkdir(exist_ok=True)
-    write_json(commands / (uuid.uuid4().hex + ".json"), evidence)
+    write_json(commands / f"{receipt_id}.json", evidence)
     return {"exit_code": result.returncode, "stdout": evidence["stdout"][-60000:],
-            "stderr": evidence["stderr"][-20000:]}
+            "stderr": evidence["stderr"][-20000:], "artifacts": artifacts}
 
 
 def finish(args):

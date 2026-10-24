@@ -1,13 +1,21 @@
-// Deterministic browser coverage for Trends: a series over time, what
-// changed at a diamond with the commits between, a point against the
-// previous counted one, Compare with it and back, the stack and series
-// pickers, a small chart in the large one's place, the empty state's Run
-// again and the narrow pane. No models run and no worker answers: the
-// series are the canvas's, from src/test-fixtures/trends.json.
+// Deterministic browser coverage for Trends: the release overview it opens
+// on (its verdict, the local runs beside the releases, the CI runs outside
+// Release Control, CI sync's status line) and, under More options, a series
+// over time, what changed at a diamond with the commits between, a point
+// against the previous counted one, Compare with it and back, the stack and
+// series pickers, a small chart in the large one's place, the empty state's
+// Run again and the narrow pane. No models run and no worker answers: the
+// series and the overview are the canvas's, from src/test-fixtures.
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 import { createConsoleTestHost } from './console-test-host.mjs'
-import { compareAnswer, fixture, trendsAnswer } from './trends-fixture.mjs'
+import {
+  ciSyncAnswer,
+  compareAnswer,
+  fixture,
+  overviewAnswer,
+  trendsAnswer,
+} from './trends-fixture.mjs'
 
 const opus = fixture.series.find((item) => item.key === 'opus')
 const opusDetail = {
@@ -59,8 +67,12 @@ const pinned = {
   stack: 'any',
   ...last30,
 }
-// trends-get answers that fail before one succeeds again.
+// trends-get answers that fail before one succeeds again, then the same for
+// release-overview-get.
 let failing = 0
+let overviewFails = 0
+// CI sync's status: Download turns it on, Turn off sync back off.
+let sync = ciSyncAnswer('off')
 
 const calls = []
 const requests = (id) =>
@@ -82,6 +94,18 @@ const trigger = (name, request = {}) => {
     )
       answer.points = [...answer.points, newer]
     return answer
+  }
+  if (id === 'release-overview-get') {
+    if (overviewFails > 0) {
+      overviewFails -= 1
+      throw new Error('engine unavailable')
+    }
+    return overviewAnswer()
+  }
+  if (id === 'ci-sync-status-get' || id === 'ci-sync-check') return sync
+  if (id === 'ci-sync-set') {
+    sync = ciSyncAnswer(request.enabled ? 'quick' : 'off')
+    return sync
   }
   if (id === 'version-compare') return compareAnswer(request)
   if (id === 'execution-get' && request.execution_id === opusDetail.id)
@@ -126,10 +150,153 @@ try {
     assert.match(await hash(), pattern)
   }
 
-  // The series with the latest execution, on every stack it ran on.
-  // A first load that fails says so on the host's StatusPanel and retries.
+  // The release overview first. One that fails to load says so under its
+  // heading, and the sync line and the options stay; Retry asks again.
+  const verdictLine = page.locator('[data-verdict-line]')
+  const verdictMatches = async () =>
+    assert.match(
+      await verdictLine.innerText(),
+      /^v1\.8\.36 \(Today\) vs v1\.8\.35:/,
+    )
+  const moreOptions = page.locator('summary', { hasText: 'More options' })
+  // The last request to `id`, once more than `before` of them were made.
+  const askedAfter = async (id, before) => {
+    for (let wait = 0; wait < 100 && requests(id).length <= before; wait++)
+      await page.waitForTimeout(50)
+    assert.ok(requests(id).length > before, `${id} was not asked again`)
+    return requests(id).at(-1)
+  }
+  overviewFails = 1
+  await page.goto(`${server.url}#/ext/harness-e2e`)
+  await page.getByRole('heading', { name: 'Trends', level: 1 }).waitFor()
+  await page.getByText('Couldn’t load the release overview').waitFor()
+  await page.getByRole('heading', { name: 'Harness evolution' }).waitFor()
+  await page.getByRole('button', { name: 'Download CI results' }).waitFor()
+  await moreOptions.waitFor()
+  await page.getByRole('button', { name: 'Retry' }).click()
+  await verdictLine.waitFor()
+  assert.equal(
+    await page
+      .getByRole('link', { name: 'Trends', exact: true })
+      .getAttribute('aria-current'),
+    'page',
+  )
+  assert.deepEqual(requests('trends-get')[0], {})
+  assert.ok(requests('release-overview-get').length >= 2)
+  await verdictMatches()
+
+  // Five local runs as rings beside the releases, none as a filled dot.
+  const chart = page.locator('[data-trend-chart]')
+  assert.equal(await chart.locator('.tr-point[data-source="local"]').count(), 5)
+  assert.equal(
+    await page.locator('circle.tr-dot[data-source="local"]').count(),
+    0,
+  )
+  // What changed at the latest release, and the panel closed.
+  await page.getByRole('button', { name: 'What changed', exact: true }).click()
+  await page.locator('[data-trend-panel]').waitFor()
+  await page
+    .locator('[data-trend-panel]')
+    .getByRole('button', { name: 'Close' })
+    .click()
+  assert.equal(await page.locator('[data-trend-panel]').count(), 0)
+  // The CI runs outside Release Control, and the executions that are them.
+  const outside = page.locator('[data-outside]')
+  await outside
+    .getByText('CI runs outside Release Control · 3', {
+      exact: false,
+    })
+    .waitFor()
+  assert.equal(
+    await outside.locator('a').getAttribute('href'),
+    '#/ext/harness-e2e/executions?origin=outside-release-control',
+  )
+
+  // The measure is in the hash and kept by a reload; the score is the default.
+  const metrics = page.getByRole('radiogroup', { name: 'Metric' })
+  await metrics.getByRole('radio', { name: 'Turns' }).click()
+  await hashMatches(/harness-e2e\?metric=turns$/)
+  await page.reload()
+  await verdictLine.waitFor()
+  assert.equal(
+    await metrics.getByRole('radio', { name: 'Turns' }).isChecked(),
+    true,
+  )
+  await hashMatches(/harness-e2e\?metric=turns$/)
+  await metrics.getByRole('radio', { name: 'Score' }).click()
+  await hashMatches(/harness-e2e$/)
+
+  // CI sync: Download turns it on and the line says where it is; Check now
+  // asks once; a worker without `gh` signed in says how to fix it; Turn off
+  // sync brings the offer back.
+  await page.getByRole('button', { name: 'Download CI results' }).click()
+  assert.deepEqual(requests('ci-sync-set').at(-1), { enabled: true })
+  await page
+    .getByText('Importing the newest runs first: 3 of 12', { exact: false })
+    .waitFor()
+  sync = ciSyncAnswer('keeping_up')
+  await page.getByRole('button', { name: 'Check now' }).click()
+  await page
+    .getByText('Synced from CI at 2:55 PM · 4 imports failed', { exact: false })
+    .waitFor()
+  assert.equal(requests('ci-sync-check').length, 1)
+  sync = ciSyncAnswer('signed_out')
+  await page.getByRole('button', { name: 'Check now' }).click()
+  await page.locator('code', { hasText: 'gh auth login' }).waitFor()
+  await page.getByRole('button', { name: 'Sync options' }).click()
+  await page.getByRole('menuitem', { name: /^Turn off sync/ }).click()
+  assert.deepEqual(requests('ci-sync-set').at(-1), { enabled: false })
+  await page.getByRole('button', { name: 'Download CI results' }).waitFor()
+
+  // More options holds the series pickers; opening them names no series.
+  await moreOptions.click()
+  await page.locator('[data-picker="suite"]').waitFor()
+  assert.doesNotMatch(await hash(), /suite=/)
+  // A suite opens its series under the same verdict. This one recorded no
+  // Harness release, so each execution is drawn, and said.
+  const suite = page.locator('[data-picker="suite"]')
+  await suite.click()
+  await page
+    .getByRole('menuitemradio', {
+      name: /^Software engineering\s*2 executions$/,
+    })
+    .click()
+  await page
+    .locator('[data-group-note]')
+    .getByText(
+      'No Harness release is recorded in this series, so each execution is drawn.',
+    )
+    .waitFor()
+  assert.deepEqual(requests('trends-get').at(-1), {
+    suite: 'software-engineering',
+  })
+  await hashMatches(/\?suite=software-engineering&.*&stack=any&range=all$/)
+  await page
+    .locator('summary', { hasText: 'Details' })
+    .getByText('by test · executions')
+    .waitFor()
+  await verdictMatches()
+  assert.ok((await chart.locator('.tr-point').count()) > 0)
+  // Back to the release overview, every series control where it started.
+  const beforeBack = requests('trends-get').length
+  await page.getByRole('button', { name: 'Back to release overview' }).click()
+  await hashMatches(/harness-e2e$/)
+  assert.deepEqual(await askedAfter('trends-get', beforeBack), {})
+  await verdictMatches()
+
+  // The series with the latest execution, on every stack it ran on, in the
+  // last 30 days, one point per execution. A first load that fails says so
+  // on the host's StatusPanel and retries. The overview's own panel asked
+  // for commits before: count from here.
+  const compared = requests('version-compare').length
+  // The link opened afresh: a reload after landing on it would race the page
+  // pinning the hash to the series it answered.
   failing = 1
-  await page.goto(`${server.url}#/ext/harness-e2e/trends`)
+  const mark = requests('trends-get').length
+  await page.goto('about:blank')
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/trends?range=30d&group=execution`,
+  )
   await page.getByRole('heading', { name: 'Trends', level: 1 }).waitFor()
   await page.getByText('Couldn’t load the trend').waitFor()
   await page.getByText('engine unavailable').waitFor()
@@ -140,14 +307,13 @@ try {
       .getAttribute('aria-current'),
     'page',
   )
-  assert.deepEqual(requests('trends-get')[0], last30)
+  assert.deepEqual(requests('trends-get').at(mark), last30)
   await summary
     .getByText(
       '14 executions in the last 30 days · 11 with counted runs, 3 without · 99 counted runs',
       { exact: false },
     )
     .waitFor()
-  const suite = page.locator('[data-picker="suite"]')
   const model = page.locator('[data-picker="model"]')
   const profile = page.locator('[data-picker="profile"]')
   assert.match(await suite.innerText(), /Regression/)
@@ -163,8 +329,8 @@ try {
   )
 
   // The Sep 26 diamond: no counted run, iii moved; the commits between are
-  // asked only now.
-  assert.equal(requests('version-compare').length, 0)
+  // asked only now, not while the series loads.
+  assert.equal(requests('version-compare').length, compared)
   await page.getByRole('button', { name: /^What changed · .+: iii$/ }).click()
   const failed = page.locator('[data-trend-panel="github-36220337119-1"]')
   await failed
@@ -177,7 +343,7 @@ try {
     await iii.getAttribute('href'),
     'https://github.com/iii-hq/iii/compare/iii/v0.24.2-rc.2...iii/v0.24.3-rc.1',
   )
-  assert.deepEqual(requests('version-compare')[0], {
+  assert.deepEqual(requests('version-compare').at(compared), {
     name: 'iii',
     base: '0.24.2-rc.2',
     head: '0.24.3-rc.1',
@@ -223,7 +389,7 @@ try {
   )
   // The default view is pinned to what it showed, in the hash too.
   await hashMatches(
-    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any&range=30d$/,
+    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any&range=30d&group=execution$/,
   )
 
   // A run lands, and another series has the newest execution: the trend
@@ -242,6 +408,8 @@ try {
   // A reload that fails keeps the trend and says so over it.
   failing = 1
   await change()
+  // Trends reloads at most every 10 s: skip the wait for the last one.
+  await page.clock.fastForward(10_000)
   await page.getByText('Couldn’t reload the trend').waitFor()
   await summary.getByText('15 executions ', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Retry' }).click()
@@ -267,7 +435,10 @@ try {
   await summary.getByText('11 executions ', { exact: false }).waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'default')
   assert.equal(requests('trends-get').at(-1).suite, 'regression')
-  await hashMatches(/\/trends\?suite=regression&.*stack=default&range=30d$/)
+  // The measure in front is in the hash after the period and grouping.
+  await hashMatches(
+    /\/trends\?suite=regression&.*stack=default&range=30d&group=execution&metric=duration$/,
+  )
   const here = await hash()
 
   // Compare with the previous counted execution, and back to this view.
@@ -325,16 +496,23 @@ try {
     2,
   )
 
-  // The Trends tab starts over on the default view, the hash with it.
+  // The Trends tab starts over on the release overview, the hash with it.
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
+  await page.getByRole('heading', { name: 'Harness evolution' }).waitFor()
+  await hashMatches(/\/trends$/)
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/trends?range=30d&group=execution`,
+  )
   await summary.getByText('14 executions ', { exact: false }).waitFor()
   assert.match(await suite.innerText(), /Regression/)
-  await hashMatches(/\/trends\?suite=regression&.*stack=any&range=30d$/)
+  await hashMatches(
+    /\/trends\?suite=regression&.*stack=any&range=30d&group=execution$/,
+  )
 
   // A link to a stack the series never ran on: the worker applies its
   // default, and the page says so.
   await page.goto(
-    `${server.url}#/ext/harness-e2e/trends?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=lean`,
+    `${server.url}#/ext/harness-e2e/trends?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=lean&range=30d&group=execution`,
   )
   await page
     .locator('[data-stack-notice]')
@@ -347,18 +525,24 @@ try {
     .waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'lean')
   assert.match(await stack.innerText(), /any/)
-  await hashMatches(/stack=any&range=30d$/)
+  await hashMatches(/stack=any&range=30d&group=execution$/)
 
   // The period: all time, a custom one, From after To said and not asked,
-  // then one with nothing in it and the way back to all time.
+  // then one with nothing in it and the way back to all time. A run change
+  // the 10 s interval postponed outlives the period change: the release
+  // overview is asked again too.
   const period = page.locator('[data-picker="period"]')
+  const overviews = requests('release-overview-get').length
+  await change()
   await period.click()
   await page.getByRole('menuitemradio', { name: 'All time' }).click()
   await summary
     .getByText('14 executions over all time ·', { exact: false })
     .waitFor()
   assert.equal(requests('trends-get').at(-1).since, undefined)
-  await hashMatches(/stack=any&range=all$/)
+  await page.clock.fastForward(10_000)
+  await askedAfter('release-overview-get', overviews)
+  await hashMatches(/stack=any&range=all&group=execution$/)
   await period.click()
   await page.getByRole('menuitemradio', { name: 'Custom' }).click()
   const from = page.getByLabel('From', { exact: true })
@@ -374,7 +558,9 @@ try {
     { since, until },
     { since: '2026-09-26T03:00:00.000Z', until: '2026-09-29T02:59:59.999Z' },
   )
-  await hashMatches(/stack=any&since=2026-09-26&until=2026-09-28$/)
+  await hashMatches(
+    /stack=any&since=2026-09-26&until=2026-09-28&group=execution$/,
+  )
   const before = requests('trends-get').length
   await from.fill('2026-09-29')
   await page.getByText('From must be on or before To.').waitFor()
@@ -413,7 +599,7 @@ try {
   const sep23 = page.locator('[data-trend-panel="github-35821773226-2"]')
   await sep23.getByRole('button', { name: 'Set as baseline' }).click()
   await baselineIs('Sep 23, 2:17 AM')
-  await hashMatches(/&range=all&base=github-35821773226-2$/)
+  await hashMatches(/&range=all&group=execution&base=github-35821773226-2$/)
   // Focus stays in the panel, on the button that now clears it.
   assert.equal(
     await page.evaluate(() => document.activeElement?.textContent),
@@ -431,8 +617,9 @@ try {
     'Sep 28, 2:17 AM against Sep 23, 2:17 AM (baseline)',
   )
   assert.match(await scoreCard.locator('.tr-delta').innerText(), /2\.2/)
-  // A rule on every chart, labelled only on the large one.
-  assert.equal(await page.locator('.tr-baseline').count(), 7)
+  // A rule on every chart (the six main measures), labelled only on the
+  // large one.
+  assert.equal(await page.locator('.tr-baseline').count(), 6)
   assert.equal(await page.locator('.tr-baseline-label').count(), 1)
 
   // Sep 25 against it: the commits from the earlier version to the later,
@@ -516,23 +703,27 @@ try {
   )
   assert.equal(await page.locator('.tr-baseline').count(), 0)
   await hashMatches(
-    /since=2026-09-26&until=2026-09-28&base=github-35821773226-2$/,
+    /since=2026-09-26&until=2026-09-28&group=execution&base=github-35821773226-2$/,
   )
   await period.click()
   await page.getByRole('menuitemradio', { name: 'All time' }).click()
   await baselineIs('Sep 23, 2:17 AM')
-  assert.equal(await page.locator('.tr-baseline').count(), 7)
+  assert.equal(await page.locator('.tr-baseline').count(), 6)
 
   // Another stack keeps it while its execution is there.
   await page.locator('[data-stack-picker]').click()
   await page.getByRole('menuitemradio', { name: /^default/ }).click()
   await summary.getByText('11 executions ', { exact: false }).waitFor()
-  await hashMatches(/stack=default&range=all&base=github-35821773226-2$/)
+  await hashMatches(
+    /stack=default&range=all&group=execution&base=github-35821773226-2$/,
+  )
   await baselineIs('Sep 23, 2:17 AM')
   await page.locator('[data-stack-picker]').click()
   await page.getByRole('menuitemradio', { name: /^any/ }).click()
   await summary.getByText('14 executions ', { exact: false }).waitFor()
-  await hashMatches(/stack=any&range=all&base=github-35821773226-2$/)
+  await hashMatches(
+    /stack=any&range=all&group=execution&base=github-35821773226-2$/,
+  )
 
   // Previous execution in the picker clears it; the picker sets one too,
   // each execution listed newest first with its score.
@@ -584,8 +775,13 @@ try {
   await sep23.getByRole('button', { name: 'Set as baseline' }).click()
   await baselineIs('Sep 23, 2:17 AM')
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
+  await page.getByRole('heading', { name: 'Harness evolution' }).waitFor()
+  await hashMatches(/\/trends$/)
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/trends?range=30d&group=execution`,
+  )
   await summary.getByText('in the last 30 days', { exact: false }).waitFor()
-  await hashMatches(/stack=any&range=30d$/)
+  await hashMatches(/stack=any&range=30d&group=execution$/)
   await baselineIs('previous execution')
   // Back to all time, where the flow goes on.
   await period.click()
@@ -598,6 +794,12 @@ try {
   await summary.getByText('5 executions ', { exact: false }).waitFor()
   assert.match(await stack.innerText(), /any/)
   assert.equal(await page.locator('.tr-diamond').count(), 0)
+  assert.equal(
+    await page
+      .locator('[data-trend-chart="score"] .tr-point[data-source="local"]')
+      .count(),
+    5,
+  )
 
   // Any model: Regression on deepseek and on Opus, one line, a diamond
   // where the model changed; any profile on top of it; back to one model.
@@ -618,7 +820,9 @@ try {
     profile: null,
   })
   assert.match(await model.innerText(), /any/)
-  await hashMatches(/provider=any&model=any&profile=&stack=any&range=all$/)
+  await hashMatches(
+    /provider=any&model=any&profile=&stack=any&range=all&group=execution$/,
+  )
   // Two model changes: to Opus on Sep 27 and back on Sep 28.
   const modelDiamonds = page.getByRole('button', {
     name: /^What changed · .+: model/,
@@ -641,7 +845,9 @@ try {
     .getByRole('menu', { name: 'Profile' })
     .getByRole('menuitemradio', { name: /^any/ })
     .click()
-  await hashMatches(/model=any&profile=any&stack=any&range=all$/)
+  await hashMatches(
+    /model=any&profile=any&stack=any&range=all&group=execution$/,
+  )
   assert.deepEqual(requests('trends-get').at(-1), {
     suite: 'regression',
     provider: 'any',
@@ -666,7 +872,9 @@ try {
     .getByRole('menu', { name: 'Profile' })
     .getByRole('menuitemradio', { name: /^none/ })
     .click()
-  await hashMatches(/model=deepseek-flash&profile=&stack=any&range=all$/)
+  await hashMatches(
+    /model=deepseek-flash&profile=&stack=any&range=all&group=execution$/,
+  )
 
   // Group by day: a point per day, its panel on its executions; a day set as
   // the baseline pins its last execution, kept when back to executions.
@@ -700,7 +908,7 @@ try {
     .waitFor()
   await hashMatches(/group=day&base=github-36010839787-2$/)
   await groupBy(/^None/)
-  await hashMatches(/range=all&base=github-36010839787-2$/)
+  await hashMatches(/range=all&group=execution&base=github-36010839787-2$/)
   await page
     .locator('[data-picker="baseline"]')
     .getByText('Sep 24, 11:10 AM', { exact: true })
@@ -712,13 +920,13 @@ try {
   await hashMatches(/range=all&group=release$/)
   assert.equal(await scorePoints.count(), 4)
   await page
-    .getByText('5 executions ran with no recorded Harness version', {
+    .getByText('5 executions recorded no single Harness release', {
       exact: false,
     })
     .waitFor()
   await page
     .locator('[data-trend-chart="score"]')
-    .getByText('1.8.31', { exact: true })
+    .getByText('v1.8.31', { exact: true })
     .waitFor()
   await groupBy(/^None/)
   assert.equal(await scorePoints.count(), 11)
@@ -761,8 +969,11 @@ try {
 
   // A narrow pane: the panel under the chart, the table's short form.
   await page.setViewportSize({ width: 640, height: 1000 })
-  await page.goto(`${server.url}#/ext/harness-e2e/trends`)
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/trends?range=30d&group=execution`,
+  )
   await page.reload()
+  await page.locator('summary', { hasText: 'Details' }).click()
   await page.locator('[data-trend-executions][data-narrow]').waitFor()
   assert.equal(
     await page.getByRole('columnheader', { name: 'Stack' }).count(),
@@ -789,7 +1000,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, grouped by day (a day’s panel on its executions, a day as the baseline kept on its last execution) and by Harness release (unrecorded ones said and left out), a model of a suite and the empty state’s Run again, narrow pane with the Baseline picker.',
+    'Trends browser flow passed: the release overview first (a failed load retried, the verdict line, five local runs as rings, What changed at the latest release, the CI runs outside Release Control linking to the executions, the measure kept in the hash and across a reload, Download CI results through Check now, a sign-in to fix and Turn off sync, a suite opened under More options drawn per execution with its note, Back to release overview), a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over on the release overview, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, grouped by day (a day’s panel on its executions, a day as the baseline kept on its last execution) and by Harness release (unrecorded ones said and left out, the releases in version order), a model of a suite and the empty state’s Run again, narrow pane with Details open and the Baseline picker, the five local runs of this harness as rings.',
   )
 } finally {
   await browser.close()

@@ -268,6 +268,15 @@
   background: var(--color-panel-raised);
 }
 
+/* A local run as the chart draws it: a hollow ring. */
+.tr-legend-ring {
+  width: calc(var(--spacing) * 2.5);
+  height: calc(var(--spacing) * 2.5);
+  border: 1.5px solid var(--color-ink-faint);
+  border-radius: 50%;
+  background: var(--color-panel-raised);
+}
+
 .tr-summary {
   display: flex;
   flex-direction: column;
@@ -302,31 +311,34 @@
   background: var(--color-surface);
 }
 
-.tr-skel-series {
-  width: calc(var(--spacing) * 110);
-  height: calc(var(--spacing) * 9);
-}
-
-.tr-skel-stack {
-  width: calc(var(--spacing) * 32);
-  height: calc(var(--spacing) * 9);
-}
-
 .tr-skel-line {
   width: calc(var(--spacing) * 120);
   height: calc(var(--spacing) * 4);
+}
+
+.tr-skel-tab {
+  width: calc(var(--spacing) * 22);
+  height: calc(var(--spacing) * 8);
 }
 
 .tr-skel-big {
   height: calc(var(--spacing) * 96);
 }
 
-.tr-skel-mini {
-  height: calc(var(--spacing) * 48);
-}
-
 .tr-skel-row {
   height: calc(var(--spacing) * 12);
+}
+
+/* The series view's way back, at its own width. */
+.tr-back {
+  align-self: flex-start;
+}
+
+/* What More options and Details hold, spaced like the page. */
+.tr-layer {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3.5);
 }
 
 /* The large chart and the panel of the picked execution */
@@ -339,6 +351,113 @@
 
 .tr-top[data-panel] {
   grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 90);
+}
+
+/* The release overview: the verdict, the metric tabs, the release line and
+   its callout, the legend, the CI runs outside Release Control and the
+   disclosures. */
+.tr-overview {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3.5);
+}
+
+.tr-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+}
+
+.tr-verdict p {
+  margin: 0;
+}
+
+.tr-verdict-head,
+.tr-tabs,
+.tr-outside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+}
+
+/* The metric tabs scroll sideways at phone width and never wrap. */
+.tr-segments {
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tr-segments > * {
+  flex: none;
+}
+
+/* CI sync's status beside the heading; the large download on an empty first
+   screen. */
+.tr-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.tr-sync[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.tr-sync-error {
+  color: var(--danger);
+}
+
+.tr-sync-empty {
+  display: grid;
+  justify-items: center;
+  gap: calc(var(--spacing) * 3);
+  max-width: calc(var(--spacing) * 100);
+  text-align: center;
+}
+
+.tr-sync-empty p {
+  margin: 0;
+}
+
+.tr-sync-empty .tr-sync-error {
+  font-size: var(--text-xs);
+}
+
+.tr-verdict-line {
+  font-size: var(--ds-text-md, 0.875rem);
+  line-height: calc(var(--spacing) * 7);
+}
+
+.tr-move {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.tr-control[data-active] {
+  background: var(--color-surface-selected);
+}
+
+.tr-callout .tr-measures > div {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.tr-outside {
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+}
+
+.tr-outside .tr-link {
+  margin-left: auto;
 }
 
 .tr-big {
@@ -469,6 +588,12 @@
   fill: var(--color-ink);
 }
 
+.tr-dot[data-source] {
+  fill: var(--color-panel-raised);
+  stroke: var(--color-ink-faint);
+  stroke-width: 1.5;
+}
+
 .tr-miss-mark {
   stroke: var(--ds-danger-text);
   stroke-linecap: round;
@@ -501,6 +626,18 @@
 
 .tr-point[data-selected] {
   background: var(--color-ink);
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+/* A local or Docker run: hollow, picked or not. */
+.tr-point[data-source],
+.tr-point[data-source][data-selected] {
+  border: 1.5px solid var(--color-ink-faint);
+  background: var(--color-panel-raised);
+}
+
+.tr-point[data-latest] {
   outline: 2px solid var(--color-ink);
   outline-offset: 2px;
 }
