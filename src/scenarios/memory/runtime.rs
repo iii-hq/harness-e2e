@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use super::cases::{bank, planted_memories, render, Case};
-use super::score::PromptRecord;
+use super::score::{PromptRecord, Retrieval};
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
 
@@ -30,6 +30,7 @@ const VECTOR_WAIT: Duration = Duration::from_secs(180);
 /// What one attempt holds between `setup` and `cleanup`.
 struct Run {
     prompts: Arc<Mutex<Vec<PromptRecord>>>,
+    retrieval: Option<Retrieval>,
     compaction: Option<String>,
     function: Option<FunctionRef>,
     trigger: Option<Trigger>,
@@ -40,13 +41,40 @@ fn runs() -> &'static Mutex<HashMap<String, Run>> {
     RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The detail of the doctor's `embeddings-available` check, when it passes.
-pub fn embedder(doctor: &Value) -> Option<&str> {
-    doctor["checks"]
-        .as_array()?
-        .iter()
-        .find(|check| check["name"] == "embeddings-available" && check["ok"] == true)?["detail"]
-        .as_str()
+/// What `memory::doctor` says about the embedder.
+#[derive(Debug, PartialEq)]
+pub enum Embedder {
+    Ready(Retrieval),
+    /// Another model embeds (an embed key reached the stack): the cases are
+    /// calibrated for MiniLM vectors or none.
+    Other(String),
+    /// Memory, its router or its state is not up yet.
+    Pending,
+}
+
+pub fn embedder(doctor: &Value) -> Embedder {
+    let check = |name: &str| {
+        doctor["checks"]
+            .as_array()
+            .and_then(|checks| checks.iter().find(|check| check["name"] == name))
+    };
+    let up = |name: &str| check(name).is_some_and(|check| check["ok"] == true);
+    // Before the router answers, "no vector" says nothing about the embedder.
+    let Some(embeddings) =
+        check("embeddings-available").filter(|_| up("router-reachable") && up("state-reachable"))
+    else {
+        return Embedder::Pending;
+    };
+    let detail = embeddings["detail"].as_str().unwrap_or_default();
+    if detail.contains("lexical-only") {
+        Embedder::Ready(Retrieval::Lexical)
+    } else if embeddings["ok"] != true {
+        Embedder::Pending
+    } else if detail.contains(EMBEDDER) {
+        Embedder::Ready(Retrieval::Minilm)
+    } else {
+        Embedder::Other(detail.to_string())
+    }
 }
 
 /// Stores the prompt of a step of the attempt's own session. A pre-generate
@@ -70,23 +98,24 @@ pub fn bank_already_gone(error: &str) -> bool {
     error.contains("bank_not_found")
 }
 
-/// Waits until memory embeds with MiniLM, the only model whose vectors the
-/// cases are calibrated for.
-async fn wait_for_embedder(context: &E2eContext) -> Result<()> {
+/// Waits until memory ranks with MiniLM or lexical-only, the two modes the
+/// cases are calibrated for, and says which.
+async fn wait_for_embedder(context: &E2eContext) -> Result<Retrieval> {
     let deadline = Instant::now() + EMBEDDER_WAIT;
     loop {
         // Memory may not be registered yet; an error is the same as no answer.
-        if let Ok(doctor) = context.trigger_value("memory::doctor", json!({})).await {
-            match embedder(&doctor) {
-                Some(detail) if detail.contains(EMBEDDER) => return Ok(()),
-                Some(detail) => {
+        let last = match context.trigger_value("memory::doctor", json!({})).await {
+            Ok(doctor) => match embedder(&doctor) {
+                Embedder::Ready(retrieval) => return Ok(retrieval),
+                Embedder::Other(detail) => {
                     bail!("memory embeds with {detail}, not MiniLM: an embed key reached the stack")
                 }
-                None => {}
-            }
-        }
+                Embedder::Pending => doctor.to_string(),
+            },
+            Err(error) => format!("{error:#}"),
+        };
         if Instant::now() >= deadline {
-            bail!("memory's embedder never answered");
+            bail!("memory's embedder never settled; last doctor answer: {last}");
         }
         sleep(POLL).await;
     }
@@ -140,13 +169,18 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         run_id.to_string(),
         Run {
             prompts: prompts.clone(),
+            retrieval: None,
             compaction: None,
             function: None,
             trigger: None,
         },
     );
 
-    wait_for_embedder(context).await?;
+    let retrieval = wait_for_embedder(context).await?;
+    lock_unpoisoned(runs())
+        .get_mut(run_id)
+        .expect("registered above")
+        .retrieval = Some(retrieval);
     let bank = bank(run_id);
     context
         .trigger_value("memory::bank::create", json!({"name": bank}))
@@ -168,8 +202,11 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         for text in planted_memories(case, run_id) {
             saved.push((save(context, &bank, &text).await?, text));
         }
-        for (id, text) in &saved {
-            wait_for_vector(context, &bank, id, text).await?;
+        // Lexical-only stores no vector to wait for.
+        if retrieval == Retrieval::Minilm {
+            for (id, text) in &saved {
+                wait_for_vector(context, &bank, id, text).await?;
+            }
         }
     }
 
@@ -221,14 +258,16 @@ pub async fn compact(context: &E2eContext, run_id: &str, session_id: &str) {
     }
 }
 
-/// The prompts the observer recorded and the compaction status, if any.
-pub fn snapshot(run_id: &str) -> (Vec<PromptRecord>, Option<String>) {
+/// The prompts the observer recorded, the compaction status and the
+/// retrieval mode, each if any.
+pub fn snapshot(run_id: &str) -> (Vec<PromptRecord>, Option<String>, Option<Retrieval>) {
     lock_unpoisoned(runs()).get(run_id).map_or_else(
-        || (Vec::new(), None),
+        || (Vec::new(), None, None),
         |run| {
             (
                 lock_unpoisoned(&run.prompts).clone(),
                 run.compaction.clone(),
+                run.retrieval,
             )
         },
     )
@@ -289,18 +328,36 @@ mod tests {
     }
 
     #[test]
-    fn the_embedder_is_read_from_the_doctor() {
-        let doctor = |ok: bool| {
-            json!({"checks": [
-                {"name": "store-roundtrip", "ok": true, "detail": "ok"},
-                {"name": "embeddings-available", "ok": ok, "detail": "router::embed answered (model sentence-transformers/all-MiniLM-L6-v2@c9745ed1d9f2)"},
+    fn the_doctor_picks_minilm_lexical_or_refuses_another_embedder() {
+        const MINILM: &str =
+            "router::embed answered (model sentence-transformers/all-MiniLM-L6-v2@c9745ed1d9f2)";
+        // memory 0.2.21 on a Linux stack, whose iii-directory has no MiniLM.
+        const LEXICAL: &str =
+            "router::embed returned no vector; recall runs lexical-only (BM25 + entities)";
+        let doctor = |router: bool, ok: bool, detail: &str| {
+            json!({"ok": true, "checks": [
+                {"name": "store-roundtrip", "ok": true, "detail": "save→recall→delete ok"},
+                {"name": "router-reachable", "ok": router, "detail": "router::models::list reachable"},
+                {"name": "state-reachable", "ok": true, "detail": "state::get reachable"},
+                {"name": "embeddings-available", "ok": ok, "detail": detail},
             ]})
         };
-        assert!(embedder(&doctor(true))
-            .unwrap()
-            .contains("all-MiniLM-L6-v2"));
-        assert_eq!(embedder(&doctor(false)), None);
-        assert_eq!(embedder(&json!({"checks": []})), None);
+        assert_eq!(
+            embedder(&doctor(true, true, MINILM)),
+            Embedder::Ready(Retrieval::Minilm)
+        );
+        assert_eq!(
+            embedder(&doctor(true, false, LEXICAL)),
+            Embedder::Ready(Retrieval::Lexical)
+        );
+        let paid = "router::embed answered (model text-embedding-3-small)";
+        assert_eq!(
+            embedder(&doctor(true, true, paid)),
+            Embedder::Other(paid.to_string())
+        );
+        // No vector while the router is still down says nothing yet.
+        assert_eq!(embedder(&doctor(false, false, LEXICAL)), Embedder::Pending);
+        assert_eq!(embedder(&json!({"checks": []})), Embedder::Pending);
     }
 
     #[test]

@@ -276,7 +276,7 @@ tour changes on purpose, regenerate the fixture from the worker's
 The `memory` suite runs eleven cases, three independent rounds, one technical
 retry. Each case plants its own bank (`e2e-<attempt>`) with the rules,
 memories and unrelated distractor facts it calls for, waits until memory has
-embedded all of them, sends its prompt and follow-ups, and audits what memory
+indexed all of them, sends its prompt and follow-ups, and audits what memory
 injected into each turn against what that turn needed: the right facts, no
 duplicates, nothing unrelated, rules intact in the system prompt. The subject
 may call no function (`memory::*` is denied), so a planted value reaches the
@@ -289,24 +289,45 @@ memory hook did not run (an infrastructure error, never a score). A fresh bank
 per attempt makes every case safe to rerun, and the attempt's bank is deleted
 afterwards; the user's own banks are never touched.
 
-Run it on the `memory` stack, the default stack plus the `memory` worker. The
-suite needs the local MiniLM embedder, so setup fails when memory embeds with
-any other model. To run a case on your own stack, from a checkout:
+Run it on the `memory` stack, the default stack plus the `memory` worker.
+Memory ranks recalls with the local MiniLM embedder where iii-directory has
+one, and lexical-only (BM25 and entities) where it has none, as on the Linux
+builds CI and the local recipe below use. Each run records which mode ran
+(`retrieval` in its evidence). Setup fails when memory embeds with any other
+model. To run a case on your own stack, from a checkout:
 
 ```bash
 D=~/iii-memory-e2e && mkdir -p "$D" && cd "$D"
 cat > worker-compose.yaml <<'YAML'
 namespace: memory-e2e
+startup_timeout: 600s
+stop_timeout: 30s
 engine:
   url: ws://127.0.0.1:49334        # own port, away from a live stack's 49134
+# The Harness graph is listed explicitly: iii 0.25's compose does not resolve
+# it from `harness` alone, and harness exits at boot without it.
 containers:
-  harness:           {worker: package://harness,           version: latest}
-  memory:            {worker: package://memory,            version: latest}
+  queue:             {worker: package://queue,             version: latest}
+  state:             {worker: package://state,             version: latest}
+  session-manager:   {worker: package://session-manager,   version: latest}
+  llm-router:        {worker: package://llm-router,        version: latest, start_after: [state]}
+  context-manager:   {worker: package://context-manager,   version: latest, start_after: [llm-router]}
+  iii-directory:     {worker: package://iii-directory,     version: latest}
+  cron:              {worker: package://cron,              version: latest}
+  ide:               {worker: package://ide,               version: latest}
+  harness:
+    worker: package://harness
+    version: latest
+    start_after: [state, queue, session-manager, llm-router, context-manager, iii-directory, cron, ide]
+  memory:
+    worker: package://memory
+    version: latest
+    start_after: [state, queue, session-manager, llm-router]
   fp:                {worker: package://fp,                version: latest}
-  provider-deepseek: {worker: package://provider-deepseek, version: latest}
+  provider-deepseek: {worker: package://provider-deepseek, version: latest, start_after: [llm-router, state]}
 YAML
-# Strip OpenAI so router::embed falls back to MiniLM, as on CI: with an
-# OPENAI_API_KEY in llm-router's environment memory embeds with
+# Strip OpenAI so router::embed falls back to MiniLM or to none, as on CI:
+# with an OPENAI_API_KEY in llm-router's environment memory embeds with
 # text-embedding-3-small, whose vectors the cases are not calibrated for.
 env -u III_URL -u OPENAI_API_KEY III_COMPOSE_STATE_DIR="$D/.compose-state" iii compose --up
 ```

@@ -162,13 +162,14 @@ impl Scenario for Memory {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<Vec<CapturedDeliverable>> {
-        let (prompts, compaction) = runtime::snapshot(run_id);
+        let (prompts, compaction, retrieval) = runtime::snapshot(run_id);
         let evidence = score::evidence(
             self.item(),
             run_id,
             &observation.transcript,
             &prompts,
             compaction,
+            retrieval,
         );
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
@@ -216,12 +217,13 @@ fn deliverable_contract() -> DeliverableContract {
             schema: json!({
                 "type": "object",
                 "required": [
-                    "schema", "bank", "canaries", "seeds", "rules", "observed",
-                    "prompts", "compaction_status", "measurements"
+                    "schema", "bank", "retrieval", "canaries", "seeds", "rules",
+                    "observed", "prompts", "compaction_status", "measurements"
                 ],
                 "properties": {
                     "schema": {"type": "string"},
                     "bank": {"type": "string"},
+                    "retrieval": {"enum": ["minilm", "lexical", null]},
                     "measurements": {"type": "array"},
                 },
             }),

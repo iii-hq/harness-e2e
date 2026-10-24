@@ -46,8 +46,9 @@ pub struct PromptRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExchangePrompt {
     pub recorded: bool,
-    /// The recorded prompt hashes to the `system_sha` Harness stamped.
-    pub sha_matches: bool,
+    /// A recorded prompt hashes to the `system_sha` Harness stamped; `None`
+    /// when it stamped none.
+    pub sha_matches: Option<bool>,
     pub memory_section: Option<String>,
 }
 
@@ -58,11 +59,23 @@ pub struct Measurement {
     pub unit: String,
 }
 
+/// How memory ranked recalls during the attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Retrieval {
+    /// MiniLM vectors next to BM25 and entities.
+    Minilm,
+    /// BM25 and entities only: no embedder answered.
+    Lexical,
+}
+
 /// The captured deliverable of a memory case.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Evidence {
     pub schema: String,
     pub bank: String,
+    /// `None` when setup never asked the doctor.
+    pub retrieval: Option<Retrieval>,
     /// Label -> value, for every canary the case plants or checks for.
     pub canaries: BTreeMap<String, String>,
     pub seeds: Vec<SeedEvidence>,
@@ -106,6 +119,7 @@ pub fn evidence(
     transcript: &Value,
     prompts: &[PromptRecord],
     compaction_status: Option<String>,
+    retrieval: Option<Retrieval>,
 ) -> Evidence {
     assemble(
         case,
@@ -113,6 +127,7 @@ pub fn evidence(
         observe(transcript),
         prompts,
         compaction_status,
+        retrieval,
     )
 }
 
@@ -122,6 +137,7 @@ fn assemble(
     observed: Observed,
     records: &[PromptRecord],
     compaction_status: Option<String>,
+    retrieval: Option<Retrieval>,
 ) -> Evidence {
     let planted = !case.baseline;
     let distractors = DISTRACTORS.iter().map(|text| SeedEvidence {
@@ -149,7 +165,7 @@ fn assemble(
             });
             ExchangePrompt {
                 recorded: !seen.is_empty(),
-                sha_matches: matching.is_some(),
+                sha_matches: exchange.system_sha.as_ref().map(|_| matching.is_some()),
                 memory_section: matching
                     .or(seen.last())
                     .and_then(|record| memory_section(&record.system_prompt))
@@ -160,6 +176,7 @@ fn assemble(
     let mut evidence = Evidence {
         schema: SCHEMA.to_string(),
         bank: bank(run_id),
+        retrieval,
         canaries: labels(case)
             .into_iter()
             .map(|label| (label.to_string(), canary(run_id, label)))
@@ -445,8 +462,10 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
         if exchange.memory_bank.is_none() {
             problems.push(format!("exchange {index} ran without the memory hook"));
         }
+        // shortcut: the published Harness stamps no `origin.req`, so its steps trust
+        // the recorded prompt unchecked, require the sha once a release stamps it.
         match evidence.prompts.get(index) {
-            Some(prompt) if prompt.recorded && prompt.sha_matches => {}
+            Some(prompt) if prompt.recorded && prompt.sha_matches != Some(false) => {}
             Some(prompt) if prompt.recorded => problems.push(format!(
                 "exchange {index}: no recorded prompt matches the system_sha Harness stamped"
             )),
@@ -536,7 +555,14 @@ mod tests {
             .iter()
             .map(|exchange| record(&exchange.turn_id, 0, prompt))
             .collect();
-        assemble(case, RUN, observed, &records, status.map(str::to_string))
+        assemble(
+            case,
+            RUN,
+            observed,
+            &records,
+            status.map(str::to_string),
+            Some(Retrieval::Lexical),
+        )
     }
 
     fn evidence_of(case: &Case, observed: Observed) -> Evidence {
@@ -599,9 +625,20 @@ mod tests {
     #[test]
     fn evidence_carries_the_bank_the_canaries_and_the_planted_flags() {
         let empty = json!({"messages": []});
-        let recall = evidence(case_named("memory_relevant_recall"), RUN, &empty, &[], None);
+        let recall = evidence(
+            case_named("memory_relevant_recall"),
+            RUN,
+            &empty,
+            &[],
+            None,
+            Some(Retrieval::Lexical),
+        );
         assert_eq!(recall.schema, "memory-evaluation/1");
         assert_eq!(recall.bank, "e2e-a");
+        assert_eq!(
+            serde_json::to_value(&recall).unwrap()["retrieval"],
+            "lexical"
+        );
         assert_eq!(
             recall.canaries.iter().collect::<Vec<_>>(),
             [
@@ -623,6 +660,7 @@ mod tests {
             &empty,
             &[],
             None,
+            None,
         );
         assert!(rules.rules.iter().all(|rule| rule.planted));
         assert!(rules.seeds.iter().all(|seed| !seed.planted));
@@ -631,6 +669,7 @@ mod tests {
             RUN,
             &empty,
             &[],
+            None,
             None,
         );
         assert!(control.rules.iter().all(|rule| !rule.planted));
@@ -659,13 +698,14 @@ mod tests {
             &transcript,
             &records,
             None,
+            None,
         );
         assert_eq!(found.prompts.len(), 2);
         assert_eq!(
             found.prompts[0],
             ExchangePrompt {
                 recorded: true,
-                sha_matches: true,
+                sha_matches: Some(true),
                 memory_section: Some("\n\n# Memory — bank: e2e-a\nbody".into()),
             }
         );
@@ -673,10 +713,41 @@ mod tests {
             found.prompts[1],
             ExchangePrompt {
                 recorded: false,
-                sha_matches: false,
+                sha_matches: Some(false),
                 memory_section: None,
             }
         );
+    }
+
+    #[test]
+    fn an_unstamped_step_trusts_the_prompt_the_observer_recorded() {
+        // The origin the published Harness writes: no `req` to hash against.
+        let transcript = json!({"messages": [
+            {"entry_id": "e_t_a_0_assistant",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+             "origin": {"memory_bank": "e2e-a", "memory_banks": ["e2e-a"],
+                        "memory_ids": ["fpda904aac412c501d"], "memory_recalled": 1,
+                        "turn_id": "t_a"}},
+        ]});
+        let sent = format!("{PROMPT}{HEADER}");
+        let case = case_named("memory_first_person_off_topic");
+        let found = evidence(
+            case,
+            RUN,
+            &transcript,
+            &[record("t_a", 0, &sent)],
+            None,
+            Some(Retrieval::Lexical),
+        );
+        assert_eq!(
+            found.prompts,
+            [ExchangePrompt {
+                recorded: true,
+                sha_matches: None,
+                memory_section: Some(HEADER.into()),
+            }]
+        );
+        assert_eq!(evaluate(case, &found).infrastructure_error, None);
     }
 
     #[test]
@@ -822,7 +893,7 @@ mod tests {
         assert!(evaluate(case, &unrecorded).infrastructure_error.is_some());
 
         let mut mismatched = healthy.clone();
-        mismatched.prompts[1].sha_matches = false;
+        mismatched.prompts[1].sha_matches = Some(false);
         assert!(evaluate(case, &mismatched).infrastructure_error.is_some());
 
         for status in [None, Some("error: boom".to_string())] {
