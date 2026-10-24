@@ -41,13 +41,13 @@ const AT_MOST_TWO_TASK_CALLS: AssessmentSpec = AssessmentSpec::scored(
 const SINGLE_TURN: AssessmentSpec = AssessmentSpec::scored(
     "single_turn",
     10,
-    "Did the session complete in exactly one turn?",
+    "Did the session store the requested object and complete in exactly one turn?",
 )
 .labeled("Finished in exactly one turn");
 const AT_MOST_TWO_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "at_most_two_turns",
     10,
-    "Did the session complete in no more than two turns?",
+    "Did the session store the requested object and complete in no more than two turns?",
 )
 .labeled("Finished in at most two turns");
 const ZERO_FRICTION: AssessmentSpec = AssessmentSpec::scored(
@@ -254,8 +254,16 @@ impl Scenario for MinimalPath {
                         calls.len()
                     ),
                 ),
-                SINGLE_TURN.full_or_zero(turns == 1, format!("turns={turns}")),
-                AT_MOST_TWO_TURNS.full_or_zero((1..=2).contains(&turns), format!("turns={turns}")),
+                // Few turns are worth something only when the write happened:
+                // a text-only reply finishes in one turn by doing nothing.
+                SINGLE_TURN.full_or_zero(
+                    turns == 1 && exact_writes >= 1,
+                    format!("turns={turns}, successful_exact_writes={exact_writes}"),
+                ),
+                AT_MOST_TWO_TURNS.full_or_zero(
+                    (1..=2).contains(&turns) && exact_writes >= 1,
+                    format!("turns={turns}, successful_exact_writes={exact_writes}"),
+                ),
                 ZERO_FRICTION.full_or_zero(
                     errors == 0 && single && concise,
                     format!(

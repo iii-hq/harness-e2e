@@ -28,7 +28,7 @@ const RECORD_CREATED: AssessmentSpec = AssessmentSpec::gate(
 const FEWER_THAN_TEN_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "fewer_than_ten_turns",
     20,
-    "Did the session use fewer than 10 turns?",
+    "Did the session create the record in fewer than 10 turns?",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[RECORD_CREATED, FEWER_THAN_TEN_TURNS];
 
@@ -167,8 +167,11 @@ impl Scenario for InsertRecord {
 
         Ok(assessment::build_evaluation([
             RECORD_CREATED.full_or_zero(record_created, format!("rows={values:?}")),
-            FEWER_THAN_TEN_TURNS
-                .full_or_zero(turns < MAX_TURNS_FOR_CREDIT, format!("turns={turns}")),
+            // A session that wrote nothing is short by doing nothing.
+            FEWER_THAN_TEN_TURNS.full_or_zero(
+                record_created && turns < MAX_TURNS_FOR_CREDIT,
+                format!("turns={turns}, record_created={record_created}"),
+            ),
         ]))
     }
 
@@ -284,6 +287,33 @@ mod tests {
         for catalog in [json!({}), json!({"tables":{}}), json!({"tables":[{}]})] {
             assert!(table_absent(&catalog, table).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn a_reply_without_the_row_earns_nothing() {
+        let run_id = "idle-run";
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let observation = crate::scenarios::ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::InsertRecord,
+            run_id,
+            json!({ "messages": [] }),
+            "Done.",
+            vec![CapturedDeliverable {
+                id: DELIVERABLE_ID.to_string(),
+                kind: "database_record".to_string(),
+                content: json!({ "rows": [], "response": "Done." }).into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        );
+        let evaluation = InsertRecord
+            .evaluate(&context, &observation, run_id)
+            .await
+            .unwrap();
+        for award in evaluation.awards {
+            assert_eq!(award.awarded, Some(0), "{}: {}", award.id, award.reason);
+        }
+        context.shutdown().await;
     }
 
     #[tokio::test]
