@@ -74,7 +74,7 @@ const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
-    "Is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
+    "Once a writer has run under the root, is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
 )
 .labeled("Final answer is the short balanced line");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -573,10 +573,12 @@ fn evaluate_observation(
                 completion_records.len(),
             ),
         ),
+        // The marker is in the prompt: only a run whose writers ran backs it.
         VERIFIED_REPORT.full_or_zero(
-            report_verified && operational_errors == 0,
+            audit.children_in_tree > 0 && report_verified && operational_errors == 0,
             format!(
-                "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                "writers_in_tree={}, report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                audit.children_in_tree,
                 observation.response.chars().count(),
                 observation.metrics.totals.function_call_errors,
             ),
@@ -1005,7 +1007,7 @@ impl Names {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn update_call(names: &Names) -> common::ObservedFunctionCall {
@@ -1073,17 +1075,19 @@ mod tests {
     }
 
     /// `children` writers ran under the root; `writers` are their transcripts.
-    fn completion_of(
+    fn evaluation_of(
         root: Value,
         children: u8,
         writers: Vec<(u8, Vec<common::ObservedFunctionCall>)>,
-    ) -> crate::report::CompletionState {
+        snapshot: &LedgerSnapshot,
+        response: &str,
+    ) -> ObjectiveEvaluation {
         let names = Names::new("run");
         let mut observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::ContentionLedger,
             "run",
             root,
-            REPORT_MARKER,
+            response,
             Vec::new(),
         );
         let mut sessions = vec![json!({
@@ -1109,22 +1113,80 @@ mod tests {
             }))
             .unwrap(),
         );
-        let balanced = LedgerSnapshot {
+        let writers = writers
+            .into_iter()
+            .map(|(writer, calls)| (writer, transcript(&calls, &[])))
+            .collect::<Vec<_>>();
+        evaluate_observation(&observation, &names, snapshot, &writers)
+    }
+
+    fn balanced() -> LedgerSnapshot {
+        LedgerSnapshot {
             accumulator_rows: 1,
             accumulator: EXPECTED_TOTAL,
             audit_pairs: expected_sequences()
                 .into_iter()
                 .flat_map(|(writer, seqs)| seqs.into_iter().map(move |seq| (writer, seq)))
                 .collect(),
-        };
-        let writers = writers
-            .into_iter()
-            .map(|(writer, calls)| (writer, transcript(&calls, &[])))
-            .collect::<Vec<_>>();
+        }
+    }
+
+    fn completion_of(
+        root: Value,
+        children: u8,
+        writers: Vec<(u8, Vec<common::ObservedFunctionCall>)>,
+    ) -> crate::report::CompletionState {
         assessment::completion(
             ASSESSMENTS,
-            &evaluate_observation(&observation, &names, &balanced, &writers),
+            &evaluation_of(root, children, writers, &balanced(), REPORT_MARKER),
         )
+    }
+
+    /// The null delivery (no writer, no table, only the report's marker) and
+    /// the reference one (one barrier wake armed, three writers spawned in
+    /// one response, each with its own five increments, and the wake fired
+    /// by the third done key).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let names = Names::new("run");
+        let mut root = vec![common::ObservedFunctionCall {
+            function_id: "engine::register_trigger".to_string(),
+            arguments: json!({
+                "trigger_type": "state", "config": { "scope": names.scope },
+                "label": names.complete_label, "once": true,
+                "conditions": [{ "function_id": "state::barrier", "config": {
+                    "id": names.barrier_id, "carry": "/new_value", "expect": done_keys(),
+                } }],
+            }),
+        }];
+        root.extend(
+            names
+                .writer_sessions
+                .iter()
+                .map(|session_id| common::ObservedFunctionCall {
+                    function_id: "harness::spawn".to_string(),
+                    arguments: json!({ "session_id": session_id }),
+                }),
+        );
+        let barrier = [("skipped", false), ("skipped", false), ("delivered", true)];
+        let writers = (0..WRITERS)
+            .map(|writer| (writer, contended_writer_calls(&names, writer)))
+            .collect();
+        [
+            evaluation_of(
+                transcript(&[], &[]),
+                0,
+                Vec::new(),
+                &LedgerSnapshot::empty(),
+                REPORT_MARKER,
+            ),
+            evaluation_of(
+                transcript(&root, &barrier),
+                WRITERS,
+                writers,
+                &balanced(),
+                REPORT_MARKER,
+            ),
+        ]
     }
 
     #[test]

@@ -733,7 +733,7 @@ fn relation_rows(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::report::CompletionState;
 
@@ -873,8 +873,31 @@ mod tests {
         }
     }
 
+    /// What `capture` reads when nothing ran: the prepared relations and no
+    /// compatibility view.
+    fn prepared_record() -> CapturedDeliverable {
+        let migrated = migrated_record("do-not-touch");
+        let mut content = migrated.content.as_json().unwrap().clone();
+        content["target"] = json!([content["target"][0].clone()]);
+        content["quarantine"] = json!([]);
+        content["compat"] = json!({ "error": "no such table" });
+        content["journal"] = json!([{
+            "migration_id": MIGRATION_ID, "status": "backfill_in_progress", "applied_rows": 1,
+            "quarantined_rows": 0, "replay_count": 0,
+        }]);
+        content["response"] = json!("done");
+        CapturedDeliverable {
+            content: content.into(),
+            ..migrated
+        }
+    }
+
     /// One assistant call per `(function_id, failed)` with its result.
-    fn completion_of(writes: &[(&str, bool)], sentinel_value: &str) -> CompletionState {
+    fn evaluation_of(
+        writes: &[(&str, bool)],
+        record: CapturedDeliverable,
+        response: &str,
+    ) -> ObjectiveEvaluation {
         let run_id = "run";
         let mut messages = Vec::new();
         for (index, (function_id, failed)) in writes.iter().enumerate() {
@@ -892,10 +915,31 @@ mod tests {
             crate::scenarios::ScenarioId::DatabaseMigrationRecovery,
             run_id,
             json!({ "messages": messages }),
-            EXPECTED_REPORT,
-            vec![migrated_record(sentinel_value)],
+            response,
+            vec![record],
         );
-        assessment::completion(ASSESSMENTS, &evaluate_observation(&observation, run_id))
+        evaluate_observation(&observation, run_id)
+    }
+
+    fn completion_of(writes: &[(&str, bool)], sentinel_value: &str) -> CompletionState {
+        assessment::completion(
+            ASSESSMENTS,
+            &evaluation_of(writes, migrated_record(sentinel_value), EXPECTED_REPORT),
+        )
+    }
+
+    /// The null delivery (no transaction, the prepared relations) and the
+    /// reference one (the migration, then its replay, then the report).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        const TX: &str = "database::transaction";
+        [
+            evaluation_of(&[], prepared_record(), "done"),
+            evaluation_of(
+                &[(TX, false), (TX, false)],
+                migrated_record("do-not-touch"),
+                EXPECTED_REPORT,
+            ),
+        ]
     }
 
     #[test]

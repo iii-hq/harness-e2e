@@ -432,8 +432,8 @@ pub struct ScenarioObservation {
 }
 
 impl ScenarioObservation {
-    /// A complete single-session run of `scenario`'s canonical case, for
-    /// evaluator tests.
+    /// A complete single-session, single-turn run of `scenario`'s canonical
+    /// case, for evaluator tests.
     #[cfg(test)]
     pub(crate) fn for_test(
         scenario: ScenarioId,
@@ -452,6 +452,7 @@ impl ScenarioObservation {
                 complete: true,
                 totals: crate::wire::SessionUsageTotals {
                     sessions: 1,
+                    turns: 1,
                     ..Default::default()
                 },
                 by_session: Vec::new(),

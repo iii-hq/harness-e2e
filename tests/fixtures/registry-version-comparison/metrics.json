@@ -693,9 +693,9 @@
         },
         {
           "id": "verification.source_preservation",
-          "question": "Did the tester leave the product source unchanged?",
+          "question": "Did the tester deliver a report and leave the product source unchanged?",
           "label": "Product source stays unchanged",
-          "expected": "The final product source equals the delivered implementation snapshot, independently of the tester's report.",
+          "expected": "The tester delivered a readable, non-empty checks.json and the final product source equals the delivered implementation snapshot. Without a report the source is unchanged because nothing was attempted, and scores 0.",
           "measurement": "binary",
           "evidence": [
             "Executor source diff against the delivered snapshot."

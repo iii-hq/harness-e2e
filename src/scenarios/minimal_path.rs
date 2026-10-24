@@ -41,13 +41,13 @@ const AT_MOST_TWO_TASK_CALLS: AssessmentSpec = AssessmentSpec::scored(
 const SINGLE_TURN: AssessmentSpec = AssessmentSpec::scored(
     "single_turn",
     10,
-    "Did the session complete in exactly one turn?",
+    "Did the session store the requested object and complete in exactly one turn?",
 )
 .labeled("Finished in exactly one turn");
 const AT_MOST_TWO_TURNS: AssessmentSpec = AssessmentSpec::scored(
     "at_most_two_turns",
     10,
-    "Did the session complete in no more than two turns?",
+    "Did the session store the requested object and complete in no more than two turns?",
 )
 .labeled("Finished in at most two turns");
 const ZERO_FRICTION: AssessmentSpec = AssessmentSpec::scored(
@@ -254,8 +254,16 @@ impl Scenario for MinimalPath {
                         calls.len()
                     ),
                 ),
-                SINGLE_TURN.full_or_zero(turns == 1, format!("turns={turns}")),
-                AT_MOST_TWO_TURNS.full_or_zero((1..=2).contains(&turns), format!("turns={turns}")),
+                // Few turns are worth something only when the write happened:
+                // a text-only reply finishes in one turn by doing nothing.
+                SINGLE_TURN.full_or_zero(
+                    turns == 1 && exact_writes >= 1,
+                    format!("turns={turns}, successful_exact_writes={exact_writes}"),
+                ),
+                AT_MOST_TWO_TURNS.full_or_zero(
+                    (1..=2).contains(&turns) && exact_writes >= 1,
+                    format!("turns={turns}, successful_exact_writes={exact_writes}"),
+                ),
                 ZERO_FRICTION.full_or_zero(
                     errors == 0 && single && concise,
                     format!(
@@ -326,8 +334,51 @@ fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The run as `capture` records it: the transcript, the reply and the
+    /// state the key holds afterwards.
+    async fn evaluation_of(transcript: Value, state: Value, response: &str) -> ObjectiveEvaluation {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::MinimalPath,
+            "control",
+            transcript,
+            response,
+            vec![CapturedDeliverable {
+                id: DELIVERABLE_ID.to_string(),
+                kind: "state_record".to_string(),
+                content: json!({ "state": state }).into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        );
+        MinimalPath
+            .evaluate(&context, &observation, "control")
+            .await
+            .unwrap()
+    }
+
+    /// The null delivery (a text-only reply, nothing written) and the
+    /// reference one (the exact write, alone, in one turn).
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        let expected = expected(crate::scenarios::ScenarioId::MinimalPath.canonical_seed());
+        let reference = json!({ "messages": [
+            { "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": "call-0", "function_id": "state::set",
+                "arguments": { "scope": scope("control"), "key": KEY, "value": expected },
+            }] } },
+            { "message": {
+                "role": "function_result", "function_call_id": "call-0",
+                "function_id": "state::set", "is_error": false,
+            } },
+        ] });
+        [
+            evaluation_of(json!({ "messages": [] }), baseline(), "done").await,
+            evaluation_of(reference, expected, "Stored. MIN-DONE").await,
+        ]
+    }
 
     #[test]
     fn materialized_case_carries_the_seeded_expected_value() {

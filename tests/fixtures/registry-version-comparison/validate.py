@@ -502,17 +502,20 @@ def empty_verification(task_root, state, run_root, truth_complete, known_failed,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
                               "no_reported_outcomes", empty_value=0))
-    observations.extend(source_preservation(task_root, state, run_root))
+    observations.extend(source_preservation(task_root, state, run_root, reported=False))
     return observations
 
 
-def source_preservation(task_root, state, run_root):
+def source_preservation(task_root, state, run_root, reported=True):
+    """An unchanged source counts only beside a report: a tester that reported
+    nothing left the source alone by doing nothing."""
     source_patch = task_root / "source.patch"
     state_path = task_root / "state.json"
     evidence = [relative_evidence(run_root, source_patch), relative_evidence(run_root, state_path)]
     expected_patch = state.get("initial_patch_sha256")
     if isinstance(expected_patch, str) and source_patch.is_file():
-        return [binary("verification.source_preservation", hashlib.sha256(source_patch.read_bytes()).hexdigest() == expected_patch, [item for item in evidence if item])]
+        unchanged = hashlib.sha256(source_patch.read_bytes()).hexdigest() == expected_patch
+        return [binary("verification.source_preservation", reported and unchanged, [item for item in evidence if item])]
     else:
         return [unavailable("verification.source_preservation", "delivery_or_final_patch_missing")]
 

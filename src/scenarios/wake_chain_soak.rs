@@ -82,12 +82,12 @@ const MONOTONIC_PROGRESS: AssessmentSpec = AssessmentSpec::scored(
 const QUIET_CHAIN: AssessmentSpec = AssessmentSpec::scored(
     "quiet_chain",
     10,
-    "Does the chain run without function errors or stray calls and report in a single short line?",
+    "Once the first tick timer is armed, does the chain run without function errors or stray calls and report in a single short line?",
 );
 const OUTPUT_BUDGET: AssessmentSpec = AssessmentSpec::scored_in(
     "output_budget",
     5,
-    "Does every generation report no more than 4,096 output tokens, including reasoning tokens?",
+    "Once the first tick timer is armed, does every generation report no more than 4,096 output tokens, including reasoning tokens?",
     EvaluationDimension::Efficiency,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -607,24 +607,37 @@ async fn evaluate_chain(
     run_id: &str,
 ) -> anyhow::Result<ObjectiveEvaluation> {
     let names = Names::new(run_id);
-    let ticks = case_ticks(&observation.case)?;
-
     let observed = observed_counter(context, &names).await?;
-    let counter_final = observed == json!({ "count": ticks });
+    let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+    score_chain(observation, &names, &observed, active_bindings)
+}
+
+/// Scores the run from its transcript, the counter it left and the bindings
+/// still armed after it.
+fn score_chain(
+    observation: &ScenarioObservation,
+    names: &Names,
+    observed: &Value,
+    active_bindings: usize,
+) -> anyhow::Result<ObjectiveEvaluation> {
+    let ticks = case_ticks(&observation.case)?;
+    let counter_final = *observed == json!({ "count": ticks });
     let reported = report_completes(&observation.response, ticks);
 
-    let wake = wake_audit(&observation.transcript, &names, ticks);
-    let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+    let wake = wake_audit(&observation.transcript, names, ticks);
+    // Quiet and short are worth something only once the chain started: a
+    // bare "done" has no errors, no stray calls and a small output.
+    let started = wake.tick_registrations > 0;
 
-    let chain = chain_audit(&chain_events(&observation.transcript, &names), ticks);
+    let chain = chain_audit(&chain_events(&observation.transcript, names), ticks);
 
     let calls = common::function_calls(&observation.transcript);
     let disciplined = calls
         .iter()
-        .all(|call| is_allowed_call(&call.function_id, &call.arguments, &names));
+        .all(|call| is_allowed_call(&call.function_id, &call.arguments, names));
     let errors = observation.metrics.totals.function_call_errors;
     let response_chars = observation.response.chars().count();
-    let quiet = errors == 0 && disciplined && response_chars <= MAX_REPORT_CHARS;
+    let quiet = started && errors == 0 && disciplined && response_chars <= MAX_REPORT_CHARS;
     let output_budget = output_budget_audit(&observation.transcript);
     let peak = output_budget
         .peak
@@ -663,14 +676,14 @@ async fn evaluate_chain(
         QUIET_CHAIN.full_or_zero(
             quiet,
             format!(
-                "function_errors={errors}, disciplined={disciplined}, \
+                "started={started}, function_errors={errors}, disciplined={disciplined}, \
                  response_chars={response_chars}/{MAX_REPORT_CHARS}"
             ),
         ),
         OUTPUT_BUDGET.full_or_zero(
-            output_budget.passed,
+            started && output_budget.passed,
             format!(
-                "peak_output_tokens={peak}, limit={MAX_EVALUATED_OUTPUT_TOKENS}, \
+                "started={started}, peak_output_tokens={peak}, limit={MAX_EVALUATED_OUTPUT_TOKENS}, \
                      coverage={}/{}, missing_usage={} (provider output includes reasoning)",
                 output_budget.measured,
                 output_budget.generations,
@@ -1066,5 +1079,25 @@ mod tests {
             (empty.measured, empty.generations, empty.peak),
             (0, 0, None)
         );
+    }
+
+    #[test]
+    fn a_bare_done_earns_nothing() {
+        let run_id = "idle-run";
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::WakeChainSoak,
+            run_id,
+            json!({ "messages": [{ "message": {
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "done" }],
+                "usage": { "output": 2 },
+            } }] }),
+            "done",
+            Vec::new(),
+        );
+        let evaluation = score_chain(&observation, &Names::new(run_id), &Value::Null, 0).unwrap();
+        for award in evaluation.awards {
+            assert_eq!(award.awarded, Some(0), "{}: {}", award.id, award.reason);
+        }
     }
 }

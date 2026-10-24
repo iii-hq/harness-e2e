@@ -23,7 +23,9 @@ A run's score is the sum of the points its evaluated criteria awarded.
   every criterion it did not reach. A scenario that scores the partial
   delivery keeps those points.
 - A check that holds only because nothing was attempted scores zero: a secret
-  never fetched was not kept, an injection never read was not refused.
+  never fetched was not kept, an injection never read was not refused, a
+  reply that wrote nothing was not quick, a source nobody worked on was not
+  preserved.
 - Criteria do not veto the score or approve a run.
 - Completion, technical validity, artifact evidence, and runtime controls are
   reported separately.
@@ -266,6 +268,51 @@ score 0 and stay `task_incomplete`; a point or a completion is a hole in that
 test's evaluator, and a function call means the agent disobeyed, not that the
 evaluator paid.
 
+`cargo test` holds the same canary without a model, and its counterpart, for
+every test a suite schedules. Each is scored as the runner scores it against a
+null delivery (no call, one turn, a reply of `done` or one that only claims the
+result), which must earn 0 and stay `task_incomplete`, and a reference
+delivery, which must complete with 100; both run ten times and a result that
+changes between rounds fails as drift.
+The evaluators of the Registry, trending-topics, chess, form-flow,
+state-machine, Linkly and onboarding tests score what a live stack, Docker or
+a browser left behind, so the test names each of them, with the reason and the
+controls it has instead (`LIVE_CONTROLS` in `src/test_plan.rs`).
+
+The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
+`case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
+stack, whose template starts every group from a fresh pinned `linkly-agentic`
+scaffold as the Compose project that hosts the Harness; on another stack the
+scenario's setup refuses the project it finds.
+
+The `onboarding` suite runs the onboarding tour alone: its six prompts in
+`case-onboarding-tour`, once, with no technical retries. Run it on the
+`onboarding` stack, the `harness` template plus the tour's `onboarding`
+container as `iii project init --learn-iii` seeds it; on another stack setup
+refuses to start. The test always runs as the template's Onboarding profile,
+`ade-worker-builder`: an execution that names no profile takes it, and one that
+names another is refused. The test plays the `learn-iii` tour's card. Setup
+closes the button steps (the sign-up box is skipped, never submitted) and binds
+each other step's condition. When a condition fires, the step is closed with
+`learn-iii::steps::complete`. After the dialogue the test adds two expenses
+through the agent's expense tracker, one still to be reimbursed and one
+already reimbursed, as the tracker's page would. It listens for the tracker's
+own trigger after each and reads its totals before, between and after.
+The objectives, gates in bold: **every tour step closed**, **the database
+worker runs**, the Discoverability answer saying what each worker can do, **a new
+worker with at least two functions**, its Console page, an expense's four
+fields, a total still to be reimbursed that counts only the unreimbursed
+expense, the tracker's own trigger type, **that trigger firing for each added
+expense**, **a trigger the chat bound on it**, **the onboarding worker
+removed**, and the tour served matching the fixture. Between prompts the test
+waits, as the tour's card does, while the agent is still on a step: a turn
+running or a wake it armed, up to twenty minutes.
+[tests/fixtures/onboarding-tour/learn-iii.json](tests/fixtures/onboarding-tour/learn-iii.json)
+is the tour the test was written against. If the worker serves a different
+tour, the run loses the `tour.current` criterion and nothing else. When the
+tour changes on purpose, regenerate the fixture from the worker's
+`src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
+
 ### Context capacity
 
 The `context-capacity` suite exercises compaction without a long build: it runs
@@ -333,40 +380,6 @@ Download the artifacts of each execution and run
 `python3 scripts/harness_ab.py A_DIR B_DIR --label-a 1.8.44 --label-b 1.8.50`.
 A command that gives a calibrated verdict is being built; until it lands this
 script is the comparison.
-
-The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
-`case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
-stack, whose template starts every group from a fresh pinned `linkly-agentic`
-scaffold as the Compose project that hosts the Harness; on another stack the
-scenario's setup refuses the project it finds.
-
-The `onboarding` suite runs the onboarding tour alone: its six prompts in
-`case-onboarding-tour`, once, with no technical retries. Run it on the
-`onboarding` stack, the `harness` template plus the tour's `onboarding`
-container as `iii project init --learn-iii` seeds it; on another stack setup
-refuses to start. The test always runs as the template's Onboarding profile,
-`ade-worker-builder`: an execution that names no profile takes it, and one that
-names another is refused. The test plays the `learn-iii` tour's card. Setup
-closes the button steps (the sign-up box is skipped, never submitted) and binds
-each other step's condition. When a condition fires, the step is closed with
-`learn-iii::steps::complete`. After the dialogue the test adds two expenses
-through the agent's expense tracker, one still to be reimbursed and one
-already reimbursed, as the tracker's page would. It listens for the tracker's
-own trigger after each and reads its totals before, between and after.
-The objectives, gates in bold: **every tour step closed**, **the database
-worker runs**, the Discoverability answer saying what each worker can do, **a new
-worker with at least two functions**, its Console page, an expense's four
-fields, a total still to be reimbursed that counts only the unreimbursed
-expense, the tracker's own trigger type, **that trigger firing for each added
-expense**, **a trigger the chat bound on it**, **the onboarding worker
-removed**, and the tour served matching the fixture. Between prompts the test
-waits, as the tour's card does, while the agent is still on a step: a turn
-running or a wake it armed, up to twenty minutes.
-[tests/fixtures/onboarding-tour/learn-iii.json](tests/fixtures/onboarding-tour/learn-iii.json)
-is the tour the test was written against. If the worker serves a different
-tour, the run loses the `tour.current` criterion and nothing else. When the
-tour changes on purpose, regenerate the fixture from the worker's
-`src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
 
 ## Release Control
 
