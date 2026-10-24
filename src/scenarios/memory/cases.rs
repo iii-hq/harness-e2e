@@ -63,7 +63,9 @@ pub struct Case {
     pub title: &'static str,
     pub summary: &'static str,
     pub protects: &'static str,
-    /// Plant nothing; score against the same seeds as withheld.
+    /// Plant nothing; score against the same seeds as withheld, on the twin's
+    /// answer criterion alone. A baseline that completes produced the planted
+    /// value without memory, so its twin proves nothing: redesign it.
     pub baseline: bool,
     /// Also plant `DISTRACTORS`, saved first.
     pub distractors: bool,
@@ -145,6 +147,18 @@ const RELEASE_MEMORIES: &[Seed] = &[seed(
     "release",
     &[0],
 )];
+const fn release_answer(weight: u8) -> Criterion {
+    gate(
+        "answer_uses_release_command",
+        weight,
+        Check::AnswerContains {
+            exchange: Some(0),
+            canary: "release",
+        },
+        "Answer uses the stored release command",
+        "Does the answer carry the run's release command value?",
+    )
+}
 const RELEASE_CRITERIA: &[Criterion] = &[
     gate(
         "release_fact_injected",
@@ -153,16 +167,7 @@ const RELEASE_CRITERIA: &[Criterion] = &[
         "Release fact injected on the turn",
         "Was the stored release convention injected on the turn that needs it?",
     ),
-    gate(
-        "answer_uses_release_command",
-        60,
-        Check::AnswerContains {
-            exchange: Some(0),
-            canary: "release",
-        },
-        "Answer uses the stored release command",
-        "Does the answer carry the run's release command value?",
-    ),
+    release_answer(60),
 ];
 
 const COMMIT_PROMPT: &str = "Write a commit message for a change that fixes a null pointer crash in the login form. Reply with the commit message only.";
@@ -172,6 +177,18 @@ const COMMIT_RULES: &[RuleSeed] = &[RuleSeed {
     content:
         "Start every commit message you write with the prefix [{prefix}] followed by one space.",
 }];
+const fn prefix_answer(weight: u8) -> Criterion {
+    gate(
+        "every_message_has_prefix",
+        weight,
+        Check::AnswerContains {
+            exchange: None,
+            canary: "prefix",
+        },
+        "Every commit message has the prefix",
+        "Does every answer carry the run's commit prefix value?",
+    )
+}
 const COMMIT_CRITERIA: &[Criterion] = &[
     gate(
         "rule_in_system_prompt",
@@ -180,16 +197,7 @@ const COMMIT_CRITERIA: &[Criterion] = &[
         "Rule present in the system prompt",
         "Does the system prompt of the first turn hold the stored commit rule, untruncated?",
     ),
-    gate(
-        "every_message_has_prefix",
-        70,
-        Check::AnswerContains {
-            exchange: None,
-            canary: "prefix",
-        },
-        "Every commit message has the prefix",
-        "Does every answer carry the run's commit prefix value?",
-    ),
+    prefix_answer(70),
 ];
 
 pub const CASES: [Case; 11] = [
@@ -505,7 +513,7 @@ pub const CASES: [Case; 11] = [
         prompt: RELEASE_PROMPT,
         followups: &[],
         compact_before: None,
-        criteria: RELEASE_CRITERIA,
+        criteria: &[release_answer(100)],
     },
     Case {
         id: "memory_value_preference",
@@ -533,7 +541,7 @@ pub const CASES: [Case; 11] = [
         prompt: COMMIT_PROMPT,
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
-        criteria: COMMIT_CRITERIA,
+        criteria: &[prefix_answer(100)],
     },
     Case {
         id: "memory_rule_fit",
@@ -740,7 +748,24 @@ mod tests {
             assert_eq!(twin.followups, baseline.followups);
             assert_eq!(twin.memories.len(), baseline.memories.len());
             assert_eq!(twin.rules.len(), baseline.rules.len());
-            assert_eq!(twin.criteria.len(), baseline.criteria.len());
+            // The answer alone: a baseline completes only when the subject
+            // produced the planted value without memory.
+            let [only] = baseline.criteria else {
+                panic!("{}: one criterion", baseline.id)
+            };
+            assert!(only.gate && only.weight == 100, "{}", baseline.id);
+            assert!(
+                matches!(only.check, Check::AnswerContains { .. }),
+                "{}",
+                baseline.id
+            );
+            assert!(
+                twin.criteria
+                    .iter()
+                    .any(|c| c.id == only.id && c.check == only.check),
+                "{}: the twin's answer criterion",
+                baseline.id
+            );
         }
     }
 

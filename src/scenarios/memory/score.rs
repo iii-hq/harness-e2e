@@ -993,8 +993,13 @@ mod tests {
         assert!(evidence.seeds.iter().all(|seed| !seed.planted));
         assert_eq!(audit(&evidence).missing, [(0, "release".to_string())]);
         let evaluation = evaluate(case, &evidence);
-        assert_eq!(award(&evaluation, "release_fact_injected"), Some(0));
+        assert_eq!(evaluation.awards.len(), 1);
+        assert_eq!(award(&evaluation, "answer_uses_release_command"), Some(0));
         assert_eq!(evaluation.infrastructure_error, None);
+        // The planted value without memory completes it: the redesign signal.
+        let guessed = format!("release-{} --channel stable", canary(RUN, "release"));
+        let evaluation = evaluate(case, &evidence_of(case, observed(&[&guessed], vec![])));
+        assert_eq!(award(&evaluation, "answer_uses_release_command"), Some(100));
     }
 
     #[test]
