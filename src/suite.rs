@@ -627,7 +627,7 @@ async fn emit_event(control: Option<&SuiteControl>, event: SuiteEvent) -> Result
 
 fn ensure_not_cancelled(control: Option<&SuiteControl>) -> Result<()> {
     if control.is_some_and(|control| *control.cancellation.borrow()) {
-        bail!("E2E execution was cancelled");
+        bail!(crate::report::EXECUTION_CANCELLED);
     }
     Ok(())
 }
@@ -1637,9 +1637,17 @@ async fn run_adaptive_once(
                             })
                             .await;
                         let rendered = format!("{error:#}");
-                        report.push_failure(
-                            adaptive_planner_failure_status(&rendered),
+                        let status = adaptive_planner_failure_status(&rendered);
+                        report.push_typed_failure(
+                            status,
                             FailurePhase::Execute,
+                            if status == RunStatus::SubjectError {
+                                "adaptive_plan_invalid".into()
+                            } else {
+                                crate::report::classify_failure(status, FailurePhase::Execute)
+                            },
+                            crate::report::RetryScope::None,
+                            crate::report::ContaminationScope::None,
                             format!("adaptive planning failed: {rendered}"),
                         );
                         if let Err(cleanup_error) = cleanup_result {
@@ -1732,9 +1740,12 @@ async fn run_adaptive_once(
                                 }
                                 match outcome {
                                     Ok(_) if *cancelled.borrow() => {
-                                        report.push_failure(
+                                        report.push_typed_failure(
                                             RunStatus::InfrastructureError,
                                             FailurePhase::Execute,
+                                            "execution_cancelled",
+                                            crate::report::RetryScope::None,
+                                            crate::report::ContaminationScope::None,
                                             "adaptive workflow was cancelled",
                                         );
                                     }
@@ -2099,14 +2110,14 @@ fn populate_composite_report(
     };
     for step in &workflow.steps {
         for failure in &step.failures {
-            report.push_failure(
-                if failure.technical {
-                    RunStatus::InfrastructureError
-                } else {
-                    RunStatus::SubjectError
-                },
-                workflow_failure_phase(failure.phase),
-                format!("semantic test '{}': {}", step.node_id, failure.message),
+            let classified = step_failure(failure);
+            report.push_typed_failure(
+                classified.status,
+                classified.phase,
+                classified.code,
+                classified.retry_scope,
+                classified.contamination,
+                format!("semantic test '{}': {}", step.node_id, classified.message),
             );
         }
     }
@@ -2121,12 +2132,7 @@ fn populate_composite_report(
                 .unwrap_or_else(|| "mandatory composite cleanup failed".into()),
         );
     }
-    if workflow.technical_failure
-        && !report
-            .failures
-            .iter()
-            .any(|failure| failure.domain == crate::report::FailureDomain::E2eInfrastructure)
-    {
+    if workflow.technical_failure && report.failures.is_empty() {
         report.push_failure(
             RunStatus::InfrastructureError,
             FailurePhase::Execute,
@@ -2149,6 +2155,35 @@ fn populate_composite_report(
             crate::report::EvaluatorAvailability::Available,
         );
         report.finish(RunStatus::Passed);
+    }
+}
+
+/// The scheduler marks every step failure technical. A step's Harness turn
+/// that failed, or a budget the flow spent, is the subject's, classified as
+/// in a native run. A step the flow stopped because something else failed
+/// is tagged `step_aborted`: its cause is that other failure.
+fn step_failure(failure: &crate::workflow::WorkflowStepFailure) -> RunFailure {
+    let phase = workflow_failure_phase(failure.phase);
+    if failure.message == crate::report::EXECUTION_CANCELLED {
+        let mut aborted = RunFailure::new(
+            RunStatus::InfrastructureError,
+            phase,
+            failure.message.clone(),
+        );
+        aborted.code = "step_aborted".into();
+        return aborted;
+    }
+    if failure.technical
+        && !failure.message.starts_with("turn ended as ")
+        && !is_resource_limit(&failure.message)
+    {
+        RunFailure::new(
+            RunStatus::InfrastructureError,
+            phase,
+            failure.message.clone(),
+        )
+    } else {
+        subject_failure(phase, failure.message.clone())
     }
 }
 
@@ -2599,18 +2634,28 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 }
 
 /// A subject stopped by a resource limit spent the budget the task allows
-/// without finishing it: every criterion it did not reach scores zero, so the
-/// run keeps a score and a comparison counts it instead of dropping it. A
-/// scenario that scored the partial delivery keeps that score.
+/// without finishing it, and one that failed by itself (the agent or the
+/// Harness) did not finish it either: every criterion it did not reach scores
+/// zero, so the run keeps a score and a comparison counts it instead of
+/// dropping it. A scenario that scored the partial delivery keeps that score.
 fn zero_unreached_criteria(spec: &ScenarioSpec, report: &mut E2eRunReport) {
-    if report.status != RunStatus::ResourceLimit || report.score.is_some() {
+    if !matches!(
+        report.status,
+        RunStatus::ResourceLimit | RunStatus::SubjectError
+    ) || !report.cause.is_some_and(crate::report::RunCause::counted)
+        || report.score.is_some()
+    {
         return;
     }
     let cause = report
         .failures
         .first()
         .map_or("the subject was stopped", |failure| &failure.message);
-    let reason = format!("not reached within the run's resource limits: {cause}");
+    let reason = if report.status == RunStatus::ResourceLimit {
+        format!("not reached within the run's resource limits: {cause}")
+    } else {
+        format!("not reached before the subject failed: {cause}")
+    };
     let awards = spec
         .criteria
         .iter()
@@ -3021,6 +3066,7 @@ fn is_resource_limit(message: &str) -> bool {
         "scenario exceeded",
         "no observable progress",
         "maximum turn",
+        "max_turns",
         "turn limit",
         "context length",
         "input limit",
@@ -3060,6 +3106,11 @@ fn is_provider_transport_failure(message: &str) -> bool {
 }
 
 fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
+    if message.ends_with(crate::report::EXECUTION_CANCELLED) {
+        let mut failure = RunFailure::new(RunStatus::SubjectError, phase, message);
+        failure.code = "execution_cancelled".into();
+        return failure;
+    }
     if is_provider_transport_failure(&message) {
         // Not retried here: the Release Control re-runs the slot once.
         let mut failure = RunFailure::new(
@@ -4494,16 +4545,173 @@ mod tests {
     }
 
     #[test]
-    fn subject_error_without_evaluation_stays_unscored() {
+    fn a_subject_failure_counts_like_a_resource_limit_and_an_excluded_one_stays_unscored() {
         let spec = mixed_assessment_spec();
         let mut report = test_run_report();
         report.push_failure(
             RunStatus::SubjectError,
             FailurePhase::Execute,
-            "turn ended as Failed: provider returned 500",
+            "turn ended as Failed: The conversation is too large for the selected model.",
         );
         finish_native_assessment(&spec, &mut report);
-        assert_eq!(report.score, None);
+        assert_eq!(report.cause, Some(crate::report::RunCause::ContextOverflow));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(0));
+        assert!(report.criteria.iter().all(|criterion| {
+            criterion.awarded == Some(0) && criterion.reason.contains("before the subject failed")
+        }));
+
+        let mut cancelled = test_run_report();
+        let failure = subject_failure(
+            FailurePhase::Execute,
+            crate::report::EXECUTION_CANCELLED.into(),
+        );
+        assert_eq!(failure.code, "execution_cancelled");
+        cancelled.push_typed_failure(
+            failure.status,
+            failure.phase,
+            failure.code,
+            failure.retry_scope,
+            failure.contamination,
+            failure.message,
+        );
+        finish_native_assessment(&spec, &mut cancelled);
+        assert_eq!(
+            cancelled.cause,
+            Some(crate::report::RunCause::OperatorCancelled)
+        );
+        assert_eq!(
+            cancelled.technical,
+            crate::report::TechnicalState::TechnicalInvalid
+        );
+        assert_eq!(cancelled.score, None);
+    }
+
+    #[test]
+    fn dimension_points_add_up_to_the_score_and_gates_are_never_discipline() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: None,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "met".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: Some(12),
+                        reason: "partly".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        finish_native_assessment(&spec, &mut report);
+        report.refresh_dimensions(false);
+        let points = |dimension| {
+            report
+                .dimensions
+                .iter()
+                .find(|report| report.dimension == dimension)
+                .and_then(|report| report.points)
+        };
+        assert_eq!(points(EvaluationDimension::StructuralIntegrity), Some(70));
+        assert_eq!(points(EvaluationDimension::Deliverable), Some(12));
+        assert_eq!(points(EvaluationDimension::Efficiency), Some(0));
+        assert_eq!(
+            report
+                .dimensions
+                .iter()
+                .filter_map(|report| report.points)
+                .sum::<u16>(),
+            u16::from(report.score.unwrap())
+        );
+        // What a test protects is its gates: none of them is spend or
+        // robustness discipline.
+        for scenario in ScenarioId::ALL {
+            for criterion in scenario.spec("catalog").criteria {
+                assert!(
+                    !criterion.gate
+                        || matches!(
+                            criterion.dimension,
+                            EvaluationDimension::Deliverable
+                                | EvaluationDimension::StructuralIntegrity
+                        ),
+                    "{scenario:?} gate {} is {:?}",
+                    criterion.id,
+                    criterion.dimension
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn max_turns_is_a_turn_limit_in_native_and_composite_flows() {
+        let message = "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: result rejected by validator fp::pipe";
+        assert_eq!(
+            subject_failure(FailurePhase::Execute, message.into()).status,
+            RunStatus::ResourceLimit
+        );
+        let step = |message: &str| crate::workflow::WorkflowStepFailure {
+            phase: WorkflowFailurePhase::Execute,
+            message: message.into(),
+            technical: true,
+        };
+        assert_eq!(
+            step_failure(&step(message)).status,
+            RunStatus::ResourceLimit
+        );
+        assert_eq!(
+            step_failure(&step(
+                "turn ended as Failed: The conversation is too large for the selected model."
+            ))
+            .status,
+            RunStatus::SubjectError
+        );
+        assert_eq!(
+            step_failure(&step(
+                "turn ended as Failed: The provider is busy right now."
+            ))
+            .code,
+            "provider_transport_failed"
+        );
+        assert_eq!(
+            step_failure(&step(
+                "workflow token budget exceeded: observed 12, limit 10"
+            ))
+            .status,
+            RunStatus::ResourceLimit
+        );
+        assert_eq!(
+            step_failure(&step("step timed out after 30 seconds")).status,
+            RunStatus::InfrastructureError
+        );
+        // A step the flow stopped after another one spent the budget does not
+        // decide the cause; the budget does.
+        let mut report = test_run_report();
+        for failure in [
+            step(crate::report::EXECUTION_CANCELLED),
+            step("workflow token budget exceeded: observed 12, limit 10"),
+        ] {
+            let failure = step_failure(&failure);
+            report.push_typed_failure(
+                failure.status,
+                failure.phase,
+                failure.code,
+                failure.retry_scope,
+                failure.contamination,
+                format!("semantic test 'node': {}", failure.message),
+            );
+        }
+        assert_eq!(report.cause, Some(crate::report::RunCause::ResourceLimit));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
     }
 
     #[test]

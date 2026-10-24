@@ -749,8 +749,10 @@ async fn capture<const N: u8>(
 }
 /// A delivery the validator cannot start because of what the subject did —
 /// source that does not come up, or Registry source changed in a verification
-/// task — is a product failure and scores zero on every metric. Only a Docker
-/// daemon that stopped answering keeps the metrics unavailable.
+/// task — is a product failure and scores zero on every metric. A Docker
+/// daemon that stopped answering, or a host port another container holds,
+/// is the evaluating machine's: the metrics stay unavailable and the run is
+/// an evaluation-environment failure, not a zero.
 fn undeliverable_observations(test: u8, delivery: &Value) -> Option<Value> {
     let error = delivery["runtime_error"]
         .as_str()
@@ -760,6 +762,8 @@ fn undeliverable_observations(test: u8, delivery: &Value) -> Option<Value> {
         "cannot connect to the docker daemon",
         "is the docker daemon running",
         "permission denied while trying to connect",
+        "port is already allocated",
+        "address already in use",
     ]
     .iter()
     .any(|token| error.contains(token))
@@ -953,6 +957,11 @@ mod tests {
             let daemon = json!({"runtime_ready": false,
                 "runtime_error": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"});
             assert!(undeliverable_observations(n, &daemon).is_none());
+            // The 1.8.50 arm of the Harness A/B scored 0 here only because the
+            // evaluating machine held the port.
+            let port = json!({"runtime_ready": false,
+                "runtime_error": "docker failed (1): Error response from daemon: driver failed programming external connectivity on endpoint registry-task-api-1: Bind for 127.0.0.1:34859 failed: port is already allocated"});
+            assert!(undeliverable_observations(n, &port).is_none());
         }
     }
     #[test]

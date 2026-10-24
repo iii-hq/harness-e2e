@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use super::{sum_cost, E2eReport};
+use super::{sum_cost, E2eReport, EARLIER_RULE};
 
 impl E2eReport {
     pub fn summary(&self, verbose: bool) -> String {
@@ -17,6 +17,10 @@ impl E2eReport {
             self.subject.model,
             format_cost(total_cost),
         );
+        let earlier = self.runs_without_cause();
+        if earlier > 0 {
+            let _ = writeln!(output, "warning: {earlier} {EARLIER_RULE}");
+        }
 
         for scenario in &self.scenarios {
             let duration_ms = scenario
@@ -50,11 +54,16 @@ impl E2eReport {
                 } else {
                     format!("  retries={}", run.retry_attempts.len())
                 };
+                let cause = run
+                    .cause
+                    .map(|cause| format!("  cause={}", cause.label()))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     output,
-                    "  run {}: {}  completion={:?}  score={}  time={}  cost={}{}",
+                    "  run {}: {}{}  completion={:?}  score={}  time={}  cost={}{}",
                     index + 1,
                     run.status.label(),
+                    cause,
                     run.completion,
                     score,
                     format_duration(run.wall_time_ms),

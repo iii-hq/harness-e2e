@@ -248,7 +248,7 @@ fn status_is_fatal(status: &StatusReport) -> Result<()> {
 
 fn ensure_not_cancelled(cancellation: Option<&watch::Receiver<bool>>) -> Result<()> {
     if cancellation.is_some_and(|receiver| *receiver.borrow()) {
-        bail!("E2E execution was cancelled");
+        bail!(crate::report::EXECUTION_CANCELLED);
     }
     Ok(())
 }
