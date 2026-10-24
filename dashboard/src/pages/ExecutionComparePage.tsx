@@ -202,8 +202,13 @@ export function comparisonInvestigation({
         scenario_id: scenario.id,
         reason: exclusionPhrase(scenario) ?? 'not counted',
       })),
+    // A figure neither side reported has no delta to miss.
     unavailableDeltas: totals
-      .filter((metric) => metric.delta === null)
+      .filter(
+        (metric) =>
+          metric.delta === null &&
+          (metric.baseline !== null || metric.candidate !== null),
+      )
       .map((metric) => metric.id),
     changes: [
       ...parameters.map(({ field, a, b }) => ({

@@ -46,6 +46,30 @@ export type ExecutionMetrics = {
   completedTokenSamples: number
   tokensCompletedP50: number | null
   tokensPerCompletion: number | null
+  /** Input plus cache reads and writes, retries included. */
+  processedPrompt: UsageCoverage
+  /** Cache reads over the processed prompt of the runs that report both. */
+  cacheShare: number | null
+  /** The processed prompt over the turns of the runs that report both. */
+  contextPerTurn: number | null
+  /** The largest step prompt of any run's root session, and the largest
+   *  usable window. */
+  peakContext: number | null
+  usableContext: number | null
+  compactions: UsageCoverage
+  /** Runs whose provider's prompt does not match the Harness's count. */
+  cacheNotComparable: number
+  /** Observed runs per cause. */
+  causes: Record<string, number>
+  /** Runs from reports written before causes: the earlier rule classified them. */
+  earlierRule: number
+}
+
+/** A run cause as words: `context_overflow` → `context overflow`. */
+export function causeLabel(cause: string): string {
+  return cause === 'earlier_rule'
+    ? 'classified by the earlier rule'
+    : cause.replaceAll('_', ' ')
 }
 
 const countFields = [
@@ -119,6 +143,14 @@ export function buildExecutionMetrics(
   const scores = runs.map((run) => score(run.score))
   const subjectTokens = coverage(runs.map(tokens), scopeComplete)
   const completedTokens = coverage(completed.map(tokens), scopeComplete)
+  const processed = runs.map((run) =>
+    cumulativeCounter(run, 'processed_prompt_tokens'),
+  )
+  const efficiency = (run: DashboardRunProjection, name: string) =>
+    counter(field(run.efficiency, name))
+  const causes: Record<string, number> = {}
+  for (const run of runs)
+    if (run.cause) causes[run.cause] = (causes[run.cause] ?? 0) + 1
   return {
     scenarios: matrix.items.length,
     includedScenarios: included.length,
@@ -194,7 +226,52 @@ export function buildExecutionMetrics(
       subjectTokens.total === null || completed.length === 0
         ? null
         : subjectTokens.total / completed.length,
+    processedPrompt: coverage(processed, scopeComplete),
+    cacheShare: pairedRatio(
+      attemptMetrics.map((run) => run.cacheRead),
+      processed,
+    ),
+    contextPerTurn: pairedRatio(
+      processed,
+      attemptMetrics.map((run) => run.turns),
+    ),
+    peakContext: maximum(
+      runs.map((run) => efficiency(run, 'peak_context_tokens')),
+    ),
+    usableContext: maximum(
+      runs.map((run) => efficiency(run, 'usable_context_tokens')),
+    ),
+    compactions: coverage(
+      runs.map((run) => cumulativeCounter(run, 'compactions')),
+      scopeComplete,
+    ),
+    cacheNotComparable: runs.filter(
+      (run) => field(run.efficiency, 'cache_comparable') === false,
+    ).length,
+    causes,
+    earlierRule: runs.filter((run) => !run.cause).length,
   }
+}
+
+/** Σ numerators over Σ denominators of the runs that report both. */
+function pairedRatio(
+  numerators: Array<number | null>,
+  denominators: Array<number | null>,
+): number | null {
+  let top = 0
+  let bottom = 0
+  numerators.forEach((value, index) => {
+    const other = denominators[index]
+    if (value === null || other === null || other === undefined) return
+    top += value
+    bottom += other
+  })
+  return bottom > 0 ? top / bottom : null
+}
+
+function maximum(values: Array<number | null>): number | null {
+  const known = values.filter((value): value is number => value !== null)
+  return known.length === 0 ? null : Math.max(...known)
 }
 
 function validCounts(
