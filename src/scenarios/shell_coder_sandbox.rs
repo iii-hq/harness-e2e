@@ -186,7 +186,7 @@ const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
-    "Are the source and tests inspected and is the public failure reproduced before the first production edit?",
+    "Are the source and tests inspected, one file or a batch at a time, and is the public failure reproduced before the first production edit?",
 )
 .labeled("Failure reproduced before the first edit");
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
@@ -970,13 +970,23 @@ fn invocation_indexes(
         .collect()
 }
 
+/// A `coder::read-file` call that reads `relative`, alone (`path`) or in a
+/// batch (`paths`, each a path or `{path, line_from, line_to}`).
 fn is_coder_read(call: &common::ObservedFunctionCall, root: &Path, relative: &str) -> bool {
+    let batch = call
+        .arguments
+        .get("paths")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|item| item.get("path").unwrap_or(item));
     call.function_id == "coder::read-file"
-        && workspace_path_matches(
-            call.arguments.get("path").and_then(Value::as_str),
-            root,
-            relative,
-        )
+        && call
+            .arguments
+            .get("path")
+            .into_iter()
+            .chain(batch)
+            .any(|path| workspace_path_matches(path.as_str(), root, relative))
 }
 
 fn is_coder_update(call: &common::ObservedFunctionCall, root: &Path, relative: &str) -> bool {
@@ -1318,6 +1328,52 @@ mod tests {
             compute_fixture_manifest_sha256(temporary.path()).unwrap(),
             "sha256:406b314a5efd07a62e4ab3b51bdc54a88c4d9bef0c592b7d63e56ebe85ea3682"
         );
+    }
+
+    /// The read as agents make it: one `agent_trigger` naming every file.
+    fn read_files(paths: Value) -> Value {
+        json!({ "messages": [{ "message": { "role": "assistant", "content": [{
+            "type": "function_call", "id": "call-read", "function_id": "agent_trigger",
+            "arguments": { "function": "coder::read-file", "payload": { "paths": paths } },
+        }] } }] })
+    }
+
+    #[test]
+    fn a_batch_read_inspects_every_file_it_names() {
+        let root = PathBuf::from("/tmp/scenario-workspaces/shell-coder-test");
+        let observation = |transcript| {
+            ScenarioObservation::for_test(
+                crate::scenarios::ScenarioId::ShellCoderSandbox,
+                "test",
+                transcript,
+                "",
+                Vec::new(),
+            )
+        };
+        let batch = observation(read_files(json!([
+            SOURCE_PATH,
+            { "path": root.join(PUBLIC_TEST_PATH), "line_from": 1, "line_to": 80 },
+            TASK_PATH,
+        ])));
+        let audit = workflow_audit(&batch, &root);
+        assert_eq!(
+            (audit.source_read, audit.tests_read, audit.task_read),
+            (Some(0), Some(0), Some(0))
+        );
+        assert_eq!(audit.investigation_points(), 8);
+
+        // A batch that leaves out the tests did not inspect them.
+        let partial = observation(read_files(json!([SOURCE_PATH, TASK_PATH])));
+        let audit = workflow_audit(&partial, &root);
+        assert_eq!(audit.tests_read, None);
+        assert_eq!(audit.investigation_points(), 0);
+
+        let single = common::ObservedFunctionCall {
+            function_id: "coder::read-file".to_string(),
+            arguments: json!({ "path": PUBLIC_TEST_PATH }),
+        };
+        assert!(is_coder_read(&single, &root, PUBLIC_TEST_PATH));
+        assert!(!is_coder_read(&single, &root, SOURCE_PATH));
     }
 
     #[test]
