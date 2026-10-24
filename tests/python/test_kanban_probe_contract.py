@@ -302,6 +302,37 @@ console.log(JSON.stringify(observed))
             "missing": "unverified",
         })
 
+    def test_drag_replays_are_stable_and_subchecks_are_independent(self):
+        if not PLAYWRIGHT.exists():
+            self.fail("dashboard Playwright is required for the C5 stability gate")
+        fixture = ROOT / "tests/fixtures/kanban-evaluator/drag-stability.mjs"
+        env = os.environ.copy()
+        env["PLAYWRIGHT_MODULE_PATH"] = str(PLAYWRIGHT)
+        completed = subprocess.run(
+            ["node", str(fixture), str(PROBE)], cwd=ROOT, text=True,
+            capture_output=True, check=False, timeout=90, env=env,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        for style in ("baseline", "deepwork"):
+            with self.subTest(style=style):
+                self.assertEqual(result[style], {
+                    "attempts": 100, "patches": 100, "valid": 100,
+                    "height": 693, "clipped": True,
+                })
+        self.assertEqual(result["wrongPayload"]["patches"], 1)
+        self.assertEqual(result["wrongPayload"]["valid"], 0)
+        self.assertEqual(result["missingDrop"], 0)
+        self.assertEqual(result["malformedPayload"], [
+            {"id": "malformed_json", "status": "failed"},
+            {"id": "after_malformed_json", "status": "passed"},
+        ])
+        self.assertEqual(result["independent"], [
+            {"id": "criterion_drag_failure", "status": "failed"},
+            {"id": "criterion_drag", "status": "passed"},
+            {"id": "criterion_move_navigation", "status": "passed"},
+        ])
+
     def test_board_semantics_accept_equivalent_dom_without_accepting_wrong_state(self):
         if not PLAYWRIGHT.exists():
             self.skipTest("dashboard Playwright is not installed")

@@ -228,6 +228,35 @@ console.log(JSON.stringify(probe.scoreCriteria(records,rubric).map(({id,status})
             {'id': 'criterion_delete', 'status': 'unverified'},
         ])
 
+    def test_visible_lane_drag_handles_both_tall_layouts_and_keeps_broken_drag_broken(self):
+        result = self.node("""
+const outcomes=[];
+for(const style of ['baseline','deepwork']){
+ await page.setContent(`<style>
+  #board{display:grid;grid-template-columns:repeat(5,220px);gap:${style==='baseline'?'16px':'24px'};width:1180px}
+  .lane{height:693px;border:1px solid;padding:${style==='baseline'?'12px':'20px'};box-sizing:border-box}
+  .blocker{height:96px;margin-top:8px}.broken{height:693px;border:1px solid}
+ </style><main id="board">
+  <section class="lane">${'<div class="blocker"></div>'.repeat(5)}</section>
+  <section class="lane"><a id="source" draggable="true">Drag probe</a><div class="blocker"></div></section>
+  <section class="lane"></section><section class="lane"></section>
+  <section id="target" class="lane">${'<div class="blocker"></div>'.repeat(5)}</section>
+ </main><section id="broken" class="broken"></section>`);
+ let drops=0;const target=page.locator('#target');
+ await target.evaluate(node=>{node.addEventListener('dragover',event=>event.preventDefault());node.addEventListener('drop',event=>{event.preventDefault();globalThis.__drops=(globalThis.__drops||0)+1})});
+ const height=(await target.boundingBox()).height;
+ await probe.dragToVisibleLane(page.locator('#source'),target,page);
+ drops=await page.evaluate(()=>globalThis.__drops||0);await page.evaluate(()=>{globalThis.__drops=0});await target.evaluate(node=>node.remove());
+ await probe.dragToVisibleLane(page.locator('#source'),page.locator('#broken'),page);
+ outcomes.push({style,drops,broken:await page.evaluate(()=>globalThis.__drops||0),height});
+}
+console.log(JSON.stringify(outcomes));
+""", browser=True)
+        self.assertEqual(result, [
+            {'style': 'baseline', 'drops': 1, 'broken': 0, 'height': 693},
+            {'style': 'deepwork', 'drops': 1, 'broken': 0, 'height': 693},
+        ])
+
     def test_missing_fixture_is_unverified_without_losing_other_results(self):
         result = self.node("""
 const records=[];const recorder=probe.createCheckRecorder(records);

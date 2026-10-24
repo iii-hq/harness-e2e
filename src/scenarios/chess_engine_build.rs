@@ -838,7 +838,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     let browser_blocked = browser["status"] == "blocked";
     checks.insert(
         "playable_ui".into(),
-        json!({"passed":browser["passed"],"status":if browser_blocked {"blocked"} else if browser["passed"] == true {"passed"} else {"failed"},"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"]}}),
+        json!({"passed":browser["passed"],"status":if browser_blocked {"blocked"} else if browser["passed"] == true {"passed"} else {"failed"},"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"],"ui_before":browser["ui_before"],"ui_after":browser["ui_after"],"worker_rpc":browser["worker_rpc"],"conditions":browser["conditions"]}}),
     );
 
     let mut files = serde_json::Map::new();
@@ -857,7 +857,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     }
     let evidence_ok = files.contains_key("screenshots/before.png")
         && files.contains_key("screenshots/after.png")
-        && browser["passed"] == true
+        && chess_capture_evidence_complete(&browser, &identity, &files)
         && source_sha256.is_some()
         && compose_sha256.is_some();
     checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser probe was blocked by prerequisites"} else if evidence_ok {"portable screenshots are bound to candidate and checked FENs"} else {"screenshot or identity evidence is incomplete"}}));
@@ -1088,9 +1088,10 @@ async fn capture_browser_session(
 window.__harnessRpc={{requests:[],results:[],invalid:0}};
 window.__harnessOriginalWebSocketSend=WebSocket.prototype.send;
 window.__harnessOriginalMessageData=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data');
-const expected={encoded_play_function},observe=data=>{{if(typeof data!=='string')return;try{{const message=JSON.parse(data);if(message.function_id!==expected)return;if(message.type==='invokefunction'&&typeof message.invocation_id==='string')window.__harnessRpc.requests.push(message);if(message.type==='invocationresult'&&typeof message.invocation_id==='string')window.__harnessRpc.results.push(message)}}catch{{window.__harnessRpc.invalid++}}}};
-WebSocket.prototype.send=function(data){{observe(data);return window.__harnessOriginalWebSocketSend.call(this,data)}};
-Object.defineProperty(MessageEvent.prototype,'data',{{configurable:true,get(){{const data=window.__harnessOriginalMessageData.get.call(this);observe(data);return data}}}});
+window.__harnessSeenRpcEvents=new WeakSet;
+const expected={encoded_play_function},observe=(data,expectedType)=>{{if(typeof data!=='string')return;try{{const message=JSON.parse(data);if(message.function_id!==expected||typeof message.invocation_id!=='string'||message.type!==expectedType)return;const base={{type:message.type,invocation_id:message.invocation_id,function_id:message.function_id}};if(message.type==='invokefunction')window.__harnessRpc.requests.push({{...base,data:message.data}});if(message.type==='invocationresult')window.__harnessRpc.results.push({{...base,...('result'in message?{{result:message.result}}:{{}}),...('error'in message?{{error:message.error}}:{{}})}})}}catch{{window.__harnessRpc.invalid++}}}};
+WebSocket.prototype.send=function(data){{observe(data,'invokefunction');return window.__harnessOriginalWebSocketSend.call(this,data)}};
+Object.defineProperty(MessageEvent.prototype,'data',{{configurable:true,get(){{const data=window.__harnessOriginalMessageData.get.call(this);if(this.isTrusted&&this.target instanceof WebSocket&&!window.__harnessSeenRpcEvents.has(this)){{window.__harnessSeenRpcEvents.add(this);observe(data,'invocationresult')}}return data}}}});
 return true;
 }})();"#)}),
         )
@@ -1127,12 +1128,12 @@ return true;
     let worker_rpc = context
         .trigger_value(
             "browser::execute",
-            json!({"session_id":session,"code":r#"return (()=>{const rpc=window.__harnessRpc??{requests:[],results:[],invalid:0};if(window.__harnessOriginalWebSocketSend)WebSocket.prototype.send=window.__harnessOriginalWebSocketSend;if(window.__harnessOriginalMessageData)Object.defineProperty(MessageEvent.prototype,'data',window.__harnessOriginalMessageData);delete window.__harnessRpc;delete window.__harnessOriginalWebSocketSend;delete window.__harnessOriginalMessageData;return rpc})();"#}),
+            json!({"session_id":session,"code":r#"return (()=>{const rpc=window.__harnessRpc??{requests:[],results:[],invalid:0};if(window.__harnessOriginalWebSocketSend)WebSocket.prototype.send=window.__harnessOriginalWebSocketSend;if(window.__harnessOriginalMessageData)Object.defineProperty(MessageEvent.prototype,'data',window.__harnessOriginalMessageData);delete window.__harnessRpc;delete window.__harnessOriginalWebSocketSend;delete window.__harnessOriginalMessageData;delete window.__harnessSeenRpcEvents;return rpc})();"#}),
         )
         .await?;
     let after_state = inspect_ui(context, session, actual_final, true).await?;
     let after = common::screenshot_png(context, session).await?;
-    let passed = chess_browser_passed(
+    let mut conditions = chess_browser_observations(
         &before_state,
         &after_state,
         &interaction["result"],
@@ -1140,14 +1141,26 @@ return true;
         actual_after,
         actual_final,
         play_function,
-    ) && before["data"].is_string()
-        && after["data"].is_string();
+    );
+    conditions["checks"]["before_png"] = json!(before["data"].is_string());
+    conditions["checks"]["after_png"] = json!(after["data"].is_string());
+    conditions["passed"] = json!(conditions["checks"]
+        .as_object()
+        .is_some_and(|checks| checks.values().all(|value| value == true)));
+    let passed = conditions["passed"] == true;
+    let failures = conditions["checks"]
+        .as_object()
+        .into_iter()
+        .flat_map(|checks| checks.iter())
+        .filter_map(|(name, value)| (value != true).then_some(name.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let captures = json!([
-        {"id":"before","caption":"Playable chess Worker in iii Console before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":START_FEN,"sha256":before["sha256"]},
-        {"id":"after","caption":"Playable chess Worker in iii Console after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":actual_final,"transitions":[actual_after,actual_final],"sha256":after["sha256"]}
+        {"id":"before","caption":"Playable chess Worker in iii Console before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":before_state["fen"],"sha256":before["sha256"]},
+        {"id":"after","caption":"Playable chess Worker in iii Console after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":after_state["fen"],"transitions":interaction["result"]["transitions"],"sha256":after["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"reason":if passed {"iii Console rendered the full board and completed two Worker-backed moves"} else {"Console interaction, full-board pieces, matched Worker RPC, or checked FEN failed"},"url":url,"captures":captures,"before":before,"after":after,"interaction":interaction["result"],"worker_rpc":worker_rpc["result"]}),
+        json!({"passed":passed,"reason":if passed {String::from("iii Console rendered the full board and completed two Worker-backed moves")} else {format!("Chess browser conditions failed: {failures}")},"url":url,"captures":captures,"before":before,"after":after,"ui_before":before_state,"ui_after":after_state,"interaction":interaction["result"],"worker_rpc":worker_rpc["result"],"conditions":conditions}),
     )
 }
 
@@ -1157,6 +1170,7 @@ fn contract_function<'a>(identity: &'a Value, name: &str) -> Result<&'a str> {
         .with_context(|| format!("chess identity omitted {name} function"))
 }
 
+#[cfg(test)]
 fn chess_browser_passed(
     before: &Value,
     after: &Value,
@@ -1166,6 +1180,27 @@ fn chess_browser_passed(
     expected_final: &str,
     function_id: &str,
 ) -> bool {
+    chess_browser_observations(
+        before,
+        after,
+        interaction,
+        rpc,
+        expected_after,
+        expected_final,
+        function_id,
+    )["passed"]
+        == true
+}
+
+fn chess_browser_observations(
+    before: &Value,
+    after: &Value,
+    interaction: &Value,
+    rpc: &Value,
+    expected_after: &str,
+    expected_final: &str,
+    function_id: &str,
+) -> Value {
     let succeeded = |fen: &str, mv: &str, expected: &str| {
         rpc["requests"].as_array().is_some_and(|requests| {
             requests.iter().any(|request| {
@@ -1186,12 +1221,71 @@ fn chess_browser_passed(
             })
         })
     };
-    before["passed"] == true
-        && after["passed"] == true
-        && interaction["fen"] == expected_final
-        && interaction["transitions"] == json!([expected_after, expected_final])
-        && succeeded(START_FEN, "e2e4", expected_after)
-        && succeeded(expected_after, "e7e5", expected_final)
+    let checks = json!({
+        "before_ui": before["passed"] == true,
+        "after_ui": after["passed"] == true,
+        "final_fen": interaction["fen"] == expected_final,
+        "rendered_transitions": interaction["transitions"] == json!([expected_after, expected_final]),
+        "e2e4_rpc": succeeded(START_FEN, "e2e4", expected_after),
+        "e7e5_rpc": succeeded(expected_after, "e7e5", expected_final),
+    });
+    let passed = checks
+        .as_object()
+        .is_some_and(|checks| checks.values().all(|value| value == true));
+    json!({"passed":passed,"checks":checks})
+}
+
+fn chess_capture_evidence_complete(
+    browser: &Value,
+    identity: &Value,
+    files: &serde_json::Map<String, Value>,
+) -> bool {
+    let Some(captures) = browser["captures"].as_array() else {
+        return false;
+    };
+    let capture = |id: &str| captures.iter().find(|capture| capture["id"] == id);
+    let (Some(before), Some(after)) = (capture("before"), capture("after")) else {
+        return false;
+    };
+    let url = browser["url"]
+        .as_str()
+        .filter(|url| url.starts_with("http://127.0.0.1:"));
+    let session = before["session_id"]
+        .as_str()
+        .filter(|session| !session.is_empty());
+    url.is_some()
+        && session.is_some()
+        && after["session_id"].as_str() == session
+        && before["url"].as_str() == url
+        && after["url"].as_str() == url
+        && before["identity"] == *identity
+        && after["identity"] == *identity
+        && before["status"] == "captured"
+        && after["status"] == "captured"
+        && before["screenshot"] == "before.png"
+        && after["screenshot"] == "after.png"
+        && after["transitions"]
+            == json!([
+                identity["fen"]["actual"]["after_e2e4"],
+                identity["fen"]["actual"]["after_e7e5"]
+            ])
+        && after["transitions"] == browser["interaction"]["transitions"]
+        && browser["before"]["data"].is_string()
+        && browser["after"]["data"].is_string()
+        && before["sha256"] == browser["before"]["sha256"]
+        && after["sha256"] == browser["after"]["sha256"]
+        && files["screenshots/before.png"]["sha256"] == before["sha256"]
+        && files["screenshots/after.png"]["sha256"] == after["sha256"]
+        && before["sha256"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+        && after["sha256"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+        && before["fen"] == browser["ui_before"]["fen"]
+        && after["fen"] == browser["ui_after"]["fen"]
+        && browser["ui_before"]["fen"] == identity["fen"]["start"]
+        && browser["ui_after"]["fen"] == identity["fen"]["actual"]["after_e7e5"]
 }
 
 async fn inspect_ui(
@@ -1635,27 +1729,100 @@ mod tests {
             {"type":"invokefunction","invocation_id":"one","function_id":"play","data":{"fen":START_FEN,"move":"e2e4"}},
             {"type":"invokefunction","invocation_id":"two","function_id":"play","data":{"fen":expected_after,"move":"e7e5"}}
         ],"results":[],"invalid":1});
-        assert!(!chess_browser_passed(
-            &before,
-            &after,
-            &interaction,
-            &fake_packets,
-            &expected_after,
-            &expected_final,
-            "play",
-        ));
+        for _ in 0..100 {
+            assert!(!chess_browser_passed(
+                &before,
+                &after,
+                &interaction,
+                &fake_packets,
+                &expected_after,
+                &expected_final,
+                "play",
+            ));
+        }
         let rpc = json!({"requests":fake_packets["requests"],"results":[
             {"type":"invocationresult","invocation_id":"one","function_id":"play","result":{"fen":expected_after}},
             {"type":"invocationresult","invocation_id":"two","function_id":"play","result":{"fen":expected_final}}
         ],"invalid":1});
-        assert!(chess_browser_passed(
-            &before,
-            &after,
-            &interaction,
-            &rpc,
-            &expected_after,
-            &expected_final,
-            "play",
+        for _ in 0..100 {
+            assert!(chess_browser_passed(
+                &before,
+                &after,
+                &interaction,
+                &rpc,
+                &expected_after,
+                &expected_final,
+                "play",
+            ));
+        }
+    }
+
+    #[test]
+    fn chess_evidence_uses_observed_fens_and_independent_capture_identity() {
+        let final_fen = "final observed fen";
+        let identity = json!({"fen":{"start":START_FEN,"actual":{"after_e2e4":"first observed fen","after_e7e5":final_fen}}});
+        let browser = json!({
+            "url":"http://127.0.0.1:3113/#/worker/chess/chess",
+            "before":{"data":"png","sha256":"sha256:before"},
+            "after":{"data":"png","sha256":"sha256:after"},
+            "ui_before":{"fen":START_FEN,"passed":false},
+            "ui_after":{"fen":final_fen,"passed":false},
+            "interaction":{"transitions":["first observed fen",final_fen]},
+            "captures":[
+                {"id":"before","url":"http://127.0.0.1:3113/#/worker/chess/chess","session_id":"session","fen":START_FEN,"sha256":"sha256:before","identity":identity,"status":"captured","screenshot":"before.png"},
+                {"id":"after","url":"http://127.0.0.1:3113/#/worker/chess/chess","session_id":"session","fen":final_fen,"sha256":"sha256:after","identity":identity,"status":"captured","screenshot":"after.png","transitions":["first observed fen",final_fen]}
+            ]
+        });
+        let files = serde_json::Map::from_iter([
+            (
+                "screenshots/before.png".into(),
+                json!({"sha256":"sha256:before"}),
+            ),
+            (
+                "screenshots/after.png".into(),
+                json!({"sha256":"sha256:after"}),
+            ),
+        ]);
+        for _ in 0..100 {
+            assert!(chess_capture_evidence_complete(&browser, &identity, &files));
+        }
+        for field in ["identity", "status", "screenshot", "transitions"] {
+            let mut incomplete = browser.clone();
+            incomplete["captures"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(!chess_capture_evidence_complete(
+                &incomplete,
+                &identity,
+                &files
+            ));
+        }
+        let mut swapped_identity = browser.clone();
+        swapped_identity["captures"][1]["identity"]["worker"] = json!("other-candidate");
+        assert!(!chess_capture_evidence_complete(
+            &swapped_identity,
+            &identity,
+            &files
+        ));
+        let mut wrong_transition = browser.clone();
+        wrong_transition["captures"][1]["transitions"][0] = json!("unobserved first move");
+        assert!(!chess_capture_evidence_complete(
+            &wrong_transition,
+            &identity,
+            &files
+        ));
+        let mut hardcoded = browser.clone();
+        hardcoded["captures"][1]["fen"] = json!("expected but not observed");
+        assert!(!chess_capture_evidence_complete(
+            &hardcoded, &identity, &files
+        ));
+        let mut wrong_session = browser;
+        wrong_session["captures"][1]["session_id"] = json!("other");
+        assert!(!chess_capture_evidence_complete(
+            &wrong_session,
+            &identity,
+            &files
         ));
     }
 

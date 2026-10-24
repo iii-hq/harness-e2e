@@ -180,6 +180,13 @@ impl Kind {
         }
     }
 
+    fn edit(self) -> &'static str {
+        match self {
+            Self::Form => "add_environment",
+            Self::Machine => "add_cancel",
+        }
+    }
+
     fn assessments(self) -> &'static [AssessmentSpec] {
         match self {
             Self::Form => FORM_ASSESSMENTS,
@@ -1284,18 +1291,22 @@ async fn capture_browser_session(
     let domain_function = identity["functions"][kind.domain_operation()]
         .as_str()
         .context("visual Worker identity omitted its domain function")?;
+    let canvas_function = identity["functions"]["canvas"]
+        .as_str()
+        .context("visual Worker identity omitted its Canvas function")?;
     context
         .trigger_value(
             "browser::execute",
             json!({"session_id":session,"code":format!(r#"return (()=>{{
-window.__harnessRpc={{requests:[],results:[],invalid:0}};
+window.__harnessRpc={{requests:[],results:[],invalid:0,sequence:0}};
 window.__harnessOriginalWebSocketSend=WebSocket.prototype.send;
 window.__harnessOriginalMessageData=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data');
-const expected={},observe=data=>{{if(typeof data!=='string')return;try{{const message=JSON.parse(data);if(message.function_id!==expected)return;if(message.type==='invokefunction'&&typeof message.invocation_id==='string')window.__harnessRpc.requests.push(message);if(message.type==='invocationresult'&&typeof message.invocation_id==='string')window.__harnessRpc.results.push(message)}}catch{{window.__harnessRpc.invalid++}}}};
-WebSocket.prototype.send=function(data){{observe(data);return window.__harnessOriginalWebSocketSend.call(this,data)}};
-Object.defineProperty(MessageEvent.prototype,'data',{{configurable:true,get(){{const data=window.__harnessOriginalMessageData.get.call(this);observe(data);return data}}}});
+window.__harnessSeenRpcEvents=new WeakSet;
+const expected=new Set([{},{}]),observe=(data,expectedType)=>{{if(typeof data!=='string')return;try{{const message=JSON.parse(data);if(!expected.has(message.function_id)||typeof message.invocation_id!=='string'||message.type!==expectedType)return;const base={{type:message.type,invocation_id:message.invocation_id,function_id:message.function_id,sequence:++window.__harnessRpc.sequence}};if(message.type==='invokefunction')window.__harnessRpc.requests.push({{...base,data:message.data}});if(message.type==='invocationresult')window.__harnessRpc.results.push({{...base,...('result'in message?{{result:message.result}}:{{}}),...('error'in message?{{error:message.error}}:{{}})}})}}catch{{window.__harnessRpc.invalid++}}}};
+WebSocket.prototype.send=function(data){{observe(data,'invokefunction');return window.__harnessOriginalWebSocketSend.call(this,data)}};
+Object.defineProperty(MessageEvent.prototype,'data',{{configurable:true,get(){{const data=window.__harnessOriginalMessageData.get.call(this);if(this.isTrusted&&this.target instanceof WebSocket&&!window.__harnessSeenRpcEvents.has(this)){{window.__harnessSeenRpcEvents.add(this);observe(data,'invocationresult')}}return data}}}});
 return true;
-}})();"#, serde_json::to_string(domain_function)?)}),
+}})();"#, serde_json::to_string(domain_function)?, serde_json::to_string(canvas_function)?)}),
         )
         .await?;
     let keyboard = exercise_keyboard_edit(context, kind, session).await?;
@@ -1368,7 +1379,7 @@ return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorde
     let worker_rpc = context
         .trigger_value(
             "browser::execute",
-            json!({"session_id":session,"code":r#"return (()=>{const rpc=window.__harnessRpc??{requests:[],results:[],invalid:0};if(window.__harnessOriginalWebSocketSend)WebSocket.prototype.send=window.__harnessOriginalWebSocketSend;if(window.__harnessOriginalMessageData)Object.defineProperty(MessageEvent.prototype,'data',window.__harnessOriginalMessageData);delete window.__harnessRpc;delete window.__harnessOriginalWebSocketSend;delete window.__harnessOriginalMessageData;return rpc})();"#}),
+            json!({"session_id":session,"code":r#"return (()=>{const rpc=window.__harnessRpc??{requests:[],results:[],invalid:0};if(window.__harnessOriginalWebSocketSend)WebSocket.prototype.send=window.__harnessOriginalWebSocketSend;if(window.__harnessOriginalMessageData)Object.defineProperty(MessageEvent.prototype,'data',window.__harnessOriginalMessageData);delete window.__harnessRpc;delete window.__harnessOriginalWebSocketSend;delete window.__harnessOriginalMessageData;delete window.__harnessSeenRpcEvents;return rpc})();"#}),
         )
         .await?;
     let after_state = inspect_ui(context, kind, session, "edited").await?;
@@ -1486,7 +1497,14 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         && reloaded_state["passed"] == true
         && persisted_canvas_id["result"] == true
         && keyboard_and_theme_passed(&keyboard, &mobile["result"])
-        && visual_worker_rpc_observed(&worker_rpc["result"], domain_function, kind)
+        && visual_worker_rpc_observed(
+            &worker_rpc["result"],
+            domain_function,
+            canvas_function,
+            identity["canvas_id"].as_str().unwrap_or_default(),
+            edited_source(kind),
+            kind,
+        )
         && interaction["result"].get("error").is_none();
     let captures = json!([
         {"id":"before","caption":format!("The {} page alone in the Console before editing",kind.page_id()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
@@ -1499,48 +1517,93 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
     )
 }
 
-fn visual_worker_rpc_observed(rpc: &Value, function_id: &str, kind: Kind) -> bool {
-    let matched = |accept_request: &dyn Fn(&Value) -> bool,
+fn visual_worker_rpc_observed(
+    rpc: &Value,
+    domain_function: &str,
+    canvas_function: &str,
+    canvas_id: &str,
+    edited_source: &str,
+    kind: Kind,
+) -> bool {
+    let matched = |function_id: &str,
+                   after_sequence: Option<u64>,
+                   accept_request: &dyn Fn(&Value) -> bool,
                    accept_result: &dyn Fn(&Value) -> bool| {
-        rpc["requests"].as_array().is_some_and(|requests| {
-            requests.iter().any(|request| {
-                request["type"] == "invokefunction"
-                    && request["function_id"] == function_id
-                    && request["invocation_id"].is_string()
-                    && accept_request(request)
-                    && rpc["results"].as_array().is_some_and(|results| {
-                        results.iter().any(|result| {
-                            result["type"] == "invocationresult"
-                                && result["invocation_id"] == request["invocation_id"]
-                                && result["function_id"] == function_id
-                                && result.get("error").is_none()
-                                && accept_result(result)
-                        })
+        rpc["requests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|request| {
+                let request_sequence = request["sequence"].as_u64()?;
+                if request["type"] != "invokefunction"
+                    || request["function_id"] != function_id
+                    || !request["invocation_id"].is_string()
+                    || after_sequence.is_some_and(|sequence| request_sequence <= sequence)
+                    || !accept_request(request)
+                {
+                    return None;
+                }
+                rpc["results"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|result| {
+                        let result_sequence = result["sequence"].as_u64()?;
+                        (result_sequence > request_sequence
+                            && result["type"] == "invocationresult"
+                            && result["invocation_id"] == request["invocation_id"]
+                            && result["function_id"] == function_id
+                            && result.get("error").is_none()
+                            && accept_result(result))
+                        .then_some((request_sequence, result_sequence))
                     })
+                    .min()
             })
-        })
+            .collect::<Vec<_>>()
     };
-    match kind {
-        Kind::Form => matched(
-            &|request| request["data"]["edit"] == "add_environment",
-            &|result| {
-                result["result"]["visible_fields"]
-                    .as_array()
-                    .is_some_and(|fields| fields.iter().any(|field| field == "environment"))
-            },
-        ),
-        Kind::Machine => {
-            matched(
-                &|request| request["data"]["edit"] == "add_cancel",
-                &|result| result["result"].is_object(),
-            ) && matched(
+    let domain_edit = matched(
+        domain_function,
+        None,
+        &|request| request["data"]["edit"] == kind.edit(),
+        &|result| result["result"].is_object(),
+    );
+    let canvas_edit = matched(
+        canvas_function,
+        None,
+        &|request| {
+            request["data"]["edit"] == kind.edit()
+                && (request["data"].get("canvas_id").is_none()
+                    || request["data"]["canvas_id"] == canvas_id)
+        },
+        &|result| {
+            result["result"]["canvas_id"] == canvas_id
+                && result["result"]["source"] == edited_source
+        },
+    );
+    domain_edit
+        .into_iter()
+        .chain(canvas_edit)
+        .any(|(_, edit_result_sequence)| match kind {
+            Kind::Form => !matched(
+                domain_function,
+                Some(edit_result_sequence),
+                &|request| request["data"]["values"]["work_type"] == "bug",
+                &|result| {
+                    result["result"]["visible_fields"]
+                        .as_array()
+                        .is_some_and(|fields| fields.iter().any(|field| field == "environment"))
+                },
+            )
+            .is_empty(),
+            Kind::Machine => !matched(
+                domain_function,
+                Some(edit_result_sequence),
                 &|request| {
                     request["data"]["state"] == "running" && request["data"]["event"] == "cancel"
                 },
                 &|result| result["result"]["state"] == "cancelled",
             )
-        }
-    }
+            .is_empty(),
+        })
 }
 
 fn browser_evidence_complete(screenshots: [&Value; 4], canvas_evidence_ok: bool) -> bool {
@@ -2008,27 +2071,187 @@ mod tests {
     #[test]
     fn test_visual_worker_eval_requires_matched_worker_rpc() {
         let function = "visual-worker::preview";
-        let request = json!({"type":"invokefunction","invocation_id":"one","function_id":function,"data":{"edit":"add_environment"}});
-        let without_result = json!({"requests":[request.clone()],"results":[],"invalid":1});
+        let canvas = "visual-worker::canvas";
+        let request = json!({"type":"invokefunction","invocation_id":"one","function_id":function,"sequence":1,"data":{"edit":"add_environment","values":{}}});
+        let bug = json!({"type":"invokefunction","invocation_id":"bug","function_id":function,"sequence":3,"data":{"values":{"work_type":"bug"}}});
+        let without_result =
+            json!({"requests":[request.clone(),bug.clone()],"results":[],"invalid":1});
         assert!(!visual_worker_rpc_observed(
             &without_result,
             function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
             Kind::Form
         ));
-        let matched = json!({"requests":[request],"results":[{"type":"invocationresult","invocation_id":"one","function_id":function,"result":{"visible_fields":["environment"]}}],"invalid":1});
-        assert!(visual_worker_rpc_observed(&matched, function, Kind::Form));
+        let matched = json!({"requests":[request,bug],"results":[
+            {"type":"invocationresult","invocation_id":"one","function_id":function,"sequence":2,"result":{"visible_fields":["title","work_type"]}},
+            {"type":"invocationresult","invocation_id":"bug","function_id":function,"sequence":4,"result":{"visible_fields":["title","work_type","environment"]}}
+        ],"invalid":1});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &matched,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+
+        let canvas_request = json!({"type":"invokefunction","invocation_id":"edit","function_id":canvas,"sequence":1,"data":{"canvas_id":"canvas-one","edit":"add_environment"}});
+        let canvas_result = json!({"type":"invocationresult","invocation_id":"edit","function_id":canvas,"sequence":2,"result":{"canvas_id":"canvas-one","source":edited_source(Kind::Form)}});
+        let canvas_route = json!({"requests":[canvas_request,matched["requests"][1]],"results":[canvas_result,matched["results"][1]]});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &canvas_route,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+        let mut wrong_canvas = canvas_route.clone();
+        wrong_canvas["results"][0]["result"]["canvas_id"] = json!("other");
+        assert!(!visual_worker_rpc_observed(
+            &wrong_canvas,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let mut canned = canvas_route;
+        canned["results"][0]["invocation_id"] = json!("wrong");
+        assert!(!visual_worker_rpc_observed(
+            &canned,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let mut wrong_source = matched.clone();
+        wrong_source["requests"] = json!([
+            {"type":"invokefunction","invocation_id":"canvas","function_id":canvas,"sequence":1,"data":{"canvas_id":"canvas-one","edit":"add_environment"}},
+            wrong_source["requests"][1]
+        ]);
+        wrong_source["results"][0] = json!({"type":"invocationresult","invocation_id":"canvas","function_id":canvas,"sequence":2,"result":{"canvas_id":"canvas-one","source":"canned"}});
+        assert!(!visual_worker_rpc_observed(
+            &wrong_source,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let mut missing_sequence = matched.clone();
+        missing_sequence["requests"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("sequence");
+        for _ in 0..100 {
+            assert!(!visual_worker_rpc_observed(
+                &missing_sequence,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+
+        let before_and_after = json!({"requests":[
+            {"type":"invokefunction","invocation_id":"before","function_id":function,"sequence":1,"data":{"values":{"work_type":"bug"}}},
+            {"type":"invokefunction","invocation_id":"edit","function_id":function,"sequence":3,"data":{"edit":"add_environment"}},
+            {"type":"invokefunction","invocation_id":"after","function_id":function,"sequence":5,"data":{"values":{"work_type":"bug"}}}
+        ],"results":[
+            {"type":"invocationresult","invocation_id":"before","function_id":function,"sequence":2,"result":{"visible_fields":["environment"]}},
+            {"type":"invocationresult","invocation_id":"edit","function_id":function,"sequence":4,"result":{"visible_fields":["environment"]}},
+            {"type":"invocationresult","invocation_id":"after","function_id":function,"sequence":6,"result":{"visible_fields":["environment"]}}
+        ]});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &before_and_after,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+        let only_before = json!({"requests":[before_and_after["requests"][0],before_and_after["requests"][1]],"results":[before_and_after["results"][0],before_and_after["results"][1]]});
+        for _ in 0..100 {
+            assert!(!visual_worker_rpc_observed(
+                &only_before,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+        let late_edit_result = json!({"requests":[
+            {"type":"invokefunction","invocation_id":"edit","function_id":function,"sequence":1,"data":{"edit":"add_environment"}},
+            {"type":"invokefunction","invocation_id":"bug","function_id":function,"sequence":2,"data":{"values":{"work_type":"bug"}}}
+        ],"results":[
+            {"type":"invocationresult","invocation_id":"bug","function_id":function,"sequence":3,"result":{"visible_fields":["environment"]}},
+            {"type":"invocationresult","invocation_id":"edit","function_id":function,"sequence":4,"result":{}}
+        ]});
+        for _ in 0..100 {
+            assert!(!visual_worker_rpc_observed(
+                &late_edit_result,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
 
         let transition = "visual-worker::transition";
+        let machine_canvas = "visual-worker::canvas";
         let machine = json!({"requests":[
-            {"type":"invokefunction","invocation_id":"edit","function_id":transition,"data":{"state":"queued","event":"start","edit":"add_cancel"}},
-            {"type":"invokefunction","invocation_id":"cancel","function_id":transition,"data":{"state":"running","event":"cancel"}}
+            {"type":"invokefunction","invocation_id":"edit","function_id":machine_canvas,"sequence":1,"data":{"canvas_id":"canvas-one","edit":"add_cancel"}},
+            {"type":"invokefunction","invocation_id":"cancel","function_id":transition,"sequence":3,"data":{"state":"running","event":"cancel"}}
         ],"results":[
-            {"type":"invocationresult","invocation_id":"edit","function_id":transition,"result":{"state":"running"}},
-            {"type":"invocationresult","invocation_id":"cancel","function_id":transition,"result":{"state":"cancelled"}}
+            {"type":"invocationresult","invocation_id":"edit","function_id":machine_canvas,"sequence":2,"result":{"canvas_id":"canvas-one","source":edited_source(Kind::Machine)}},
+            {"type":"invocationresult","invocation_id":"cancel","function_id":transition,"sequence":4,"result":{"state":"cancelled"}}
         ]});
-        assert!(visual_worker_rpc_observed(
-            &machine,
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &machine,
+                transition,
+                machine_canvas,
+                "canvas-one",
+                edited_source(Kind::Machine),
+                Kind::Machine
+            ));
+        }
+        let mut domain_machine = machine.clone();
+        domain_machine["requests"][0]["function_id"] = json!(transition);
+        domain_machine["requests"][0]["data"] =
+            json!({"state":"queued","event":"start","edit":"add_cancel"});
+        domain_machine["results"][0] = json!({"type":"invocationresult","invocation_id":"edit","function_id":transition,"sequence":2,"result":{"state":"running"}});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &domain_machine,
+                transition,
+                machine_canvas,
+                "canvas-one",
+                edited_source(Kind::Machine),
+                Kind::Machine
+            ));
+        }
+        let mut no_edit = machine;
+        no_edit["requests"][0]["data"]["edit"] = json!("other");
+        assert!(!visual_worker_rpc_observed(
+            &no_edit,
             transition,
+            machine_canvas,
+            "canvas-one",
+            edited_source(Kind::Machine),
             Kind::Machine
         ));
     }

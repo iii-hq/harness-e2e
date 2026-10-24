@@ -16,7 +16,7 @@ PLAYWRIGHT = Path(os.environ.get(
 class ChessEvalRegressionsTest(unittest.TestCase):
     def test_chess_eval_requires_visible_full_fen_board(self):
         if not PLAYWRIGHT.exists():
-            self.skipTest("dashboard Playwright is not installed")
+            self.fail("dashboard Playwright must be installed for evaluator controls")
         env = {**os.environ, "PLAYWRIGHT_MODULE_PATH": PLAYWRIGHT.as_uri()}
         completed = subprocess.run(
             ["node", str(FIXTURE)],
@@ -32,6 +32,10 @@ class ChessEvalRegressionsTest(unittest.TestCase):
         self.assertTrue(result["invisible"]["pieces_match"])
         self.assertEqual(result["invisible"]["piece_count"], 32)
         self.assertTrue(result["visible"]["passed"])
+        self.assertEqual(result["invisibleReplays"], 100)
+        self.assertTrue(result["invisibleStable"])
+        self.assertEqual(result["visibleReplays"], 100)
+        self.assertTrue(result["visibleStable"])
         self.assertTrue(result["variedPieceStyle"]["passed"])
         self.assertFalse(result["clipped"]["passed"])
         self.assertFalse(result["identicalBackgrounds"]["passed"])
@@ -43,6 +47,15 @@ class ChessEvalRegressionsTest(unittest.TestCase):
         self.assertFalse(result["brokenImages"]["passed"])
         self.assertTrue(result["visibleImages"]["passed"])
         self.assertFalse(result["transparentImages"]["passed"])
+        self.assertEqual(result["controls"], {"outboundFakeResults": 100, "inboundFakeRequests": 100})
+        self.assertEqual(
+            [packet["invocation_id"] for packet in result["rpc"]["requests"]],
+            [f"play-{replay}" for replay in range(100)],
+        )
+        self.assertEqual(
+            [packet["invocation_id"] for packet in result["rpc"]["results"]],
+            [f"play-{replay}" for replay in range(100)],
+        )
 
 
 if __name__ == "__main__":

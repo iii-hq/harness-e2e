@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -9,6 +11,20 @@ METRICS = ROOT / "tests/fixtures/registry-version-comparison/metrics.json"
 
 
 class RegistryFeatureProbeTests(unittest.TestCase):
+    def test_real_browser_failures_cover_ssr_and_spa(self):
+        playwright = Path(os.environ.get("PLAYWRIGHT_MODULE_PATH", ROOT / "dashboard/node_modules/playwright/index.mjs"))
+        self.assertTrue(playwright.exists(), "Playwright is required for evaluator regression controls")
+        result = subprocess.run(
+            ["node", str(SCRIPT.with_name("failure-regressions.mjs"))], cwd=ROOT,
+            env={**os.environ, "PLAYWRIGHT_MODULE_PATH": playwright.as_uri()},
+            text=True, capture_output=True, timeout=900,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = json.loads(result.stdout)
+        self.assertEqual(len(result["replays"]), 6)
+        self.assertTrue(all(count == 100 for count in result["replays"].values()))
+        self.assertGreaterEqual(result["actual503Responses"], 1200)
+
     def test_probe_ids_are_known_test_two_metrics(self):
         source = SCRIPT.read_text()
         catalog = json.loads(METRICS.read_text())

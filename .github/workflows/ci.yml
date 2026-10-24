@@ -77,7 +77,7 @@ jobs:
         run: |
           node --test tests/fixtures/trending-topics-build/evaluator.test.mjs
           python3 -m unittest -v tests/fixtures/trending-topics-build/test_lifecycle.py
-      - name: Verify Python contracts
+      - name: Verify Python contracts and evaluator stability controls
         env:
           HARNESS_E2E_BIN: ${{ github.workspace }}/target/debug/harness-e2e
         run: |

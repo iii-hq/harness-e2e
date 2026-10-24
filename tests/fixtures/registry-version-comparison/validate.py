@@ -12,6 +12,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import uuid
 
 REGISTRY_SHA = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
 IMPLEMENTATION_METRICS = (
@@ -38,6 +39,11 @@ VERIFICATION_METRICS = (
     "verification.recall", "verification.precision", "verification.execution_coverage",
     "verification.evidence_coverage", "verification.source_preservation",
 )
+FAULT_PATHS = {
+    "navigation": "/w/orders-worker/compare/1.1.0...2.0.0",
+    "interaction": "/w/orders-worker/compare/1.0.0...1.1.0",
+}
+FAULT_COMMAND = "docker compose -f /fixture/compose.yaml exec -T fault node /fixture/fault-gateway.cjs"
 
 
 def write_json(path, value):
@@ -136,36 +142,140 @@ def actual_evidence(run_root, task_root, references):
     return sorted(evidence, key=lambda item: item["path"])
 
 
+def fault_receipts_valid(config, status):
+    if not isinstance(config, dict) or not isinstance(status, dict):
+        return False
+    probe_id = config.get("probe_id")
+    try:
+        uuid.UUID(probe_id)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    if (config.get("paths") != FAULT_PATHS or status.get("probe_id") != probe_id
+            or status.get("paths") != FAULT_PATHS or not isinstance(status.get("receipts"), list)):
+        return False
+    paths = set()
+    for receipt in status["receipts"]:
+        if not isinstance(receipt, dict):
+            continue
+        count = receipt.get("count")
+        first = receipt.get("first_sequence")
+        last = receipt.get("last_sequence")
+        if (receipt.get("probe_id") == probe_id and receipt.get("method") == "GET"
+                and receipt.get("path") in FAULT_PATHS.values() and receipt.get("status") == 503
+                and type(count) is int and count > 0 and type(first) is int
+                and type(last) is int and 0 < first <= last):
+            paths.add(receipt["path"])
+    return paths == set(FAULT_PATHS.values())
+
+
 def feature_probe(task_root, assets, state):
     """Run the independent probe in the real web container and collect its JSON."""
     script = assets / "validate-feature.cjs"
     if not script.is_file():
         return None, "feature_probe_not_supplied"
-    command = ["docker", "exec", "-i", state["container"], "docker", "compose", "-f",
-               "/fixture/compose.yaml", "exec", "-T", "web", "node", "-"]
+    validation = task_root / "validation"
+    validation.mkdir(parents=True, exist_ok=True)
+    config = None
+    feature = None
+    error = None
+    status = None
+    restart_ready = False
+    cleared = False
     try:
-        result = subprocess.run(command, input=script.read_bytes(), stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, timeout=180, check=False)
-    except subprocess.TimeoutExpired:
-        return None, "feature_probe_timeout"
-    log = task_root / "validation" / "feature-probe.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_bytes(result.stdout + result.stderr)
-    if result.returncode:
-        return None, "feature_probe_failed"
-    copied = controller_command(state, "mkdir -p /workspace/output/validator && docker compose -f /fixture/compose.yaml cp web:/tmp/registry-validation/. /workspace/output/validator/", 120)
-    save_command(task_root, "feature-probe-copy", copied)
-    if copied.get("exit_code") != 0:
-        return None, "feature_probe_copy_failed"
-    source = task_root / "workspace" / "output" / "validator" / "feature.json"
-    if not source.is_file():
-        return None, "feature_probe_output_missing"
-    destination = task_root / "validation" / "feature.json"
-    shutil.copyfile(source, destination)
-    try:
-        return json.loads(destination.read_text()), None
-    except json.JSONDecodeError:
-        return None, "feature_probe_output_invalid"
+        configure = controller_command(state, f"{FAULT_COMMAND} configure", 30)
+        save_command(task_root, "fault-gateway-configure", configure)
+        if configure.get("exit_code") == 0:
+            try:
+                config = json.loads(configure.get("stdout", ""))
+            except json.JSONDecodeError:
+                pass
+        restart = controller_command(
+            state,
+            "docker compose -f /fixture/compose.yaml restart web && "
+            "docker compose -f /fixture/compose.yaml up -d --no-deps --wait --wait-timeout 90 web",
+            120,
+        )
+        save_command(task_root, "feature-probe-web-restart", restart)
+        restart_ready = restart.get("exit_code") == 0
+        command = ["docker", "exec", "-i", state["container"], "docker", "compose", "-f",
+                   "/fixture/compose.yaml", "exec", "-T", "web", "node", "-"]
+        try:
+            result = subprocess.run(command, input=script.read_bytes(), stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=180, check=False)
+        except subprocess.TimeoutExpired as exception:
+            result = exception
+            error = "feature_probe_timeout"
+        output = (getattr(result, "stdout", None) or b"") + (getattr(result, "stderr", None) or b"")
+        (validation / "feature-probe.log").write_bytes(output)
+        if error is None and result.returncode:
+            error = "feature_probe_failed"
+        if error is None:
+            copied = controller_command(state, "mkdir -p /workspace/output/validator && docker compose -f /fixture/compose.yaml cp web:/tmp/registry-validation/. /workspace/output/validator/", 120)
+            save_command(task_root, "feature-probe-copy", copied)
+            if copied.get("exit_code") != 0:
+                error = "feature_probe_copy_failed"
+            else:
+                source = task_root / "workspace" / "output" / "validator" / "feature.json"
+                if not source.is_file():
+                    error = "feature_probe_output_missing"
+                else:
+                    try:
+                        feature = json.loads(source.read_text())
+                    except json.JSONDecodeError:
+                        error = "feature_probe_output_invalid"
+    finally:
+        try:
+            status_result = controller_command(state, f"{FAULT_COMMAND} status", 30)
+            save_command(task_root, "fault-gateway-status", status_result)
+            if status_result.get("exit_code") == 0:
+                try:
+                    status = json.loads(status_result.get("stdout", ""))
+                except json.JSONDecodeError:
+                    pass
+        finally:
+            clear = controller_command(state, f"{FAULT_COMMAND} clear", 30)
+            save_command(task_root, "fault-gateway-clear", clear)
+            cleared = clear.get("exit_code") == 0
+
+    if feature is not None:
+        receipts_valid = fault_receipts_valid(config, status)
+        try:
+            valid_probe_id = str(uuid.UUID(config.get("probe_id"))) == config.get("probe_id")
+        except (AttributeError, TypeError, ValueError):
+            valid_probe_id = False
+        configured = (isinstance(config, dict) and valid_probe_id
+                      and config.get("paths") == FAULT_PATHS)
+        feature["fault_gateway"] = {
+            "trusted": True,
+            "configured": configured,
+            "restart_ready": restart_ready,
+            "receipts_valid": receipts_valid,
+            "cleared": cleared,
+            "status": status,
+        }
+        reason = None
+        if not cleared:
+            reason = "fault_cleanup_failed"
+        elif not configured:
+            reason = "fault_gateway_prerequisite_missing"
+        elif not restart_ready:
+            reason = "web_restart_failed"
+        elif not receipts_valid:
+            reason = "fault_not_exercised"
+        if reason:
+            observations = feature.get("observations")
+            if isinstance(observations, list):
+                replacement = unavailable("implementation.stale_results", reason)
+                stale = next((item for item in observations
+                              if isinstance(item, dict)
+                              and item.get("id") == "implementation.stale_results"), None)
+                if stale is None:
+                    observations.append(replacement)
+                else:
+                    stale.clear()
+                    stale.update(replacement)
+        write_json(validation / "feature.json", feature)
+    return feature, error
 
 
 def checks_by_id(feature):

@@ -21,6 +21,7 @@ ENV = {'PATH': '/runtime:/usr/bin:/bin', 'HOME': '/tmp', 'LANG': 'C.UTF-8',
        'III_COMPOSE_STATE_DIR': '/runtime-state/compose',
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_TERMINAL_PROMPT': '0', 'CI': 'true'}
+HARD_BUILD_STEPS = frozenset(('typecheck', 'build'))
 
 RUNTIME_ENGINE = '''set -eu
 iii --no-update-check --config /runtime-state/config.json &
@@ -291,6 +292,25 @@ def atomic_json(path, value):
     temporary = path.with_name(path.name + '.tmp')
     temporary.write_text(json.dumps(value, indent=2))
     os.replace(temporary, path)
+
+
+def run_candidate_build_checks(candidate, evidence, cancel=None):
+    checks = []
+    for step in ('typecheck', 'test', 'build'):
+        command = ['pnpm', '--dir', 'kanban', step]
+        timeout = 90
+        owned_container = candidate
+        if step == 'test':
+            command = ['/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '90s', *command]
+            timeout = 120
+            owned_container = None
+        code = bounded(docker_exec(candidate, command), evidence / f'{step}.log',
+                       timeout, owned_container, cancel)
+        checks.append({'id': step, 'status': 'passed' if code == 0 else 'failed',
+                       'detail': f'isolated command exit {code}'})
+        if code and step in HARD_BUILD_STEPS:
+            return checks, False
+    return checks, True
 
 
 def wait_for_external_subject(output, ready, timeout=1800):
@@ -809,14 +829,10 @@ print('workspace readable; trusted files, evaluator process and external network
                                  'detail': 'The selected snapshot contains no application.'})
             (evidence / 'result.json').write_text(json.dumps(result))
         else:
-            for step in ('typecheck', 'test', 'build'):
-                code = bounded(docker_exec(candidate, ['pnpm', '--dir', 'kanban', step]),
-                               evidence / f'{step}.log', 90, candidate, cancel)
-                build_checks.append({'id': step, 'status': 'passed' if code == 0 else 'failed',
-                                     'detail': f'isolated command exit {code}'})
-                if code:
-                    (evidence / 'result.json').write_text(json.dumps(result))
-                    break
+            build_checks, build_ready = run_candidate_build_checks(candidate, evidence, cancel)
+            result['checks'] = build_checks
+            if not build_ready:
+                (evidence / 'result.json').write_text(json.dumps(result))
             else:
                 config = {'workers': [
                     {'name': 'iii-worker-manager', 'config': {'host': '127.0.0.1', 'port': 50179}},

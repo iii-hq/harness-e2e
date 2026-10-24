@@ -256,7 +256,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 2,
+    rubric_version: 3,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -269,7 +269,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 2,
+    rubric_version: 3,
     case_id: caseId,
     checks,
     status,
@@ -352,6 +352,36 @@ export async function boardLaneWithCount(page, label, count) {
   return lane
 }
 
+export async function dragToVisibleLane(source, target, page) {
+  await target.scrollIntoViewIfNeeded()
+  const box = await target.boundingBox()
+  const viewport = page.viewportSize()
+  expect(box && viewport, 'drag target is not visible')
+  const visible = {
+    left: Math.max(0, box.x),
+    top: Math.max(0, box.y),
+    right: Math.min(viewport.width, box.x + box.width),
+    bottom: Math.min(viewport.height, box.y + box.height),
+  }
+  expect(visible.right > visible.left && visible.bottom > visible.top, 'drag target is outside the viewport')
+  const candidates = []
+  for (let row = 1; row <= 8; row++) {
+    for (const column of [0.5, 0.25, 0.75]) candidates.push({
+      x: visible.left + (visible.right - visible.left) * column,
+      y: visible.top + (visible.bottom - visible.top) * row / 9,
+    })
+  }
+  const point = await target.evaluate((lane, points) => points.find(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y)
+    return hit && (hit === lane || lane.contains(hit)) && !hit.closest('[draggable="true"]')
+  }) ?? points.find(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y)
+    return hit && (hit === lane || lane.contains(hit))
+  }), candidates)
+  expect(point, 'drag target has no hit-tested point in the viewport')
+  await source.dragTo(target, { targetPosition: { x: point.x - box.x, y: point.y - box.y } })
+}
+
 export function boardTicketTotal(page, count) {
   const labeled = page.getByLabel(/^total(?: tickets)?$/i)
     .filter({ hasText: new RegExp(`^\\s*${count}\\s*$`) })
@@ -431,7 +461,7 @@ export async function holdResponse(page, pattern, method) {
     intercepted = true
     try {
       const original = await route.fetch()
-      reached({})
+      reached({ request: route.request() })
       await held
       await route.fulfill({ response: original })
       delivered({})
@@ -444,6 +474,7 @@ export async function holdResponse(page, pattern, method) {
         timer = setTimeout(() => reject(new Error(`${method} ${label} timed out`)), 8_000)
       })])
       if (result.error) throw result.error
+      return result.request
     } finally { clearTimeout(timer) }
   }
   return { release, reached: () => bounded(request, 'request'), delivered: () => bounded(response, 'response') }
@@ -1112,7 +1143,7 @@ export const PROBES = {
       await edit.getByLabel('Status').selectOption('todo')
       await edit.getByLabel('Priority').selectOption('urgent')
       await edit.getByLabel('Assignee').fill('Updated')
-      await page.route('**/api/tickets/**', async (route) => {
+      await page.route(`**/api/tickets/${ticket.id}`, async (route) => {
         if (route.request().method() === 'PATCH') {
           await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' })
           return
@@ -1188,34 +1219,53 @@ export const PROBES = {
       })).status === 404, 'a deleted ticket was updated')
       return 'Empty, immutable and invalid updates are rejected without writes; deleted tickets cannot be restored.'
     })
-    await check('drag_persists_status_only', async () => {
+    await check('drag_failure', async () => {
       const ticket = await create(trigger, { title: 'Drag probe', status: 'todo', description: 'Status-only drag' })
-      const beforeMove = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       const { context, page } = await pageFor(browser, baseUrl)
       await eventually(async () => await page.getByRole('heading', { name: 'Drag probe' }).count(), 'edited card did not appear')
       const card = page.getByRole('heading', { name: 'Drag probe' }).locator('xpath=ancestor::a[1]')
       const beforeTickets = (await json(await api('/api/tickets'))).tickets
       const todoCount = beforeTickets.filter(({status}) => status === 'todo').length
       const doneCount = beforeTickets.filter(({status}) => status === 'done').length
-      const reviewCount = beforeTickets.filter(({status}) => status === 'in_review').length
       const target = await boardLaneWithCount(page, 'Done', doneCount)
-      stage('drag_failure')
-      let failMove = true
-      await page.route('**/api/tickets/**', async (route) => {
-        if (failMove && route.request().method() === 'PATCH') {
-          failMove = false
+      let attempted
+      await page.route(`**/api/tickets/${ticket.id}`, async (route) => {
+        if (route.request().method() === 'PATCH') {
+          attempted = route.request()
           await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' })
           return
         }
         await route.continue()
       })
-      await card.dragTo(target)
-      await expectText(mutationFailureFeedback(page), /\S/)
+      await dragToVisibleLane(card, target, page)
+      await eventually(() => attempted, 'failed drag did not send its PATCH')
+      expect(sameJson(attempted.postDataJSON(), { status: 'done' }), 'failed drag PATCH changed fields besides status')
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'todo', 'failed drag changed persisted status')
       const todo = await boardLaneWithCount(page, 'To do', todoCount)
       expect(await todo.getByRole('heading', { name: 'Drag probe' }).count() === 1, 'failed drag moved the visible card')
-      stage('drag_success')
-      await card.dragTo(target)
+      await expectText(mutationFailureFeedback(page), /\S/)
+      await context.close()
+      return 'A failed status-only drag stays in its original lane and reports an error.'
+    })
+    await check('drag_success', async () => {
+      const ticket = await create(trigger, { title: 'Successful drag probe', status: 'todo', description: 'Status-only drag' })
+      const beforeMove = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
+      const { context, page } = await pageFor(browser, baseUrl)
+      await eventually(async () => await page.getByRole('heading', { name: ticket.title }).count(), 'drag card did not appear')
+      const card = page.getByRole('heading', { name: ticket.title }).locator('xpath=ancestor::a[1]')
+      const beforeTickets = (await json(await api('/api/tickets'))).tickets
+      const todoCount = beforeTickets.filter(({status}) => status === 'todo').length
+      const doneCount = beforeTickets.filter(({status}) => status === 'done').length
+      const target = await boardLaneWithCount(page, 'Done', doneCount)
+      let patch
+      page.on('request', request => {
+        if (request.method() === 'PATCH' && new URL(request.url()).pathname === `/api/tickets/${ticket.id}`) {
+          patch = request
+        }
+      })
+      await dragToVisibleLane(card, target, page)
+      await eventually(() => patch, 'successful drag did not send its PATCH')
+      expect(sameJson(patch.postDataJSON(), { status: 'done' }), 'drag PATCH changed fields besides status')
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'done', 'drag did not persist done status')
       await boardLaneWithCount(page, 'Done', doneCount + 1)
       await boardLaneWithCount(page, 'To do', todoCount - 1)
@@ -1223,31 +1273,32 @@ export const PROBES = {
       expect(Object.entries(beforeMove).every(([field, value]) => ['status', 'updated_at'].includes(field)
         || JSON.stringify(moved[field]) === JSON.stringify(value)), 'drag changed fields besides status')
       expect(Date.parse(moved.updated_at) > Date.parse(beforeMove.updated_at), 'drag did not advance updated_at')
-
-      stage('drag_navigation')
-      await page.unroute('**/api/tickets/**')
-      let release
-      let intercepted
-      const reached = new Promise((resolve) => { intercepted = resolve })
-      const held = new Promise((resolve) => { release = resolve })
-      await page.route('**/api/tickets/**', async (route) => {
-        if (route.request().method() !== 'PATCH') { await route.continue(); return }
-        intercepted()
-        await held
-        await route.continue()
-      })
-      const review = await boardLaneWithCount(page, 'In review', reviewCount)
-      await card.dragTo(review)
-      await reached
-      await page.getByRole('link', { name: /^settings$/i }).click()
-      release()
-      await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'in_review', 'late move did not persist after navigation')
-      await boardNavigation(page).click()
-      const restoredReview = await boardLaneWithCount(page, 'In review', reviewCount + 1)
-      await eventually(async () => await restoredReview.getByRole('heading', { name: 'Drag probe' }).count(), 'late move is absent from the relevant board')
-      await screenshot(page, output, 'board-after-drag')
       await context.close()
-      return 'Failed drag stays put, retry persists only status, and a move finishing after navigation appears on return.'
+      return 'Pointer drag persists only status and updates both lane counts.'
+    })
+    await check('drag_navigation', async () => {
+      const ticket = await create(trigger, { title: 'Navigation drag probe', status: 'done', description: 'Late move' })
+      const { context, page } = await pageFor(browser, baseUrl)
+      await eventually(async () => await page.getByRole('heading', { name: ticket.title }).count(), 'navigation drag card did not appear')
+      const card = page.getByRole('heading', { name: ticket.title }).locator('xpath=ancestor::a[1]')
+      const beforeTickets = (await json(await api('/api/tickets'))).tickets
+      const reviewCount = beforeTickets.filter(({status}) => status === 'in_review').length
+      const review = await boardLaneWithCount(page, 'In review', reviewCount)
+      const delayed = await holdResponse(page, `**/api/tickets/${ticket.id}`, 'PATCH')
+      try {
+        await dragToVisibleLane(card, review, page)
+        const patch = await delayed.reached()
+        expect(sameJson(patch.postDataJSON(), { status: 'in_review' }), 'late drag PATCH changed fields besides status')
+        await page.getByRole('link', { name: /^settings$/i }).click()
+        delayed.release()
+        await delayed.delivered()
+        await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'in_review', 'late move did not persist after navigation')
+        await boardNavigation(page).click()
+        const restoredReview = await boardLaneWithCount(page, 'In review', reviewCount + 1)
+        await eventually(async () => await restoredReview.getByRole('heading', { name: ticket.title }).count(), 'late move is absent from the relevant board')
+        await screenshot(page, output, 'board-after-drag')
+      } finally { delayed.release(); await context.close() }
+      return 'A status-only move finishing after navigation appears on the relevant board.'
     })
     await check('edit_move_survives_restart', async () => {
       const ticket = await create(trigger, { title: 'Restart fixture', status: 'backlog' })
