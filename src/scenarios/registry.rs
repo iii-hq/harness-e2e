@@ -779,8 +779,54 @@ fn undeliverable_observations(test: u8, delivery: &Value) -> Option<Value> {
         .collect::<Vec<_>>();
     Some(json!({ "observations": observations }))
 }
+/// Why the validator could not measure a check for a reason of its own: the
+/// evaluating machine (a Docker daemon that stopped answering, a port it
+/// could not allocate), the runner's own probe and fault gateway, or the
+/// evidence the runner keeps. Only these leave a check unavailable, which
+/// sets the run aside. Any other reason is the delivery's — an alert the UI
+/// never shows, a comparison that never succeeds, a Compose file that does
+/// not load, a web container that does not restart — and scores zero.
+const EVALUATOR_UNAVAILABLE: &[&str] = &[
+    "validator_infrastructure_unavailable",
+    "validator_port_allocation_unavailable",
+    "no_attributable_evidence",
+    "patch_missing",
+    "patch_replay_checkout_failed",
+    "delivery_or_final_patch_missing",
+    "feature_probe_not_supplied",
+    "feature_probe_timeout",
+    "feature_probe_failed",
+    "feature_probe_copy_failed",
+    "feature_probe_output_missing",
+    "feature_probe_output_invalid",
+    "fault_cleanup_failed",
+    "fault_gateway_prerequisite_missing",
+    "independent_case_missing",
+    "independent_case_invalid",
+    "independent_case_unavailable",
+    // registry_verification: the truth comes from another task's delivery.
+    "independent_truth_incomplete",
+    "reported_failure_truth_unavailable",
+];
+
 fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
-    super::common::atomic_awards(metrics(test), validation)
+    let mut validation = validation.clone();
+    for item in validation["observations"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        let reason = item["reason"].as_str().unwrap_or_default();
+        let evaluator = reason.is_empty()
+            || EVALUATOR_UNAVAILABLE.contains(&reason)
+            || reason.starts_with("Browser unavailable:");
+        if item["status"] == "unavailable" && !evaluator {
+            *item = json!({"id": item["id"], "status": "measured", "value": 0,
+                           "numerator": 0, "denominator": 1,
+                           "reason": format!("the delivery left this check unmeasurable: {reason}")});
+        }
+    }
+    super::common::atomic_awards(metrics(test), &validation)
 }
 /// Scores the observations the capture already sealed into the evidence
 /// deliverable, so the verdict no longer depends on the workspace surviving.
@@ -985,6 +1031,75 @@ mod tests {
             .map(|m| json!({"id":m["id"],"status":"measured","numerator":0,"denominator":0}))
             .collect();
         assert!(awards(4, &json!({"observations":observations})).is_err());
+    }
+    /// The local history's unavailable checks: a delivery whose UI never
+    /// shows the alert, whose comparison never succeeds, whose web container
+    /// does not restart or whose Compose file does not load scores zero on
+    /// that check; only the evaluator's own machine or tooling sets it aside.
+    #[test]
+    fn a_check_the_delivery_left_unmeasurable_scores_zero() {
+        let validation = |test: u8, unmeasured: &str, reason: &str| {
+            let observations: Vec<_> = metrics(test)
+                .iter()
+                .map(|metric| {
+                    if metric["id"] == unmeasured {
+                        json!({"id":metric["id"],"status":"unavailable","reason":reason})
+                    } else {
+                        json!({"id":metric["id"],"status":"measured","value":1,"numerator":1,"denominator":1})
+                    }
+                })
+                .collect();
+            json!({ "observations": observations })
+        };
+        let awarded = |test: u8, unmeasured: &str, reason: &str| {
+            awards(test, &validation(test, unmeasured, reason)).map(|awards| {
+                awards
+                    .into_iter()
+                    .find(|award| award.id == unmeasured)
+                    .unwrap()
+                    .awarded
+            })
+        };
+        for reason in [
+            "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n  - waiting for getByRole('alert').first() to be visible\n",
+            "successful_comparison_precondition_missing",
+            "web_restart_failed",
+        ] {
+            assert_eq!(
+                awarded(2, "implementation.stale_results", reason).unwrap(),
+                Some(0),
+                "{reason}"
+            );
+        }
+        assert_eq!(
+            awarded(
+                3,
+                "environment.frontend_reachability",
+                "compose_config_unavailable"
+            )
+            .unwrap(),
+            Some(0)
+        );
+        for (test, unmeasured, reason) in [
+            (
+                2,
+                "implementation.stale_results",
+                "validator_infrastructure_unavailable",
+            ),
+            (
+                2,
+                "implementation.history",
+                "Browser unavailable: browserType.launch: Executable doesn't exist",
+            ),
+            (4, "verification.recall", "independent_truth_incomplete"),
+            (
+                3,
+                "environment.clean_reproduction",
+                "validator_port_allocation_unavailable",
+            ),
+        ] {
+            assert!(awarded(test, unmeasured, reason).is_err(), "{reason}");
+        }
     }
     #[test]
     fn explicit_zero_denominator_values_are_scored() {

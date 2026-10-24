@@ -46,32 +46,49 @@ whether the run counts toward the mean. The subject's own failures
 count: the run stays technically valid and incomplete, with the points already
 measured. They are `resource_limit` (`max_turns` included, and a composite
 flow's deadline or a Harness step's), `invalid_provider_request` (a request
-the Harness built wrong), `context_overflow`, `planner_format` and
+the Harness built wrong, such as a tool call sent without its result or a
+function schema the provider cannot read), `context_overflow` (also when the
+provider only says so in its own words), `planner_format` and
 `subject_failure`. The others leave the mean and are counted apart, per
 scenario in `aggregate.causes`:
 
 - `provider_infrastructure`: the provider was unreachable, rate limited, out
-  of balance or credit, or not authorized (`provider_transport_failed` among
-  them).
+  of balance, credit or usage limit, or not authorized or configured
+  (`provider_transport_failed` among them), with or without the turn's error
+  entry.
 - `test_environment_incomplete`: the final failure says the stack lacks a
-  function or database the scenario's prompt names, or the stack does not
-  route the configured provider or model. A function the agent mistyped or
-  made up, or one missing earlier in a turn that got past it, stays the
-  subject's.
+  function or database the run is owed, or the stack does not route, single
+  out or price the configured provider or model (an ambiguous model, no
+  structured output, a cost cap without catalog pricing, a model the provider
+  does not serve). The run is owed the functions it registers and needs
+  itself (its worker contracts), the databases the prompt names and the
+  functions of the measurement's own worker (`fp`) it names. A function the
+  prompt alone mentions, such as a validator the scenario breaks on purpose,
+  one the agent mistyped or made up, or one missing earlier in a turn that
+  got past it, stays the subject's.
 - `evaluation_environment`: the evaluator could not validate the delivery for
-  a reason of its own machine, such as a Docker daemon that stopped
-  answering. The Registry runner removes every other stack in the run's
-  private Docker daemon before it starts the delivery, and records what it
-  removed; a port still taken after that is the delivery's own.
+  a reason of its own machine or tooling, such as a Docker daemon that
+  stopped answering. The Registry runner removes every other stack in the
+  run's private Docker daemon before it starts the delivery, and records what
+  it removed; a port still taken after that is the delivery's own. A check
+  the delivery left unmeasurable (an alert the UI never shows, a comparison
+  that never succeeds, a Compose file that does not load, a web container
+  that does not restart) scores zero instead.
 - `e2e_infrastructure`: any other failure of the runner or its fixtures, an
-  engine the watchdog could not sample among them.
+  engine the watchdog could not sample or a `harness::send` whose response
+  the engine lost among them.
 - `operator_cancelled`, also when the cancelled turn reports first.
 - `undetermined`: another worker timed out, the turn was cancelled without an
   error, or the provider refused a request for a reason no rule recognises.
 
+A function the subject registered that outlives its workers at cleanup is
+recorded as the subject's `subject_leftover` failure; the run keeps its
+status, cause and score.
+
 Composite and adaptive flows follow the same rule: a failed composite step
-keeps its turn's transcript, so its error code decides, and a failed planner
-turn is classified as a native turn. The Console counts failures by cause.
+keeps its turn's transcript, so its own error code decides, and a failed
+planner turn is classified as a native turn. The Console counts failures by
+cause.
 A report written before causes keeps the earlier rule, where every subject
 error left the mean, and every reader says so.
 
