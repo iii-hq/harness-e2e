@@ -607,6 +607,21 @@ pub fn render(template: &str, run_id: &str) -> String {
     out
 }
 
+/// The memories `setup` saves, rendered for the run, in saving order: the
+/// distractors first when the case has them. A baseline plants nothing.
+pub fn planted_memories(case: &Case, run_id: &str) -> Vec<String> {
+    if case.baseline {
+        return Vec::new();
+    }
+    let distractors: &[&str] = if case.distractors { &DISTRACTORS } else { &[] };
+    distractors
+        .iter()
+        .copied()
+        .chain(case.memories.iter().map(|seed| seed.text))
+        .map(|template| render(template, run_id))
+        .collect()
+}
+
 /// Every label the case plants or checks for, sorted and deduplicated.
 pub fn labels(case: &Case) -> Vec<&'static str> {
     let mut found: Vec<&'static str> = case
@@ -714,6 +729,22 @@ mod tests {
             assert_eq!(twin.rules.len(), baseline.rules.len());
             assert_eq!(twin.criteria.len(), baseline.criteria.len());
         }
+    }
+
+    #[test]
+    fn a_case_plants_its_distractors_first_and_a_baseline_nothing() {
+        let planted = planted_memories(case_named("memory_relevant_recall"), "a");
+        assert_eq!(planted.len(), DISTRACTORS.len() + 2);
+        assert_eq!(planted[0], DISTRACTORS[0]);
+        assert_eq!(
+            planted[DISTRACTORS.len()],
+            render(
+                "Deploy the billing-sync service with the command deploy-{deploy}.",
+                "a"
+            )
+        );
+        assert!(planted_memories(case_named("memory_rule_fit"), "a").is_empty());
+        assert!(planted_memories(case_named("memory_value_project_baseline"), "a").is_empty());
     }
 
     #[test]

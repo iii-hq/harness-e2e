@@ -65,6 +65,8 @@ fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
         Some(5.0)
     } else if scenario_id == crate::scenarios::linkly::ID {
         Some(10.0)
+    } else if crate::scenarios::memory::IDS.contains(&scenario_id) {
+        Some(2.0)
     } else {
         None
     }
@@ -3653,6 +3655,14 @@ mod tests {
         );
         subject.priced = Some(false);
         assert_eq!(subject_cost_cap(&subject, capped), None);
+    }
+
+    #[test]
+    fn every_memory_case_is_capped_at_two_dollars() {
+        for id in crate::scenarios::memory::IDS {
+            assert_eq!(subject_cost_cap_usd(id), Some(2.0), "{id}");
+        }
+        assert_eq!(subject_cost_cap_usd("minimal_path"), None);
     }
 
     #[test]

@@ -200,6 +200,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
+| Memory quality | `memory` | What the memory worker injects into a live session, eleven cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -271,6 +272,58 @@ is the tour the test was written against. If the worker serves a different
 tour, the run loses the `tour.current` criterion and nothing else. When the
 tour changes on purpose, regenerate the fixture from the worker's
 `src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
+
+The `memory` suite runs eleven cases, three independent rounds, one technical
+retry. Each case plants its own bank (`e2e-<attempt>`) with the rules,
+memories and unrelated distractor facts it calls for, waits until memory has
+embedded all of them, sends its prompt and follow-ups, and audits what memory
+injected into each turn against what that turn needed: the right facts, no
+duplicates, nothing unrelated, rules intact in the system prompt. The subject
+may call no function (`memory::*` is denied), so a planted value reaches the
+answer only through memory's injection. Two cases are baselines: the same task
+with nothing planted, expected to fail, since a baseline that passes means its
+value case proves nothing. Scoring is deterministic, never a model. Each run
+also records seven `memory_` measurements: expected, irrelevant and duplicate
+injections, the injected, rules and reminder tokens, and the turns where the
+memory hook did not run (an infrastructure error, never a score). A fresh bank
+per attempt makes every case safe to rerun, and the attempt's bank is deleted
+afterwards; the user's own banks are never touched.
+
+Run it on the `memory` stack, the default stack plus the `memory` worker. The
+suite needs the local MiniLM embedder, so setup fails when memory embeds with
+any other model. To run a case on your own stack, from a checkout:
+
+```bash
+D=~/iii-memory-e2e && mkdir -p "$D" && cd "$D"
+cat > worker-compose.yaml <<'YAML'
+namespace: memory-e2e
+engine:
+  url: ws://127.0.0.1:49334        # own port, away from a live stack's 49134
+containers:
+  harness:           {worker: package://harness,           version: latest}
+  memory:            {worker: package://memory,            version: latest}
+  fp:                {worker: package://fp,                version: latest}
+  provider-deepseek: {worker: package://provider-deepseek, version: latest}
+YAML
+# Strip OpenAI so router::embed falls back to MiniLM, as on CI: with an
+# OPENAI_API_KEY in llm-router's environment memory embeds with
+# text-embedding-3-small, whose vectors the cases are not calibrated for.
+env -u III_URL -u OPENAI_API_KEY III_COMPOSE_STATE_DIR="$D/.compose-state" iii compose --up
+```
+
+Then, from the checkout of this repository:
+
+```bash
+III_NAMESPACE=memory-e2e III_TELEMETRY_ENABLED=false \
+cargo run --locked --bin harness-e2e -- run \
+  --url ws://127.0.0.1:49334 --provider deepseek --model deepseek-flash \
+  --scenario memory_relevant_recall
+cargo run --locked --bin harness-e2e -- report target/e2e
+```
+
+A CI or Docker run takes its suite from the stack's runner: until a
+`harness-e2e` release carries `memory`, give the dispatch an inline stack that
+pins `harness-e2e` with `commit:`.
 
 ## Release Control
 

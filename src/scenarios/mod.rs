@@ -604,6 +604,17 @@ scenarios! {
     BrowserCrossSite = "browser_cross_site" => browser_cross_site::BrowserCrossSite,
     ReleaseTrainRecovery = "release_train_recovery" => release_train_recovery::ReleaseTrainRecovery,
     CrossRepoContractMigration = "cross_repo_contract_migration" => cross_repo_contract_migration::CrossRepoContractMigration,
+    MemoryRelevantRecall = "memory_relevant_recall" => memory::Memory(0),
+    MemorySmallTalk = "memory_small_talk" => memory::Memory(1),
+    MemoryFirstPersonOffTopic = "memory_first_person_off_topic" => memory::Memory(2),
+    MemoryParaphrase = "memory_paraphrase" => memory::Memory(3),
+    MemorySessionRepeat = "memory_session_repeat" => memory::Memory(4),
+    MemoryUpdatedFact = "memory_updated_fact" => memory::Memory(5),
+    MemoryValueProject = "memory_value_project" => memory::Memory(6),
+    MemoryValueProjectBaseline = "memory_value_project_baseline" => memory::Memory(7),
+    MemoryValuePreference = "memory_value_preference" => memory::Memory(8),
+    MemoryValuePreferenceBaseline = "memory_value_preference_baseline" => memory::Memory(9),
+    MemoryRuleFit = "memory_rule_fit" => memory::Memory(10),
 }
 
 impl ScenarioId {
@@ -867,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_sixty_unique_valid_scenarios() {
+    fn registry_contains_seventy_one_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -876,7 +887,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 60);
+        assert_eq!(ids.len(), 71);
     }
 
     #[test]
@@ -1082,6 +1093,54 @@ mod tests {
                 digests.insert(first.case.behavior_sha256.clone()),
                 "{scenario:?} shares a digest with another scenario"
             );
+        }
+    }
+
+    /// The bank and what `setup` plants are part of the task, so they sit in
+    /// the digest; a baseline plants nothing.
+    #[test]
+    fn memory_definitions_fold_the_bank_and_the_planted_state() {
+        use super::memory::cases::{CASES, DISTRACTORS};
+
+        assert_eq!(memory::IDS.len(), CASES.len());
+        for (index, id) in memory::IDS.iter().enumerate() {
+            let case = &CASES[index];
+            let scenario = ScenarioId::ALL
+                .iter()
+                .copied()
+                .find(|scenario| scenario.as_str() == *id)
+                .unwrap();
+            let materialized = scenario
+                .materialize("attempt-a", scenario.canonical_seed())
+                .unwrap();
+            let definition = behavior_definition(scenario, &materialized.case).unwrap();
+            assert_eq!(
+                definition["send_metadata"],
+                serde_json::json!({"memory_bank": "e2e-contract"}),
+                "{id}"
+            );
+            assert_eq!(
+                definition["allowed_functions"],
+                serde_json::json!([]),
+                "{id}"
+            );
+            let planted = &definition["planted_state"];
+            let memories = planted["memories"].as_array().unwrap();
+            let rules = planted["rules"].as_array().unwrap();
+            assert_eq!(
+                memories.is_empty() && rules.is_empty(),
+                case.baseline,
+                "{id}"
+            );
+            if !case.baseline {
+                let distractors = if case.distractors {
+                    DISTRACTORS.len()
+                } else {
+                    0
+                };
+                assert_eq!(memories.len(), distractors + case.memories.len(), "{id}");
+                assert_eq!(rules.len(), case.rules.len(), "{id}");
+            }
         }
     }
 

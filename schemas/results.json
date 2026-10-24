@@ -197,7 +197,8 @@
         "long-context",
         "security",
         "app-building",
-        "verification"
+        "verification",
+        "memory"
       ]
     },
     "ArtifactExpectation": {
@@ -2542,7 +2543,18 @@
         "performance_regression",
         "browser_cross_site",
         "release_train_recovery",
-        "cross_repo_contract_migration"
+        "cross_repo_contract_migration",
+        "memory_relevant_recall",
+        "memory_small_talk",
+        "memory_first_person_off_topic",
+        "memory_paraphrase",
+        "memory_session_repeat",
+        "memory_updated_fact",
+        "memory_value_project",
+        "memory_value_project_baseline",
+        "memory_value_preference",
+        "memory_value_preference_baseline",
+        "memory_rule_fit"
       ]
     },
     "ScenarioMeasurement": {
@@ -3035,6 +3047,7 @@
         "iii-directory",
         "judge",
         "llm-router",
+        "memory",
         "pubsub",
         "queue",
         "rbac-proxy",

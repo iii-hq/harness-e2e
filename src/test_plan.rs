@@ -161,14 +161,26 @@ pub struct UncoveredTag {
 }
 
 /// Left out of every selection by tag: the registry pair runs 17 to 34 min
-/// a test, and Linkly and the onboarding tour need a stack of their own.
+/// a test, and Linkly, the onboarding tour and the memory tests need a stack
+/// of their own.
 // ponytail: a fixed list; a ceiling from run durations belongs where the
 // durations are (Release Control's deploy check).
-const IMPACT_EXCLUDED: [ScenarioId; 4] = [
+const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::RegistryImplementation,
     ScenarioId::RegistryVerification,
     ScenarioId::LinklyTutorial,
     ScenarioId::OnboardingTour,
+    ScenarioId::MemoryRelevantRecall,
+    ScenarioId::MemorySmallTalk,
+    ScenarioId::MemoryFirstPersonOffTopic,
+    ScenarioId::MemoryParaphrase,
+    ScenarioId::MemorySessionRepeat,
+    ScenarioId::MemoryUpdatedFact,
+    ScenarioId::MemoryValueProject,
+    ScenarioId::MemoryValueProjectBaseline,
+    ScenarioId::MemoryValuePreference,
+    ScenarioId::MemoryValuePreferenceBaseline,
+    ScenarioId::MemoryRuleFit,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -714,7 +726,7 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 9);
+        assert_eq!(plan.suites.len(), 10);
         for (id, cases, runs) in [
             ("regression", 9, 27),
             ("null-canary", 9, 9),
@@ -725,6 +737,7 @@ mod tests {
             ("onboarding", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
+            ("memory", 11, 33),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -909,7 +922,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:eaf7d56ef3d1358e41903fcd654e55146edeca51bf5d68da7efb5a6ada0f4e51"
+            "sha256:b5d209ad9fcb9a2c22c668d8690a90bd14abde50fb0a81bce746ec892ef6c512"
         );
     }
 
@@ -978,6 +991,7 @@ mod tests {
             "software-engineering",
             "software-engineering-x3",
             "linkly",
+            "memory",
         ] {
             for id in plan.materialize(suite).unwrap().scenario_ids {
                 let scenario = id.parse::<ScenarioId>().unwrap();
@@ -1043,6 +1057,49 @@ mod tests {
                 "id": "case-linkly-tutorial", "execution_kind": "scripted_dialogue",
                 "runs": 1, "technical_retries": 0, "scenarios": ["linkly_tutorial"],
             }])
+        );
+    }
+
+    /// Every memory case is its own group, so a retry reruns one case and a
+    /// case never shares a stack with its baseline.
+    #[test]
+    fn memory_runs_each_case_alone_three_times_with_one_retry() {
+        let snapshot = embedded().unwrap().materialize("memory").unwrap();
+        assert_eq!(snapshot.scenario_ids, crate::scenarios::memory::IDS);
+        assert_eq!(snapshot.campaigns.len(), 3);
+        for campaign in &snapshot.campaigns {
+            let groups = campaign["groups"].as_array().unwrap();
+            assert_eq!(groups.len(), crate::scenarios::memory::IDS.len());
+            for (group, id) in groups.iter().zip(crate::scenarios::memory::IDS) {
+                assert_eq!(group["scenarios"], json!([id]));
+                assert_eq!(group["execution_kind"], "harness_turn");
+                assert_eq!(group["technical_retries"], 1);
+            }
+        }
+    }
+
+    /// The memory cases need the memory stack, so a selection by tag leaves
+    /// them out instead of running them where they would fail in setup.
+    #[test]
+    fn a_selection_by_the_memory_worker_leaves_the_memory_cases_out() {
+        let plan = embedded().unwrap();
+        let impact = plan
+            .materialize_suite(
+                serde_json::from_value(json!({"id": "impact", "workers": ["memory"]})).unwrap(),
+            )
+            .unwrap();
+        assert!(!impact
+            .scenario_ids
+            .iter()
+            .any(|id| id.starts_with("memory_")));
+        let impact = impact.impact.unwrap();
+        assert!(impact.matched.is_empty());
+        let mut every_case = crate::scenarios::memory::IDS;
+        every_case.sort_unstable();
+        assert_eq!(impact.excluded, every_case);
+        assert_eq!(
+            impact.uncovered[0].reason,
+            "only tests a selection by tag leaves out carry it"
         );
     }
 

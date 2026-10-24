@@ -16,7 +16,7 @@ use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use super::cases::{bank, render, Case, DISTRACTORS};
+use super::cases::{bank, planted_memories, render, Case};
 use super::score::PromptRecord;
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
@@ -164,14 +164,8 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
                 .await
                 .context("memory::rule::set")?;
         }
-        let distractors: &[&str] = if case.distractors { &DISTRACTORS } else { &[] };
-        let texts = distractors
-            .iter()
-            .copied()
-            .chain(case.memories.iter().map(|seed| seed.text))
-            .map(|template| render(template, run_id));
         let mut saved = Vec::new();
-        for text in texts {
+        for text in planted_memories(case, run_id) {
             saved.push((save(context, &bank, &text).await?, text));
         }
         for (id, text) in &saved {
