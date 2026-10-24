@@ -276,7 +276,8 @@ tour changes on purpose, regenerate the fixture from the worker's
 The `memory` suite runs eleven cases, three independent rounds, one technical
 retry. Each case plants its own bank (`e2e-<attempt>`) with the rules,
 memories and unrelated distractor facts it calls for, waits until memory has
-indexed all of them, sends its prompt and follow-ups, and audits what memory
+indexed all of them (with MiniLM; lexical-only stores nothing to wait for),
+sends its prompt and follow-ups, and audits what memory
 injected into each turn against what that turn needed: the right facts, no
 duplicates, nothing unrelated, rules intact in the system prompt. The subject
 may call no function (`memory::*` is denied), so a planted value reaches the
@@ -285,16 +286,21 @@ with nothing planted, expected to fail, since a baseline that passes means its
 value case proves nothing. Scoring is deterministic, never a model. Each run
 also records seven `memory_` measurements: expected, irrelevant and duplicate
 injections, the injected, rules and reminder tokens, and the turns where the
-memory hook did not run (an infrastructure error, never a score). A fresh bank
-per attempt makes every case safe to rerun, and the attempt's bank is deleted
-afterwards; the user's own banks are never touched.
+memory hook did not run. An attempt that cannot show memory ran on its own
+bank (no hook, another bank, a recall count its parsed lines do not match, an
+unobserved prompt, a failed compaction) is an infrastructure error: reported
+unscored and not retried automatically, so rerun the case. A fresh bank per
+attempt makes every case safe to rerun, and `memory::bank::delete` moves the
+attempt's bank to memory's `.trash` afterwards; the user's own banks are never
+touched.
 
 Run it on the `memory` stack, the default stack plus the `memory` worker.
 Memory ranks recalls with the local MiniLM embedder where iii-directory has
 one, and lexical-only (BM25 and entities) where it has none, as on the Linux
 builds CI and the local recipe below use. Each run records which mode ran
-(`retrieval` in its evidence). Setup fails when memory embeds with any other
-model. To run a case on your own stack, from a checkout:
+(`retrieval` in its evidence). Lexical-only counts once the doctor has said so
+for 15 seconds, so a stack still loading MiniLM is not taken for one without
+it. Setup fails when memory embeds with any other model. To run a case on your own stack, from a checkout:
 
 ```bash
 D=~/iii-memory-e2e && mkdir -p "$D" && cd "$D"
@@ -304,8 +310,8 @@ startup_timeout: 600s
 stop_timeout: 30s
 engine:
   url: ws://127.0.0.1:49334        # own port, away from a live stack's 49134
-# The Harness graph is listed explicitly: iii 0.25's compose does not resolve
-# it from `harness` alone, and harness exits at boot without it.
+# The Harness graph is listed explicitly: a bare `iii compose --up` does not
+# resolve it from `harness` alone, and harness exits at boot without it.
 containers:
   queue:             {worker: package://queue,             version: latest}
   state:             {worker: package://state,             version: latest}

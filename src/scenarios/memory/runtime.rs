@@ -348,7 +348,7 @@ mod tests {
     fn the_doctor_picks_minilm_lexical_or_refuses_another_embedder() {
         const MINILM: &str =
             "router::embed answered (model sentence-transformers/all-MiniLM-L6-v2@c9745ed1d9f2)";
-        // memory 0.2.21 on a Linux stack, whose iii-directory has no MiniLM.
+        // Memory on a Linux stack, whose iii-directory has no MiniLM.
         const LEXICAL: &str =
             "router::embed returned no vector; recall runs lexical-only (BM25 + entities)";
         let doctor = |router: bool, ok: bool, detail: &str| {

@@ -1,15 +1,18 @@
 # The stack the `memory` suite runs on: the default stack plus the memory
-# worker, which the Harness does not bring. Memory's own dependencies
-# (configuration, session-manager, llm-router, state, queue) all arrive with
-# the Harness graph, so only memory is declared. Keep the other containers in
-# step with default.yaml.
+# worker, which the Harness does not bring. The executor resolves the Harness
+# graph from a Registry lock, and memory's own dependencies (configuration,
+# session-manager, llm-router, state, queue) arrive with it, so only memory is
+# declared. A bare local `iii compose --up` does not resolve that graph; the
+# README's local recipe lists it. Keep the other containers in step with
+# default.yaml.
 #
 # Embeddings: iii-directory's local MiniLM (provider::minilm::embed) is
 # router::embed's fallback when no registered provider has an embed key. The
 # published Linux builds carry no MiniLM, so there memory ranks lexical-only
-# (BM25 and entities); either way recall ranks the same on every run. An
-# OPENAI_API_KEY reaching llm-router moves memory to text-embedding-3-small;
-# the suite's setup refuses it and records which mode ran.
+# (BM25 and entities). Each mode is stable on its own; the two rank
+# differently. An OPENAI_API_KEY reaching llm-router moves memory to
+# text-embedding-3-small; the suite's setup refuses it and records which mode
+# ran.
 
 iii: latest
 
