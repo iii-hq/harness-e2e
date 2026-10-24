@@ -1096,75 +1096,136 @@ mod tests {
         assert_eq!(body.trim().lines().last(), Some("done"));
     }
 
-    /// What the null agent earns from the evaluators that read only what the
-    /// subject left (transcript, response, captured deliverables), so a dead
-    /// engine connection stands in for the stack. The expected answer is 0
-    /// points and `task_incomplete`; the other six regression tests need a
-    /// stack and are measured by the null-canary suite itself
-    /// (`tests/live_worker.rs` runs it against one).
+    /// Scheduled tests whose evaluator scores what a live stack left behind:
+    /// their controls run where that stack does, named here.
+    const LIVE_CONTROLS: &[(ScenarioId, &str)] = &[
+        (
+            ScenarioId::RegistryImplementation,
+            "capture builds the delivery in Docker and probes it; validate.py has its \
+             controls in tests/python/test_registry_validation.py",
+        ),
+        (
+            ScenarioId::RegistryVerification,
+            "capture replays the report against the delivery in Docker; the empty and the \
+             all-passing report are scored in tests/python/test_registry_validation.py",
+        ),
+        (
+            ScenarioId::TrendingTopicsBuild,
+            "capture builds the pushed site and runs Playwright in Docker; \
+             tests/fixtures/trending-topics-build/validate-controls.mjs holds the reference app",
+        ),
+        (
+            ScenarioId::ChessEngineBuild,
+            "capture plays the Compose-started Worker in the Console; \
+             tests/fixtures/chess-eval/negative-control.mjs holds its browser controls",
+        ),
+        (
+            ScenarioId::FormFlowBuild,
+            "capture drives the Compose-started Worker in the Console; \
+             tests/fixtures/visual-worker-eval/regressions.mjs holds its browser controls",
+        ),
+        (
+            ScenarioId::StateMachineCanvasBuild,
+            "capture drives the Compose-started Worker in the Console; \
+             tests/fixtures/visual-worker-eval/regressions.mjs holds its browser controls",
+        ),
+        (
+            ScenarioId::LinklyTutorial,
+            "capture probes the running linkly-agentic scaffold, chapter by chapter",
+        ),
+        (
+            ScenarioId::OnboardingTour,
+            "capture reads what the tour left in the onboarding stack's engine",
+        ),
+    ];
+
+    /// The null and the reference delivery of a scheduled test whose
+    /// evaluator scores offline, in that order.
+    async fn offline_controls(
+        id: ScenarioId,
+    ) -> Option<[crate::scenarios::ObjectiveEvaluation; 2]> {
+        use crate::scenarios::*;
+        Some(match id {
+            ScenarioId::MinimalPath => minimal_path::tests::controls().await,
+            ScenarioId::PersistentState => persistent_state::tests::controls().await,
+            ScenarioId::ToolContractRecovery => tool_contract_recovery::tests::controls(),
+            ScenarioId::TimerWake => timer_wake::tests::controls(),
+            ScenarioId::ShellCoderSandbox => shell_coder_sandbox::tests::controls().await,
+            ScenarioId::DatabaseMigrationRecovery => database_migration_recovery::tests::controls(),
+            ScenarioId::ContentionLedger => contention_ledger::tests::controls(),
+            ScenarioId::ValidationSelfRepair => validation_self_repair::tests::controls(),
+            ScenarioId::ContextPressure => context_pressure::tests::controls(),
+            ScenarioId::PromptInjectionResilience => prompt_injection_resilience::tests::controls(),
+            ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls(),
+            _ => return None,
+        })
+    }
+
+    /// The null agent without a model, and its counterpart. Every scheduled
+    /// test is scored as the runner scores it against two deliveries: the
+    /// null one (no call, `done`, one turn) earns 0 and stays
+    /// `task_incomplete`; the reference one completes with 100. Both run ten
+    /// times: a result that differs between rounds is named as drift.
     #[tokio::test]
-    async fn the_null_agent_earns_nothing_from_evaluators_that_read_only_the_subject() {
+    async fn every_scheduled_test_pays_nothing_for_nothing_and_everything_for_the_task() {
         use crate::report::CompletionState;
-        use crate::scenarios::{
-            CapturedDeliverable, CapturedDeliverableContent, ScenarioObservation,
-        };
-        // Anything but 0 points and task_incomplete is a hole: (test, points,
-        // completion), as the runner reports them.
-        let context =
-            crate::context::E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
-        let run_id = "null-agent";
-        let mut paid = Vec::new();
-        for id in [
-            ScenarioId::ContextPressure,
-            ScenarioId::ToolContractRecovery,
-            ScenarioId::PromptInjectionResilience,
-        ] {
-            let materialized = id.materialize(run_id, id.canonical_seed()).unwrap();
-            let observation = ScenarioObservation {
-                case: materialized.case,
-                metrics: crate::wire::SessionMetricsResponse::from_normalized(
-                    crate::wire::SessionMetricsPayload {
-                        root_session_id: run_id.into(),
-                        complete: true,
-                        totals: Default::default(),
-                        by_session: Vec::new(),
-                        traces: None,
-                    },
-                ),
-                transcript: json!({ "messages": [] }),
-                response: "done".into(),
-                // What the injection test's capture stores when nobody wrote
-                // the canary key.
-                deliverables: vec![CapturedDeliverable {
-                    id: "resilience_report".into(),
-                    kind: "resilience_report".into(),
-                    content: CapturedDeliverableContent::Json(
-                        json!({ "report": "done", "canary_written": false }),
-                    ),
-                    invariants: Vec::new(),
-                    provenance: Vec::new(),
-                }],
+        let plan = embedded().unwrap();
+        let scheduled: BTreeSet<&str> = plan
+            .suites
+            .iter()
+            .flat_map(|suite| suite.scenarios.iter().map(String::as_str))
+            .collect();
+        for (id, _) in LIVE_CONTROLS {
+            assert!(scheduled.contains(id.as_str()), "{id} is not scheduled");
+        }
+        let mut holes = Vec::new();
+        for id in scheduled {
+            let id: ScenarioId = id.parse().unwrap();
+            let live = LIVE_CONTROLS.iter().any(|(live, _)| *live == id);
+            let spec = id.spec("control");
+            let score = |evaluation: crate::scenarios::ObjectiveEvaluation| {
+                let criteria = crate::suite::criterion_reports(&spec, evaluation.awards);
+                let completion = evaluation
+                    .completion
+                    .unwrap_or_else(|| crate::report::gate_completion(&criteria));
+                let points: u16 = criteria
+                    .iter()
+                    .filter_map(|criterion| criterion.awarded.map(u16::from))
+                    .sum();
+                (points, completion)
             };
-            let evaluation = materialized
-                .module
-                .evaluate(&context, &observation, run_id)
-                .await
-                .unwrap();
-            // Scored and completed as the runner does: the criteria, then the
-            // completion the gates give unless a prerequisite decided it.
-            let criteria = crate::suite::criterion_reports(&materialized.spec, evaluation.awards);
-            let completion = evaluation
-                .completion
-                .unwrap_or_else(|| crate::report::gate_completion(&criteria));
-            let points: u16 = criteria
-                .iter()
-                .filter_map(|criterion| criterion.awarded.map(u16::from))
-                .sum();
-            if points > 0 || completion != CompletionState::TaskIncomplete {
-                paid.push((id.as_str(), points, completion));
+            let mut rounds = Vec::new();
+            for _ in 0..10 {
+                let Some([null, reference]) = offline_controls(id).await else {
+                    break;
+                };
+                rounds.push((score(null), score(reference)));
+            }
+            assert_eq!(
+                rounds.is_empty(),
+                live,
+                "{id}: offline controls xor a live reason"
+            );
+            for (delivery, expected, results) in [
+                (
+                    "null",
+                    (0, CompletionState::TaskIncomplete),
+                    rounds.iter().map(|round| round.0).collect::<Vec<_>>(),
+                ),
+                (
+                    "reference",
+                    (100, CompletionState::Completed),
+                    rounds.iter().map(|round| round.1).collect(),
+                ),
+            ] {
+                if results.iter().any(|result| *result != results[0]) {
+                    holes.push(format!("{id} {delivery} drifts: {results:?}"));
+                } else if results.first().is_some_and(|result| *result != expected) {
+                    holes.push(format!("{id} {delivery}: {:?}", results[0]));
+                }
             }
         }
-        assert!(paid.is_empty(), "the null agent earned something: {paid:?}");
+        assert!(holes.is_empty(), "{holes:#?}");
     }
 
     #[test]

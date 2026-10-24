@@ -60,7 +60,7 @@ const BUNDLE_BYTES: &[u8] =
 const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     "revision_pinned",
     10,
-    "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
+    "Once route::match is registered, does the checkout use the supplied Alertmanager revision or a commit based on it?",
 )
 .labeled("Checkout is based on the supplied revision");
 // Points scale with the oracle cases that match; the gate needs all of them,
@@ -81,7 +81,7 @@ const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
     10,
-    "Are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
+    "Once route::match is registered, are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
 )
 .labeled("Protected Alertmanager files stay unchanged");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -343,11 +343,26 @@ and process started from this workspace."#,
 }
 
 fn evaluate_snapshot(snapshot: &Snapshot) -> Result<ObjectiveEvaluation> {
+    // An untouched checkout is pinned and in scope because nothing was
+    // attempted: both count only once route::match exists.
+    let delivered = snapshot.function_registered;
     Ok(assessment::build_evaluation([
-        REVISION_PINNED.full_or_zero(snapshot.revision_pinned(), revision_reason(snapshot)),
+        REVISION_PINNED.full_or_zero(
+            delivered && snapshot.revision_pinned(),
+            format!(
+                "{}; route::match registered={delivered}",
+                revision_reason(snapshot)
+            ),
+        ),
         MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(snapshot))?,
         DELEGATION_WIRED.full_or_zero(snapshot.delegation_wired, delegation_reason(snapshot)),
-        SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(snapshot)),
+        SCOPE_EXACT.full_or_zero(
+            delivered && snapshot.scope_exact(),
+            format!(
+                "{}; route::match registered={delivered}",
+                scope_reason(snapshot)
+            ),
+        ),
     ]))
 }
 
@@ -1116,7 +1131,7 @@ fn workspace_root(run_id: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::time::Duration;
 
     use super::*;
@@ -1137,6 +1152,27 @@ mod tests {
                 "oracle match".into(),
             )],
         }
+    }
+
+    /// The null delivery (the prepared checkout untouched, no route::match)
+    /// and the reference one (all 18 cases matched, delegation proven). The
+    /// snapshot stands in for the live probes `collect_snapshot` runs.
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let untouched = Snapshot {
+            delegation_wired: false,
+            delegation_detail: "route::match is not registered".into(),
+            function_registered: false,
+            match_cases: Vec::new(),
+            ..valid_snapshot()
+        };
+        let mut reference = valid_snapshot();
+        reference.match_cases = (0..18)
+            .map(|index| (format!("case-{index}"), true, String::new()))
+            .collect();
+        [
+            evaluate_snapshot(&untouched).unwrap(),
+            evaluate_snapshot(&reference).unwrap(),
+        ]
     }
 
     #[test]

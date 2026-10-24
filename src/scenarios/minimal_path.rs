@@ -334,8 +334,51 @@ fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The run as `capture` records it: the transcript, the reply and the
+    /// state the key holds afterwards.
+    async fn evaluation_of(transcript: Value, state: Value, response: &str) -> ObjectiveEvaluation {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::MinimalPath,
+            "control",
+            transcript,
+            response,
+            vec![CapturedDeliverable {
+                id: DELIVERABLE_ID.to_string(),
+                kind: "state_record".to_string(),
+                content: json!({ "state": state }).into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        );
+        MinimalPath
+            .evaluate(&context, &observation, "control")
+            .await
+            .unwrap()
+    }
+
+    /// The null delivery (a text-only reply, nothing written) and the
+    /// reference one (the exact write, alone, in one turn).
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        let expected = expected(crate::scenarios::ScenarioId::MinimalPath.canonical_seed());
+        let reference = json!({ "messages": [
+            { "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": "call-0", "function_id": "state::set",
+                "arguments": { "scope": scope("control"), "key": KEY, "value": expected },
+            }] } },
+            { "message": {
+                "role": "function_result", "function_call_id": "call-0",
+                "function_id": "state::set", "is_error": false,
+            } },
+        ] });
+        [
+            evaluation_of(json!({ "messages": [] }), baseline(), "done").await,
+            evaluation_of(reference, expected, "Stored. MIN-DONE").await,
+        ]
+    }
 
     #[test]
     fn materialized_case_carries_the_seeded_expected_value() {

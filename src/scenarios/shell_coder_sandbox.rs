@@ -437,103 +437,111 @@ baseline, green public suite, and host demo results."#,
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<ObjectiveEvaluation> {
-        let root = workspace_root(run_id);
-        let assets = load_fixture_assets().await?;
-        let fixture = audit_fixture(run_id, &assets).await?;
-        let workflow = workflow_audit(observation, &root);
         let shell_ready = context.function_exists("shell::exec").await?;
         let coder_ready = context.function_exists("coder::update-file").await?;
-        // The stack exposing both surfaces is not the subject's doing; using them is.
-        let invocations = common::function_invocations(&observation.transcript);
-        let used = |id: &str| {
-            invocations
-                .iter()
-                .any(|invocation| invocation.call.function_id == id)
-        };
-        let (shell_used, coder_used) = (used("shell::exec"), used("coder::update-file"));
-        let worker_setup = shell_ready && coder_ready && shell_used && coder_used;
-        let public_correctness =
-            workflow.red_before_edit && workflow.green_public.is_some() && fixture.public.success;
-        let host_execution = workflow.host_demo.is_some()
-            && fixture.demo.success
-            && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
-            && fixture.demo.stderr.trim().is_empty();
-        let scope = fixture.scope_valid() && workflow.evidence_ordered;
-        Ok(assessment::build_evaluation([
-            WORKER_SETUP.full_or_zero(
-                worker_setup,
-                format!(
-                    "shell={shell_ready} (used={shell_used}), coder={coder_ready} (used={coder_used})"
-                ),
-            ),
-            INVESTIGATION.award(
-                workflow.investigation_points(),
-                format!(
-                    "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
-                    workflow.coder_info,
-                    workflow.source_read,
-                    workflow.tests_read,
-                    workflow.task_read,
-                    workflow.red_baseline,
-                    workflow.first_source_edit
-                ),
-            )?,
-            DIAGNOSIS.award(
-                if workflow.diagnosis_complete() && fixture.diagnosis_present {
-                    DIAGNOSIS.weight()
-                } else {
-                    0
-                },
-                format!(
-                    "create={:?}, move={:?}, retained={}",
-                    workflow.diagnosis_create, workflow.diagnosis_move, fixture.diagnosis_present
-                ),
-            )?,
-            PUBLIC_CORRECTNESS.full_or_zero(
-                public_correctness,
-                format!(
-                    "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
-                    workflow.red_baseline,
-                    workflow.green_public,
-                    fixture.public.success,
-                    fixture.public.stdout,
-                    fixture.public.stderr
-                ),
-            ),
-            HIDDEN_CORRECTNESS.full_or_zero(
-                fixture.hidden.passed,
-                format!(
-                    "checks={:?}; output={:?}",
-                    fixture.hidden.checks, fixture.hidden_output
-                ),
-            ),
-            HOST_EXECUTION.full_or_zero(
-                host_execution,
-                format!(
-                    "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
-                    workflow.host_demo,
-                    fixture.demo.success,
-                    fixture.demo.stdout,
-                    fixture.demo.stderr
-                ),
-            ),
-            SCOPE_AND_LIFECYCLE.full_or_zero(
-                scope,
-                format!(
-                    "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
-                    fixture.protected_files_exact,
-                    fixture.production_patch_present,
-                    fixture.diagnosis_present,
-                    fixture.unexpected_paths,
-                    workflow.evidence_ordered
-                ),
-            ),
-        ]))
+        evaluate_workspace(observation, run_id, shell_ready, coder_ready).await
     }
 
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
         remove_workspace(&workspace_root(run_id))
     }
+}
+
+/// Scores the run from the workspace it left and its calls, given whether the
+/// stack exposes the shell and coder surfaces.
+async fn evaluate_workspace(
+    observation: &ScenarioObservation,
+    run_id: &str,
+    shell_ready: bool,
+    coder_ready: bool,
+) -> Result<ObjectiveEvaluation> {
+    let root = workspace_root(run_id);
+    let assets = load_fixture_assets().await?;
+    let fixture = audit_fixture(run_id, &assets).await?;
+    let workflow = workflow_audit(observation, &root);
+    // The stack exposing both surfaces is not the subject's doing; using them is.
+    let invocations = common::function_invocations(&observation.transcript);
+    let used = |id: &str| {
+        invocations
+            .iter()
+            .any(|invocation| invocation.call.function_id == id)
+    };
+    let (shell_used, coder_used) = (used("shell::exec"), used("coder::update-file"));
+    let worker_setup = shell_ready && coder_ready && shell_used && coder_used;
+    let public_correctness =
+        workflow.red_before_edit && workflow.green_public.is_some() && fixture.public.success;
+    let host_execution = workflow.host_demo.is_some()
+        && fixture.demo.success
+        && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
+        && fixture.demo.stderr.trim().is_empty();
+    let scope = fixture.scope_valid() && workflow.evidence_ordered;
+    Ok(assessment::build_evaluation([
+        WORKER_SETUP.full_or_zero(
+            worker_setup,
+            format!(
+                "shell={shell_ready} (used={shell_used}), coder={coder_ready} (used={coder_used})"
+            ),
+        ),
+        INVESTIGATION.award(
+            workflow.investigation_points(),
+            format!(
+                "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
+                workflow.coder_info,
+                workflow.source_read,
+                workflow.tests_read,
+                workflow.task_read,
+                workflow.red_baseline,
+                workflow.first_source_edit
+            ),
+        )?,
+        DIAGNOSIS.award(
+            if workflow.diagnosis_complete() && fixture.diagnosis_present {
+                DIAGNOSIS.weight()
+            } else {
+                0
+            },
+            format!(
+                "create={:?}, move={:?}, retained={}",
+                workflow.diagnosis_create, workflow.diagnosis_move, fixture.diagnosis_present
+            ),
+        )?,
+        PUBLIC_CORRECTNESS.full_or_zero(
+            public_correctness,
+            format!(
+                "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
+                workflow.red_baseline,
+                workflow.green_public,
+                fixture.public.success,
+                fixture.public.stdout,
+                fixture.public.stderr
+            ),
+        ),
+        HIDDEN_CORRECTNESS.full_or_zero(
+            fixture.hidden.passed,
+            format!(
+                "checks={:?}; output={:?}",
+                fixture.hidden.checks, fixture.hidden_output
+            ),
+        ),
+        HOST_EXECUTION.full_or_zero(
+            host_execution,
+            format!(
+                "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
+                workflow.host_demo, fixture.demo.success, fixture.demo.stdout, fixture.demo.stderr
+            ),
+        ),
+        SCOPE_AND_LIFECYCLE.full_or_zero(
+            scope,
+            format!(
+                "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
+                fixture.protected_files_exact,
+                fixture.production_patch_present,
+                fixture.diagnosis_present,
+                fixture.unexpected_paths,
+                workflow.evidence_ordered
+            ),
+        ),
+    ]))
 }
 
 #[derive(Debug, Clone)]
@@ -1236,8 +1244,105 @@ fn workspace_root(run_id: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The prompt's evidence order, each shell run answered as the stack
+    /// answers it, with the files read in one batch.
+    fn reference_transcript() -> Value {
+        let unittest = json!({
+            "command": "python3",
+            "args": ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
+        });
+        let read_all = json!({
+            "function": "coder::read-file",
+            "payload": { "paths": [SOURCE_PATH, PUBLIC_TEST_PATH, TASK_PATH] },
+        });
+        let calls = [
+            ("coder::info", json!({}), None),
+            ("agent_trigger", read_all, None),
+            (
+                "shell::exec",
+                unittest.clone(),
+                Some(json!({ "exit_code": 1 })),
+            ),
+            (
+                "coder::create-file",
+                json!({ "files": [{ "path": DIAGNOSIS_DRAFT_PATH, "content": "Revisions are not reconciled.\n" }] }),
+                None,
+            ),
+            (
+                "coder::update-file",
+                json!({ "files": [{ "path": SOURCE_PATH, "ops": [{ "op": "replace" }] }] }),
+                None,
+            ),
+            ("shell::exec", unittest, Some(json!({ "exit_code": 0 }))),
+            ("coder::read-file", json!({ "path": SOURCE_PATH }), None),
+            (
+                "shell::exec",
+                json!({ "command": "python3", "args": [SOURCE_PATH, "--demo"] }),
+                Some(json!({ "exit_code": 0, "stdout": HOST_DEMO_STDOUT, "stderr": "" })),
+            ),
+            (
+                "coder::move",
+                json!({ "files": [{ "from": DIAGNOSIS_DRAFT_PATH, "to": DIAGNOSIS_PATH }] }),
+                None,
+            ),
+        ];
+        let mut messages = Vec::new();
+        for (index, (function_id, arguments, details)) in calls.into_iter().enumerate() {
+            let call_id = format!("call-{index}");
+            messages.push(json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": call_id, "function_id": function_id,
+                "arguments": arguments,
+            }] } }));
+            if let Some(details) = details {
+                messages.push(json!({ "message": {
+                    "role": "function_result", "function_call_id": call_id,
+                    "function_id": function_id, "is_error": false, "details": details,
+                } }));
+            }
+        }
+        json!({ "messages": messages })
+    }
+
+    /// Scores one delivery in a fresh workspace with both surfaces exposed:
+    /// the fixture untouched and no call, or `REFERENCE_SOURCE` delivered
+    /// along the reference transcript.
+    async fn evaluation_in_workspace(reference: bool) -> ObjectiveEvaluation {
+        let run_id = uuid::Uuid::new_v4().simple().to_string();
+        let root = workspace_root(&run_id);
+        reset_fixture(&root, &load_fixture_assets().await.unwrap()).unwrap();
+        let (transcript, response) = if reference {
+            fs::write(root.join(SOURCE_PATH), REFERENCE_SOURCE).unwrap();
+            fs::create_dir_all(root.join("evidence")).unwrap();
+            fs::write(root.join(DIAGNOSIS_PATH), "Revisions are not reconciled.\n").unwrap();
+            (
+                reference_transcript(),
+                "Red, then green; the demo prints the contract.",
+            )
+        } else {
+            (json!({ "messages": [] }), "done")
+        };
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::ShellCoderSandbox,
+            &run_id,
+            transcript,
+            response,
+            Vec::new(),
+        );
+        let evaluation = evaluate_workspace(&observation, &run_id, true, true).await;
+        remove_workspace(&root).unwrap();
+        evaluation.unwrap()
+    }
+
+    /// The null delivery and the reference one, in their own workspaces.
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        [
+            evaluation_in_workspace(false).await,
+            evaluation_in_workspace(true).await,
+        ]
+    }
 
     #[test]
     fn host_only_case_has_a_stable_identity_and_cohort() {

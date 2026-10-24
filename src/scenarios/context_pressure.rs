@@ -593,7 +593,7 @@ fn deliverable_contract() -> DeliverableContract {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::report::CompletionState;
 
@@ -721,7 +721,7 @@ mod tests {
         assert!(audit.segments_exact);
     }
 
-    fn completion_of(calls: Vec<ObservedFunctionCall>, response: &str) -> CompletionState {
+    fn evaluation_of(calls: Vec<ObservedFunctionCall>, response: &str) -> ObjectiveEvaluation {
         let run_id = "run";
         let blocks = calls
             .into_iter()
@@ -741,7 +741,26 @@ mod tests {
             response,
             Vec::new(),
         );
-        assessment::completion(ASSESSMENTS, &evaluate_rung(&observation, run_id).unwrap())
+        evaluate_rung(&observation, run_id).unwrap()
+    }
+
+    fn completion_of(calls: Vec<ObservedFunctionCall>, response: &str) -> CompletionState {
+        assessment::completion(ASSESSMENTS, &evaluation_of(calls, response))
+    }
+
+    /// The null delivery (nothing read) and the reference one (the charter,
+    /// then every document once in order, then the full report).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let run_id = "run";
+        let mut calls = vec![call(charter_function_id(run_id), json!({}))];
+        calls.extend(
+            (0..RUNG.segments)
+                .map(|index| call(segment_function_id(run_id), json!({ "index": index }))),
+        );
+        [
+            evaluation_of(Vec::new(), "done"),
+            evaluation_of(calls, &full_report(run_id, RUNG.segments)),
+        ]
     }
 
     #[test]

@@ -468,7 +468,7 @@ fn nudge_texts(transcript: &Value) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::report::CompletionState;
 
@@ -479,19 +479,51 @@ mod tests {
         })
     }
 
-    fn completion_of(nudges: &[&str], remaining: Vec<String>) -> CompletionState {
+    fn evaluation_of(
+        messages: Vec<Value>,
+        response: &str,
+        dataset: (usize, Vec<String>),
+    ) -> ObjectiveEvaluation {
         let run_id = "run";
         let observation = ScenarioObservation::for_test(
             super::super::ScenarioId::ValidationSelfRepair,
             run_id,
-            json!({ "messages": nudges.iter().map(|text| nudge(text)).collect::<Vec<_>>() }),
-            "",
+            json!({ "messages": messages }),
+            response,
             Vec::new(),
         );
-        assessment::completion(
-            ASSESSMENTS,
-            &evaluate_observation(&observation, run_id, (4, remaining)).unwrap(),
-        )
+        evaluate_observation(&observation, run_id, dataset).unwrap()
+    }
+
+    fn completion_of(nudges: &[&str], remaining: Vec<String>) -> CompletionState {
+        let messages = nudges.iter().map(|text| nudge(text)).collect();
+        assessment::completion(ASSESSMENTS, &evaluation_of(messages, "", (4, remaining)))
+    }
+
+    /// The null delivery (no auditor, no table) and the reference one (one
+    /// envelope-mode auditor, its rejection of the flawed seed, one repair).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let seed = [
+            ("alpha", 10),
+            ("beta", -5),
+            ("gamma", 30),
+            ("beta", 7),
+            ("delta", 200),
+        ]
+        .map(|(name, amount)| (name.to_string(), amount));
+        let rejection = format!("data audit failed: {}.", violations(&seed).join("; "));
+        let auditor = json!({ "message": { "role": "assistant", "content": [{
+            "type": "function_call", "id": "call-0", "function_id": "engine::register_trigger",
+            "arguments": { "trigger_type": HOOK_TYPE, "function_id": function_id("run") },
+        }] } });
+        [
+            evaluation_of(Vec::new(), "done", (0, violations(&[]))),
+            evaluation_of(
+                vec![auditor, nudge(&rejection)],
+                "Deleted the beta=-5 row: it was negative and duplicated beta.",
+                (4, Vec::new()),
+            ),
+        ]
     }
 
     #[test]

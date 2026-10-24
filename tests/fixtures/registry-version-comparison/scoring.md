@@ -17,7 +17,7 @@ Verification recall is detection of failing **contract checks**, not an estimate
 
 ## Observations and scoring
 
-Validators retain raw results, command receipts, evidence sizes, and SHA-256 values in `validation/observations.json` and `validation/verification-evidence.json`. Binary observations contain `value: 0` or `value: 1`. Ratio observations retain integer `numerator` and `denominator` counts. A measured zero-denominator observation also contains the normalized `value` defined by its metric: recall and precision use 1 for an empty failure set in a readable report. Without a readable `checks.json`, recall and coverage score 0 while source preservation still reflects the independently measured patch hash; the run remains incomplete.
+Validators retain raw results, command receipts, evidence sizes, and SHA-256 values in `validation/observations.json` and `validation/verification-evidence.json`. Binary observations contain `value: 0` or `value: 1`. Ratio observations retain integer `numerator` and `denominator` counts. A measured zero-denominator observation also contains the normalized `value` defined by its metric: recall and precision use 1 for an empty failure set in a readable report. Without a readable, non-empty `checks.json`, recall, coverage and source preservation score 0: an untouched source is not preserved by a tester that attempted nothing. The run remains incomplete.
 
 Measured points are `round(weight × value)`, using the regular integer criterion format. Raw ratios remain available in the evidence. Each scenario is scored independently through the normal Harness reports.
 

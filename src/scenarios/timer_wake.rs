@@ -657,7 +657,7 @@ impl Names {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn assistant_entry(calls: Vec<Value>) -> Value {
@@ -799,23 +799,56 @@ mod tests {
         assert_eq!(captured_result(&[record(json!({}))]), Value::Null);
     }
 
-    fn completion_of(messages: Vec<Value>) -> crate::report::CompletionState {
+    /// The run as `capture` records it, with no binding left armed.
+    fn evaluation_of(messages: Vec<Value>, response: &str, result: Value) -> ObjectiveEvaluation {
         let run_id = "run";
-        let token = signal_token(run_id);
         let observation = ScenarioObservation::for_test(
             super::super::ScenarioId::TimerWake,
             run_id,
             json!({ "messages": messages }),
-            &format!("timer fired {token}"),
+            response,
             vec![CapturedDeliverable {
                 id: DELIVERABLE_ID.to_string(),
                 kind: "timer_result".to_string(),
-                content: json!({ "result": expected_result() }).into(),
+                content: json!({ "result": result }).into(),
                 invariants: Vec::new(),
                 provenance: Vec::new(),
             }],
         );
-        assessment::completion(ASSESSMENTS, &evaluate_observation(&observation, run_id, 0))
+        evaluate_observation(&observation, run_id, 0)
+    }
+
+    fn completion_of(messages: Vec<Value>) -> crate::report::CompletionState {
+        let response = format!("timer fired {}", signal_token("run"));
+        assessment::completion(
+            ASSESSMENTS,
+            &evaluation_of(messages, &response, expected_result()),
+        )
+    }
+
+    /// The null delivery (no timer, nothing written) and the reference one
+    /// (arm, end the turn, check the signal once and write after the wake).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let names = Names::new("run");
+        let reference = vec![
+            assistant_entry(vec![call_block(
+                "engine::register_trigger",
+                timer_arguments(&names.timer_label),
+            )]),
+            fired_entry(&names.timer_label),
+            assistant_entry(vec![
+                call_block(&names.signal_function, json!({})),
+                state_write(&names),
+            ]),
+        ];
+        [
+            evaluation_of(Vec::new(), "done", Value::Null),
+            evaluation_of(
+                reference,
+                &format!("The timer fired; signal {}.", signal_token("run")),
+                expected_result(),
+            ),
+        ]
     }
 
     #[test]

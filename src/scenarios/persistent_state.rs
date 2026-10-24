@@ -369,8 +369,67 @@ fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The run as `capture` records it: the transcript, the reply and the
+    /// record the key holds afterwards.
+    async fn evaluation_of(transcript: Value, state: Value, response: &str) -> ObjectiveEvaluation {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::PersistentState,
+            "control",
+            transcript,
+            response,
+            vec![CapturedDeliverable {
+                id: DELIVERABLE_ID.to_string(),
+                kind: "state_record".to_string(),
+                content: json!({ "state": state }).into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        );
+        PersistentState
+            .evaluate(&context, &observation, "control")
+            .await
+            .unwrap()
+    }
+
+    /// The null delivery (a text-only reply, the record untouched) and the
+    /// reference one (read the key, write the migrated record once).
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        let scope = scope("control");
+        let mut messages = Vec::new();
+        for (index, (function_id, arguments)) in [
+            ("state::get", json!({ "scope": scope, "key": KEY })),
+            (
+                "state::set",
+                json!({ "scope": scope, "key": KEY, "value": expected() }),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let call_id = format!("call-{index}");
+            messages.push(json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": call_id, "function_id": function_id,
+                "arguments": arguments,
+            }] } }));
+            messages.push(json!({ "message": {
+                "role": "function_result", "function_call_id": call_id,
+                "function_id": function_id, "is_error": false,
+            } }));
+        }
+        [
+            evaluation_of(json!({ "messages": [] }), baseline(), "done").await,
+            evaluation_of(
+                json!({ "messages": messages }),
+                expected(),
+                "Migrated to revision 2 with 3 items.",
+            )
+            .await,
+        ]
+    }
 
     #[test]
     fn expected_record_is_the_migrated_baseline() {
