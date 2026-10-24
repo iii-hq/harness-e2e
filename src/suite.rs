@@ -1412,10 +1412,17 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         );
     }
     if let Err(error) = module.cleanup(context, &attempt_id).await {
-        report.push_failure(
-            RunStatus::InfrastructureError,
-            FailurePhase::Cleanup,
-            format!("scenario '{}': scenario cleanup failed: {error:#}", spec.id),
+        let failure = cleanup_failure(format!(
+            "scenario '{}': scenario cleanup failed: {error:#}",
+            spec.id
+        ));
+        report.push_typed_failure(
+            failure.status,
+            failure.phase,
+            failure.code,
+            failure.retry_scope,
+            failure.contamination,
+            failure.message,
         );
     }
     if crate::scenarios::kanban::IDS.contains(&spec.id) && report.deliverables.is_empty() {
@@ -2651,7 +2658,11 @@ fn captured_measurements(
 fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
     zero_unreached_criteria(spec, report);
     ensure_assessment_results(spec, report);
-    if report.failures.is_empty() {
+    if report
+        .failures
+        .iter()
+        .all(|failure| failure.code == crate::report::SUBJECT_LEFTOVER)
+    {
         if report.evaluators.completion == crate::report::EvaluatorAvailability::Available
             || report.assessment_results.is_empty()
         {
@@ -3180,9 +3191,12 @@ fn subject_dispatch_failure(error: anyhow::Error) -> RunFailure {
             "harness_send_not_dispatched",
             format!("{error:#}"),
         )
+    } else if crate::context::transport_failure_code(&error).is_some() {
+        // A lost response is not proof that send did not execute, so it is
+        // never replayed; nor is it the subject's: the engine dropped it, as
+        // the adaptive planner's own send reports.
+        infrastructure_failure(FailurePhase::Execute, format!("{error:#}"))
     } else {
-        // A lost response is not proof that send did not execute. Read failures
-        // retry the read itself in E2eContext, never a completed subject run.
         subject_failure(FailurePhase::Execute, format!("{error:#}"))
     }
 }
@@ -3198,6 +3212,20 @@ fn collection_failure(phase: FailurePhase, message: String) -> RunFailure {
 
 fn infrastructure_failure(phase: FailurePhase, message: String) -> RunFailure {
     RunFailure::new(RunStatus::InfrastructureError, phase, message)
+}
+
+/// A scenario's cleanup that failed. A function the subject registered that
+/// outlived the workers it started is the subject's leftover: recorded, and
+/// the run keeps what was measured.
+// ponytail: matches alertmanager_route_match's copy, the one scenario that
+// checks its subject's registrations; a typed error replaces it if another does.
+fn cleanup_failure(message: String) -> RunFailure {
+    if message.ends_with("is still registered after stopping the workspace workers") {
+        let mut failure = RunFailure::new(RunStatus::SubjectError, FailurePhase::Cleanup, message);
+        failure.code = crate::report::SUBJECT_LEFTOVER.into();
+        return failure;
+    }
+    infrastructure_failure(FailurePhase::Cleanup, message)
 }
 
 fn journal_checkpoint_failure(phase: FailurePhase, message: String) -> RunFailure {
@@ -4286,9 +4314,91 @@ mod tests {
             iii_sdk::errors::Error::Timeout,
             iii_sdk::errors::Error::WebSocket("reset".into()),
         ] {
-            let failure = subject_dispatch_failure(anyhow::Error::new(error));
+            let failure =
+                subject_dispatch_failure(anyhow::Error::new(error).context("invoke harness::send"));
             assert_eq!(failure.retry_scope, crate::report::RetryScope::None);
+            // The engine lost it, as the adaptive planner's own send says.
+            assert_eq!(failure.status, RunStatus::InfrastructureError);
+            let mut report = test_run_report();
+            report.push_typed_failure(
+                failure.status,
+                failure.phase,
+                failure.code,
+                failure.retry_scope,
+                failure.contamination,
+                failure.message,
+            );
+            assert_eq!(
+                report.cause,
+                Some(crate::report::RunCause::E2eInfrastructure)
+            );
         }
+        // A send the Harness answered with a refusal stays the subject's.
+        let refused = subject_dispatch_failure(
+            anyhow::Error::new(iii_sdk::errors::Error::Remote {
+                code: "invocation_failed".into(),
+                message: "agent profile 'missing' was not found".into(),
+                stacktrace: None,
+            })
+            .context("invoke harness::send"),
+        );
+        assert_eq!(refused.status, RunStatus::SubjectError);
+    }
+
+    /// alertmanager_route_match's cleanup in the local history: the subject
+    /// left route::match registered. Recorded as the subject's, it neither
+    /// sets the run aside nor changes what was measured.
+    #[test]
+    fn a_subject_leftover_is_recorded_and_keeps_the_measured_result() {
+        let mut spec = mixed_assessment_spec();
+        spec.criteria[0] = spec.criteria[0].clone().with_gate(true);
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: None,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "met".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: Some(30),
+                        reason: "met".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        let leftover = cleanup_failure("scenario 'alertmanager_route_match': scenario cleanup failed: route::match is still registered after stopping the workspace workers".into());
+        report.push_typed_failure(
+            leftover.status,
+            leftover.phase,
+            leftover.code,
+            leftover.retry_scope,
+            leftover.contamination,
+            leftover.message,
+        );
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.cause, Some(crate::report::RunCause::Evaluated));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::Completed);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].code, crate::report::SUBJECT_LEFTOVER);
+        assert_eq!(
+            report.failures[0].domain,
+            crate::report::FailureDomain::Subject
+        );
+        // Any other cleanup failure is still the runner's.
+        let teardown = cleanup_failure("scenario 'database_migration_recovery': scenario cleanup failed: invoke database::executeBatch: invoke database::executeBatch: remote error (invocation_failed): handler error: {\"code\":\"UNKNOWN_DB\",\"db\":\"primary\",\"available\":[\"harness_e2e\"]}".into());
+        assert_eq!(teardown.status, RunStatus::InfrastructureError);
+        assert_eq!(teardown.code, "cleanup_failed");
     }
 
     fn measurement_deliverable(
@@ -4859,6 +4969,43 @@ mod tests {
         );
         assert_eq!(request.technical, crate::report::TechnicalState::Valid);
         assert_eq!(request.score, Some(0));
+        // Two failed steps with the same summary: each reads its own
+        // transcript, so step b's balance is not step a's malformed request.
+        let mut steps = workflow(
+            "The provider rejected this request.",
+            json!({"code": "provider/invalid_request", "class": "llm.permanent",
+                   "summary": "The provider rejected this request.",
+                   "detail": "remote error (provider/invalid_request): bad ProviderStreamInput: data did not match any variant of untagged enum AgentMessage"}),
+        );
+        let mut second = steps.steps[0].clone();
+        second.node_id = "review".into();
+        second.transcript = Some(
+            json!({"messages": [{"custom": {"custom_type": "error", "data": {
+            "code": "router/provider_rejected", "class": "llm.permanent",
+            "summary": "The provider rejected this request.",
+            "detail": "{\"error\":{\"message\":\"Insufficient Balance\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"}}}]}),
+        );
+        steps.steps.push(second);
+        let mut both = test_run_report();
+        populate_composite_report(&mut both, steps, &spec);
+        let causes = |report: &E2eRunReport| {
+            report
+                .failures
+                .iter()
+                .map(|failure| failure.domain)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            causes(&both),
+            [
+                crate::report::FailureDomain::Subject,
+                crate::report::FailureDomain::E2eInfrastructure
+            ]
+        );
+        assert_eq!(
+            both.cause,
+            Some(crate::report::RunCause::ProviderInfrastructure)
+        );
     }
 
     #[test]
@@ -4908,6 +5055,17 @@ mod tests {
             (
                 "wait for adaptive planner turn: E2E execution was cancelled",
                 RunCause::OperatorCancelled,
+                None,
+            ),
+            // A planner turn keeps no error entry: the Harness's copy decides.
+            (
+                "wait for adaptive planner turn: turn ended as Failed: The provider authentication needs attention.",
+                RunCause::ProviderInfrastructure,
+                None,
+            ),
+            (
+                "wait for adaptive planner turn: turn ended as Failed: No configured provider can serve the selected model.",
+                RunCause::TestEnvironmentIncomplete,
                 None,
             ),
             (

@@ -151,13 +151,33 @@ impl RunCause {
 /// with the same words; the adaptive flow tags its own `execution_cancelled`.
 pub(crate) const EXECUTION_CANCELLED: &str = "E2E execution was cancelled";
 
+/// The code of what the subject left running past cleanup, such as a
+/// function it registered that outlived its workers. It is the subject's,
+/// recorded beside the run, and changes neither the run's status, its cause
+/// nor its score.
+pub(crate) const SUBJECT_LEFTOVER: &str = "subject_leftover";
+
+/// What the test environment owes a run. `functions` are the ones the run
+/// registers itself and needs, as its preflight observed them; `prompt` is
+/// the task the scenario gave, for the databases it names and the functions
+/// of the workers a stack brings for the measurement. A name the prompt
+/// alone mentions, such as a validator the scenario breaks on purpose, is
+/// owed by nobody.
+struct Owed<'a> {
+    prompt: &'a str,
+    functions: Vec<&'a str>,
+}
+
+/// Functions of the worker every stack declares for the measurement itself
+/// (`fp` in `stacks/default.yaml`).
+// ponytail: one worker; read the stack's lock if a scenario relies on another.
+const MEASUREMENT_FUNCTIONS: &str = "fp::";
+
 /// The cause one failure points to. The failure's code decides when the
 /// runner tagged it; else the error the Harness recorded for the failed turn
 /// (`custom_type: error`, matched by its summary); else the runner's and the
-/// Harness's fixed copy, which reports older than the codes carry. `prompt`
-/// is the task the scenario gave: the functions and databases it names are the
-/// ones the test relies on.
-fn failure_cause(failure: &FailureRecord, transcripts: &[&Value], prompt: &str) -> RunCause {
+/// Harness's fixed copy, which reports older than the codes carry.
+fn failure_cause(failure: &FailureRecord, transcripts: &[&Value], owed: &Owed) -> RunCause {
     let message = failure.message.as_str();
     if failure.code == "execution_cancelled" || message.ends_with("execution was cancelled") {
         return RunCause::OperatorCancelled;
@@ -178,8 +198,8 @@ fn failure_cause(failure: &FailureRecord, transcripts: &[&Value], prompt: &str) 
             RunCause::PlannerFormat
         }
         RunStatus::SubjectError | RunStatus::ResourceLimit => turn_error(message, transcripts)
-            .and_then(|error| turn_error_cause(error, prompt))
-            .or_else(|| fixed_copy_cause(message, prompt))
+            .and_then(|error| turn_error_cause(error, owed))
+            .or_else(|| fixed_copy_cause(message, owed))
             .unwrap_or(if failure.status == RunStatus::ResourceLimit {
                 RunCause::ResourceLimit
             } else {
@@ -206,20 +226,24 @@ fn turn_error<'a>(message: &str, transcripts: &[&'a Value]) -> Option<&'a Value>
     })
 }
 
-fn turn_error_cause(error: &Value, prompt: &str) -> Option<RunCause> {
+fn turn_error_cause(error: &Value, owed: &Owed) -> Option<RunCause> {
     let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or_default();
     let (code, class, detail) = (text("code"), text("class"), text("detail"));
     // Only the final failure decides: a function or database missing earlier
     // in the turn, which the turn then got past, does not.
-    if missing_test_environment(detail, prompt)
+    if missing_test_environment(detail, owed)
         || matches!(
             code,
-            "router/unknown_provider" | "router/no_provider_for_model" | "harness.unknown_model"
+            "router/unknown_provider"
+                | "router/no_provider_for_model"
+                | "router/ambiguous_model"
+                | "router/structured_output_unsupported"
+                | "harness.unknown_model"
+                | "harness.budget_unavailable"
         )
     {
         return Some(RunCause::TestEnvironmentIncomplete);
     }
-    let lower = detail.to_ascii_lowercase();
     let cause = if class == "llm.context_overflow" || code.ends_with("context_overflow") {
         RunCause::ContextOverflow
     } else if matches!(
@@ -228,40 +252,78 @@ fn turn_error_cause(error: &Value, prompt: &str) -> Option<RunCause> {
     ) || matches!(
         code,
         "router/not_configured" | "router/provider_auth_expired" | "router/provider_unavailable"
-    ) || [
+    ) {
+        RunCause::ProviderInfrastructure
+    } else if code == "router/provider_rejected" {
+        provider_refusal_cause(&detail.to_ascii_lowercase())
+    } else if code.ends_with("invalid_request") {
+        RunCause::InvalidProviderRequest
+    } else if detail.starts_with("max_turns") {
+        RunCause::ResourceLimit
+    } else {
+        // Unrecognized: the failure's status decides; a Harness dependency
+        // repeats its code in the summary, which the fixed copy reads.
+        return None;
+    };
+    Some(cause)
+}
+
+/// A provider's refusal, read from the provider's own words, which the
+/// Harness keeps as the error's detail.
+fn provider_refusal_cause(detail: &str) -> RunCause {
+    let says = |needles: &[&str]| needles.iter().any(|needle| detail.contains(needle));
+    if says(&[
+        "exceeded model token limit",
+        "prompt exceeds max length",
+        "exceeds the maximum number of tokens",
+        "maximum context length",
+        "context_length_exceeded",
+        "prompt is too long",
+    ]) {
+        RunCause::ContextOverflow
+    } else if says(&[
+        // A conversation the Harness sent malformed: a tool call without its
+        // result, or a function schema the provider cannot read.
+        "ids were found without `tool_result`",
+        "must be followed by tool messages",
+        "invalid schema for function",
+        "invalid_function_parameters",
+    ]) {
+        RunCause::InvalidProviderRequest
+    } else if says(&[
         "insufficient balance",
+        "run out of balance",
         "insufficient_quota",
         "insufficient credits",
         "credit balance",
         "exceeded your current quota",
         "exceeded_current_quota",
         "requires more credits",
+        "usage limit",
+        "key limit exceeded",
+        "api key",
         "余额不足",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-    {
+    ]) {
         RunCause::ProviderInfrastructure
-    } else if code == "router/provider_rejected" {
+    } else if says(&[
+        "model_not_found",
+        "model not found",
+        "does not exist or you do not have access",
+        "is not found for api version",
+    ]) {
+        // The stack names a model its provider does not serve.
+        RunCause::TestEnvironmentIncomplete
+    } else {
         // A refusal no rule above explains may be the account's as well as the
         // request's: nobody is blamed.
         RunCause::Undetermined
-    } else if code.ends_with("invalid_request") {
-        RunCause::InvalidProviderRequest
-    } else if detail.starts_with("harness/dependency") {
-        RunCause::Undetermined
-    } else if detail.starts_with("max_turns") {
-        RunCause::ResourceLimit
-    } else {
-        // Unrecognized: the failure's status decides.
-        return None;
-    };
-    Some(cause)
+    }
 }
 
-/// The failure says the stack lacks a function or a database the scenario's
-/// prompt names. One the agent mistyped or made up stays the agent's.
-fn missing_test_environment(text: &str, prompt: &str) -> bool {
+/// The failure says the stack lacks a function or a database the run is
+/// owed. One the agent mistyped or made up stays the agent's, and so does
+/// one the scenario never provides.
+fn missing_test_environment(text: &str, owed: &Owed) -> bool {
     fn names<'a>(text: &'a str, start: &'a str, end: &'a str) -> impl Iterator<Item = &'a str> {
         text.split(start)
             .skip(1)
@@ -270,27 +332,50 @@ fn missing_test_environment(text: &str, prompt: &str) -> bool {
     }
     let named = |name: &str| {
         !name.is_empty()
-            && prompt
+            && owed
+                .prompt
                 .split(|c: char| !(c.is_ascii_alphanumeric() || "_:.-".contains(c)))
                 .any(|token| token.trim_end_matches('.') == name)
     };
-    names(text, "Function ", " not found").any(named)
-        || text.contains("UNKNOWN_DB") && names(text, "\"db\":\"", "\"").any(named)
+    names(text, "Function ", " not found").any(|name| {
+        owed.functions.contains(&name) || name.starts_with(MEASUREMENT_FUNCTIONS) && named(name)
+    }) || text.contains("UNKNOWN_DB") && names(text, "\"db\":\"", "\"").any(named)
 }
 
 /// Failures that kept no error entry: the Harness's fixed summary for a
-/// context overflow or a provider's refusal, its dependency code, and the
-/// runner's copy for a turn cancelled without an error.
-fn fixed_copy_cause(message: &str, prompt: &str) -> Option<RunCause> {
+/// context overflow, a provider or model the stack does not serve, a
+/// provider's refusal or a dependency, and the runner's copy for a turn
+/// cancelled without an error. The Harness's `failure_presentation` maps
+/// each router code to one summary.
+fn fixed_copy_cause(message: &str, owed: &Owed) -> Option<RunCause> {
     let reason = message
         .split_once("turn ended as ")
         .map_or(message, |(_, reason)| reason);
-    if missing_test_environment(reason, prompt) {
-        Some(RunCause::TestEnvironmentIncomplete)
-    } else if reason.ends_with("The conversation is too large for the selected model.")
-        || reason.ends_with("The conversation could not be compacted to fit the selected model.")
+    let ends = |copies: &[&str]| copies.iter().any(|copy| reason.ends_with(copy));
+    if missing_test_environment(reason, owed)
+        || ends(&[
+            "No configured provider can serve the selected model.",
+            "The selected provider is no longer registered.",
+            "The selected model is not in the model catalog.",
+            "The selected model is available from multiple providers.",
+            "The selected model does not support structured output.",
+        ])
+        // A cost cap the catalog cannot price, at send or at a step.
+        || reason.contains("no pricing is configured in the model catalog")
     {
+        Some(RunCause::TestEnvironmentIncomplete)
+    } else if ends(&[
+        "The conversation is too large for the selected model.",
+        "The conversation could not be compacted to fit the selected model.",
+    ]) {
         Some(RunCause::ContextOverflow)
+    } else if ends(&[
+        "The provider authentication needs attention.",
+        "The selected provider is not configured.",
+    ]) {
+        Some(RunCause::ProviderInfrastructure)
+    } else if reason.ends_with("The model request is invalid.") {
+        Some(RunCause::InvalidProviderRequest)
     } else if reason.contains("harness/dependency")
         || reason == "Cancelled: no error was reported"
         // Without its code, a refusal is the account's as much as the request's.
@@ -844,12 +929,18 @@ impl E2eRunReport {
         message: impl Into<String>,
     ) {
         let message = message.into();
-        let is_primary = self.failures.is_empty();
+        let code = code.into();
+        // A subject's leftover never becomes the run's status.
+        let is_primary = code != SUBJECT_LEFTOVER
+            && self
+                .failures
+                .iter()
+                .all(|failure| failure.code == SUBJECT_LEFTOVER);
         self.failures.push(FailureRecord {
             status,
             domain: status.failure_domain(),
             phase,
-            code: code.into(),
+            code,
             retry_scope,
             contamination,
             message,
@@ -878,14 +969,40 @@ impl E2eRunReport {
                     .filter_map(|test| test.transcript.as_ref()),
             )
             .collect::<Vec<_>>();
+        let owed = Owed {
+            prompt: &self.prompt,
+            functions: self
+                .worker_contracts
+                .iter()
+                .map(|contract| contract.function_id.as_str())
+                .collect(),
+        };
         let mut causes = Vec::new();
-        // A composite step the flow stopped: another failure is the cause.
+        // A composite step the flow stopped: another failure is the cause. A
+        // subject's leftover is recorded and decides nothing.
         for failure in self
             .failures
             .iter_mut()
-            .filter(|failure| failure.code != "step_aborted")
+            .filter(|failure| !matches!(failure.code.as_str(), "step_aborted" | SUBJECT_LEFTOVER))
         {
-            let cause = failure_cause(failure, &transcripts, &self.prompt);
+            // A composite step's failure is read from its own step's
+            // transcript (`semantic test '<node>': …`), never from another
+            // step whose error has the same summary.
+            let step = failure
+                .message
+                .strip_prefix("semantic test '")
+                .and_then(|rest| rest.split_once("': "))
+                .map(|(node, _)| node);
+            let transcripts = match step {
+                Some(node) => self
+                    .semantic_tests
+                    .iter()
+                    .filter(|test| test.node_id == node)
+                    .filter_map(|test| test.transcript.as_ref())
+                    .collect(),
+                None => transcripts.clone(),
+            };
+            let cause = failure_cause(failure, &transcripts, &owed);
             // The domain says whose failure it is, as the cause does.
             failure.domain = match cause {
                 RunCause::Evaluated => failure.status.failure_domain(),
@@ -4013,26 +4130,85 @@ mod tests {
             );
             run.cause.unwrap()
         };
-        for detail in [
+        for (detail, cause) in [
             // Moonshot (Kimi), Z.ai (code 1113) and OpenRouter out of credit.
-            r#"{"error":{"message":"Your account org-1 <ak-1> is suspended, please check your plan and billing details","type":"exceeded_current_quota_error"}}"#,
-            r#"{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}"#,
-            r#"{"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1234.","code":402}}"#,
+            (
+                r#"{"error":{"message":"Your account org-1 <ak-1> is suspended, please check your plan and billing details","type":"exceeded_current_quota_error"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1234.","code":402}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            // DeepSeek, Anthropic and Z.ai (1308) usage limits, an OpenRouter
+            // key limit and an expired Gemini key.
+            (
+                r#"{"error":{"message":"You have run out of balance","type":"unknown_error"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-10-24 20:00:00"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys","code":403}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"code":400,"message":"API key expired. Please renew the API key.","status":"INVALID_ARGUMENT"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            // Kimi, Z.ai (1261) and Gemini overflow in their own words.
+            (
+                r#"{"error":{"message":"Invalid request: Your request exceeded model token limit: 262144","type":"invalid_request_error"}}"#,
+                RunCause::ContextOverflow,
+            ),
+            (
+                r#"{"error":{"code":"1261","message":"Prompt exceeds max length"}}"#,
+                RunCause::ContextOverflow,
+            ),
+            (
+                r#"{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}"#,
+                RunCause::ContextOverflow,
+            ),
+            // A conversation the Harness sent malformed.
+            (
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.3: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01"}}"#,
+                RunCause::InvalidProviderRequest,
+            ),
+            (
+                r#"{"error":{"message":"Invalid schema for function 'state__set': In context=(), 'required' is required to be supplied","type":"invalid_request_error","param":"tools[0].function.parameters","code":"invalid_function_parameters"}}"#,
+                RunCause::InvalidProviderRequest,
+            ),
+            // A model the stack names and its provider does not serve.
+            (
+                r#"{"error":{"message":"The model `kimi-k3` does not exist or you do not have access to it."}}"#,
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                r#"{"error":{"message":"The model `gpt-9` does not exist or you do not have access to it.","type":"invalid_request_error","param":null,"code":"model_not_found"}}"#,
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            // A refusal no rule explains blames nobody.
+            (
+                r#"{"error":{"message":"Invalid prompt: your prompt was flagged as potentially violating our usage policy.","type":"invalid_request_error"}}"#,
+                RunCause::Undetermined,
+            ),
         ] {
             assert_eq!(
                 refused("router/provider_rejected", detail),
-                RunCause::ProviderInfrastructure,
+                cause,
                 "{detail}"
             );
         }
-        // A refusal no rule explains blames nobody.
-        assert_eq!(
-            refused(
-                "router/provider_rejected",
-                r#"{"error":{"message":"The model `kimi-k3` does not exist or you do not have access to it."}}"#
-            ),
-            RunCause::Undetermined
-        );
         assert_eq!(
             refused(
                 "provider/invalid_request",
@@ -4040,11 +4216,15 @@ mod tests {
             ),
             RunCause::InvalidProviderRequest
         );
-        // A stack that does not route the configured provider or model.
+        // A stack that does not route, single out or price the configured
+        // provider or model.
         for code in [
             "router/unknown_provider",
             "router/no_provider_for_model",
+            "router/ambiguous_model",
+            "router/structured_output_unsupported",
             "harness.unknown_model",
+            "harness.budget_unavailable",
         ] {
             assert_eq!(
                 refused(code, "no route"),
@@ -4052,20 +4232,58 @@ mod tests {
                 "{code}"
             );
         }
-        // Without its error entry, the Harness's copy for a refusal says no more.
-        let mut bare = run(0, false);
-        bare.evaluators = EvaluatorStates::default();
-        bare.push_failure(
-            RunStatus::SubjectError,
-            FailurePhase::Execute,
-            "turn ended as Failed: The provider rejected this request.",
+        // Without its error entry (an adaptive planner turn, an unreadable
+        // transcript), the Harness's copy for each router code decides.
+        let bare = |message: &str| {
+            let mut bare = run(0, false);
+            bare.evaluators = EvaluatorStates::default();
+            bare.push_failure(RunStatus::SubjectError, FailurePhase::Execute, message);
+            bare.cause.unwrap()
+        };
+        for (reason, cause) in [
+            // A refusal says no more.
+            (
+                "The provider rejected this request.",
+                RunCause::Undetermined,
+            ),
+            (
+                "The provider authentication needs attention.",
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                "The selected provider is not configured.",
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                "No configured provider can serve the selected model.",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                "The selected model is available from multiple providers.",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                "The selected model does not support structured output.",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                "cannot enforce max_cost_usd for model m because no pricing is configured in the model catalog; configure input/output pricing or remove max_cost_usd",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            ("The model request is invalid.", RunCause::InvalidProviderRequest),
+        ] {
+            assert_eq!(bare(&format!("turn ended as Failed: {reason}")), cause, "{reason}");
+        }
+        // The Harness refuses a cost cap it cannot price at send as well.
+        assert_eq!(
+            bare("invoke harness::send: remote error (invocation_failed): cannot enforce max_cost_usd for model m because no pricing is configured in the model catalog; configure input/output pricing or remove max_cost_usd"),
+            RunCause::TestEnvironmentIncomplete
         );
-        assert_eq!(bare.cause, Some(RunCause::Undetermined));
     }
 
     #[test]
-    fn only_a_function_the_scenario_names_makes_the_stack_incomplete() {
-        let failed = |prompt: &str, message: &str| {
+    fn only_a_function_the_run_is_owed_makes_the_stack_incomplete() {
+        let failed_with = |prompt: &str, required: &[&str], status, message: &str| {
             let mut run = E2eRunReport::new(
                 "run".into(),
                 "attempt".into(),
@@ -4073,9 +4291,62 @@ mod tests {
                 "session".into(),
                 prompt.into(),
             );
-            run.push_failure(RunStatus::SubjectError, FailurePhase::Execute, message);
+            run.worker_contracts = required
+                .iter()
+                .map(|function_id| ObservedWorkerContract {
+                    function_id: (*function_id).into(),
+                    request_schema_sha256: TEST_DIGEST.into(),
+                    response_schema_sha256: TEST_DIGEST.into(),
+                })
+                .collect();
+            run.push_failure(status, FailurePhase::Execute, message);
             run.cause.unwrap()
         };
+        let failed = |prompt: &str, message: &str| {
+            failed_with(prompt, &[], RunStatus::SubjectError, message)
+        };
+        // validation_chain's deliberately broken validator, which its prompt
+        // names: a Harness that fails it closed is the regression the
+        // scenario protects, never an incomplete stack.
+        let chain = crate::scenarios::ScenarioId::ValidationChain
+            .spec("run")
+            .prompt;
+        let broken = chain
+            .split("function_id \"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        assert!(broken.starts_with("e2e::does_not_exist_"), "{broken}");
+        let hook = format!("hook {broken} failed: remote error (function_not_found): Function {broken} not found in namespace my-project.");
+        for (status, message, cause) in [
+            (
+                RunStatus::ResourceLimit,
+                format!("turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: {hook}"),
+                RunCause::ResourceLimit,
+            ),
+            (
+                RunStatus::SubjectError,
+                format!("turn ended as Failed: {hook}"),
+                RunCause::SubjectFailure,
+            ),
+        ] {
+            assert_eq!(failed_with(&chain, &[], status, &message), cause, "{message}");
+        }
+        // A function the run registers itself and needs is owed, named or not.
+        let resolver = "turn ended as Failed: hook e2etest::contract_resolver_1 failed: remote error (function_not_found): Function e2etest::contract_resolver_1 not found in namespace my-project.";
+        assert_eq!(
+            failed_with(
+                "Resolve the contract.",
+                &["e2etest::contract_resolver_1"],
+                RunStatus::SubjectError,
+                resolver
+            ),
+            RunCause::TestEnvironmentIncomplete
+        );
+        assert_eq!(
+            failed("Resolve the contract.", resolver),
+            RunCause::SubjectFailure
+        );
         let missing = "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project.";
         assert_eq!(
             failed(
@@ -4171,6 +4442,18 @@ mod tests {
             EXECUTION_CANCELLED,
         );
         assert_eq!(cancelled.cause, Some(RunCause::OperatorCancelled));
+        // A cancellation explains what failed before it, even a failure that
+        // was not the subject's.
+        let mut interrupted = transport.clone();
+        interrupted.push_typed_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "execution_cancelled",
+            RetryScope::None,
+            ContaminationScope::None,
+            EXECUTION_CANCELLED,
+        );
+        assert_eq!(interrupted.cause, Some(RunCause::OperatorCancelled));
         // A later failure the subject did not cause takes a counted run out.
         let mut cleanup = turns.clone();
         cleanup.push_failure(
@@ -4180,28 +4463,63 @@ mod tests {
         );
         assert_eq!(cleanup.cause, Some(RunCause::E2eInfrastructure));
         assert_eq!(cleanup.technical, TechnicalState::TechnicalInvalid);
+        // Any other failure of the subject counts, as its own cause.
+        let denied = failed(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "subject_execution_failed",
+            "turn ended as Failed: pre_generate hook denied: tool budget",
+        );
+        assert_eq!(denied.cause, Some(RunCause::SubjectFailure));
+        assert_eq!(denied.technical, TechnicalState::Valid);
+        assert_eq!(denied.completion, CompletionState::TaskIncomplete);
 
         let report = aggregate(vec![
             run(90, true),
             turns,
             overflow,
+            denied,
             transport,
             evaluator,
             cancelled,
         ]);
-        assert_eq!(report.aggregate.technical_valid_runs, 3);
-        assert_eq!(report.aggregate.mean_score, Some(50.0));
+        assert_eq!(report.aggregate.technical_valid_runs, 4);
+        assert_eq!(report.aggregate.mean_score, Some(45.0));
         assert_eq!(
             report.aggregate.causes,
             BTreeMap::from([
                 (RunCause::Evaluated, 1),
                 (RunCause::ResourceLimit, 1),
                 (RunCause::ContextOverflow, 1),
+                (RunCause::SubjectFailure, 1),
                 (RunCause::ProviderInfrastructure, 1),
                 (RunCause::EvaluationEnvironment, 1),
                 (RunCause::OperatorCancelled, 1),
             ])
         );
+    }
+
+    /// A session keeps one error entry per failed turn; the failure reports
+    /// the last turn, so the last entry with its summary decides.
+    #[test]
+    fn the_last_error_entry_of_the_failed_turn_decides() {
+        let entry = |code: &str, detail: &str| {
+            serde_json::json!({"custom": {"custom_type": "error", "data": {
+                "code": code, "class": "llm.permanent",
+                "summary": "The provider rejected this request.", "detail": detail}}})
+        };
+        let mut run = run(0, false);
+        run.evaluators = EvaluatorStates::default();
+        run.transcript = Some(serde_json::json!({"messages": [
+            entry("router/provider_rejected", r#"{"error":{"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}}"#),
+            entry("provider/invalid_request", "remote error (provider/invalid_request): bad ProviderStreamInput: data did not match any variant of untagged enum AgentMessage"),
+        ]}));
+        run.push_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "turn ended as Failed: The provider rejected this request.",
+        );
+        assert_eq!(run.cause, Some(RunCause::InvalidProviderRequest));
     }
 
     #[test]
