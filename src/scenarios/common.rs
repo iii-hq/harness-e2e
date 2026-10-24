@@ -205,6 +205,32 @@ pub fn identified_discovery_errors(transcript: &Value) -> u64 {
         .count() as u64
 }
 
+/// Assistant messages in the recorded conversation, not `harness::metrics`.
+pub fn assistant_turns(transcript: &Value) -> u64 {
+    recorded_messages(transcript)
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .count() as u64
+}
+
+/// Failed function results in the recorded conversation, not `harness::metrics`.
+pub fn function_errors(transcript: &Value) -> u64 {
+    recorded_messages(transcript)
+        .filter(|message| {
+            message.get("role").and_then(Value::as_str) == Some("function_result")
+                && message.get("is_error").and_then(Value::as_bool) == Some(true)
+        })
+        .count() as u64
+}
+
+fn recorded_messages(transcript: &Value) -> impl Iterator<Item = &Value> {
+    transcript
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("message"))
+}
+
 pub fn operational_function_errors(total: u64, identified_discovery: u64) -> u64 {
     total.checked_sub(identified_discovery).unwrap_or(total)
 }

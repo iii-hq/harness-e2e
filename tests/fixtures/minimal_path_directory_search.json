@@ -1,6 +1,7 @@
 {
   "source_fixture_sha256": "d6c275bbd7d3f6bb4d5df4da1160fb218a722282faf20832f1d5dffcccaf0fb0",
   "provenance": {
+    "transcript_note": "The final assistant reply was restored from this fixture's own response field so the transcript holds every turn the metrics counted.",
     "execution_id": "62b84851fac3cb1c5cb357b77bbe8144",
     "attempt_id": "6bc7d19b85d54f4fab3b6cc67e90b44c",
     "session_id": "e2e_6bc7d19b85d54f4fab3b6cc67e90b44c",
@@ -61,6 +62,12 @@
           "function_id": "state::set",
           "is_error": false,
           "details": {"new_value": {"case_seed": 13011553812202181534, "owner": "efficiency-suite", "status": "stored"}}
+        }
+      },
+      {
+        "message": {
+          "role": "assistant",
+          "content": [{"type": "text", "text": "MIN-DONE: I stored the value under minimal_result."}]
         }
       }
     ]

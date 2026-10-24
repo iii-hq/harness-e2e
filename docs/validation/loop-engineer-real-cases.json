@@ -345,7 +345,7 @@
   },
   "evaluator_replay": {
     "fixture": "tests/fixtures/minimal_path_directory_search.json",
-    "fixture_sha256": "13013a8454f407ffc8fbbe8cb24f114db73520a9af8b8b0caf92678f572c6d88",
+    "fixture_sha256": "68034d7155d299c4c199126f3b2e9302c5d94528f00449a94877f8df6fb2a38c",
     "native_execution_id": "62b84851fac3cb1c5cb357b77bbe8144",
     "before_score": 40,
     "after_score": 80,
