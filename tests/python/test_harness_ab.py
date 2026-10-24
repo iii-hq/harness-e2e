@@ -84,7 +84,7 @@ class HarnessAbTest(unittest.TestCase):
                     "metrics": {"totals": {"input_tokens": 300, "output_tokens": 30, "cache_read_tokens": read,
                                            "turns": 3},
                                 "by_session": [{"depth": 0, "input_tokens": 300, "cache_read_tokens": read,
-                                                "context": {"usable": 10_000, "total": provider_total,
+                                                "context": {"usable": 10_000, "total": provider_total, "estimator": "heuristic",
                                                             "usage": {"input": 100, "cache_read": 1_000}}}]},
                     "transcript": {"messages": [step(200), compaction, step(300), compaction, step(500)]}}
         with tempfile.TemporaryDirectory() as directory:
@@ -128,6 +128,48 @@ class HarnessAbTest(unittest.TestCase):
         self.assertEqual(result["pooled"]["peak_context"]["a"], 500)
         self.assertIn("| Pico de contexto (sessão principal) (não comparável) |", MODULE.report(result, "A", "B"))
 
+
+    def test_a_provider_counted_total_is_not_judged_and_compaction_can_be_unknown(self):
+        def run(estimator, compacted, messages):
+            return {"attempt_id": "x", "technical": "valid", "completion": "completed", "score": 100,
+                    "metrics": {"totals": {"input_tokens": 100, "cache_read_tokens": 900, "turns": 2},
+                                "by_session": [{"depth": 0, "input_tokens": 100, "cache_read_tokens": 900,
+                                                "context": {"usable": 10_000, "total": 1_000, "estimator": estimator,
+                                                            "compacted": compacted,
+                                                            "usage": {"input": 100, "cache_read": 100}}}]},
+                    "transcript": {"messages": messages}}
+        step = {"message": {"role": "assistant", "usage": {"input": 100, "cache_read": 900}}}
+        with tempfile.TemporaryDirectory() as directory:
+            def figures(*arguments):
+                Path(directory, "results.json").write_text(json.dumps({"scenarios": [
+                    {"scenario_id": "s", "behavior_sha256": "b", "runs": [run(*arguments)]}]}))
+                return next(iter(MODULE.runs_of(Path(directory)).values()))
+            # Billed 200 against counted 1,000: only a heuristic count is held to it.
+            self.assertFalse(figures("heuristic", False, [step])["comparable"])
+            exact = figures("provider", False, [step])
+            self.assertTrue(exact["comparable"])
+            self.assertIsNone(MODULE.context_figures(
+                run("provider", False, [step]))["cache_comparable"])
+            # No custom entry and no compacted snapshot: unknown, not zero.
+            self.assertIsNone(exact["compactions"])
+            self.assertEqual(figures("provider", True, [step])["compactions"], 0)
+            self.assertEqual(figures("provider", False, [{"custom": {"custom_type": "other"}}, step])["compactions"], 0)
+
+    def test_a_retried_run_sums_every_attempt_for_the_turns_and_the_prompt(self):
+        def totals(turns):
+            return {"metrics": {"totals": {"turns": turns, "input_tokens": 100, "output_tokens": 5,
+                                           "function_call_errors": 1}}}
+        run = {"attempt_id": "a2", "technical": "valid", "completion": "completed", "score": 100,
+               "efficiency": {"processed_prompt_tokens": 2_000, "cache_read_tokens": 1_800},
+               "retry_attempts": [totals(10)], **totals(10)}
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "results.json").write_text(json.dumps({"scenarios": [
+                {"scenario_id": "s", "behavior_sha256": "b", "runs": [run]}]}))
+            figures = next(iter(MODULE.runs_of(Path(directory)).values()))
+        self.assertEqual(figures["turns"], 20)
+        self.assertEqual(figures["context_per_turn"], 100)
+        self.assertEqual(figures["input_tokens"], 200)
+        self.assertEqual(figures["call_errors"], 2)
 
     @unittest.skipUnless(os.environ.get("HARNESS_E2E_BIN"), "needs the runner: HARNESS_E2E_BIN")
     def test_the_verdict_is_the_runners(self):

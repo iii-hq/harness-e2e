@@ -1,7 +1,11 @@
 import { ChevronRight, Info } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import { buildExecutionMetrics, causeLabel } from '@/lib/execution-metrics'
+import {
+  buildExecutionMetrics,
+  causeLabel,
+  type UsageCoverage,
+} from '@/lib/execution-metrics'
 import { formatTokens as compactTokens, formatCost } from '@/lib/format'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import { type ScenarioMatrixItem, unreported } from '@/lib/scenario-matrix'
@@ -67,18 +71,20 @@ export function KpiTile({
 
 /** Prompt and context figures, then the runs per cause. A provider whose
  *  prompt does not match the Harness's count is marked not comparable. */
-function contextRows(
+export function contextRows(
   metrics: ReturnType<typeof buildExecutionMetrics>,
 ): Array<[string, string]> {
-  const processed =
-    metrics.processedPrompt.total ?? metrics.processedPrompt.observed
-  const compactions = metrics.compactions.total ?? metrics.compactions.observed
+  // A sum short of runs is shown as what was observed, and says so.
+  const counted = (usage: UsageCoverage): string =>
+    usage.total === null && usage.observed !== null
+      ? `${formatFull(usage.observed)} (partial: ${usage.samples} of ${usage.expected} runs)`
+      : formatFull(usage.total)
   const notComparable =
     metrics.cacheNotComparable > 0
       ? ` (not comparable: ${plural(metrics.cacheNotComparable, 'run', 'runs')})`
       : ''
   return [
-    ['Processed prompt', `${formatFull(processed)}${notComparable}`],
+    ['Processed prompt', `${counted(metrics.processedPrompt)}${notComparable}`],
     [
       'Cache share',
       metrics.cacheShare === null
@@ -92,7 +98,7 @@ function contextRows(
         ? '—'
         : `${formatFull(metrics.peakContext)}${metrics.usableContext ? ` of ${formatFull(metrics.usableContext)}` : ''}`,
     ],
-    ['Compactions', formatFull(compactions)],
+    ['Compactions', counted(metrics.compactions)],
     ...Object.entries(metrics.causes)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([cause, count]): [string, string] => [

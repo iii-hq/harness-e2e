@@ -4,7 +4,12 @@ import { InvestigationContext } from '@/components/InvestigationAction'
 import { matchesFilter, rowNote } from '@/components/ScenarioMatrix'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
-import { ExecutionTotals, formatTokens, formatUsd } from './ExecutionTotals'
+import {
+  contextRows,
+  ExecutionTotals,
+  formatTokens,
+  formatUsd,
+} from './ExecutionTotals'
 import { NeedsAttention } from './NeedsAttention'
 
 const metric = (value: number | null): MetricValue => ({
@@ -172,6 +177,30 @@ describe('execution totals (canvas)', () => {
     expect(text).toContain('Partial: 2 of 3 tests reported')
     expect(html).toContain('aria-expanded="false"')
     expect(text).toContain('All metrics')
+  })
+})
+
+describe('context rows', () => {
+  it('marks a sum short of runs as partial', () => {
+    const rows = Object.fromEntries(
+      contextRows({
+        processedPrompt: {
+          total: null,
+          observed: 4_000,
+          samples: 2,
+          expected: 3,
+        },
+        compactions: { total: 2, observed: 2, samples: 3, expected: 3 },
+        cacheShare: null,
+        contextPerTurn: null,
+        peakContext: null,
+        usableContext: null,
+        cacheNotComparable: 0,
+        causes: {},
+      } as never),
+    )
+    expect(rows['Processed prompt']).toBe('4,000 (partial: 2 of 3 runs)')
+    expect(rows.Compactions).toBe('2')
   })
 })
 

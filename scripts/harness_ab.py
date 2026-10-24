@@ -28,8 +28,9 @@ pass over them takes.
 The prompt processed is input plus cache reads and writes; context per turn
 divides it by the turns; the peak is the largest prompt one step of the root
 session sent. A run without cache figures has none of them, never a zero, and
-a provider whose prompt does not match the Harness's count (claude-code) is
-flagged not comparable.
+a provider whose prompt does not match the Harness's heuristic count is
+flagged not comparable. The peak is the mean over scenarios of each run's peak,
+as the Console shows it. A retried run sums the totals of every attempt.
 """
 
 from __future__ import annotations
@@ -89,8 +90,12 @@ def context_figures(run: dict) -> dict:
     processed = (None if totals.get("input_tokens") is None or read is None
                  else totals["input_tokens"] + read + (totals.get("cache_write_tokens") or 0))
     comparable = None
+    compacted = False
     for session in sessions:
         context = session.get("context") or {}
+        compacted = compacted or context.get("compacted") is True
+        if context.get("estimator") != "heuristic":
+            continue
         billed, counted = step_prompt(context.get("usage") or {}), context.get("total") or 0
         if billed and counted:
             comparable = (comparable is not False) and abs(billed - counted) <= PROMPT_TOLERANCE * counted
@@ -105,10 +110,18 @@ def context_figures(run: dict) -> dict:
         "processed_prompt_tokens": processed,
         "peak_context_tokens": max(steps) if reconciles else None,
         "usable_context_tokens": (root.get("context") or {}).get("usable"),
-        "compactions": None if messages is None else sum(
-            1 for entry in messages if (entry.get("custom") or {}).get("custom_type") == "compaction"),
+        "compactions": None if messages is None or not (compacted or any("custom" in entry for entry in messages))
+        else sum(1 for entry in messages if (entry.get("custom") or {}).get("custom_type") == "compaction"),
         "cache_comparable": comparable,
     }
+
+
+def attempt_total(run: dict, key: str, fallback: int | None = None) -> int | None:
+    """`key` summed over the retried attempts and the final one, as the Console
+    does; `fallback` when an attempt did not report it."""
+    values = [((attempt.get("metrics") or {}).get("totals") or {}).get(key)
+              for attempt in [*(run.get("retry_attempts") or []), run]]
+    return fallback if any(value is None for value in values) else sum(values)
 
 
 def runs_of(directory: Path) -> dict[str, dict]:
@@ -121,10 +134,9 @@ def runs_of(directory: Path) -> dict[str, dict]:
             continue
         for scenario in (results.get("scenarios") if isinstance(results, dict) else None) or []:
             for run in scenario.get("runs") or []:
-                totals = (run.get("metrics") or {}).get("totals") or {}
                 efficiency = run.get("efficiency") or {}
                 context = context_figures(run)
-                processed, turns = context["processed_prompt_tokens"], totals.get("turns")
+                processed, turns = context["processed_prompt_tokens"], attempt_total(run, "turns")
                 peak, usable = context["peak_context_tokens"], context["usable_context_tokens"]
                 runs[run.get("attempt_id") or run.get("run_id") or f"{path}:{len(runs)}"] = {
                     "scenario": scenario["scenario_id"],
@@ -134,8 +146,8 @@ def runs_of(directory: Path) -> dict[str, dict]:
                     "comparable": context["cache_comparable"] is not False,
                     "completed": float(run.get("completion") == "completed"),
                     "score": run.get("score"),
-                    "input_tokens": totals.get("input_tokens", efficiency.get("input_tokens")),
-                    "output_tokens": totals.get("output_tokens", efficiency.get("output_tokens")),
+                    "input_tokens": attempt_total(run, "input_tokens", efficiency.get("input_tokens")),
+                    "output_tokens": attempt_total(run, "output_tokens", efficiency.get("output_tokens")),
                     "processed_prompt": processed,
                     "cache_share": context["cache_read_tokens"] / processed if processed else None,
                     "turns": turns,
@@ -145,7 +157,7 @@ def runs_of(directory: Path) -> dict[str, dict]:
                     "compactions": context["compactions"],
                     "cost_usd": (run.get("cost") or {}).get("subject_usd", efficiency.get("cost_usd")),
                     "wall_s": None if run.get("wall_time_ms") is None else run["wall_time_ms"] / 1000,
-                    "call_errors": totals.get("function_call_errors", efficiency.get("function_call_errors")),
+                    "call_errors": attempt_total(run, "function_call_errors", efficiency.get("function_call_errors")),
                 }
     return runs
 
@@ -283,7 +295,7 @@ def report(result: dict, label_a: str, label_b: str) -> str:
                       "pôde contar como zero válido."]
     if result["not_comparable"]:
         lines += ["", f"Aviso: {result['not_comparable']} execuções comparadas são de provedores cuja contagem de "
-                      "prompt não bate com a do harness (claude-code): prompt, cache e contexto não comparáveis."]
+                      "prompt não bate com a contagem heurística do harness: prompt, cache e contexto não comparáveis."]
     return "\n".join(lines) + "\n"
 
 
@@ -311,16 +323,16 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="also write the numbers here")
     args = parser.parse_args()
     result = analyse(runs_of(args.a), runs_of(args.b), args.resamples)
+    # One run of the runner: JSON for --json (the page then shows that), text otherwise.
+    answer = verdict(args.a, args.b, args.label_a, args.label_b, as_json=bool(args.json))
     if args.json:
-        answer = verdict(args.a, args.b, args.label_a, args.label_b, as_json=True)
         try:
             result["verdict"] = json.loads(answer)
         except ValueError:
             result["verdict"] = answer.strip()
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     sys.stdout.write(report(result, args.label_a, args.label_b))
-    sys.stdout.write("\n### Veredito (harness-e2e compare)\n\n```\n"
-                     + verdict(args.a, args.b, args.label_a, args.label_b) + "```\n")
+    sys.stdout.write("\n### Veredito (harness-e2e compare)\n\n```\n" + answer + "```\n")
     return 0
 
 
