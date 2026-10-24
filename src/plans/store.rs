@@ -4623,7 +4623,7 @@ esac"#,
             ("pr", 4, 4),
             ("after-release", 5, 5),
             ("software-engineering-x3", 42, 39),
-            ("null-canary", 9, 9),
+            ("null-canary", 10, 10),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));
