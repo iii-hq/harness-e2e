@@ -462,8 +462,9 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
         if exchange.memory_bank.is_none() {
             problems.push(format!("exchange {index} ran without the memory hook"));
         }
-        // shortcut: the published Harness stamps no `origin.req`, so its steps trust
-        // the recorded prompt unchecked, require the sha once a release stamps it.
+        // shortcut: the published Harness stamps no `origin.req`, so an unstamped step
+        // trusts its recorded prompt unchecked; once a Harness release stamps every
+        // step, change `!= Some(false)` to `== Some(true)`.
         match evidence.prompts.get(index) {
             Some(prompt) if prompt.recorded && prompt.sha_matches != Some(false) => {}
             Some(prompt) if prompt.recorded => problems.push(format!(
