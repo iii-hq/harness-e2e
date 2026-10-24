@@ -1,0 +1,87 @@
+{
+  "source_fixture_sha256": "d6c275bbd7d3f6bb4d5df4da1160fb218a722282faf20832f1d5dffcccaf0fb0",
+  "provenance": {
+    "execution_id": "62b84851fac3cb1c5cb357b77bbe8144",
+    "attempt_id": "6bc7d19b85d54f4fab3b6cc67e90b44c",
+    "session_id": "e2e_6bc7d19b85d54f4fab3b6cc67e90b44c",
+    "e2e_revision": "f42b9008af2da184ca83dfec49062d029be70130",
+    "harness_version": "1.8.58",
+    "engine_version": "0.25.0-rc.2"
+  },
+  "case": {
+    "seed": 13011553812202181534
+  },
+  "transcript": {
+    "messages": [
+      {
+        "message": {
+          "role": "assistant",
+          "content": [{
+            "type": "function_call",
+            "id": "discovery",
+            "function_id": "agent_trigger",
+            "arguments": {
+              "function": "directory::search_functions",
+              "payload": {"capabilities": ["set a value in state by scope and key"]}
+            }
+          }]
+        }
+      },
+      {
+        "message": {
+          "role": "function_result",
+          "function_call_id": "discovery",
+          "function_id": "directory::search_functions",
+          "is_error": false,
+          "details": {"workers": [{"functions": [{"function_id": "state::set"}]}]}
+        }
+      },
+      {
+        "message": {
+          "role": "assistant",
+          "content": [{
+            "type": "function_call",
+            "id": "write",
+            "function_id": "agent_trigger",
+            "arguments": {
+              "function": "state::set",
+              "payload": {
+                "scope": "e2e-minimal-6bc7d19b85d54f4fab3b6cc67e90b44c",
+                "key": "minimal_result",
+                "value": {"case_seed": 13011553812202181534, "owner": "efficiency-suite", "status": "stored"}
+              }
+            }
+          }]
+        }
+      },
+      {
+        "message": {
+          "role": "function_result",
+          "function_call_id": "write",
+          "function_id": "state::set",
+          "is_error": false,
+          "details": {"new_value": {"case_seed": 13011553812202181534, "owner": "efficiency-suite", "status": "stored"}}
+        }
+      }
+    ]
+  },
+  "response": "MIN-DONE: I stored the value under minimal_result.",
+  "metrics": {
+    "complete": true,
+    "totals": {"sessions": 1, "turns": 3, "function_calls": 2, "function_call_errors": 0}
+  },
+  "captured_deliverable": {
+    "id": "minimal_result_record",
+    "kind": "state_record",
+    "preview": {
+      "state": {"case_seed": 13011553812202181534, "owner": "efficiency-suite", "status": "stored"},
+      "task_calls": [
+        {"function_id": "directory::search_functions"},
+        {"function_id": "state::set"}
+      ],
+      "turns": 3,
+      "response": "MIN-DONE: I stored the value under minimal_result."
+    }
+  },
+  "native_evaluation": {"score": 40}
+}

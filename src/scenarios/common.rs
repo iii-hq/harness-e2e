@@ -37,11 +37,13 @@ pub struct ObservedFunctionOutcome {
 
 /// Returns whether a function call is contract discovery rather than product work.
 ///
-/// The directory alias is intentionally narrow: only the engine function-info
-/// endpoint is discovery. Other `directory::*` calls remain observable work.
+/// The directory aliases are intentionally narrow: contract search and the
+/// engine function-info endpoint are discovery. Other `directory::*` calls
+/// remain observable work.
 pub fn is_contract_discovery(function_id: &str) -> bool {
     function_id.starts_with("engine::functions::")
         || function_id == "directory::engine::functions::info"
+        || function_id == "directory::search_functions"
 }
 
 pub fn final_response(transcript: &Value) -> String {
@@ -808,6 +810,7 @@ mod tests {
         assert!(is_contract_discovery("engine::functions::list"));
         assert!(is_contract_discovery("engine::functions::info"));
         assert!(is_contract_discovery("directory::engine::functions::info"));
+        assert!(is_contract_discovery("directory::search_functions"));
 
         assert!(!is_contract_discovery("directory::engine::functions::list"));
         assert!(!is_contract_discovery("directory::workers::info"));
