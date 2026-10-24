@@ -374,6 +374,24 @@ export function ticketCard(page, ticket) {
     .filter({ visible: true })
 }
 
+export async function ticketCardRegion(scope, ticket) {
+  const title = boardTicketTitle(scope, ticket.title)
+  const values = [ticket.key, ticket.priority, ticket.assignee].filter((value) => value != null && value !== '')
+  const ancestors = title.locator('xpath=ancestor-or-self::*')
+  const scopeElement = await scope.elementHandle()
+  for (let index = 0; index < await ancestors.count(); index++) {
+    const candidate = ancestors.nth(index)
+    if (await candidate.evaluate((element, boundary) => element === boundary
+      || ['HTML', 'BODY', 'MAIN'].includes(element.tagName), scopeElement)) continue
+    const hasValues = await Promise.all(values.map((value) => candidate.getByText(
+      value === ticket.priority ? new RegExp(`^${literalPattern(value)}$`, 'i') : value, { exact: true },
+    ).filter({ visible: true }).count()))
+    if (hasValues.every((count) => count > 0)
+      && await candidate.getByRole('heading').filter({ visible: true }).count() <= 1) return candidate
+  }
+  return title
+}
+
 export function ticketCreationDialog(page) {
   return page.getByRole('dialog').filter({ visible: true, has: page.getByLabel('Title') })
     .filter({ has: page.getByRole('button', { name: 'Create ticket', exact: true }) })
@@ -433,13 +451,16 @@ export async function holdResponse(page, pattern, method) {
 
 export async function assertTicketDetails(page, ticket) {
   const detail = await ticketDetail(page, ticket)
+  const displayedStatus = ticket.status === 'todo' ? 'to do' : ticket.status.replaceAll('_', ' ')
+  const status = new RegExp(`^(?:${literalPattern(ticket.status)}|${literalPattern(displayedStatus)})$`, 'i')
   const values = [
-    [ticket.description, false], [ticket.status === 'todo' ? 'To do' : ticket.status.replaceAll('_', ' '), true],
+    [ticket.description, false], [status, false],
     [ticket.priority, true], [ticket.assignee, false],
   ]
   for (const [value, presentation] of values) {
     if (value == null || value === '') continue
-    const text = presentation ? new RegExp(`^${literalPattern(value)}$`, 'i') : value
+    const text = value instanceof RegExp ? value
+      : presentation ? new RegExp(`^${literalPattern(value)}$`, 'i') : value
     expect(await detail.getByText(text, { exact: true }).filter({ visible: true }).count() > 0,
       `detail omitted persisted value: ${value}`)
   }
@@ -452,7 +473,7 @@ export function boardNavigation(page) {
 
 export function mutationFailureFeedback(page) {
   return page.getByRole('alert').or(page.getByRole('status'))
-    .filter({ hasText: /probe failure|unable.*(?:save|move|create|delete|post)|failed.*(?:save|move|create|delete|post)|error/i }).filter({ visible: true })
+    .filter({ hasText: /probe failure|(?:unable|failed|could not).*(?:sav|mov|creat|delet|post)|error/i }).filter({ visible: true })
 }
 
 export async function assertClearedDiscussionDraft(page, title) {
@@ -466,7 +487,7 @@ export async function assertClearedDiscussionDraft(page, title) {
 export async function ticketEditor(page, expectedTitle) {
   const forms = page.locator('form')
     .filter({ has: page.getByRole('textbox', { name: 'Title', exact: true }) })
-    .filter({ has: page.getByRole('button', { name: 'Save changes', exact: true }) })
+    .filter({ has: saveTicketAction(page) })
     .filter({ visible: true })
   const open = page.getByRole('button', { name: /^(?:edit|edit ticket)$/i }).filter({ visible: true })
   await eventually(async () => await forms.count() === 1 || await open.count() === 1,
@@ -480,6 +501,10 @@ export async function ticketEditor(page, expectedTitle) {
   return forms
 }
 
+export function saveTicketAction(scope) {
+  return scope.getByRole('button', { name: /^save(?: changes| ticket)?$/i }).filter({ visible: true })
+}
+
 // The prompt asks for an author without naming its label, so find it beside the
 // comment body instead of requiring the reference's "Your name".
 export function commentAuthor(page) {
@@ -489,9 +514,41 @@ export function commentAuthor(page) {
     .filter({ visible: true })
 }
 
-export function commentParentAction(entry) {
-  const name = /first|parent|reference|in reply|replying.*go to.*comment|show.*comment|comment.*reply answers/i
-  return entry.getByRole('button', { name }).or(entry.getByRole('link', { name })).first()
+export async function activateCommentParent(entry, parent, page) {
+  const relation = /previous|earlier|ancestor|reference|referenced|in reply|replying|responding|quoted|original|jump|go to|show|parent comment|comment parent/i
+  const named = entry.getByRole('link', { name: relation }).or(entry.getByRole('button', { name: relation })).filter({ visible: true })
+  const destructiveName = /^\s*(?:delete|remove|edit|reply|react)\b/i
+  const destructive = entry.getByRole('link', { name: destructiveName }).or(entry.getByRole('button', { name: destructiveName }))
+  const referenced = entry.locator('a[href^="#"], button[aria-controls], button[data-parent-id], button[data-parent], button[data-comment-parent]').filter({ visible: true })
+  const attempt = async (action) => {
+    if (await action.and(destructive).count()) return false
+    const link = await action.elementHandle()
+    const before = await page.evaluate(commentParentState, { parent })
+    await action.focus()
+    await action.press('Enter')
+    const transitioned = await eventually(async () => {
+      const after = await page.evaluate(commentParentState, { parent })
+      return (!before.focused && after.focused) || (!before.hash && after.hash)
+    }, 'candidate did not navigate to the parent comment', 500).catch(() => false)
+    if (transitioned && await page.evaluate(reachedCommentParent, { parent, link })) return true
+    return false
+  }
+  for (let index = 0; index < await named.count(); index++) {
+    if (await attempt(named.nth(index))) return true
+  }
+  for (let index = 0; index < await referenced.count(); index++) {
+    const action = referenced.nth(index)
+    const targetsParent = await action.evaluate((element, parentElement) => {
+      const references = [element.getAttribute('href'), element.getAttribute('aria-controls'),
+        element.dataset.parentId, element.dataset.parent, element.dataset.commentParent]
+      return references.filter(Boolean).flatMap((value) => value.split(/\s+/)).some((reference) => {
+        const target = document.getElementById(reference.replace(/^#/, ''))
+        return target === parentElement || parentElement.contains(target)
+      })
+    }, parent)
+    if (targetsParent && await attempt(action)) return true
+  }
+  return false
 }
 
 export async function assertAccessibleFormControls(form) {
@@ -524,6 +581,15 @@ export function duplicateStoredTicket(value, id) {
     && Object.values(value).some((item) => duplicateStoredTicket(item, id))
 }
 
+export function findStoredTicket(value, id) {
+  if (Array.isArray(value)) return value.find((item) => item?.id === id)
+    ?? value.map((item) => findStoredTicket(item, id)).find(Boolean)
+  if (value !== null && typeof value === 'object') {
+    if (value.id === id) return value
+    return Object.values(value).map((item) => findStoredTicket(item, id)).find(Boolean)
+  }
+}
+
 export function standaloneCompose(status) {
   if (!Array.isArray(status?.containers)) throw new ControlError('Compose status omitted declared containers')
   return status.containers.length > 0 && status.containers.every(({ container }) => !/console/i.test(container))
@@ -534,6 +600,19 @@ export function reachedCommentParent({ parent, link }) {
     || element?.closest('li, article, [role="listitem"]') === parent)
   return insideParent(document.activeElement)
     || insideParent(document.getElementById(decodeURIComponent(location.hash.slice(1))))
+}
+
+function commentParentState({ parent }) {
+  const insideParent = (element) => element === parent
+    || element?.closest('li, article, [role="listitem"]') === parent
+  return {
+    focused: insideParent(document.activeElement),
+    hash: insideParent(document.getElementById(decodeURIComponent(location.hash.slice(1)))),
+  }
+}
+
+export function barrierEventIndex(events, start, store) {
+  return events.findIndex((event, index) => index >= start && event?.store === store)
 }
 
 async function create(trigger, fields = {}) {
@@ -643,6 +722,7 @@ export const PROBES = {
     await check('persistence_invalid_input_no_write', async () => {
       requireEvidence(crudAvailable, 'Persistence fixture requires working create/list/get functions.')
       const before = (await trigger('kanban::tickets::list')).tickets.length
+      const beforeStore = await control('read_store')
       for (const input of [
         { title: '' }, { title: 'x', status: 'invented' }, { title: 'x', priority: 'invented' },
         { title: 'x', assignee: 42 }, { title: 'x', unexpected: true },
@@ -652,6 +732,7 @@ export const PROBES = {
         expect(rejected, `invalid ticket was accepted: ${JSON.stringify(input)}`)
       }
       expect((await trigger('kanban::tickets::list')).tickets.length === before, 'invalid create changed the store')
+      expect(await control('read_store') === beforeStore, 'invalid create rewrote persisted bytes')
       return 'Invalid fields and values are rejected without adding a ticket.'
     })
     await check('persistence_directory_isolation_and_restart', async () => {
@@ -766,9 +847,10 @@ export const PROBES = {
       for (let index = 0; index < statuses.length; index++) {
         const [, label] = statuses[index]
         const lane = boardLane(page, label)
-        await eventually(async () => await lane.getByText(seeded[index].key, { exact: true }).count() === 1, `${label} readable key is missing`)
-        expect(await lane.getByText(/^high$/i).count() === 1, `${label} priority is missing`)
-        expect(await lane.getByText('Grace', { exact: true }).count() === 1, `${label} assignee is missing`)
+        const card = await ticketCardRegion(lane, seeded[index])
+        await eventually(async () => await card.getByText(seeded[index].key, { exact: true }).count() === 1, `${label} readable key is missing from its card`)
+        expect(await card.getByText(/^high$/i).count() === 1, `${label} priority is missing from its card`)
+        expect(await card.getByText('Grace', { exact: true }).count() === 1, `${label} assignee is missing from its card`)
       }
       await context.close()
     })
@@ -835,7 +917,7 @@ export const PROBES = {
     })
   },
 
-  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check }) {
+  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check, stage }) {
     const fields = { description: 'UTF-8: ação e café', status: 'in_review', priority: 'urgent', assignee: 'Lin' }
     const newForm = async (title) => {
       const opened = await pageFor(browser, baseUrl, { width: 390, height: 844 })
@@ -877,7 +959,7 @@ export const PROBES = {
       await page.route('**/api/tickets', (route) => route.request().method() === 'POST'
         ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }) : route.continue())
       await dialog.getByRole('button', { name: 'Create ticket' }).click()
-      await expectText(mutationFailureFeedback(dialog), /\S/)
+      await expectText(mutationFailureFeedback(page), /\S/)
       expect(await dialog.isVisible(), 'failed create closed the modal')
       for (const [label, value] of [['Title', 'Failed creation draft'], ['Description', fields.description], ['Status', fields.status], ['Priority', fields.priority], ['Assignee', fields.assignee]]) {
         expect(await dialog.getByLabel(label).inputValue() === value, `failed create erased ${label}`)
@@ -945,7 +1027,7 @@ export const PROBES = {
       await page.route('**/api/tickets/**', (route) => route.request().method() === 'DELETE'
         ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }) : route.continue())
       await detail.getByRole('button', { name: 'Delete ticket' }).click()
-      await expectText(mutationFailureFeedback(detail), /\S/)
+      await expectText(mutationFailureFeedback(page), /\S/)
       await ticketDetail(page, ticket)
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.id === ticket.id, 'failed delete removed the persisted ticket')
       await context.close()
@@ -973,12 +1055,17 @@ export const PROBES = {
       const response = await api(`/api/tickets/${ticket.key}`, { method: 'DELETE' })
       expect(response.status === 200, 'HTTP deletion by key failed')
       expect((await json(response)).ticket.id === ticket.id, 'deletion returned the wrong ticket')
-      expect((await api(`/api/tickets/${ticket.id}`)).status === 404, 'deleted ticket is still retrievable')
-      let deleted = JSON.parse(await control('read_store')).find(({ id }) => id === ticket.id)
+      stage('ticket_deletion_get')
+      const retrieval = await api(`/api/tickets/${ticket.id}`)
+      expect(retrieval.status === 404, `deleted ticket GET returned HTTP ${retrieval.status}: ${await retrieval.text()}`)
+      stage('ticket_deletion_disk')
+      let deleted = findStoredTicket(JSON.parse(await control('read_store')), ticket.id)
       expect(deleted?.deleted_at, 'soft-deleted ticket is absent from disk')
+      stage('ticket_deletion_restart')
       await control('restart')
-      deleted = JSON.parse(await control('read_store')).find(({ id }) => id === ticket.id)
+      deleted = findStoredTicket(JSON.parse(await control('read_store')), ticket.id)
       expect(deleted?.deleted_at, 'restart lost the soft-deleted record')
+      stage('ticket_deletion_key')
       const next = await eventually(() => create(trigger, { title: 'Key retirement probe' }), 'create did not recover after restart', 15_000)
       expect(Number(next.key.slice(4)) > Number(ticket.key.slice(4)), 'deleted readable key was reused')
     })
@@ -998,52 +1085,71 @@ export const PROBES = {
   },
 
   async kanban_c5_edit_move({ api, trigger, control, browser, baseUrl, output, check, stage }) {
-    let ticket
-    await check('edit_fixture_creation', async () => {
-      ticket = await create(trigger, { title: 'Editable probe', description: 'Keep me', assignee: 'Initial' })
-      return 'A persisted ticket is available for edit and move evaluation.'
-    })
-    await check('edit_save_cancel_and_partial_update', async () => {
-      requireEvidence(ticket, 'Edit fixture was not created.')
-      stage('edit_partial')
+    await check('edit_partial', async () => {
+      const ticket = await create(trigger, { title: 'Partial edit probe', description: 'Keep me', assignee: 'Initial' })
       const partial = await trigger('kanban::tickets::update', { id: ticket.key, changes: { priority: 'high' } })
       expect(partial.description === 'Keep me' && partial.title === ticket.title, 'partial update erased unrelated fields')
-      stage('edit_cancel')
+      return 'A partial iii update preserves omitted editable fields.'
+    })
+    await check('edit_cancel', async () => {
+      const ticket = await create(trigger, { title: 'Cancel edit probe', description: 'Keep me', assignee: 'Initial' })
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
-      await expectText(page.getByRole('heading', { name: ticket.title }), /Editable probe/)
-      let edit = await ticketEditor(page)
+      const edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Discard this')
       await edit.getByRole('button', { name: 'Cancel' }).click()
-      await expectText(page.getByRole('heading', { name: ticket.title }), /Editable probe/)
-      edit = await ticketEditor(page, ticket.title)
+      await expectText(page.getByRole('heading', { name: ticket.title }), /Cancel edit probe/)
+      await ticketEditor(page, ticket.title)
+      expect((await trigger('kanban::tickets::get', { id: ticket.id })).title === ticket.title, 'Cancel wrote the draft')
+      await context.close()
+      return 'Cancel restores persisted fields without writing the draft.'
+    })
+    await check('edit_failure', async () => {
+      const ticket = await create(trigger, { title: 'Failed edit probe', assignee: 'Initial' })
+      const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
+      const edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Edited probe')
       await edit.getByLabel('Description').fill('Edited description')
       await edit.getByLabel('Status').selectOption('todo')
       await edit.getByLabel('Priority').selectOption('urgent')
       await edit.getByLabel('Assignee').fill('Updated')
-      stage('edit_failure')
-      let failSave = true
       await page.route('**/api/tickets/**', async (route) => {
-        if (failSave && route.request().method() === 'PATCH') {
-          failSave = false
+        if (route.request().method() === 'PATCH') {
           await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' })
           return
         }
         await route.continue()
       })
-      await edit.getByRole('button', { name: 'Save changes' }).click()
+      await saveTicketAction(edit).click()
       await expectText(mutationFailureFeedback(page), /\S/)
       expect(await edit.getByLabel('Title').inputValue() === 'Edited probe', 'failed save erased the title draft')
       expect(await edit.getByLabel('Assignee').inputValue() === 'Updated', 'failed save erased another draft field')
-      stage('edit_success')
-      await edit.getByRole('button', { name: 'Save changes' }).click()
+      expect((await trigger('kanban::tickets::get', { id: ticket.id })).title === ticket.title, 'failed save changed persisted data')
+      await context.close()
+      return 'A failed save reports an accessible error and preserves its draft without writing.'
+    })
+    await check('edit_success', async () => {
+      const ticket = await create(trigger, { title: 'Editable probe', description: 'Keep me', assignee: 'Initial' })
+      const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
+      const edit = await ticketEditor(page)
+      await edit.getByLabel('Title').fill('Edited probe')
+      await edit.getByLabel('Description').fill('Edited description')
+      await edit.getByLabel('Status').selectOption('todo')
+      await edit.getByLabel('Priority').selectOption('urgent')
+      await edit.getByLabel('Assignee').fill('Updated')
+      await saveTicketAction(edit).click()
       await expectText(page.getByRole('heading', { name: 'Edited probe' }), /Edited probe/)
       const saved = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       expect(saved.description === 'Edited description' && saved.status === 'todo' && saved.priority === 'urgent' && saved.assignee === 'Updated', 'UI edit was not persisted')
+      expect(saved.id === ticket.id && saved.key === ticket.key && saved.created_at === ticket.created_at,
+        'UI edit changed immutable identity metadata')
       await screenshot(page, output, 'ticket-edited-mobile')
-
-      stage('edit_navigation')
-      edit = await ticketEditor(page)
+      await context.close()
+      return 'Saving supported fields preserves immutable ticket identity metadata.'
+    })
+    await check('edit_navigation', async () => {
+      const ticket = await create(trigger, { title: 'Navigation edit probe' })
+      const { context, page } = await openTicket(browser, baseUrl, ticket)
+      const edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Late saved probe')
       let release
       let intercepted
@@ -1056,17 +1162,17 @@ export const PROBES = {
         await held
         await route.continue()
       })
-      await edit.getByRole('button', { name: 'Save changes' }).click()
+      await saveTicketAction(edit).click()
       await reached
       await page.getByRole('link', { name: /Back to board/ }).click()
       release()
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.title === 'Late saved probe', 'late save did not persist after navigation')
       await eventually(async () => await page.getByRole('heading', { name: 'Late saved probe' }).count(), 'board did not refresh after the late save')
       await context.close()
-      return 'Cancel is inert, failed-save drafts survive, retry persists edits, and a save finishing after navigation refreshes the board.'
+      return 'A save finishing after navigation persists and refreshes the board.'
     })
     await check('edit_rejects_invalid_immutable_and_deleted_updates', async () => {
-      requireEvidence(ticket, 'Edit fixture was not created.')
+      const ticket = await create(trigger, { title: 'Invalid edit probe' })
       const before = await trigger('kanban::tickets::get', { id: ticket.id })
       for (const changes of [{}, { id: 'replacement' }, { created_at: new Date().toISOString() }, { status: 'invented' }]) {
         expect((await api(`/api/tickets/${ticket.id}`, {
@@ -1160,7 +1266,7 @@ export const PROBES = {
       const edit = await ticketEditor(page)
       expect(await edit.getByLabel('Status').inputValue() === 'todo', 'mobile status selector did not reflect the persisted edit')
       await edit.getByLabel('Status').selectOption('done')
-      await edit.getByRole('button', { name: 'Save changes' }).click()
+      await saveTicketAction(edit).click()
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).status === 'done', 'mobile status selector did not persist the edit')
       await context.close()
       return 'All edited fields and the mobile status alternative retain the moved state after runtime restart.'
@@ -1220,13 +1326,8 @@ export const PROBES = {
         items[index].compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING), entries), 'timeline is not in posting order')
       stage('discussion_parent_navigation')
       const replyItem = entry('second')
-      const parentLink = commentParentAction(replyItem)
-      expect(await parentLink.count() === 1, 'reply has no accessible parent navigation action')
       const parent = await entry('<img src=x onerror=alert(1)> first').elementHandle()
-      const link = await parentLink.elementHandle()
-      await parentLink.focus()
-      await parentLink.press('Enter')
-      await eventually(() => page.evaluate(reachedCommentParent, { parent, link }), 'keyboard parent navigation did not reach the referenced comment')
+      expect(await activateCommentParent(replyItem, parent, page), 'keyboard parent navigation did not reach the referenced comment')
       await screenshot(page, output, 'discussion-mobile')
       await context.close()
       return 'Comments and nested replies retain order; safe text, times and keyboard parent navigation work on mobile.'
@@ -1247,7 +1348,9 @@ export const PROBES = {
       const original = await control('read_store')
       const rejectsWithoutRewrite = async (mutate, label) => {
         const records = JSON.parse(original)
-        mutate(records.find(({ id }) => id === ticket.id).comments)
+        const stored = findStoredTicket(records, ticket.id)
+        if (!stored) throw new ControlError('Cannot locate the discussion fixture in the persisted store')
+        mutate(stored.comments)
         const malformed = `${JSON.stringify(records, null, 2)}\n`
         await control('write_store', { value: malformed })
         expect((await api(`/api/tickets/${ticket.id}`)).status === 500, `${label} discussion was accepted`)
@@ -1336,12 +1439,12 @@ export const PROBES = {
       expect(sameJson(edited.comments, expected.comments), 'ticket edit discarded comments')
       await trigger('kanban::tickets::delete', { id: ticket.id })
       let records = JSON.parse(await control('read_store'))
-      let deleted = records.find(({ id }) => id === ticket.id)
+      let deleted = findStoredTicket(records, ticket.id)
       expect(deleted?.deleted_at && sameJson(deleted.comments, expected.comments), 'soft deletion discarded the discussion on disk')
       stage('discussion_restart')
       await control('restart')
       records = JSON.parse(await control('read_store'))
-      deleted = records.find(({ id }) => id === ticket.id)
+      deleted = findStoredTicket(records, ticket.id)
       expect(deleted?.deleted_at && sameJson(deleted.comments, expected.comments), 'restart discarded the deleted discussion')
       await eventually(async () => (await trigger('kanban::tickets::get', { id: other.id })).id === other.id, 'existing ticket was unusable after restart', 15_000)
       return 'Comments survive ticket editing, soft deletion and runtime restart while remaining records stay usable.'
@@ -1372,17 +1475,36 @@ export const PROBES = {
         await create(trigger, { title: 'SSE protocol probe' })
         expect(exactStore(await eventAt(1)), 'persisted mutation SSE event has the wrong name or store payload')
         stage('live_failed_write')
-        await new Promise((resolve) => setTimeout(resolve, 250))
         const count = await page.evaluate(() => globalThis.__kanbanProbeEvents.length)
         original = await control('read_store')
         await control('write_store', { value: '{broken json' })
         let rejected = false
         try { await create(trigger, { title: 'Rejected SSE mutation' }) } catch { rejected = true }
         expect(rejected, 'mutation unexpectedly succeeded against a corrupt store')
-        await new Promise((resolve) => setTimeout(resolve, 750))
-        expect(await page.evaluate(() => globalThis.__kanbanProbeEvents.length) === count, 'failed persistence emitted a change event')
+        await control('write_store', { value: original })
+        original = undefined
+        const directories = [`./sse-barrier-${randomUUID()}`, configuration.data_dir, `./sse-barrier-${randomUUID()}`]
+        const indexes = []
+        for (const data_dir of directories) {
+          const barrier = await json(await api('/api/config', {
+            method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data_dir }),
+          }))
+          const { index } = await eventually(async () => {
+            const events = await page.evaluate(() => globalThis.__kanbanProbeEvents)
+            const index = barrierEventIndex(events, count, barrier.resolved_data_dir)
+            return index >= 0 ? { index } : false
+          }, 'identified SSE barrier event was not received')
+          indexes.push(index)
+        }
+        expect(indexes.every((index, offset) => index === count + offset),
+          'failed persistence emitted an extra change event between the identified barriers')
       } finally {
-        try { if (original !== undefined) await control('write_store', { value: original }) } finally {
+        try {
+          if (original !== undefined) await control('write_store', { value: original })
+          await json(await api('/api/config', {
+            method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data_dir: configuration.data_dir }),
+          }))
+        } finally {
           await page.evaluate(() => globalThis.__kanbanProbeSource?.close()).catch(() => {})
           await context.close().catch(() => {})
         }
@@ -1400,7 +1522,7 @@ export const PROBES = {
       const focusedCard = sessions[0].page.getByRole('heading', { name: 'Live probe' }).locator('xpath=ancestor::a[1]')
       await focusedCard.focus()
       await create(trigger, { title: 'Live noise' })
-      await eventually(async () => sessions[0].page.evaluate(() => document.activeElement?.textContent?.includes('Live probe')), 'focused card was lost during an ordinary live update')
+      await eventually(async () => focusedCard.evaluate((card) => document.activeElement === card || card.contains(document.activeElement)), 'focused card was lost during an ordinary live update')
 
       stage('live_edit_merge')
       await sessions[0].page.getByRole('heading', { name: 'Live probe' }).click()
@@ -1410,7 +1532,7 @@ export const PROBES = {
       await edit.getByLabel('Title').fill('Dirty local title')
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { priority: 'urgent', status: 'in_progress' } })
       await eventually(async () => (await edit.getByLabel('Title').inputValue()) === 'Dirty local title', 'dirty edit draft was lost')
-      await edit.getByRole('button', { name: 'Save changes' }).click()
+      await saveTicketAction(edit).click()
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).title === 'Dirty local title', 'local edit did not save')
       expect((await trigger('kanban::tickets::get', { id: ticket.id })).priority === 'urgent', 'saving overwrote untouched remote priority')
       stage('live_comment_draft')
@@ -1420,7 +1542,7 @@ export const PROBES = {
       await preservedDraft.focus()
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { description: 'Remote description' } })
       await eventually(async () => (await preservedDraft.inputValue()) === 'Ordinary update draft', 'ordinary live update erased comment draft')
-      expect(await sessions[0].page.evaluate(() => document.activeElement?.tagName === 'TEXTAREA'), 'ordinary live update lost textarea focus')
+      expect(await preservedDraft.evaluate((draft) => document.activeElement === draft), 'ordinary live update lost textarea focus')
 
       stage('live_replies')
       await commentAuthor(sessions[1].page).fill('Remote author')
@@ -1432,7 +1554,9 @@ export const PROBES = {
       expect(posted.status() === 201, `browser comment failed with HTTP ${posted.status()}`)
       await eventually(async () => await sessions[2].page.getByText('Live comment', { exact: true }).count(), 'third session missed browser comment')
       const withComment = await trigger('kanban::tickets::get', { id: ticket.id })
-      await sessions[0].page.getByRole('button', { name: 'Reply to Remote author' }).click()
+      await sessions[0].page.getByText('Live comment', { exact: true })
+        .locator('xpath=ancestor::*[self::li or self::article or @role="listitem"][1]')
+        .getByRole('button', { name: /^reply/i }).click()
       await preservedDraft.fill('Reply draft survives')
       await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Direct', body: 'Live reply', parent_id: withComment.comments[0].id } })
       await Promise.all(sessions.map(({ page }) => eventually(async () => await page.getByText('Live reply', { exact: true }).count(), 'session missed direct iii reply')))
@@ -1449,8 +1573,10 @@ export const PROBES = {
       await sessions[2].page.evaluate(() => { location.hash = '#board' })
       await eventually(async () => await sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).count(), 'board did not recover after restart')
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { status: 'done' } })
-      await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () =>
-        await page.getByText('Done', { exact: true }).filter({ visible: true }).count(), 'remote move did not update detail status')))
+      await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => {
+        const detail = await ticketDetail(page, { ...ticket, title: 'Dirty local title' })
+        return await detail.getByText(/^done$/i).filter({ visible: true }).count() === 1
+      }, 'remote move did not update detail status')))
       await eventually(async () => await boardLane(sessions[2].page, 'Done').getByRole('heading', { name: 'Dirty local title' }).count(), 'remote move did not update the board lane')
       stage('live_drag')
       const dragging = sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).locator('xpath=ancestor::a[1]')
@@ -1475,7 +1601,9 @@ export const PROBES = {
         expect(await dragged.evaluate((element) => element.isConnected && !globalThis.__kanbanDragEnded), 'ordinary live update replaced or ended the active drag')
         stage('live_store')
         await trigger('configuration::set', { id: 'kanban', value: { ...configuration.value, data_dir: '/data/live-alternate' } })
-        await eventually(async () => await sessions[2].page.getByText('No tickets yet.', { exact: true }).count(), 'store switch during drag did not load the empty store')
+        await eventually(async () => await boardTicketTotal(sessions[2].page, 0).count() === 1
+          && await ticketCard(sessions[2].page, { title: 'Dirty local title' }).count() === 0,
+        'store switch during drag did not load the empty store')
       } finally {
         await mouse.up()
       }
@@ -1522,7 +1650,7 @@ export const PROBES = {
       await expectText(page.getByRole('heading', { name: 'Newer GET state' }), /Newer GET state/)
       release()
       await delivered
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
       expect(await page.getByRole('heading', { name: 'Newer GET state' }).count() === 1, 'late GET replaced newer state')
 
       stage('live_late_mutation')
@@ -1543,7 +1671,7 @@ export const PROBES = {
         await route.fulfill({ response })
         fulfilledMutation()
       })
-      await edit.getByRole('button', { name: 'Save changes' }).click()
+      await saveTicketAction(edit).click()
       await mutationReached
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { title: 'Newest direct state' } })
       releaseMutation()

@@ -35,7 +35,7 @@ const SUMMARIES: [&str; 4] = [
     "Create an evidence-based plan for adding version comparison to a pinned Registry codebase.",
     "In a private container with the Registry code at a pinned commit, implement version comparison from the requirements and a reference plan: a compare API, a Changelog tab with version pickers, and shareable URLs. Test it against the running app and write a report with real screenshots.",
     "Reproduce the Registry test environment, including build, startup, isolation, restart, and cleanup.",
-    "Run the feature that registry_implementation just delivered, check its 24 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
+    "Run the feature that registry_implementation just delivered, check its 23 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
 ];
 const PROTECTS: [Option<&str>; 4] = [
     None,
@@ -314,7 +314,16 @@ struct ExecOutput {
     stdout: String,
     stderr: String,
     exit_code: i32,
+    artifacts: Vec<ExecArtifact>,
 }
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct ExecArtifact {
+    path: String,
+    sha256: String,
+    size_bytes: u64,
+}
+
 async fn checked(command: &mut Command) -> Result<Value> {
     command.kill_on_drop(true);
     let out = command.output().await?;
@@ -456,6 +465,7 @@ fn evidence_files(directory: &std::path::Path) -> Result<Value> {
         &[
             "validation",
             "commands",
+            "execution-evidence",
             "screenshots",
             "delivery",
             "workspace/output",
@@ -873,9 +883,15 @@ mod tests {
                 "implementation.function_removal",
             ],
             &["environment.build", "environment.api_readiness"],
-            &["verification.recall"],
+            &[
+                "verification.recall",
+                "verification.precision",
+                "verification.execution_coverage",
+                "verification.evidence_coverage",
+                "verification.source_preservation",
+            ],
         ];
-        // Finding one real failure is the verification's purpose.
+        // Verification completes only after it finds every known failure.
         assert_eq!(
             Registry(4)
                 .spec("test")
@@ -883,7 +899,7 @@ mod tests {
                 .iter()
                 .find(|c| c.id == "verification.recall")
                 .and_then(|c| c.gate_minimum),
-            Some(1)
+            None
         );
         for n in 1..=4 {
             let scenario = Registry(n).spec("test");

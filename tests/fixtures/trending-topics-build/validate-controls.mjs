@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
+import { variedFeed as makeVariedFeed } from './evaluate.mjs';
 
 const [fixtureApp, outputRoot] = process.argv.slice(2);
 if (!fixtureApp || !outputRoot || !isAbsolute(fixtureApp) || !isAbsolute(outputRoot)) {
@@ -21,7 +22,7 @@ try {
 }
 
 const evaluatorRoot = dirname(fileURLToPath(import.meta.url));
-const evaluatorFiles = ['acceptance.spec.mjs', 'playwright.config.mjs', 'validate-controls.mjs', 'package-lock.json'];
+const evaluatorFiles = ['acceptance.spec.mjs', 'evaluate.mjs', 'playwright.config.mjs', 'validate-controls.mjs', 'package-lock.json'];
 const evaluatorHashes = Object.fromEntries(await Promise.all(evaluatorFiles.map(async file =>
   [file, createHash('sha256').update(await readFile(join(evaluatorRoot, file))).digest('hex')])));
 const referenceMain = await readFile(join(evaluatorRoot, 'reference/main.js'), 'utf8');
@@ -36,20 +37,8 @@ const portProbe = createServer();
 await new Promise((resolve, reject) => portProbe.once('error', reject).listen(4187, '127.0.0.1', resolve));
 await new Promise(resolve => portProbe.close(resolve));
 
-const variedFeed = {
-  edition: '2031-Q4 <control>',
-  topics: [4, 0, 5, 1, 3, 2].map((index) => {
-    const id = `signal-${index + 1}`;
-    return {
-      id,
-      rank: [41, 7, 29, 13, 37, 19][index],
-      title: `Signal ${index + 1}: <not markup> & “quoted”`,
-      source_body: `Control story ${index + 1} keeps <tags> as text, punctuation & symbols.\nLine two says: “don't hardcode me.”`,
-      url: index === 0 ? 'https://root.trend-e2e.test#source'
-        : `https://varied.trend-e2e.test/${id}?edition=2031-Q4&slot=${index + 1}`,
-    };
-  }),
-};
+const variedFeed = makeVariedFeed('local-adversarial-controls');
+
 
 await mkdir(join(outputRoot, 'apps'), { recursive: true });
 await mkdir(join(outputRoot, 'results'), { recursive: true });
@@ -228,6 +217,14 @@ const cases = [
   {
     name: 'animated-no-focus', dataset: 'original', grep: `B09.*${originalFeed.topics[0].id}`, main: referenceMain,
     css: `${referenceCss}\n@keyframes decoy-focus { from { color: #185d37; } to { color: #d14d2c; } }\na { animation: decoy-focus 50ms infinite alternate linear !important; }\na, a:focus, a:focus-visible { outline: none !important; outline-offset: 0 !important; box-shadow: none !important; }\n`,
+  },
+  {
+    name: 'transparent-focus', dataset: 'original', grep: `B09.*${originalFeed.topics[0].id}`, main: referenceMain,
+    css: `${referenceCss}\na:focus-visible { outline: 4px solid transparent !important; transform: translateX(.0001px); }\n`,
+  },
+  {
+    name: 'low-contrast-focus', dataset: 'original', grep: `B09.*${originalFeed.topics[0].id}`, main: referenceMain,
+    css: `${referenceCss}\na:focus-visible { outline: 4px solid #f4f1e8 !important; }\n`,
   },
   {
     name: 'mobile-overflow', dataset: 'original', grep: 'B10.*home', main: referenceMain,

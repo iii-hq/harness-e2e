@@ -33,7 +33,7 @@ const CRITERIA: [(&str, u8, &str, &str); 10] = [
     ("B06", 10, "Do the home, article, All topics, and browser Back navigation flows work?", "Home, article and Back navigation work"),
     ("B07", 5, "Do direct entry and reload work for every article URL?", "Article URLs work on direct entry and reload"),
     ("B08", 5, "Does every article expose a Source link with the exact input URL?", "Every article links to its exact source"),
-    ("B09", 5, "Do pages have the required semantic structure and keyboard-operable links with visible focus?", "Semantic structure and keyboard focus are correct"),
+    ("B09", 5, "Do pages have the required semantic structure and keyboard-operable links with a visible focus indicator of at least 3:1 contrast?", "Semantic structure and keyboard focus are correct"),
     ("B10", 5, "Do desktop and mobile layouts avoid horizontal overflow and keep required links unobstructed?", "Desktop and mobile layouts have no overflow"),
 ];
 

@@ -1,12 +1,15 @@
 """Independent Kanban evidence regressions, including negative controls."""
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / 'scripts/kanban_eval/probe.mjs'
-PLAYWRIGHT = ROOT / 'dashboard/node_modules/playwright/index.mjs'
+PLAYWRIGHT = Path(os.environ.get(
+    'PLAYWRIGHT_MODULE_PATH', ROOT / 'dashboard/node_modules/playwright/index.mjs'
+))
 
 
 class KanbanScoringRegressions(unittest.TestCase):
@@ -53,9 +56,9 @@ console.log(JSON.stringify({scope:await (await probe.ticketDetail(page,ticket)).
         result = self.node("""
 const ticket={id:'id-1',key:'KAN-1',title:'Ticket [one]',description:'Details',status:'in_review',priority:'urgent',assignee:'Lin'};
 await page.setContent(`<main><section id="board">
- <a href="#ticket/id-1" aria-label="Open KAN-1: Ticket [one]"><span>Ticket [one]</span><span>Lin</span><span>Urgent</span></a>
+<a href="#ticket/id-1" aria-label="Open KAN-1: Ticket [one]"><span>Ticket [one]</span><span>Lin</span><span>Urgent</span></a>
  <a href="#ticket/id-2"><span>Another ticket</span></a>
- </section><aside id="details"><h2>Ticket [one]</h2><p>KAN-1</p><p>Details</p><p>In review</p><p>Urgent</p><p id="assignee">Lin</p><button>Delete ticket</button></aside></main>`);
+ </section><aside id="details"><h2>Ticket [one]</h2><p>KAN-1</p><p>Details</p><p>in_review</p><p>Urgent</p><p id="assignee">Lin</p><button>Delete ticket</button></aside></main>`);
 const card=probe.ticketCard(page,ticket);
 await card.focus();await card.press('Enter');
 const activated=await page.evaluate(()=>location.hash);
@@ -89,7 +92,7 @@ console.log(JSON.stringify([
         script = f"import * as probe from {json.dumps(PROBE.as_uri())};\n"
         if browser:
             script += f"import {{chromium}} from {json.dumps(PLAYWRIGHT.as_uri())};\n"
-            script += "const browser=await chromium.launch({headless:true});const page=await browser.newPage();try {\n"
+            script += "const browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH});const page=await browser.newPage();try {\n"
         script += body
         if browser:
             script += '\n} finally {await browser.close()}'
@@ -118,30 +121,93 @@ console.log(JSON.stringify({id:await lane.getAttribute('id'),count:await (await 
 """, browser=True)
         self.assertEqual(result, {'id': 'backlog', 'count': 1})
 
+    def test_card_metadata_cannot_be_borrowed_from_a_sibling_card(self):
+        result = self.node("""
+const ticket={title:'Target',key:'KAN-1',priority:'high',assignee:'Grace'};
+await page.setContent('<main><section><h2>Backlog <span>2</span></h2><a><span>Target</span></a><a><span>Other</span><p>KAN-1</p><p>high</p><p>Grace</p></a></section><section><h2>Done <span>0</span></h2></section></main>');
+const region=await probe.ticketCardRegion(probe.boardLane(page,'Backlog'),ticket);
+console.log(JSON.stringify({tag:await region.evaluate(element=>element.tagName),key:await region.getByText('KAN-1',{exact:true}).count(),priority:await region.getByText(/^high$/i).count(),assignee:await region.getByText('Grace',{exact:true}).count()}));
+""", browser=True)
+        self.assertEqual(result, {'tag': 'SPAN', 'key': 0, 'priority': 0, 'assignee': 0})
+
+    def test_div_card_metadata_is_accepted_without_borrowing_from_its_lane(self):
+        result = self.node("""
+const ticket={title:'Target',key:'KAN-1',priority:'high',assignee:'Grace'};
+await page.setContent('<main><section><h2>Backlog <span>2</span></h2><div class="card"><a href="/tickets/1"><h3>Target</h3></a><p>KAN-1</p><p>high</p><p>Grace</p><button>More actions</button></div><div class="card"><h3>Other</h3></div></section><section><h2>Done <span>0</span></h2></section></main>');
+const region=await probe.ticketCardRegion(probe.boardLane(page,'Backlog'),ticket);
+console.log(JSON.stringify({tag:await region.evaluate(element=>element.tagName),className:await region.getAttribute('class')}));
+""", browser=True)
+        self.assertEqual(result, {'tag': 'DIV', 'className': 'card'})
+
     def test_parent_accessible_label_variant_still_requires_real_navigation(self):
         result = self.node("""
-await page.setContent('<ul><li id="parent" tabindex="-1">Alice: first</li><li id="reply"><button aria-label="Replying to Alice; go to that comment">In reply to Alice</button>second</li></ul>');
-const action=probe.commentParentAction(page.locator('#reply'));
-const count=await action.count();let inert=false;let navigated=false;
-if(count){
- const parent=await page.locator('#parent').elementHandle();const link=await action.elementHandle();
- await action.focus();await action.press('Enter');inert=await page.evaluate(probe.reachedCommentParent,{parent,link});
- await action.evaluate(button=>button.onclick=()=>document.querySelector('#parent').focus());
- await action.press('Enter');navigated=await page.evaluate(probe.reachedCommentParent,{parent,link});
-}
-console.log(JSON.stringify({count,inert,navigated}));
+await page.setContent('<ul><li id="parent" tabindex="-1">Alice: first</li><li id="reply"><button id="reply-action" aria-controls="reply-form">Reply</button><button id="delete-action" aria-label="Delete parent comment" aria-controls="parent">×</button><button aria-label="Jump upward">↑</button>second<form id="reply-form"></form></li></ul>');
+const entry=page.locator('#reply');const parent=await page.locator('#parent').elementHandle();
+await page.evaluate(()=>{window.destructive=0;document.querySelector('#reply-action').onclick=()=>window.destructive++;document.querySelector('#delete-action').onclick=()=>window.destructive++});
+const inert=await probe.activateCommentParent(entry,parent,page);
+await page.locator('[aria-label="Jump upward"]').evaluate(button=>button.onclick=()=>document.querySelector('#parent').focus());
+const navigated=await probe.activateCommentParent(entry,parent,page);
+console.log(JSON.stringify({inert,navigated,destructive:await page.evaluate(()=>window.destructive)}));
 """, browser=True)
-        self.assertEqual(result, {'count': 1, 'inert': False, 'navigated': True})
+        self.assertEqual(result, {'inert': False, 'navigated': True, 'destructive': 0})
+
+    def test_preexisting_parent_hash_does_not_fake_navigation(self):
+        result = self.node("""
+await page.setContent('<ul><li id="parent" tabindex="-1">first</li><li id="reply"><a href="#parent">Context</a></li></ul>');
+await page.evaluate(()=>{location.hash='#parent'});
+const parent=await page.locator('#parent').elementHandle();
+console.log(JSON.stringify(await probe.activateCommentParent(page.locator('#reply'),parent,page)));
+""", browser=True)
+        self.assertFalse(result)
+
+    def test_failed_write_event_before_identified_barrier_is_rejected(self):
+        result = self.node("""
+const start=1, store='/workspace/barrier';
+const valid=[{store:'/workspace/original'},{store}];
+const invalid=[{store:'/workspace/original'},{store:'/workspace/original'}];
+await new Promise(resolve=>setTimeout(()=>{invalid.push({store});resolve()},10));
+console.log(JSON.stringify({valid:probe.barrierEventIndex(valid,start,store)===start,invalid:probe.barrierEventIndex(invalid,start,store)===start}));
+""")
+        self.assertEqual(result, {'valid': True, 'invalid': False})
+
+    def test_delayed_failed_write_event_cannot_masquerade_as_store_restoration(self):
+        if not PLAYWRIGHT.exists():
+            self.skipTest('dashboard Playwright is not installed')
+        fixture = ROOT / 'tests/fixtures/kanban-evaluator/sse.mjs'
+        result = self.node(f"await import({json.dumps(fixture.as_uri())});")
+        self.assertEqual(result, {'valid': True, 'beforeBarrier': False, 'afterBarrier': False})
 
     def test_error_feedback_accepts_failed_creation_and_deletion_not_success(self):
         result = self.node("""
 const found=[];
-for(const text of ['probe failure','Failed to create ticket','Unable to delete KAN-1 (500)','Unable to post comment (500)','Failed to post comment','Creating…','Ticket created','Delete ticket']){
+for(const text of ['probe failure','Failed to create ticket','Could not be created','Unable to delete KAN-1 (500)','Could not be deleted','Unable to post comment (500)','Failed to post comment','Creating…','Ticket created','Delete ticket']){
  await page.setContent(`<p role="alert">${text}</p>`);found.push(await probe.mutationFailureFeedback(page).count());
 }
 console.log(JSON.stringify(found));
 """, browser=True)
-        self.assertEqual(result, [1, 1, 1, 1, 1, 0, 0, 0])
+        self.assertEqual(result, [1, 1, 1, 1, 1, 1, 1, 0, 0, 0])
+
+    def test_save_action_accepts_contract_names_without_matching_settings(self):
+        result = self.node("""
+const found=[];
+for(const name of ['Save','Save changes','Save ticket','Save settings','Autosave']){
+ await page.setContent(`<form><label for="title">Title</label><input id="title"><button>${name}</button></form>`);
+ found.push(await probe.saveTicketAction(page.locator('form')).count());
+}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, [1, 1, 1, 0, 0])
+
+    def test_soft_deleted_ticket_is_found_in_array_or_envelope(self):
+        result = self.node("""
+const ticket={id:'ticket-1',deleted_at:'now'};
+console.log(JSON.stringify([
+ probe.findStoredTicket([ticket],'ticket-1')?.deleted_at,
+ probe.findStoredTicket({version:1,records:[ticket]},'ticket-1')?.deleted_at,
+ probe.findStoredTicket({version:1,records:[]},'ticket-1') ?? null,
+]));
+""")
+        self.assertEqual(result, ['now', 'now', None])
 
     def test_checkpoints_preserve_earned_evidence_and_do_not_fail_unreached_checks(self):
         result = self.node("""
