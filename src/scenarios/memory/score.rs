@@ -97,6 +97,8 @@ pub struct Audit {
     /// Injected lines whose group was already injected and is still visible.
     pub duplicates: Vec<(usize, String)>,
     pub relevant: usize,
+    /// Every line judged, in order.
+    pub injected: Vec<(usize, String)>,
 }
 
 /// Hex sha256 of the JSON string, as Harness hashes the system prompt into
@@ -232,6 +234,7 @@ pub fn audit(evidence: &Evidence) -> Audit {
         };
         let earlier = visible_at(observed, block.position);
         for (index, line) in block.lines.iter().enumerate() {
+            audit.injected.push((exchange, line.clone()));
             let Some(seed) = seed_of(line).filter(|seed| seed.needed_on.contains(&exchange)) else {
                 audit.irrelevant.push((exchange, line.clone()));
                 continue;
@@ -376,6 +379,24 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
             "no memory was injected twice while visible",
             "injected again while its group was still visible",
         ),
+        Check::GroupOmitted { group } => {
+            let found: Vec<(usize, String)> = audit
+                .injected
+                .iter()
+                .filter(|(_, line)| {
+                    evidence
+                        .seeds
+                        .iter()
+                        .any(|seed| seed.text == *line && seed.group == group)
+                })
+                .cloned()
+                .collect();
+            verdict(
+                &found,
+                &format!("no {group} memory was injected"),
+                &format!("{group} memory injected"),
+            )
+        }
         Check::RulesInPrompt => {
             let section = first_section(evidence);
             let lacking: Vec<&str> = evidence
@@ -875,6 +896,19 @@ mod tests {
         let evaluation = evaluate(case, &evidence);
         assert_eq!(award(&evaluation, "current_fact_injected"), Some(35));
         assert_eq!(award(&evaluation, "stale_fact_left_out"), Some(0));
+    }
+
+    #[test]
+    fn the_stale_gate_ignores_distractors() {
+        let case = case_named("memory_updated_fact");
+        let (old, new) = (line(case, 0), line(case, 1));
+        let score = |lines: Vec<String>| {
+            let evidence = evidence_of(case, observed(&["x"], vec![block(0, lines)]));
+            award(&evaluate(case, &evidence), "stale_fact_left_out")
+        };
+        let metabase = "The analytics dashboards are hosted on Metabase.".to_string();
+        assert_eq!(score(vec![new.clone(), metabase]), Some(35));
+        assert_eq!(score(vec![new, old]), Some(0));
     }
 
     #[test]

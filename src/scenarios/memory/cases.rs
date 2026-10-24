@@ -30,6 +30,8 @@ pub enum Check {
     NothingIrrelevant,
     /// No line whose group is already in the same block or a visible earlier block.
     NoDuplicates,
+    /// No injected line on any exchange belongs to the seed group `group`.
+    GroupOmitted { group: &'static str },
     /// Exchange 0's memory section holds every case rule, untruncated.
     RulesInPrompt,
     /// The answer holds the canary for the label `canary`; `None` = every exchange.
@@ -443,7 +445,9 @@ pub const CASES: [Case; 11] = [
             gate(
                 "stale_fact_left_out",
                 35,
-                Check::NothingIrrelevant,
+                Check::GroupOmitted {
+                    group: "export-old",
+                },
                 "Stale fact left out of memory",
                 "Was the older export schedule, which the newer one replaced, left out?",
             ),
