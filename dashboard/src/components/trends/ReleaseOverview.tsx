@@ -21,15 +21,14 @@ import { formatDateTime, plural } from '@/lib/format'
 import {
   type Aggregate,
   aggregateDelta,
-  aggregateOf,
   combinationText,
-  moves,
   type ReleaseOverview as Overview,
   type OverviewPoint,
   overviewMetric,
   stepText,
   type Timeline,
   timeline,
+  uncalibratedText,
   type Verdict,
 } from '@/lib/release-overview'
 import {
@@ -39,6 +38,7 @@ import {
   type TrendMetricId,
   trendMetric,
 } from '@/lib/trends'
+import { repetitionsText, verdictHeadline, verdictTone } from '@/lib/verdict'
 import { PointPanel } from './PointPanel'
 import { DeltaPill, Direction, Plot } from './TrendsChart'
 import { MAIN_METRICS } from './VerdictHeadline'
@@ -53,8 +53,8 @@ function releaseOf(overview: Overview, point: OverviewPoint | undefined) {
   )
 }
 
-/** The verdict's combinations one by one: what got worse in each, and the
- *  tests left out of it. */
+/** The verdict's combinations one by one: the calibrated verdict of each,
+ *  or why it has none, and the tests left out of it. */
 function Combinations({ verdict }: { verdict: Verdict }) {
   return (
     <section className="tr-panel-section" aria-labelledby="tr-cb">
@@ -63,25 +63,32 @@ function Combinations({ verdict }: { verdict: Verdict }) {
       </h3>
       <ul className="tr-changes">
         {verdict.compared.map((item) => {
-          const { worse } = moves(
-            aggregateOf(item.latest),
-            aggregateOf(item.previous),
-            MAIN_METRICS,
-          )
+          const summary = item.calibrated
           return (
             <li key={combinationText(item.combination)} data-combination>
               <span className="tr-mono tr-small tr-strong tr-wrap">
                 {combinationText(item.combination)}
               </span>
-              {worse.length === 0 ? (
-                <span className="tr-faint">Nothing got worse.</span>
-              ) : (
-                worse.map(({ metric, delta }) => (
-                  <span key={metric.id} className="tr-move tr-faint">
-                    {`Worse: ${metric.label}`}{' '}
-                    <DeltaPill metric={metric} value={delta} />
+              {summary?.verdict ? (
+                <>
+                  <span
+                    className="tr-move tr-strong"
+                    data-verdict={summary.verdict}
+                    data-tone={verdictTone(summary)}
+                  >
+                    {verdictHeadline(summary)}
                   </span>
-                ))
+                  {summary.reasons.map((reason) => (
+                    <span key={reason} className="tr-faint">
+                      {reason}
+                    </span>
+                  ))}
+                  <span className="tr-faint">{repetitionsText(summary)}</span>
+                </>
+              ) : (
+                <span className="tr-faint">
+                  {`No calibrated verdict: ${uncalibratedText(item)}`}
+                </span>
               )}
               {item.tests_left_out.length > 0 ? (
                 <span className="tr-faint">
@@ -340,8 +347,9 @@ export function ReleaseOverview({
                       <div key={item.id}>
                         <dt>{item.label}</dt>
                         <dd>
+                          {/* Untoned: better or worse is the verdict's. */}
                           <DeltaPill
-                            metric={item}
+                            metric={{ ...item, better: 'neither' }}
                             value={aggregateDelta(
                               item,
                               against.latest_aggregate,

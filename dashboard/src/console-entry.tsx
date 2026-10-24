@@ -12,6 +12,7 @@ const runtimeConfig: RuntimeConfig = {
   functions: {
     executions_list: 'e2e::dashboard::executions-list',
     execution_get: 'e2e::dashboard::execution-get',
+    execution_verdict: 'e2e::dashboard::execution-verdict',
     execution_delete: 'e2e::dashboard::execution-delete',
     execution_rename: 'e2e::dashboard::execution-rename',
     evidence_read: 'e2e::dashboard::evidence-read',

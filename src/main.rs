@@ -7,6 +7,7 @@ use harness_e2e::manifest;
 use harness_e2e::report::E2eReport;
 use harness_e2e::scenarios::{self, ScenarioId};
 use harness_e2e::suite::{run_suite, SubjectConfig, SuiteRunConfig};
+use harness_e2e::verdict;
 use harness_e2e::worker::{self, WorkerArgs};
 
 #[derive(Debug, Parser)]
@@ -46,6 +47,8 @@ enum Command {
     /// Print a human-readable summary from a saved results.json.
     #[command(alias = "inspect")]
     Report(ReportArgs),
+    /// Compare two arms' results: whether B is better than A, worse, no different, or cannot tell yet.
+    Compare(CompareArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -171,6 +174,33 @@ struct ReportArgs {
     verbose: bool,
 }
 
+#[derive(Debug, Args)]
+struct CompareArgs {
+    /// Arm A, the reference: a results.json, or a directory read for every results.json below it.
+    a: PathBuf,
+    /// Arm B, compared with A.
+    b: PathBuf,
+    /// Points of quality B may lose and still be non-inferior (default 5).
+    #[arg(long)]
+    margin: Option<f64>,
+    /// Relative cost change that counts as no change (default 0.05).
+    #[arg(long)]
+    equivalence: Option<f64>,
+    /// Permutations of each test (default 10000).
+    #[arg(long)]
+    permutations: Option<usize>,
+    /// Seed of the permutations (default 0).
+    #[arg(long)]
+    seed: Option<u64>,
+    #[arg(long, default_value = "A")]
+    label_a: String,
+    #[arg(long, default_value = "B")]
+    label_b: String,
+    /// Print the comparison as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
 fn main() -> Result<()> {
     disable_iii_telemetry();
     tokio::runtime::Builder::new_multi_thread()
@@ -221,7 +251,33 @@ async fn run_cli() -> Result<()> {
         Some(Command::Models(args)) => models(args).await,
         Some(Command::Run(args)) => run(*args).await,
         Some(Command::Report(args)) => report(args),
+        Some(Command::Compare(args)) => compare(args),
     }
+}
+
+fn compare(args: CompareArgs) -> Result<()> {
+    let default = verdict::Rule::default();
+    let rule = verdict::Rule {
+        margin: args.margin.unwrap_or(default.margin),
+        equivalence: args.equivalence.unwrap_or(default.equivalence),
+        permutations: args.permutations.unwrap_or(default.permutations),
+        seed: args.seed.unwrap_or(default.seed),
+        ..default
+    };
+    let comparison = verdict::compare(
+        &verdict::read_arm(&args.a)?,
+        &verdict::read_arm(&args.b)?,
+        &rule,
+    );
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&comparison)?);
+    } else {
+        print!(
+            "{}",
+            verdict::text(&comparison, &args.label_a, &args.label_b)
+        );
+    }
+    Ok(())
 }
 
 async fn models(args: ModelsArgs) -> Result<()> {
@@ -429,6 +485,46 @@ mod tests {
         for command in ["dashboard", "serve"] {
             assert!(Cli::try_parse_from(["harness-e2e", command]).is_err());
         }
+    }
+
+    #[test]
+    fn compare_reads_each_arm_from_a_file_or_every_results_json_below_a_directory() {
+        let cli =
+            Cli::try_parse_from(["harness-e2e", "compare", "a", "b", "--margin", "3"]).unwrap();
+        let Some(Command::Compare(args)) = cli.command else {
+            panic!("expected compare command");
+        };
+        assert_eq!((args.a, args.b), (PathBuf::from("a"), PathBuf::from("b")));
+        assert_eq!(
+            (args.margin, args.seed, args.json),
+            (Some(3.0), None, false)
+        );
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verdict");
+        let arm = tempfile::tempdir().unwrap();
+        // A root bundle repeats its groups' results: each run counts once.
+        for group in ["group", "root"] {
+            std::fs::create_dir(arm.path().join(group)).unwrap();
+            std::fs::copy(
+                fixtures.join("se-1.8.50.json"),
+                arm.path().join(group).join("results.json"),
+            )
+            .unwrap();
+        }
+        assert_eq!(verdict::read_arm(arm.path()).unwrap().len(), 30);
+        assert!(verdict::read_arm(&fixtures.join("missing")).is_err());
+        compare(CompareArgs {
+            a: fixtures.join("se-1.8.44.json"),
+            b: arm.path().to_owned(),
+            margin: None,
+            equivalence: None,
+            permutations: Some(100),
+            seed: None,
+            label_a: "A".into(),
+            label_b: "B".into(),
+            json: true,
+        })
+        .unwrap();
     }
 
     #[test]

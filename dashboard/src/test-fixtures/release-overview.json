@@ -498,7 +498,30 @@
           "validation_retries_mean": 0.1,
           "technical_retries_mean": 0
         },
-        "tests_left_out": ["contention_ledger"]
+        "tests_left_out": ["contention_ledger"],
+        "calibrated": {
+          "verdict": null,
+          "qualifier": null,
+          "unavailable": "One run per test on a side: no noise to read the difference against.",
+          "reasons": [],
+          "rule": {
+            "margin": 5,
+            "equivalence": 0.05,
+            "alpha": 0.025,
+            "permutations": 10000,
+            "seed": 0
+          },
+          "quality": null,
+          "cost": null,
+          "repetitions": {
+            "have": { "a": 1, "b": 1 },
+            "sigma": null,
+            "needed": null,
+            "missing": null,
+            "more_than": null,
+            "note": null
+          }
+        }
       }
     ],
     "left_out": []

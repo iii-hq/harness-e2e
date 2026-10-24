@@ -98,6 +98,10 @@ pub(super) struct CombinationDelta {
     /// or only one release planned or ran them. A test both planned that one
     /// release never ran compares, as not completed there.
     pub tests_left_out: Vec<String>,
+    /// The latest against the previous over the tests compared, as
+    /// `harness-e2e compare` reads them; without a verdict when a side ran
+    /// one run per test. Only the latest pair has one.
+    pub calibrated: Option<crate::verdict::Summary>,
 }
 
 /// `only_in: None`: ran on both, but no test kept its `behavior_sha256`.
@@ -262,7 +266,8 @@ pub(super) fn overview(
             engine: newest.point.engine.clone(),
             workers: newest.point.workers.clone(),
             step: before.map(|before| {
-                let (latest_aggregate, previous_aggregate) = aggregates(&compare(line, before).0);
+                let (latest_aggregate, previous_aggregate) =
+                    aggregates(&compare(line, before, false).0);
                 ReleaseStep {
                     previous: before.release.to_owned(),
                     latest_aggregate,
@@ -273,7 +278,7 @@ pub(super) fn overview(
     }
     let verdict = match lines.as_slice() {
         [.., previous, latest] => {
-            let (compared, left_out) = compare(latest, previous);
+            let (compared, left_out) = compare(latest, previous, true);
             let (latest_aggregate, previous_aggregate) = aggregates(&compared);
             Some(Verdict {
                 latest: latest.release.to_owned(),
@@ -401,8 +406,13 @@ fn missing(line: &Line, other: &Line) -> Vec<Combination> {
 }
 
 /// A release against an earlier one: each combination both ran, over the
-/// tests both ran alike; every other combination is left out.
-fn compare(latest: &Line, previous: &Line) -> (Vec<CombinationDelta>, Vec<LeftOutCombination>) {
+/// tests both ran alike; every other combination is left out. `calibrate`
+/// also reads each combination's calibrated verdict.
+fn compare(
+    latest: &Line,
+    previous: &Line,
+    calibrate: bool,
+) -> (Vec<CombinationDelta>, Vec<LeftOutCombination>) {
     let (mut compared, mut left_out) = (Vec::new(), Vec::new());
     let keys = latest
         .combinations
@@ -416,7 +426,7 @@ fn compare(latest: &Line, previous: &Line) -> (Vec<CombinationDelta>, Vec<LeftOu
     for key in keys {
         match (latest.combinations.get(key), previous.combinations.get(key)) {
             (Some((combination, ran)), Some((_, ran_before))) => {
-                match delta(combination, ran, ran_before) {
+                match delta(combination, ran, ran_before, calibrate) {
                     Some(delta) => compared.push(delta),
                     None => left_out.push(left(combination, None)),
                 }
@@ -441,6 +451,7 @@ fn delta(
     combination: &Combination,
     latest: &[&Ran],
     previous: &[&Ran],
+    calibrate: bool,
 ) -> Option<CombinationDelta> {
     let (latest_counted, previous_counted) = (counted(latest), counted(previous));
     let (latest_tests, previous_tests) = (tests(latest), tests(previous));
@@ -463,6 +474,14 @@ fn delta(
         .copied()
         .collect::<BTreeSet<_>>();
     let keep = |test: &str| alike.contains(test);
+    let runs = |group: &[&Ran]| {
+        group
+            .iter()
+            .flat_map(|ran| ran.runs.iter().copied())
+            .filter(|run| keep(&run.test))
+            .map(verdict_run)
+            .collect::<Vec<_>>()
+    };
     Some(CombinationDelta {
         combination: combination.clone(),
         latest: measured(latest, keep)?,
@@ -471,7 +490,31 @@ fn delta(
             .difference(&alike)
             .map(|test| (*test).to_owned())
             .collect(),
+        calibrated: calibrate.then(|| {
+            crate::verdict::compare(
+                &runs(previous),
+                &runs(latest),
+                &crate::verdict::Rule::default(),
+            )
+            .summary()
+        }),
     })
+}
+
+/// A run as the verdict reads it; the read model keeps whether it counted,
+/// not its cause or its criteria.
+fn verdict_run(run: &TrendRun) -> crate::verdict::Run {
+    crate::verdict::Run {
+        scenario: run.test.clone(),
+        behavior: run.behavior_sha256.clone(),
+        counted: run.counted,
+        score: run.score,
+        completed: run.completed,
+        cost_usd: run.cost_usd,
+        wall_time_ms: run.duration_ms,
+        turns: run.turns,
+        ..crate::verdict::Run::default()
+    }
 }
 
 /// The tests a release's executions of a combination planned or ran.
@@ -678,6 +721,31 @@ pub(super) mod tests {
             .iter()
             .map(|release| release.executions.iter().map(String::as_str).collect())
             .collect()
+    }
+
+    #[test]
+    fn a_combination_has_a_calibrated_verdict_only_with_repeated_runs() {
+        let summaries = [rc("p", 1, "1.9.2"), rc("l", 3, "1.9.3")].concat();
+        let calibrated = |previous: Vec<TrendRun>, latest: Vec<TrendRun>| {
+            let overview = overview(&summaries, &runs(vec![("p", previous), ("l", latest)]));
+            overview.verdict.unwrap().compared[0]
+                .calibrated
+                .clone()
+                .unwrap()
+        };
+        // One run per test: neither better nor worse, and it says why.
+        let once = calibrated(vec![scored("t1", 80.0)], vec![scored("t1", 95.0)]);
+        assert_eq!(once.verdict, None);
+        assert!(once.unavailable.unwrap().starts_with("One run per test"));
+        let repeated = |score: f64| {
+            (0..4)
+                .flat_map(|test| (0..4).map(move |i| scored(&format!("t{test}"), score + i as f64)))
+                .collect::<Vec<_>>()
+        };
+        let dropped = calibrated(repeated(90.0), repeated(60.0));
+        assert_eq!(dropped.verdict, Some(crate::verdict::Verdict::Worse));
+        let quality = dropped.quality.unwrap();
+        assert_eq!((quality.a, quality.b, quality.tests), (91.5, 61.5, 4));
     }
 
     #[test]

@@ -36,6 +36,7 @@ use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
+pub(super) const EXECUTION_VERDICT: &str = "e2e::dashboard::execution-verdict";
 pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
 pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
@@ -117,6 +118,14 @@ pub(super) struct ExecutionListResponse {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(super) struct ExecutionGetRequest {
     pub execution_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct ExecutionVerdictRequest {
+    /// A, the reference.
+    pub a: String,
+    /// B, compared with it.
+    pub b: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -395,6 +404,22 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 let controller = controller.clone();
                 async move {
                     execution_bundle(&controller, request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        EXECUTION_VERDICT,
+        "Compare two executions over their technically valid runs, test by test under one definition: B better than A, no different, worse, or cannot tell yet, with the reasons, the repetitions missing and each criterion's health per side. The verdict `harness-e2e compare` gives.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionVerdictRequest| {
+                let controller = controller.clone();
+                async move {
+                    execution_verdict(&controller, request)
                         .await
                         .map_err(handler_error)
                 }
@@ -1115,6 +1140,35 @@ pub(super) async fn execution_bundle(
     Ok(ExecutionBundle { manifest, detail })
 }
 
+/// B against A, over the runs each execution's reports hold now.
+pub(super) async fn execution_verdict(
+    controller: &Controller,
+    request: ExecutionVerdictRequest,
+) -> Result<crate::verdict::Comparison> {
+    let mut sides = Vec::new();
+    for execution_id in [request.a, request.b] {
+        let bundle = execution_bundle(controller, ExecutionGetRequest { execution_id }).await?;
+        sides.push(verdict_runs(&bundle.detail));
+    }
+    Ok(crate::verdict::compare(
+        &sides[0],
+        &sides[1],
+        &crate::verdict::Rule::default(),
+    ))
+}
+
+/// The runs of an execution detail's available reports.
+fn verdict_runs(detail: &Value) -> Vec<crate::verdict::Run> {
+    crate::verdict::runs_of(
+        detail["reports"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|record| record["available"] != false)
+            .map(|record| &record["report"]),
+    )
+}
+
 async fn attempt_get(
     controller: &Controller,
     request: AttemptGetRequest,
@@ -1431,6 +1485,64 @@ mod response_contract_tests {
     }
 
     #[test]
+    fn the_execution_verdict_reads_the_available_reports_with_the_names_the_console_reads() {
+        let run = |attempt: &str, score: u32| {
+            json!({"attempt_id": attempt, "cause": "evaluated", "technical": "valid",
+                "completion": "completed", "score": score, "cost": {"subject_usd": 0.1},
+                "criteria": [{"id": "c1", "awarded": score, "possible": 100}]})
+        };
+        let detail = |runs: Vec<Value>| {
+            json!({"reports": [
+                {"available": true, "report": {"scenarios": [
+                    {"scenario_id": "t", "behavior_sha256": "sha256:t", "runs": runs.clone()}]}},
+                // A slot reported twice, and one that reported nothing.
+                {"available": true, "report": {"scenarios": [
+                    {"scenario_id": "t", "behavior_sha256": "sha256:t", "runs": runs}]}},
+                {"available": false, "scenario_id": "u", "subject_id": "flash"},
+            ]})
+        };
+        let a = verdict_runs(&detail(vec![run("a1", 90), run("a2", 92)]));
+        let b = verdict_runs(&detail(vec![run("b1", 91), run("b2", 93)]));
+        assert_eq!(a.len(), 2);
+        let answer = serde_json::to_value(crate::verdict::compare(
+            &a,
+            &b,
+            &crate::verdict::Rule::default(),
+        ))
+        .unwrap();
+        assert_eq!(
+            keys(&answer),
+            "cost,criteria,dropped,figures,qualifier,quality,reasons,repetitions,rule,runs,tests,unavailable,verdict,warnings"
+        );
+        assert_eq!(
+            keys(&answer["quality"]),
+            "a,b,delta,p_fell,p_inferior,p_non_inferior,state,tests"
+        );
+        assert_eq!(
+            keys(&answer["cost"]),
+            "a,b,p_cheaper,p_more_expensive,p_within_high,p_within_low,relative,state,tests"
+        );
+        assert_eq!(
+            keys(&answer["repetitions"]),
+            "have,missing,more_than,needed,note,sigma"
+        );
+        assert_eq!(keys(&answer["criteria"]), "changes,configurations,min_runs");
+        assert_eq!(
+            keys(&answer["criteria"]["configurations"][0]),
+            "behavior,criteria,groups,runs,scenario,side,sufficient"
+        );
+        assert_eq!(
+            keys(&answer["criteria"]["changes"][0]),
+            "behavior,criteria,delta,failing,points,runs,scenario"
+        );
+        assert_eq!(
+            keys(&answer["runs"]["a"]),
+            "causes,classes,counted,excluded"
+        );
+        assert_eq!(answer["verdict"], "cannot_tell");
+    }
+
+    #[test]
     fn the_release_overview_answers_with_the_names_the_console_reads() {
         use super::super::overview::tests::{rc, runs, scored, with};
         use super::super::overview::{overview, ReleaseOverview};
@@ -1490,7 +1602,11 @@ mod response_contract_tests {
         );
         assert_eq!(
             keys(&verdict["compared"][0]),
-            "combination,latest,previous,tests_left_out"
+            "calibrated,combination,latest,previous,tests_left_out"
+        );
+        assert_eq!(
+            keys(&verdict["compared"][0]["calibrated"]),
+            "cost,qualifier,quality,reasons,repetitions,rule,unavailable,verdict"
         );
         assert_eq!(verdict["latest"], "1.9.3");
         assert_eq!(verdict["left_out"], json!([]));

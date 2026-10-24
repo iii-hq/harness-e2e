@@ -1,10 +1,10 @@
 // The Trends first screen: a step per Harness release with Release Control
 // results, the latest read against the previous one over what both ran
-// alike. The worker answers e2e::dashboard::release-overview-get; the
-// measures' direction, the wording and the stand-ins the Trends chart draws
-// are worked out here.
+// alike. The worker answers e2e::dashboard::release-overview-get, each
+// combination of the latest pair with its calibrated verdict; the wording
+// and the stand-ins the Trends chart draws are worked out here. A measure
+// that moved is only said to have moved: better or worse is the verdict's.
 
-import { deltaDirection, deltaTone } from '@/design-system'
 import {
   ANY,
   deltaFormat,
@@ -20,6 +20,7 @@ import {
   type TrendPoint,
   type TrendRole,
 } from '@/lib/trends'
+import type { VerdictSummary } from '@/lib/verdict'
 
 /* ------------------------------------------------------------- contract */
 
@@ -83,6 +84,9 @@ export type CombinationDelta = {
    *  or only one release planned or ran them. A test both planned that one
    *  release never ran compares, as not completed there. */
   tests_left_out: string[]
+  /** The latest against the previous over the tests compared, as
+   *  `harness-e2e compare` reads them; absent from a worker before it. */
+  calibrated?: VerdictSummary | null
 }
 
 export type LeftOutCombination = {
@@ -201,45 +205,50 @@ export function aggregateDelta(
 }
 
 export type MetricMove = { metric: TrendMetric; delta: number }
-export type VerdictSummary = {
-  better: MetricMove[]
-  worse: MetricMove[]
-  same: TrendMetricId[]
-}
+export type Moves = { moved: MetricMove[]; same: TrendMetricId[] }
 
-/** Which of the metrics moved for the better, for the worse or not at all,
- *  in the order given. One with no direction, or no value on a side, is in
- *  none of them. */
+/** Which of the metrics moved and which did not, in the order given; one
+ *  with no direction, or no value on a side, is in neither. A move is not
+ *  better or worse: one run per test cannot tell it from noise. */
 export function moves(
   latest: Aggregate,
   previous: Aggregate,
   metrics: TrendMetric[],
-): VerdictSummary {
-  const summary: VerdictSummary = { better: [], worse: [], same: [] }
+): Moves {
+  const summary: Moves = { moved: [], same: [] }
   for (const metric of metrics) {
     if (metric.better === 'neither') continue
     const delta = aggregateDelta(metric, latest, previous)
     if (delta === null) continue
-    if (delta === 0) {
-      summary.same.push(metric.id)
-      continue
-    }
-    const tone = deltaTone(deltaDirection(delta), metric.better)
-    if (tone === 'positive') summary.better.push({ metric, delta })
-    else if (tone === 'negative') summary.worse.push({ metric, delta })
+    if (delta === 0) summary.same.push(metric.id)
+    else summary.moved.push({ metric, delta })
   }
   return summary
 }
 
 /** `moves` of the verdict's two aggregates; none when a side has none. */
-export function verdictSummary(
-  verdict: Verdict,
-  metrics: TrendMetric[],
-): VerdictSummary {
+export function verdictMoves(verdict: Verdict, metrics: TrendMetric[]): Moves {
   const { latest_aggregate, previous_aggregate } = verdict
   return latest_aggregate && previous_aggregate
     ? moves(latest_aggregate, previous_aggregate, metrics)
-    : { better: [], worse: [], same: [] }
+    : { moved: [], same: [] }
+}
+
+/** The compared combinations that have a calibrated verdict. */
+export function calibrated(verdict: Verdict) {
+  return verdict.compared.flatMap((item) =>
+    item.calibrated?.verdict
+      ? [{ combination: item.combination, summary: item.calibrated }]
+      : [],
+  )
+}
+
+/** Why a combination has no calibrated verdict. */
+export function uncalibratedText(item: CombinationDelta) {
+  return (
+    item.calibrated?.unavailable ??
+    'The worker sent no calibrated verdict for it.'
+  )
 }
 
 /* ------------------------------------------------------------- timeline */
