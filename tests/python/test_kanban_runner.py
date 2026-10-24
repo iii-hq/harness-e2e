@@ -15,6 +15,35 @@ SPEC.loader.exec_module(runner)
 
 
 class KanbanRunnerTest(unittest.TestCase):
+    def test_candidate_tests_are_advisory_but_typecheck_and_build_are_prerequisites(self):
+        self.assertEqual(runner.HARD_BUILD_STEPS, {'typecheck', 'build'})
+
+    def test_candidate_test_failure_and_inner_timeout_continue_to_build(self):
+        for test_code in (1, 124):
+            with self.subTest(test_code=test_code), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(runner, 'bounded', side_effect=(0, test_code, 0)) as bounded:
+                checks, ready = runner.run_candidate_build_checks(
+                    'candidate-id', Path(directory))
+                self.assertTrue(ready)
+                self.assertEqual([check['id'] for check in checks],
+                                 ['typecheck', 'test', 'build'])
+                self.assertEqual(checks[1]['status'], 'failed')
+                test_call = bounded.call_args_list[1]
+                self.assertEqual(test_call.args[0][3:8], [
+                    '/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '90s',
+                    'pnpm',
+                ])
+                self.assertEqual(test_call.args[2], 120)
+                self.assertIsNone(test_call.args[3])
+
+    def test_hard_build_failure_still_stops_before_runtime(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(runner, 'bounded', side_effect=(0, 0, 2)) as bounded:
+            checks, ready = runner.run_candidate_build_checks('candidate-id', Path(directory))
+        self.assertFalse(ready)
+        self.assertEqual([check['id'] for check in checks], ['typecheck', 'test', 'build'])
+        self.assertEqual(bounded.call_count, 3)
+
     def test_integrity_failure_retains_provisional_functional_result(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)

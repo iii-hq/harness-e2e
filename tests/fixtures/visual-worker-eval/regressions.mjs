@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { startWebSocketServer } from './websocket-server.mjs'
 
 const playwright = (await import(process.env.PLAYWRIGHT_MODULE_PATH)).default
 
@@ -6,7 +7,17 @@ const source = fs.readFileSync(new URL('../../../src/scenarios/visual_worker_bui
 const rawStrings = [...source.matchAll(/r#"([\s\S]*?)"#/g)].map(match => match[1])
 const themeProbe = rawStrings.find(code => code.includes('const settle=async()=>'))
 const graphProbe = rawStrings.find(code => code.includes('const labels=graph?'))
-const trackerProbe = rawStrings.find(code => code.includes('window.__harnessRpc={{requests:[],results:[],invalid:0}}'))
+const trackerProbe = rawStrings.find(code => code.includes('window.__harnessRpc={{requests:[],results:[],invalid:0,sequence:0}}'))
+const rpcServer = await startWebSocketServer(message => {
+  if (message.function_id === 'control::inbound-request') return {
+    type: 'invokefunction', invocation_id: `inbound-${message.invocation_id}`, function_id: 'visual-worker::preview', data: { edit: 'fake' },
+  }
+  if (message.type !== 'invokefunction') return null
+  const result = message.function_id === 'visual-worker::canvas'
+    ? { canvas_id: 'canvas-one', source: 'edited' }
+    : { visible_fields: ['environment'] }
+  return { type: 'invocationresult', invocation_id: message.invocation_id, function_id: message.function_id, result }
+})
 const browser = await playwright.chromium.launch({ ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}), headless: true })
 const page = await browser.newPage({ viewport: { width: 480, height: 900 } })
 
@@ -37,19 +48,46 @@ try {
     return page.evaluate(`(async()=>{${graphCode}})()`)
   }
   await page.setContent('<main>rpc</main>')
-  await page.evaluate(() => { window.WebSocket = class extends EventTarget { send() {} } })
   const functionId = 'visual-worker::preview'
-  const trackerCode = trackerProbe.replace('const expected={},', `const expected=${JSON.stringify(functionId)},`).replaceAll('{{', '{').replaceAll('}}', '}')
+  const canvasFunction = 'visual-worker::canvas'
+  const trackerCode = trackerProbe
+    .replace('const expected=new Set([{},{}]),', `const expected=new Set([${JSON.stringify(functionId)},${JSON.stringify(canvasFunction)}]),`)
+    .replaceAll('{{', '{').replaceAll('}}', '}')
   await page.evaluate(`(()=>{${trackerCode}})()`)
-  const rpc = await page.evaluate(functionId => {
-    const socket = new WebSocket()
-    socket.addEventListener('message', event => event.data)
-    socket.send('not json')
-    socket.send(JSON.stringify({ type: 'invokefunction', invocation_id: 'one', function_id: functionId, data: { edit: 'add_environment' } }))
-    socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'invocationresult', invocation_id: 'one', function_id: functionId, result: { visible_fields: ['environment'] } }) }))
-    return window.__harnessRpc
-  }, functionId)
-  console.log(JSON.stringify({ oldTheme, stableTheme, hiddenLabel: await graphResult('hidden'), coveredLabel: await graphResult('covered'), sameColorLabel: await graphResult('sameColor'), transparentAncestorLabel: await graphResult('transparentAncestor'), visibleLabel: await graphResult('visible'), rpc }))
+  const tracked = await page.evaluate(async ({ functionId, canvasFunction, url }) => {
+    const socket = new WebSocket(url)
+    await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }) })
+    const exchange = message => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`RPC timeout: ${message.invocation_id}`)), 1000)
+      const receive = event => {
+        const response = JSON.parse(event.data)
+        if (response.invocation_id !== message.invocation_id) return
+        clearTimeout(timeout); socket.removeEventListener('message', receive); resolve(response)
+      }
+      socket.addEventListener('message', receive)
+      socket.send(JSON.stringify(message))
+    })
+    const synthetic = new MessageEvent('message', { data: JSON.stringify({ type: 'invocationresult', invocation_id: 'synthetic', function_id: functionId, result: { visible_fields: ['environment'] } }) })
+    socket.dispatchEvent(synthetic); void synthetic.data
+    for (let replay = 0; replay < 100; replay++) {
+      const beforeId = `before-${replay}`, domainId = `domain-${replay}`, canvasId = `canvas-${replay}`, afterId = `after-${replay}`
+      socket.send('not json')
+      socket.send(JSON.stringify({ type: 'invocationresult', invocation_id: `outbound-${replay}`, function_id: functionId, result: { visible_fields: ['environment'] } }))
+      const inbound = new Promise(resolve => socket.addEventListener('message', event => { void event.data; resolve() }, { once: true }))
+      socket.send(JSON.stringify({ type: 'invokefunction', invocation_id: `control-${replay}`, function_id: 'control::inbound-request', data: {} }))
+      await inbound
+      await exchange({ type: 'invokefunction', invocation_id: beforeId, function_id: functionId, data: { values: { work_type: 'bug' } } })
+      await exchange({ type: 'invokefunction', invocation_id: domainId, function_id: functionId, data: { edit: 'add_environment' } })
+      await exchange({ type: 'invokefunction', invocation_id: canvasId, function_id: canvasFunction, data: { canvas_id: 'canvas-one', edit: 'add_environment' } })
+      await exchange({ type: 'invokefunction', invocation_id: `ignored-${replay}`, function_id: 'other::function', data: {} })
+      await exchange({ type: 'invokefunction', invocation_id: afterId, function_id: functionId, data: { values: { work_type: 'bug' } } })
+    }
+    socket.close()
+    return { rpc: window.__harnessRpc, controls: { outboundFakeResults: 100, inboundFakeRequests: 100 } }
+  }, { functionId, canvasFunction, url: rpcServer.url })
+  const { rpc, controls } = tracked
+  console.log(JSON.stringify({ oldTheme, stableTheme, hiddenLabel: await graphResult('hidden'), coveredLabel: await graphResult('covered'), sameColorLabel: await graphResult('sameColor'), transparentAncestorLabel: await graphResult('transparentAncestor'), visibleLabel: await graphResult('visible'), rpc, controls }))
 } finally {
   await browser.close()
+  await rpcServer.close()
 }

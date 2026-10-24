@@ -1,10 +1,8 @@
 /* Deterministic executor probe. Run with: docker compose exec -T web node - < validate-feature.cjs */
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
-const { chromium } = require('@playwright/test');
-const postgres = require('/app/api/node_modules/postgres');
 
-const api = process.env.API_URL || process.env.TEST_API_URL;
+const api = process.env.TEST_API_URL || process.env.API_URL;
 const app = process.env.E2E_APP_URL;
 const output = '/tmp/registry-validation';
 const observations = [];
@@ -33,6 +31,7 @@ function endpoint(from, to, worker = 'orders-worker') { return `/w/${worker}/com
 async function temporaryOrderingProbes() {
   const ids = ['required_order', 'enum_order', 'config_array_order'];
   const versions = ['9.90.0', '9.90.1'];
+  const postgres = require('/app/api/node_modules/postgres');
   const sql = postgres(process.env.DATABASE_URL, { max: 1 });
   try {
     await sql`delete from worker_version where worker_id = '10000000-0000-4000-8000-000000000001' and version in (${versions[0]}, ${versions[1]})`;
@@ -124,7 +123,56 @@ async function apiProbes() {
   return true;
 }
 
+async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, screenshotPath) {
+  const errors = [];
+  const onError = error => errors.push(String(error));
+  page.on('pageerror', onError);
+  let precondition = mode === 'navigation';
+  let attempted = false;
+  let error;
+  try {
+    if (mode === 'interaction') {
+      await page.goto(`${baseUrl}/workers/orders-worker?tab=changelog&from=1.0.0&to=2.0.0`, { waitUntil: 'domcontentloaded', timeout });
+      await page.waitForFunction(() => document.body.innerText.includes('orders::get')
+        && document.querySelectorAll('select')[0]?.value === '1.0.0'
+        && document.querySelectorAll('select')[1]?.value === '2.0.0', null, { timeout });
+      precondition = true;
+      if (!precondition) throw new Error('Successful comparison was not present before changing the pair');
+      const selects = page.locator('select');
+      attempted = true;
+      await selects.nth(1).selectOption('1.1.0', { timeout });
+      const compare = page.getByRole('button', { name: /compare/i }).first();
+      if (await compare.count() && await compare.isVisible()) await compare.click({ timeout });
+    } else {
+      attempted = true;
+      await page.goto(`${baseUrl}/workers/orders-worker?tab=changelog&from=1.1.0&to=2.0.0`, { waitUntil: 'domcontentloaded', timeout });
+    }
+    const expectedFrom = mode === 'interaction' ? '1.0.0' : '1.1.0';
+    const expectedTo = mode === 'interaction' ? '1.1.0' : '2.0.0';
+    await page.waitForFunction(({ from, to }) => {
+      const url = new URL(location.href);
+      return url.searchParams.get('from') === from && url.searchParams.get('to') === to
+        && !document.body.innerText.includes('orders::get')
+        && [...document.querySelectorAll('[role="alert"]')].some(node => node.checkVisibility() && node.innerText.trim());
+    }, { from: expectedFrom, to: expectedTo }, { timeout: verdictTimeout });
+  } catch (failure) { error = String(failure); }
+  try {
+    const observed = {
+      mode, precondition, attempted, error, errors, url: page.url(),
+      selected: await page.locator('select').evaluateAll(nodes => nodes.map(node => node.value)),
+      alerts: await page.getByRole('alert').evaluateAll(nodes => nodes.filter(node => node.checkVisibility()).map(node => node.innerText.trim()).filter(Boolean)),
+      body: (await page.locator('body').innerText()).slice(0, 6000),
+    };
+    if (screenshotPath) {
+      await page.screenshot({ path: screenshotPath, fullPage: true, timeout });
+      observed.screenshot = screenshotPath.split('/').pop();
+    }
+    return { passed: precondition && attempted && !error, ...observed };
+  } finally { page.off('pageerror', onError); }
+}
+
 async function browserProbes(apiHealthy) {
+  const { chromium } = require('@playwright/test');
   const ids = ['shared_url','stale_results','history','expanded_detail','keyboard_selectors','versions_regression','readme_regression','api_reference_regression'];
   if (!apiHealthy) { for (const id of ids) unavailable(`implementation.${id}`, 'Live browser observation', 'API prerequisite unavailable'); return; }
   let browser;
@@ -156,8 +204,6 @@ async function browserProbes(apiHealthy) {
     observe('implementation.expanded_detail', expanded, 'Closed timeout row opens and shows 3000 and 5000', { controlFound: !!(await detail.count()), ...disclosure });
     const selects = page.locator('select');
     let keyboard = false;
-    let staleCleared = false;
-    let staleAlertText = [];
     if (await selects.count() >= 2) {
       const originalValue = await selects.nth(1).inputValue();
       const selectedIndex = await selects.nth(1).evaluate(node => node.selectedIndex);
@@ -167,36 +213,19 @@ async function browserProbes(apiHealthy) {
       await page.keyboard.press('Enter');
       await page.waitForLoadState('networkidle');
       keyboard = (await selects.nth(1).inputValue()) !== originalValue;
-      // Restore a successful pair before inducing a failure in the same document.
-      await page.goto(comparisonUrl, { waitUntil: 'networkidle', timeout });
-      const beforeFailure = await page.locator('body').innerText();
-      const compare = page.getByRole('button', { name: /compare/i }).first();
-      const submitsComparison = await compare.count() > 0 && await compare.isVisible();
-      const sql = postgres(process.env.DATABASE_URL, { max: 1 });
-      try {
-        const renamed = await sql`update worker_version set version = '9.90.9'
-          where worker_id = '10000000-0000-4000-8000-000000000001' and version = '0.9.0'`;
-        if (renamed.count !== 1) throw new Error('Expected one temporary stale-state probe version');
-        await selects.nth(1).selectOption('0.9.0');
-        if (submitsComparison) await compare.click();
-        await page.waitForURL(url => url.searchParams.get('to') === '0.9.0', { waitUntil: 'domcontentloaded', timeout });
-        await page.getByRole('alert').first().waitFor({ state: 'visible', timeout });
-        await page.waitForFunction(() => !document.body.innerText.includes('orders::get'), null, { timeout });
-        const afterFailure = await page.locator('body').innerText();
-        staleAlertText = await page.getByRole('alert').evaluateAll(nodes => nodes
-          .filter(node => node.checkVisibility()).map(node => node.innerText.trim()).filter(Boolean));
-        staleCleared = new URL(page.url()).searchParams.get('to') === '0.9.0'
-          && beforeFailure.includes('orders::get') && !afterFailure.includes('orders::get')
-          && staleAlertText.length > 0;
-      } finally {
-        try {
-          await sql`update worker_version set version = '0.9.0'
-            where worker_id = '10000000-0000-4000-8000-000000000001' and version = '9.90.9'`;
-        } finally { await sql.end({ timeout: 5 }); }
-      }
     }
     observe('implementation.keyboard_selectors', keyboard, 'Keyboard input changes the selected version', { selectCount: await selects.count(), keyboard });
-    observe('implementation.stale_results', staleCleared, 'Successful comparison is cleared after changing the pair to a missing version', { staleCleared, alertText: staleAlertText });
+    const navigationPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const navigation = await comparisonFailure(navigationPage, app, 'navigation', timeout, `${output}/failure-navigation.png`);
+    await navigationPage.close();
+    const interaction = await comparisonFailure(page, app, 'interaction', timeout, `${output}/failure-interaction.png`);
+    if (!interaction.precondition) {
+      unavailable('implementation.stale_results', 'A failed comparison shows an alert and clears the previous result', 'successful_comparison_precondition_missing');
+      cases['implementation.stale_results'].observed = { navigation, interaction };
+    } else {
+      observe('implementation.stale_results', navigation.passed && interaction.passed,
+        'Direct navigation and a native version change show an error without stale comparison data', { navigation, interaction });
+    }
 
     await page.goto(`${app}/workers/orders-worker?tab=versions`, { waitUntil: 'networkidle', timeout });
     const versionsText = await page.locator('body').innerText();
@@ -224,14 +253,17 @@ async function downloadProbe(apiHealthy) {
   } catch (error) { unavailable('implementation.download_regression', 'Artifact bytes match hash', String(error)); }
 }
 
-(async () => {
+async function main() {
   await fs.mkdir(output, { recursive: true });
   const apiHealthy = await apiProbes();
   await browserProbes(apiHealthy);
   await downloadProbe(apiHealthy);
   for (const id of ['implementation.patch_application']) unavailable(id, 'Patch applies to pinned base', 'Measured by the controller before runtime probing');
   await fs.writeFile(`${output}/feature.json`, `${JSON.stringify({ api_url: api, app_url: app, observations, cases }, null, 2)}\n`);
-})().catch(async error => {
+}
+
+module.exports = { comparisonFailure };
+if (require.main === module) main().catch(async error => {
   await fs.mkdir(output, { recursive: true });
   await fs.writeFile(`${output}/feature.json`, `${JSON.stringify({ api_url: api, app_url: app, infrastructure_error: String(error), observations, cases }, null, 2)}\n`);
   console.error(error); process.exitCode = 1;

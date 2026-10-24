@@ -16,7 +16,7 @@ PLAYWRIGHT = Path(os.environ.get(
 class VisualWorkerEvalRegressionsTest(unittest.TestCase):
     def test_theme_and_canvas_checks_measure_stable_painted_output(self):
         if not PLAYWRIGHT.exists():
-            self.skipTest("dashboard Playwright is not installed")
+            self.fail("dashboard Playwright must be installed for evaluator controls")
         env = {**os.environ, "PLAYWRIGHT_MODULE_PATH": PLAYWRIGHT.as_uri()}
         completed = subprocess.run(
             ["node", str(FIXTURE)],
@@ -35,9 +35,26 @@ class VisualWorkerEvalRegressionsTest(unittest.TestCase):
         self.assertFalse(result["sameColorLabel"]["rendered_graph"])
         self.assertFalse(result["transparentAncestorLabel"]["rendered_graph"])
         self.assertTrue(result["visibleLabel"]["label_painted"])
-        self.assertEqual(result["rpc"]["invalid"], 1)
-        self.assertEqual(result["rpc"]["requests"][0]["invocation_id"], "one")
-        self.assertEqual(result["rpc"]["results"][0]["invocation_id"], "one")
+        self.assertEqual(result["controls"], {"outboundFakeResults": 100, "inboundFakeRequests": 100})
+        self.assertEqual(result["rpc"]["invalid"], 100)
+        self.assertEqual(result["rpc"]["sequence"], 800)
+        self.assertEqual(
+            [packet["invocation_id"] for packet in result["rpc"]["requests"]],
+            [value for replay in range(100) for value in (f"before-{replay}", f"domain-{replay}", f"canvas-{replay}", f"after-{replay}")],
+        )
+        self.assertEqual(
+            [packet["invocation_id"] for packet in result["rpc"]["results"]],
+            [value for replay in range(100) for value in (f"before-{replay}", f"domain-{replay}", f"canvas-{replay}", f"after-{replay}")],
+        )
+        packets = sorted(result["rpc"]["requests"] + result["rpc"]["results"], key=lambda packet: packet["sequence"])
+        self.assertEqual([packet["sequence"] for packet in packets], list(range(1, 801)))
+        self.assertEqual(
+            [packet["invocation_id"] for packet in packets],
+            [value for replay in range(100) for value in (
+                f"before-{replay}", f"before-{replay}", f"domain-{replay}", f"domain-{replay}",
+                f"canvas-{replay}", f"canvas-{replay}", f"after-{replay}", f"after-{replay}",
+            )],
+        )
 
 
 if __name__ == "__main__":

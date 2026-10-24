@@ -1,11 +1,23 @@
 import fs from 'node:fs'
+import { startWebSocketServer } from '../visual-worker-eval/websocket-server.mjs'
 
 const playwright = (await import(process.env.PLAYWRIGHT_MODULE_PATH)).default
 
 const source = fs.readFileSync(new URL('../../../src/scenarios/chess_engine_build.rs', import.meta.url), 'utf8')
 const tail = source.slice(source.indexOf('async fn inspect_ui('))
 const inspect = tail.match(/r#"([\s\S]*?)"#/)[1]
+const trackerProbe = [...source.matchAll(/r#"([\s\S]*?)"#/g)]
+  .map(match => match[1])
+  .find(code => code.includes('window.__harnessRpc={{requests:[],results:[],invalid:0}}'))
 const start = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+const rpcServer = await startWebSocketServer(message => {
+  if (message.function_id === 'control::inbound-request') return {
+    type: 'invokefunction', invocation_id: `inbound-${message.invocation_id}`, function_id: 'chess-engine::play', data: { fen: start, move: 'e2e4' },
+  }
+  return message.type === 'invokefunction' ? {
+    type: 'invocationresult', invocation_id: message.invocation_id, function_id: message.function_id, result: { fen: start },
+  } : null
+})
 const browser = await playwright.chromium.launch({ ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}), headless: true })
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 
@@ -30,9 +42,13 @@ try {
     document.querySelector('[data-testid="fen"]').textContent = start
   }, start)
   const run = () => page.evaluate(`(async()=>{const expected=${JSON.stringify(start)};const afterMove=false;${inspect}})()`)
-  const invisible = await run()
+  const invisibleReplays = []
+  for (let replay = 0; replay < 100; replay++) invisibleReplays.push(await run())
+  const invisible = invisibleReplays[0]
   await page.locator('[data-piece]').evaluateAll(elements => elements.forEach(element => { element.style.color = '#111' }))
-  const visible = await run()
+  const visibleReplays = []
+  for (let replay = 0; replay < 100; replay++) visibleReplays.push(await run())
+  const visible = visibleReplays[0]
   await page.locator('[data-square="e2"]').evaluate(element => { element.style.color = '#555' })
   const variedPieceStyle = await run()
   await page.locator('[data-square="e2"]').evaluate(element => {
@@ -80,7 +96,40 @@ try {
     for (const element of elements) { element.textContent = ''; const image = document.createElement('img'); image.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"></svg>')}`; element.append(image); await image.decode() }
   })
   const transparentImages = await run()
-  console.log(JSON.stringify({ invisible, visible, variedPieceStyle, clipped, identicalBackgrounds, mixedGradients, sameColorGradients, transparentGradients, brokenBackgrounds, svgPieces, brokenImages, visibleImages, transparentImages }))
+  const rpcPage = await browser.newPage()
+  await rpcPage.setContent('<main>rpc</main>')
+  const functionId = 'chess-engine::play'
+  const trackerCode = trackerProbe
+    .replace('{encoded_play_function}', JSON.stringify(functionId))
+    .replaceAll('{{', '{').replaceAll('}}', '}')
+  await rpcPage.evaluate(`(()=>{${trackerCode}})()`)
+  const tracked = await rpcPage.evaluate(async ({ functionId, url }) => {
+    const socket = new WebSocket(url)
+    await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }) })
+    const exchange = message => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`RPC timeout: ${message.invocation_id}`)), 1000)
+      const receive = event => {
+        const response = JSON.parse(event.data)
+        if (response.invocation_id !== message.invocation_id) return
+        clearTimeout(timeout); socket.removeEventListener('message', receive); resolve(response)
+      }
+      socket.addEventListener('message', receive)
+      socket.send(JSON.stringify(message))
+    })
+    for (let replay = 0; replay < 100; replay++) {
+      const synthetic = new MessageEvent('message', { data: JSON.stringify({ type: 'invocationresult', invocation_id: `synthetic-${replay}`, function_id: functionId, result: { fen: 'canned' } }) })
+      socket.dispatchEvent(synthetic); void synthetic.data
+      socket.send(JSON.stringify({ type: 'invocationresult', invocation_id: `outbound-${replay}`, function_id: functionId, result: { fen: 'canned' } }))
+      const inbound = new Promise(resolve => socket.addEventListener('message', event => { void event.data; resolve() }, { once: true }))
+      socket.send(JSON.stringify({ type: 'invokefunction', invocation_id: `control-${replay}`, function_id: 'control::inbound-request', data: {} }))
+      await inbound
+      await exchange({ type: 'invokefunction', invocation_id: `play-${replay}`, function_id: functionId, data: { fen: 'before', move: 'e2e4' } })
+    }
+    socket.close()
+    return { rpc: window.__harnessRpc, controls: { outboundFakeResults: 100, inboundFakeRequests: 100 } }
+  }, { functionId, url: rpcServer.url })
+  console.log(JSON.stringify({ invisible, visible, invisibleReplays: invisibleReplays.length, invisibleStable: invisibleReplays.every(result => !result.passed), visibleReplays: visibleReplays.length, visibleStable: visibleReplays.every(result => result.passed), variedPieceStyle, clipped, identicalBackgrounds, mixedGradients, sameColorGradients, transparentGradients, brokenBackgrounds, svgPieces, brokenImages, visibleImages, transparentImages, rpc: tracked.rpc, controls: tracked.controls }))
 } finally {
   await browser.close()
+  await rpcServer.close()
 }

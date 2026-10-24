@@ -90,7 +90,7 @@ PIN_KEYS = ("version", "commit", "repository", "path")
 #: src/scenarios/kanban/catalog.json (scripts/check_kanban_catalog.py).
 FIXTURES = {
     "kanban-e2e-fixture": ("iii-hq/kanban-e2e-fixture", "main", "case-kanban-",
-                           "49b505e46d2f99afba873197d28c79e257190082"),
+                           "de7bb56cf79dddcf6fbb93ea1f0350f7620d1de6"),
     "e2e-fixture": ("iii-hq/e2e-fixture", "HEAD", "case-registry-", None),
 }
 

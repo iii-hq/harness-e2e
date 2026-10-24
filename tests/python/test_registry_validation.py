@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 ASSETS = Path(__file__).resolve().parents[2] / "tests/fixtures/registry-version-comparison"
@@ -98,6 +99,145 @@ class ValidationTests(unittest.TestCase):
             {"id": metric, "status": "measured", "value": 0 if metric in failed else 1}
             for metric in module.PUBLIC_VERIFICATION_IDS
         ], "cases": {}}
+
+    def fault_config(self, receipts=True, probe_id=None):
+        probe_id = probe_id or str(uuid.uuid4())
+        config = {"probe_id": probe_id, "paths": module.FAULT_PATHS}
+        status = {**config, "receipts": []}
+        if receipts:
+            status["receipts"] = [
+                {"probe_id": probe_id, "method": "GET", "path": path, "status": 503,
+                 "count": 1, "first_sequence": index, "last_sequence": index}
+                for index, path in enumerate(module.FAULT_PATHS.values(), 1)
+            ]
+        return config, status
+
+    def run_feature_probe(self, feature, config=None, status=None, run_error=None,
+                          copy_error=False, restart_error=False, clear_error=False):
+        task = self.root / "test-2"
+        source = task / "workspace/output/validator/feature.json"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(json.dumps(feature))
+        commands = []
+
+        def execute(_state, command, timeout=120):
+            commands.append(command)
+            if command.endswith(" configure"):
+                return {"exit_code": 0 if config is not None else 1,
+                        "stdout": json.dumps(config) if config is not None else "",
+                        "stderr": "" if config is not None else "configure failed"}
+            if command.endswith(" status"):
+                return {"exit_code": 0 if status is not None else 1,
+                        "stdout": json.dumps(status) if status is not None else "",
+                        "stderr": "" if status is not None else "status failed"}
+            if restart_error and "restart web" in command:
+                return {"exit_code": 1, "stdout": "", "stderr": "restart failed"}
+            if copy_error and " cp web:" in command:
+                return {"exit_code": 1, "stdout": "", "stderr": "copy failed"}
+            if clear_error and command.endswith(" clear"):
+                return {"exit_code": 1, "stdout": "", "stderr": "clear failed"}
+            return {"exit_code": 0, "stdout": "", "stderr": ""}
+
+        completed = module.subprocess.CompletedProcess([], 0, b"probe output", b"")
+        with patch.object(module, "controller_command", side_effect=execute):
+            with patch.object(module.subprocess, "run", side_effect=run_error or [completed]):
+                result = module.feature_probe(task, ASSETS, {"container": "outer"})
+        return result, commands, task
+
+    def test_feature_probe_orders_gateway_and_cleans_up_failures(self):
+        config, status = self.fault_config()
+        (feature, error), commands, task = self.run_feature_probe(self.feature(), config, status)
+        self.assertIsNone(error)
+        self.assertTrue(feature["fault_gateway"]["receipts_valid"])
+        self.assertTrue(feature["fault_gateway"]["restart_ready"])
+        self.assertTrue(feature["fault_gateway"]["cleared"])
+        self.assertIn(" configure", commands[0])
+        self.assertIn("restart web", commands[1])
+        self.assertIn("up -d --no-deps --wait --wait-timeout 90 web", commands[1])
+        self.assertIn(" cp web:", commands[2])
+        self.assertEqual([command.rsplit(" ", 1)[-1] for command in commands[-2:]],
+                         ["status", "clear"])
+        saved = json.loads((task / "validation/feature.json").read_text())
+        self.assertEqual(saved["fault_gateway"]["status"], status)
+
+        for expected, kwargs in (
+            ("feature_probe_copy_failed", {"copy_error": True}),
+            ("feature_probe_timeout", {
+                "run_error": module.subprocess.TimeoutExpired("docker", 180)}),
+        ):
+            with self.subTest(expected):
+                (found, error), commands, _ = self.run_feature_probe(
+                    self.feature(), config, status, **kwargs)
+                self.assertIsNone(found)
+                self.assertEqual(error, expected)
+                self.assertEqual([command.rsplit(" ", 1)[-1] for command in commands[-2:]],
+                                 ["status", "clear"])
+
+    def test_feature_probe_requires_correlated_receipts(self):
+        config, missing = self.fault_config(receipts=False)
+        for name, status in (
+            ("missing", missing),
+            ("wrong probe", self.fault_config(probe_id=str(uuid.uuid4()))[1]),
+        ):
+            with self.subTest(name):
+                (feature, error), _commands, _task = self.run_feature_probe(
+                    self.feature(failed={"implementation.stale_results"}), config, status)
+                self.assertIsNone(error)
+                stale = module.checks_by_id(feature)["implementation.stale_results"]
+                self.assertEqual((stale["status"], stale["reason"]),
+                                 ("unavailable", "fault_not_exercised"))
+
+    def test_fault_receipts_reject_100_bypass_controls(self):
+        for kind in range(3):
+            for index in range(100):
+                config, status = self.fault_config()
+                if kind == 0:
+                    status["receipts"].pop()
+                elif kind == 1:
+                    status["receipts"][index % 2]["probe_id"] = str(uuid.uuid4())
+                else:
+                    status["receipts"][index % 2]["path"] = f"/untrusted/{index}"
+                with self.subTest(index=index, kind=kind):
+                    self.assertFalse(module.fault_receipts_valid(config, status))
+
+    def test_feature_probe_preserves_measured_failure_with_receipts(self):
+        config, status = self.fault_config()
+        feature = self.feature(failed={"implementation.stale_results"})
+        (feature, error), _commands, _task = self.run_feature_probe(feature, config, status)
+        self.assertIsNone(error)
+        self.assertEqual(module.checks_by_id(feature)["implementation.stale_results"], {
+            "id": "implementation.stale_results", "status": "measured", "value": 0,
+        })
+
+    def test_feature_probe_configure_failure_only_blocks_stale_result(self):
+        feature = self.feature(failed={"implementation.function_removal"})
+        (feature, error), commands, _task = self.run_feature_probe(feature)
+        self.assertIsNone(error)
+        checks = module.checks_by_id(feature)
+        self.assertEqual(checks["implementation.function_removal"]["value"], 0)
+        self.assertEqual(checks["implementation.stale_results"]["reason"],
+                         "fault_gateway_prerequisite_missing")
+        self.assertEqual([command.rsplit(" ", 1)[-1] for command in commands[-2:]],
+                         ["status", "clear"])
+
+    def test_feature_probe_requires_cold_restart_and_cleanup(self):
+        config, status = self.fault_config()
+        for expected, kwargs in (
+            ("web_restart_failed", {"restart_error": True}),
+            ("fault_cleanup_failed", {"clear_error": True}),
+        ):
+            with self.subTest(expected):
+                (feature, error), _commands, _task = self.run_feature_probe(
+                    self.feature(), config, status, **kwargs)
+                self.assertIsNone(error)
+                gateway = feature["fault_gateway"]
+                self.assertEqual(gateway["restart_ready"], not kwargs.get("restart_error", False))
+                self.assertEqual(gateway["cleared"], not kwargs.get("clear_error", False))
+                checks = module.checks_by_id(feature)
+                self.assertEqual(checks["implementation.function_removal"]["value"], 1)
+                stale = checks["implementation.stale_results"]
+                self.assertEqual((stale["status"], stale["reason"]),
+                                 ("unavailable", expected))
 
     def test_verification_uses_probe_observations_and_bounded_ids(self):
         task, state = self.verification_task()
