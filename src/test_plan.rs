@@ -907,12 +907,13 @@ mod tests {
     }
 
     /// Tags never reach the plan's digest: the cohort key Release Control
-    /// groups every execution by. A reviewed change to the plan updates this.
+    /// groups every execution by. A reviewed change to the plan updates this,
+    /// and gives every suite a new `profile_sha256` (README, Test plans).
     #[test]
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:110541457d4acaac116778ee1549c51867dc40a6322e59c1f5adc6155a88474c"
+            "sha256:dfe84747180f3b6cfe44ef19fdeb13cf98811cb68fdd19fd4f3a0b1f86b00787"
         );
     }
 
@@ -1139,58 +1140,100 @@ mod tests {
     }
 
     /// Scheduled tests whose evaluator scores what a live stack left behind:
-    /// their controls run where that stack does, named here.
-    const LIVE_CONTROLS: &[(ScenarioId, &str)] = &[
+    /// why, and the deterministic controls CI runs for them instead. An
+    /// empty list says "no CI control" in its reason, with what runs by hand.
+    const LIVE_CONTROLS: &[(ScenarioId, &str, &[&str])] = &[
         (
             ScenarioId::RegistryImplementation,
-            "capture builds the delivery in Docker and probes it; validate.py has its \
-             controls in tests/python/test_registry_validation.py",
+            "capture builds the delivery in Docker and probes it; validate.py and the \
+             feature probe's failure regressions are scored in CI",
+            &[
+                "tests/python/test_registry_validation.py",
+                "tests/python/test_registry_feature_probe.py",
+            ],
         ),
         (
             ScenarioId::RegistryVerification,
-            "capture replays the report against the delivery in Docker; the empty and the \
-             all-passing report are scored in tests/python/test_registry_validation.py",
+            "capture replays the report against the delivery in Docker; the empty, the \
+             claim-only and the all-passing report are scored in CI",
+            &["tests/python/test_registry_validation.py"],
         ),
         (
             ScenarioId::TrendingTopicsBuild,
-            "capture builds the pushed site and runs Playwright in Docker; \
-             tests/fixtures/trending-topics-build/validate-controls.mjs holds the reference app",
+            "capture builds the pushed site and runs Playwright in Docker; CI runs the \
+             evaluator, lifecycle and focus controls, while the reference app in \
+             validate-controls.mjs needs the private e2e-fixture app and runs by hand",
+            &[
+                "tests/fixtures/trending-topics-build/evaluator.test.mjs",
+                "tests/fixtures/trending-topics-build/test_lifecycle.py",
+                "tests/python/test_trending_focus_eval_regressions.py",
+            ],
         ),
         (
             ScenarioId::ChessEngineBuild,
-            "capture plays the Compose-started Worker in the Console; \
-             tests/fixtures/chess-eval/negative-control.mjs holds its browser controls",
+            "capture plays the Compose-started Worker in the Console; CI runs the browser \
+             controls of tests/fixtures/chess-eval/negative-control.mjs",
+            &["tests/python/test_chess_eval_regressions.py"],
         ),
-        (
-            ScenarioId::FormFlowBuild,
-            "capture drives the Compose-started Worker in the Console; \
-             tests/fixtures/visual-worker-eval/regressions.mjs holds its browser controls",
-        ),
-        (
-            ScenarioId::StateMachineCanvasBuild,
-            "capture drives the Compose-started Worker in the Console; \
-             tests/fixtures/visual-worker-eval/regressions.mjs holds its browser controls",
-        ),
+        (ScenarioId::FormFlowBuild, VISUAL_LIVE, VISUAL_CI),
+        (ScenarioId::StateMachineCanvasBuild, VISUAL_LIVE, VISUAL_CI),
         (
             ScenarioId::LinklyTutorial,
-            "capture probes the running linkly-agentic scaffold, chapter by chapter",
+            "capture probes the running linkly-agentic scaffold, chapter by chapter; \
+             no CI control",
+            &[],
         ),
         (
             ScenarioId::OnboardingTour,
-            "capture reads what the tour left in the onboarding stack's engine",
+            "capture reads what the tour left in the onboarding stack's engine; no CI control",
+            &[],
         ),
-        (ScenarioId::KanbanC1Foundation, KANBAN_LIVE),
-        (ScenarioId::KanbanC2Persistence, KANBAN_LIVE),
-        (ScenarioId::KanbanC3Board, KANBAN_LIVE),
-        (ScenarioId::KanbanC4TicketFlow, KANBAN_LIVE),
-        (ScenarioId::KanbanC5EditMove, KANBAN_LIVE),
-        (ScenarioId::KanbanC6Discussion, KANBAN_LIVE),
-        (ScenarioId::KanbanC7Live, KANBAN_LIVE),
+        (ScenarioId::KanbanC1Foundation, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC2Persistence, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC3Board, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC4TicketFlow, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC5EditMove, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC6Discussion, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC7Live, KANBAN_LIVE, KANBAN_CI),
     ];
+    const VISUAL_LIVE: &str = "capture drives the Compose-started Worker in the Console; \
+         CI runs the browser controls of tests/fixtures/visual-worker-eval/regressions.mjs";
+    const VISUAL_CI: &[&str] = &["tests/python/test_visual_worker_eval_regressions.py"];
     const KANBAN_LIVE: &str =
         "capture runs the delivered application under Compose in an isolated \
-         Docker pair and probes it with Playwright; scripts/kanban_eval/run.py runs its base and \
-         reference controls and tests/python/test_kanban*.py its scoring regressions";
+         Docker pair and probes it with Playwright; CI runs the browser controls and scoring \
+         regressions, while the base and reference controls of scripts/kanban_eval/run.py \
+         need Docker and the fixture and run by hand";
+    const KANBAN_CI: &[&str] = &[
+        "tests/python/test_kanban_browser_flows.py",
+        "tests/python/test_kanban_scoring_regressions.py",
+    ];
+    const CI: &str = include_str!("../.github/workflows/ci.yml");
+
+    /// Every control the table cites exists and CI runs it: named in the
+    /// workflow, or a `tests/python/test_*.py` its discovery runs.
+    #[test]
+    fn the_live_controls_cited_run_in_ci() {
+        let discovers = CI.contains("unittest discover -s tests/python -p 'test_*.py'");
+        for (id, reason, controls) in LIVE_CONTROLS {
+            assert_eq!(
+                controls.is_empty(),
+                reason.contains("no CI control"),
+                "{id}: say \"no CI control\" exactly when none is cited"
+            );
+            for control in *controls {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(control);
+                assert!(path.is_file(), "{id}: {control} does not exist");
+                let discovered = discovers
+                    && control.starts_with("tests/python/test_")
+                    && control.ends_with(".py");
+                assert!(
+                    discovered || CI.contains(control),
+                    "{id}: CI does not run {control}"
+                );
+            }
+        }
+    }
 
     /// The null and the reference delivery of a scheduled test whose
     /// evaluator scores offline, in that order.
@@ -1209,7 +1252,7 @@ mod tests {
             ScenarioId::ValidationSelfRepair => validation_self_repair::tests::controls(),
             ScenarioId::ContextPressure => context_pressure::tests::controls(),
             ScenarioId::PromptInjectionResilience => prompt_injection_resilience::tests::controls(),
-            ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls(),
+            ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls().await,
             _ => return None,
         })
     }
@@ -1237,13 +1280,13 @@ mod tests {
                 suite.scenarios.iter().chain(modules).map(String::as_str)
             })
             .collect();
-        for (id, _) in LIVE_CONTROLS {
+        for (id, _, _) in LIVE_CONTROLS {
             assert!(scheduled.contains(id.as_str()), "{id} is not scheduled");
         }
         let mut holes = Vec::new();
         for id in scheduled {
             let id: ScenarioId = id.parse().unwrap();
-            let live = LIVE_CONTROLS.iter().any(|(live, _)| *live == id);
+            let live = LIVE_CONTROLS.iter().any(|(live, _, _)| *live == id);
             let spec = id.spec("control");
             let score = |evaluation: crate::scenarios::ObjectiveEvaluation| {
                 let criteria = crate::suite::criterion_reports(&spec, evaluation.awards);

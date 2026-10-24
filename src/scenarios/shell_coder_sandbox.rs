@@ -186,7 +186,7 @@ const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
-    "Are the source and tests inspected, one file or a batch at a time, and is the public failure reproduced before the first production edit?",
+    "Are the source and tests read without error, one file or a batch at a time (a stat probe reads nothing), and is the public failure reproduced before the first production edit?",
 )
 .labeled("Failure reproduced before the first edit");
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
@@ -779,21 +779,27 @@ impl WorkflowAudit {
 fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAudit {
     let invocations = common::function_invocations(&observation.transcript);
     let coder_info = invocation_index(&invocations, |call| call.function_id == "coder::info");
-    let source_read = invocation_index(&invocations, |call| is_coder_read(call, root, SOURCE_PATH));
-    let tests_read = invocation_index(&invocations, |call| {
-        is_coder_read(call, root, PUBLIC_TEST_PATH)
-    });
-    let task_read = invocation_index(&invocations, |call| is_coder_read(call, root, TASK_PATH));
+    // A read counts once its result came back without an error.
+    let reads = |relative: &str| {
+        invocation_indexes(&invocations, |call| is_coder_read(call, root, relative))
+            .into_iter()
+            .filter(|index| {
+                common::function_result(&observation.transcript, &invocations[*index]).is_some()
+            })
+            .collect::<Vec<_>>()
+    };
+    let source_read = reads(SOURCE_PATH).first().copied();
+    let tests_read = reads(PUBLIC_TEST_PATH).first().copied();
+    let task_read = reads(TASK_PATH).first().copied();
     let first_source_edit = invocation_index(&invocations, |call| {
         is_coder_update(call, root, SOURCE_PATH)
     });
     let diagnosis_create = invocation_index(&invocations, |call| {
         is_coder_create(call, root, DIAGNOSIS_DRAFT_PATH)
     });
-    let final_source_read =
-        invocation_indexes(&invocations, |call| is_coder_read(call, root, SOURCE_PATH))
-            .into_iter()
-            .find(|index| first_source_edit.is_some_and(|edit| *index > edit));
+    let final_source_read = reads(SOURCE_PATH)
+        .into_iter()
+        .find(|index| first_source_edit.is_some_and(|edit| *index > edit));
     let diagnosis_move = invocation_index(&invocations, |call| {
         is_coder_move(call, root, DIAGNOSIS_DRAFT_PATH, DIAGNOSIS_PATH)
     });
@@ -979,19 +985,24 @@ fn invocation_indexes(
 }
 
 /// A `coder::read-file` call that reads `relative`, alone (`path`) or in a
-/// batch (`paths`, each a path or `{path, line_from, line_to}`).
+/// batch (`paths`, each a path or `{path, line_from, line_to}`). A `stat`
+/// probe returns size and dates, not the content, so it reads nothing.
 fn is_coder_read(call: &common::ObservedFunctionCall, root: &Path, relative: &str) -> bool {
+    let reads_content = |item: &Value| item.get("stat").and_then(Value::as_bool) != Some(true);
+    let single = call
+        .arguments
+        .get("path")
+        .filter(|_| reads_content(&call.arguments));
     let batch = call
         .arguments
         .get("paths")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .filter(|item| reads_content(item))
         .map(|item| item.get("path").unwrap_or(item));
     call.function_id == "coder::read-file"
-        && call
-            .arguments
-            .get("path")
+        && single
             .into_iter()
             .chain(batch)
             .any(|path| workspace_path_matches(path.as_str(), root, relative))
@@ -1247,8 +1258,8 @@ fn workspace_root(run_id: &str) -> PathBuf {
 pub(crate) mod tests {
     use super::*;
 
-    /// The prompt's evidence order, each shell run answered as the stack
-    /// answers it, with the files read in one batch.
+    /// The prompt's evidence order, each shell run and read answered as the
+    /// stack answers it, with the files read in one batch.
     fn reference_transcript() -> Value {
         let unittest = json!({
             "command": "python3",
@@ -1260,7 +1271,7 @@ pub(crate) mod tests {
         });
         let calls = [
             ("coder::info", json!({}), None),
-            ("agent_trigger", read_all, None),
+            ("agent_trigger", read_all, Some(json!({ "results": [] }))),
             (
                 "shell::exec",
                 unittest.clone(),
@@ -1277,7 +1288,11 @@ pub(crate) mod tests {
                 None,
             ),
             ("shell::exec", unittest, Some(json!({ "exit_code": 0 }))),
-            ("coder::read-file", json!({ "path": SOURCE_PATH }), None),
+            (
+                "coder::read-file",
+                json!({ "path": SOURCE_PATH }),
+                Some(json!({ "content": REFERENCE_SOURCE })),
+            ),
             (
                 "shell::exec",
                 json!({ "command": "python3", "args": [SOURCE_PATH, "--demo"] }),
@@ -1292,6 +1307,11 @@ pub(crate) mod tests {
         let mut messages = Vec::new();
         for (index, (function_id, arguments, details)) in calls.into_iter().enumerate() {
             let call_id = format!("call-{index}");
+            // The stack records the result under the function it ran.
+            let ran = arguments["function"]
+                .as_str()
+                .unwrap_or(function_id)
+                .to_owned();
             messages.push(json!({ "message": { "role": "assistant", "content": [{
                 "type": "function_call", "id": call_id, "function_id": function_id,
                 "arguments": arguments,
@@ -1299,7 +1319,7 @@ pub(crate) mod tests {
             if let Some(details) = details {
                 messages.push(json!({ "message": {
                     "role": "function_result", "function_call_id": call_id,
-                    "function_id": function_id, "is_error": false, "details": details,
+                    "function_id": ran, "is_error": false, "details": details,
                 } }));
             }
         }
@@ -1435,12 +1455,19 @@ pub(crate) mod tests {
         );
     }
 
-    /// The read as agents make it: one `agent_trigger` naming every file.
-    fn read_files(paths: Value) -> Value {
-        json!({ "messages": [{ "message": { "role": "assistant", "content": [{
-            "type": "function_call", "id": "call-read", "function_id": "agent_trigger",
-            "arguments": { "function": "coder::read-file", "payload": { "paths": paths } },
-        }] } }] })
+    /// The read as agents make it: one `agent_trigger` naming every file,
+    /// and its result as the stack records it.
+    fn read_files(paths: Value, is_error: bool) -> Value {
+        json!({ "messages": [
+            { "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": "call-read", "function_id": "agent_trigger",
+                "arguments": { "function": "coder::read-file", "payload": { "paths": paths } },
+            }] } },
+            { "message": {
+                "role": "function_result", "function_call_id": "call-read",
+                "function_id": "coder::read-file", "is_error": is_error,
+            } },
+        ] })
     }
 
     #[test]
@@ -1455,11 +1482,12 @@ pub(crate) mod tests {
                 Vec::new(),
             )
         };
-        let batch = observation(read_files(json!([
+        let all = json!([
             SOURCE_PATH,
             { "path": root.join(PUBLIC_TEST_PATH), "line_from": 1, "line_to": 80 },
             TASK_PATH,
-        ])));
+        ]);
+        let batch = observation(read_files(all.clone(), false));
         let audit = workflow_audit(&batch, &root);
         assert_eq!(
             (audit.source_read, audit.tests_read, audit.task_read),
@@ -1467,11 +1495,20 @@ pub(crate) mod tests {
         );
         assert_eq!(audit.investigation_points(), 8);
 
-        // A batch that leaves out the tests did not inspect them.
-        let partial = observation(read_files(json!([SOURCE_PATH, TASK_PATH])));
-        let audit = workflow_audit(&partial, &root);
-        assert_eq!(audit.tests_read, None);
-        assert_eq!(audit.investigation_points(), 0);
+        // A batch that leaves out the tests, only stats them, or fails, did
+        // not inspect them.
+        for (paths, is_error) in [
+            (json!([SOURCE_PATH, TASK_PATH]), false),
+            (
+                json!([SOURCE_PATH, { "path": PUBLIC_TEST_PATH, "stat": true }, TASK_PATH]),
+                false,
+            ),
+            (all, true),
+        ] {
+            let audit = workflow_audit(&observation(read_files(paths, is_error)), &root);
+            assert_eq!(audit.tests_read, None);
+            assert_eq!(audit.investigation_points(), 0);
+        }
 
         let single = common::ObservedFunctionCall {
             function_id: "coder::read-file".to_string(),
@@ -1479,6 +1516,11 @@ pub(crate) mod tests {
         };
         assert!(is_coder_read(&single, &root, PUBLIC_TEST_PATH));
         assert!(!is_coder_read(&single, &root, SOURCE_PATH));
+        let stat = common::ObservedFunctionCall {
+            function_id: "coder::read-file".to_string(),
+            arguments: json!({ "path": PUBLIC_TEST_PATH, "stat": true }),
+        };
+        assert!(!is_coder_read(&stat, &root, PUBLIC_TEST_PATH));
     }
 
     #[test]

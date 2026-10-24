@@ -41,7 +41,7 @@ const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
 const CONCISE_MIGRATION_CONFIRMATION: AssessmentSpec = AssessmentSpec::scored(
     "concise_migration_confirmation",
     10,
-    "After a successful write of the owned key, is the final response concise and does it state that revision 2 contains three items?",
+    "After a successful write leaves the owned key at revision 2 with three items, is the final response concise and does it state that revision 2 contains three items?",
 )
 .labeled("Reply briefly confirms revision 2 has three items");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -287,9 +287,12 @@ impl Scenario for PersistentState {
             && gamma_once;
 
         let reply = observation.response.trim();
-        // A confirmation confirms something only after the write: the
-        // prompt names revision 2 and three items, so a reply alone can say it.
-        let concise = !writes.is_empty()
+        // A confirmation confirms something only after the write, and only
+        // what the key holds: the prompt names revision 2 and three items, so
+        // a reply alone can say it.
+        let confirmed =
+            !writes.is_empty() && state.get("revision") == Some(&json!(2)) && items.len() == 3;
+        let concise = confirmed
             && !reply.is_empty()
             && reply.lines().count() <= 3
             && reply.chars().count() <= 400
@@ -314,8 +317,10 @@ impl Scenario for PersistentState {
                 CONCISE_MIGRATION_CONFIRMATION.full_or_zero(
                     concise,
                     format!(
-                        "successful_owned_writes={}, lines={}, chars={}, mentions_revision_2={}, mentions_3_items={}",
+                        "successful_owned_writes={}, stored_revision={}, stored_items={}, lines={}, chars={}, mentions_revision_2={}, mentions_3_items={}",
                         writes.len(),
+                        state.get("revision").unwrap_or(&Value::Null),
+                        items.len(),
                         reply.lines().count(),
                         reply.chars().count(),
                         mentions_number(reply, 2),
@@ -399,18 +404,17 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    /// The null delivery (the record untouched and a reply that only claims
-    /// the migration) and the reference one (read the key, write the migrated
-    /// record once, confirm).
-    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
-        let reply = "Migrated to revision 2 with 3 items.";
+    const REPLY: &str = "Migrated to revision 2 with 3 items.";
+
+    /// Read the owned key, then write `value` to it once.
+    fn read_then_write(value: Value) -> Value {
         let scope = scope("control");
         let mut messages = Vec::new();
         for (index, (function_id, arguments)) in [
             ("state::get", json!({ "scope": scope, "key": KEY })),
             (
                 "state::set",
-                json!({ "scope": scope, "key": KEY, "value": expected() }),
+                json!({ "scope": scope, "key": KEY, "value": value }),
             ),
         ]
         .into_iter()
@@ -426,10 +430,36 @@ pub(crate) mod tests {
                 "function_id": function_id, "is_error": false,
             } }));
         }
+        json!({ "messages": messages })
+    }
+
+    /// The null delivery (the record untouched and a reply that only claims
+    /// the migration) and the reference one (read the key, write the migrated
+    /// record once, confirm).
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
         [
-            evaluation_of(json!({ "messages": [] }), baseline(), reply).await,
-            evaluation_of(json!({ "messages": messages }), expected(), reply).await,
+            evaluation_of(json!({ "messages": [] }), baseline(), REPLY).await,
+            evaluation_of(read_then_write(expected()), expected(), REPLY).await,
         ]
+    }
+
+    /// A write of the wrong record does not back the confirmation.
+    #[tokio::test]
+    async fn the_confirmation_needs_the_record_it_confirms() {
+        let confirmation = |evaluation: ObjectiveEvaluation| {
+            evaluation
+                .awards
+                .into_iter()
+                .find(|award| award.id == CONCISE_MIGRATION_CONFIRMATION.id())
+                .and_then(|award| award.awarded)
+        };
+        let wrong = evaluation_of(read_then_write(json!({})), json!({}), REPLY).await;
+        assert_eq!(confirmation(wrong), Some(0));
+        let right = evaluation_of(read_then_write(expected()), expected(), REPLY).await;
+        assert_eq!(
+            confirmation(right),
+            Some(CONCISE_MIGRATION_CONFIRMATION.weight())
+        );
     }
 
     #[test]

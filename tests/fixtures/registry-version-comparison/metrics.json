@@ -633,9 +633,9 @@
       "metrics": [
         {
           "id": "verification.recall",
-          "question": "What proportion of independently failing required checks did the tester report as failing?",
+          "question": "What proportion of independently failing required checks did the tester report as failing, with an empty set counting only beside an executed check?",
           "label": "Tester reports the checks that really fail",
-          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1 when the tester delivered a readable report, 0 when it did not.",
+          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1 when the tester delivered a readable report with at least one executed check, 0 when it did not.",
           "measurement": "ratio",
           "weight": 35,
           "gate": true,
@@ -648,9 +648,9 @@
         },
         {
           "id": "verification.precision",
-          "question": "What proportion of reported failing checks are independently reproduced as failing?",
+          "question": "What proportion of reported failing checks are independently reproduced as failing, with an empty set counting only beside an executed check?",
           "label": "Reported failures reproduce independently",
-          "expected": "Execute the contract probes independently and match each reported failing check by ID. If both the independent and reported failure sets are empty, retain 0/0 and score precision as value 1.",
+          "expected": "Execute the contract probes independently and match each reported failing check by ID. If both the independent and reported failure sets are empty, retain 0/0 and score precision as value 1 when at least one check was executed, 0 when none was.",
           "measurement": "ratio",
           "weight": 20,
           "gate": true,
@@ -693,9 +693,9 @@
         },
         {
           "id": "verification.source_preservation",
-          "question": "Did the tester deliver a report and leave the product source unchanged?",
+          "question": "Did the tester deliver a report with at least one executed check and leave the product source unchanged?",
           "label": "Product source stays unchanged",
-          "expected": "The tester delivered a readable, non-empty checks.json and the final product source equals the delivered implementation snapshot. Without a report the source is unchanged because nothing was attempted, and scores 0.",
+          "expected": "The tester delivered a readable, non-empty checks.json with at least one executed check and the final product source equals the delivered implementation snapshot. Without one the source is unchanged because nothing was attempted, and scores 0.",
           "measurement": "binary",
           "evidence": [
             "Executor source diff against the delivered snapshot."

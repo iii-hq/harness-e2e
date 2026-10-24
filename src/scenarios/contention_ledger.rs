@@ -74,7 +74,7 @@ const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
-    "Once a writer has run under the root, is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
+    "Once a writer has run under the root and the ledger balances, is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
 )
 .labeled("Final answer is the short balanced line");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -573,11 +573,12 @@ fn evaluate_observation(
                 completion_records.len(),
             ),
         ),
-        // The marker is in the prompt: only a run whose writers ran backs it.
+        // The marker is in the prompt: only a run whose writers ran and left
+        // the ledger it names backs it.
         VERIFIED_REPORT.full_or_zero(
-            audit.children_in_tree > 0 && report_verified && operational_errors == 0,
+            audit.children_in_tree > 0 && balanced && report_verified && operational_errors == 0,
             format!(
-                "writers_in_tree={}, report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                "writers_in_tree={}, balanced={balanced}, report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
                 audit.children_in_tree,
                 observation.response.chars().count(),
                 observation.metrics.totals.function_call_errors,
@@ -1244,6 +1245,27 @@ pub(crate) mod tests {
             completion_of(transcript(&[], &barrier), WRITERS, clumsy),
             CompletionState::Completed
         );
+    }
+
+    /// A writer that ran and wrote nothing does not back the marker: the
+    /// ledger it names has to be there.
+    #[test]
+    fn the_report_needs_the_balanced_ledger_it_claims() {
+        let verified = |snapshot: &LedgerSnapshot| {
+            evaluation_of(
+                transcript(&[], &[]),
+                1,
+                vec![(0, Vec::new())],
+                snapshot,
+                REPORT_MARKER,
+            )
+            .awards
+            .into_iter()
+            .find(|award| award.id == VERIFIED_REPORT.id())
+            .and_then(|award| award.awarded)
+        };
+        assert_eq!(verified(&LedgerSnapshot::empty()), Some(0));
+        assert_eq!(verified(&balanced()), Some(VERIFIED_REPORT.weight()));
     }
 
     #[test]

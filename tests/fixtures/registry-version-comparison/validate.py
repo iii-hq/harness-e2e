@@ -462,12 +462,15 @@ def verification_observations(task_root, assets, state):
     report_evidence = relative_evidence(run_root, checks_path)
     validation_evidence = relative_evidence(run_root, receipt_path)
     evidence = [item for item in (report_evidence, feature_evidence, validation_evidence) if item]
+    # A report that executed nothing only claims: its empty failure sets and
+    # its untouched source hold because nothing was attempted.
+    empty_value = 1 if executed else 0
     observations = []
     if not truth_complete:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
     elif not known_failed:
         observations.append(ratio("verification.recall", 0, 0, evidence,
-                                  "no_independently_failing_checks", empty_value=1))
+                                  "no_independently_failing_checks", empty_value=empty_value))
     else:
         observations.append(ratio("verification.recall", len(known_failed & report_fail), len(known_failed), evidence))
     if any(independent.get(case_id, {}).get("status") != "measured"
@@ -475,7 +478,7 @@ def verification_observations(task_root, assets, state):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
     elif not report_fail and not known_failed:
         observations.append(ratio("verification.precision", 0, 0, evidence,
-                                  "no_failures_to_reproduce", empty_value=1))
+                                  "no_failures_to_reproduce", empty_value=empty_value))
     elif not report_fail:
         observations.append(ratio("verification.precision", 0, 0, evidence,
                                   "no_reported_failures"))
@@ -484,7 +487,7 @@ def verification_observations(task_root, assets, state):
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", len(evidenced),
                               len(PUBLIC_VERIFICATION_IDS), evidence))
-    observations.extend(source_preservation(task_root, state, run_root))
+    observations.extend(source_preservation(task_root, state, run_root, reported=bool(executed)))
     return observations
 
 
@@ -507,8 +510,8 @@ def empty_verification(task_root, state, run_root, truth_complete, known_failed,
 
 
 def source_preservation(task_root, state, run_root, reported=True):
-    """An unchanged source counts only beside a report: a tester that reported
-    nothing left the source alone by doing nothing."""
+    """An unchanged source counts only beside a report with an executed check:
+    a tester that ran nothing left the source alone by doing nothing."""
     source_patch = task_root / "source.patch"
     state_path = task_root / "state.json"
     evidence = [relative_evidence(run_root, source_patch), relative_evidence(run_root, state_path)]

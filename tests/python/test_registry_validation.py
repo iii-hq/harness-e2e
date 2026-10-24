@@ -295,6 +295,23 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(all(item.get("value", item.get("numerator")) == 0
                             for item in found.values()))
 
+    def test_a_report_that_only_claims_results_earns_nothing(self):
+        task, state = self.verification_task()
+        claims = {"checks": [{"id": metric, "status": "pass", "steps": "claimed"}
+                             for metric in module.PUBLIC_VERIFICATION_IDS]}
+        for name, report, failed in (
+            ("junk entry", {"checks": [{"id": "x"}]}, set()),
+            ("every check claimed", claims, set()),
+            ("every check claimed, two fail", claims, set(sorted(module.PUBLIC_VERIFICATION_IDS)[:2])),
+        ):
+            with self.subTest(name):
+                (task / "workspace" / "output" / "checks.json").write_text(json.dumps(report))
+                with patch.object(module, "feature_probe", return_value=(self.feature(failed=failed), None)):
+                    found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+                for metric, item in found.items():
+                    if item["status"] == "measured":
+                        self.assertEqual(item.get("value", item.get("numerator")), 0, metric)
+
     def test_all_passing_implementation_can_score_every_verification_metric(self):
         task, state = self.verification_task()
         checks = []
