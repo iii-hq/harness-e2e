@@ -917,7 +917,7 @@ export const PROBES = {
     })
   },
 
-  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check }) {
+  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check, stage }) {
     const fields = { description: 'UTF-8: ação e café', status: 'in_review', priority: 'urgent', assignee: 'Lin' }
     const newForm = async (title) => {
       const opened = await pageFor(browser, baseUrl, { width: 390, height: 844 })
