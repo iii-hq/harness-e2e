@@ -1179,7 +1179,18 @@ mod tests {
             ScenarioId::OnboardingTour,
             "capture reads what the tour left in the onboarding stack's engine",
         ),
+        (ScenarioId::KanbanC1Foundation, KANBAN_LIVE),
+        (ScenarioId::KanbanC2Persistence, KANBAN_LIVE),
+        (ScenarioId::KanbanC3Board, KANBAN_LIVE),
+        (ScenarioId::KanbanC4TicketFlow, KANBAN_LIVE),
+        (ScenarioId::KanbanC5EditMove, KANBAN_LIVE),
+        (ScenarioId::KanbanC6Discussion, KANBAN_LIVE),
+        (ScenarioId::KanbanC7Live, KANBAN_LIVE),
     ];
+    const KANBAN_LIVE: &str =
+        "capture runs the delivered application under Compose in an isolated \
+         Docker pair and probes it with Playwright; scripts/kanban_eval/run.py runs its base and \
+         reference controls and tests/python/test_kanban*.py its scoring regressions";
 
     /// The null and the reference delivery of a scheduled test whose
     /// evaluator scores offline, in that order.
@@ -1213,10 +1224,18 @@ mod tests {
     async fn every_scheduled_test_pays_nothing_for_nothing_and_everything_for_the_task() {
         use crate::report::CompletionState;
         let plan = embedded().unwrap();
+        // A suite schedules its own scenarios and those of the modules it names.
         let scheduled: BTreeSet<&str> = plan
             .suites
             .iter()
-            .flat_map(|suite| suite.scenarios.iter().map(String::as_str))
+            .flat_map(|suite| {
+                let modules = plan
+                    .modules
+                    .iter()
+                    .filter(|module| suite.modules.contains(&module.id))
+                    .flat_map(|module| module.scenarios.iter());
+                suite.scenarios.iter().chain(modules).map(String::as_str)
+            })
             .collect();
         for (id, _) in LIVE_CONTROLS {
             assert!(scheduled.contains(id.as_str()), "{id} is not scheduled");
