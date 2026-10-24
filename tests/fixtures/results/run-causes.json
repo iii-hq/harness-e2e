@@ -1,0 +1,628 @@
+[
+  {
+    "scenario": "registry_planning",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "tool_contract_recovery",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: 80ee98c2-eb8b-4697-8709-522b82bd642a)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "registry_planning",
+    "expected": "invalid_provider_request",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "provider/invalid_request",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "remote error (provider/invalid_request): bad ProviderStreamInput: data did not match any variant of untagged enum AgentMessage"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "release_train_recovery",
+    "expected": "planner_format",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "adaptive planning failed: adaptive planner response must be bare JSON without code fences"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "browser_cross_site",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "state_machine_canvas_build",
+    "expected": "undetermined",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Cancelled: no error was reported"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "persistent_state",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: a4a48830-8593-4380-ab16-a067ea364199)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "validation_self_repair",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: 51c19dc5-f9ab-4921-913e-254b5607b3e0)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "registry_implementation",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "cross_repo_contract_migration",
+    "expected": "planner_format",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "adaptive planning failed: adaptive planner response must be bare JSON without code fences"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "prompt_injection_resilience",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: 7580aa18-21a5-47e2-90ad-8954bad4c7d7)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "context_pressure",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: d2f5bdcd-741b-43d6-accb-6cbeef18e6eb)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "registry_verification",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "timer_wake",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: b31d7d4f-6c8e-4b54-b785-0f5af13bb6d1)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "validation_self_repair",
+    "expected": "test_environment_incomplete",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: data audit failed: non-positive amount: beta=-5; duplicate name: beta x2. Invariants: every amount positive; every name unique; names alpha, beta, gamma, delta all present. The audit will not tell you how to repair the data — decide your own fix, apply it, and reply with a one-line summary of what you changed and why."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "origin": {
+            "validation": true
+          },
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your previous result was not accepted: audit query failed: remote error (invocation_failed): handler error: {\"code\":\"UNKNOWN_DB\",\"db\":\"primary\",\"available\":[\"harness_e2e\"]}. Please provide a corrected result that satisfies the required output contract."
+              }
+            ]
+          }
+        },
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "harness.output_contract_invalid",
+              "class": "llm.permanent",
+              "summary": "max_turns reached with the post-turn gate unsatisfied: data audit failed: non-positive amount: beta=-5; duplicate name: beta x2. Invariants: every amount positive; every name unique; names alpha, beta, gamma, delta all present. The audit will not tell you how to repair the data — decide your own fix, apply it, and reply with a one-line summary of what you changed and why.",
+              "detail": "max_turns reached with the post-turn gate unsatisfied: data audit failed: non-positive amount: beta=-5; duplicate name: beta x2. Invariants: every amount positive; every name unique; names alpha, beta, gamma, delta all present. The audit will not tell you how to repair the data — decide your own fix, apply it, and reply with a one-line summary of what you changed and why."
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "minimal_path",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "minimal_path",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "tool_contract_recovery",
+    "expected": "undetermined",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: harness/dependency: session::append: invocation timed out"
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "harness.turn_internal",
+              "class": "llm.permanent",
+              "summary": "harness/dependency: session::append: invocation timed out",
+              "detail": "harness/dependency: session::append: invocation timed out"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "database_migration_recovery",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: 632c33b9-bd92-436a-abca-6f1d1c1005db)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "registry_environment",
+    "expected": "operator_cancelled",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "E2E execution was cancelled"
+    },
+    "transcript": {
+      "messages": []
+    }
+  },
+  {
+    "scenario": "shell_coder_sandbox",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: ad50e80f-ead6-4b10-a725-389f1c77d122)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "context_pressure",
+    "expected": "context_overflow",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The conversation is too large for the selected model."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/context_overflow",
+              "class": "llm.context_overflow",
+              "summary": "The conversation is too large for the selected model.",
+              "detail": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 260999 tokens > 200000 maximum\"},\"request_id\":\"req_011CfZfDj7ogNZfR4rF2PbSh\"}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "registry_implementation",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "validation_loop",
+    "expected": "test_environment_incomplete",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "origin": {
+            "validation": true
+          },
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your previous result was not accepted: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project.. Please provide a corrected result that satisfies the required output contract."
+              }
+            ]
+          }
+        },
+        {
+          "origin": {
+            "validation": true
+          },
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your previous result was not accepted: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project.. Please provide a corrected result that satisfies the required output contract."
+              }
+            ]
+          }
+        },
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "harness.output_contract_invalid",
+              "class": "llm.permanent",
+              "summary": "max_turns reached with the post-turn gate unsatisfied: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project.",
+              "detail": "max_turns reached with the post-turn gate unsatisfied: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project."
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "validation_scope_enforcement",
+    "expected": "resource_limit",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: result rejected by validator fp::pipe"
+    },
+    "transcript": {
+      "messages": [
+        {
+          "origin": {
+            "validation": true
+          },
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your previous result was not accepted: result rejected by validator fp::pipe. Please provide a corrected result that satisfies the required output contract."
+              }
+            ]
+          }
+        },
+        {
+          "origin": {
+            "validation": true
+          },
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your previous result was not accepted: result rejected by validator fp::pipe. Please provide a corrected result that satisfies the required output contract."
+              }
+            ]
+          }
+        },
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "harness.output_contract_invalid",
+              "class": "llm.permanent",
+              "summary": "max_turns reached with the post-turn gate unsatisfied: result rejected by validator fp::pipe",
+              "detail": "max_turns reached with the post-turn gate unsatisfied: result rejected by validator fp::pipe"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "scenario": "contention_ledger",
+    "expected": "provider_infrastructure",
+    "failure": {
+      "status": "subject_error",
+      "domain": "subject",
+      "phase": "execute",
+      "code": "subject_execution_failed",
+      "message": "turn ended as Failed: The provider rejected this request."
+    },
+    "transcript": {
+      "messages": [
+        {
+          "custom": {
+            "custom_type": "error",
+            "data": {
+              "code": "router/provider_rejected",
+              "class": "llm.permanent",
+              "summary": "The provider rejected this request.",
+              "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: 8d4af656-3e3c-4d9a-91d3-94020ef79ea6)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+            }
+          }
+        }
+      ]
+    }
+  }
+]
