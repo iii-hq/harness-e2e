@@ -186,7 +186,7 @@ const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
-    "Are the source and tests read without error, one file or a batch at a time (a stat probe reads nothing), and is the public failure reproduced before the first production edit?",
+    "Are the source and tests read without error, one file or a batch at a time (a stat probe or a failed batch entry reads nothing), and is the public failure reproduced before the first production edit?",
 )
 .labeled("Failure reproduced before the first edit");
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
@@ -781,11 +781,14 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
     let coder_info = invocation_index(&invocations, |call| call.function_id == "coder::info");
     // A read counts once its result came back without an error.
     let reads = |relative: &str| {
-        invocation_indexes(&invocations, |call| is_coder_read(call, root, relative))
-            .into_iter()
-            .filter(|index| {
-                common::function_result(&observation.transcript, &invocations[*index]).is_some()
+        invocations
+            .iter()
+            .enumerate()
+            .filter(|(_, invocation)| {
+                common::function_result(&observation.transcript, invocation)
+                    .is_some_and(|result| is_coder_read(&invocation.call, result, root, relative))
             })
+            .map(|(index, _)| index)
             .collect::<Vec<_>>()
     };
     let source_read = reads(SOURCE_PATH).first().copied();
@@ -973,22 +976,27 @@ fn invocation_index(
         .position(|invocation| predicate(&invocation.call))
 }
 
-fn invocation_indexes(
-    invocations: &[common::ObservedFunctionInvocation],
-    predicate: impl Fn(&common::ObservedFunctionCall) -> bool,
-) -> Vec<usize> {
-    invocations
-        .iter()
-        .enumerate()
-        .filter_map(|(index, invocation)| predicate(&invocation.call).then_some(index))
-        .collect()
-}
-
-/// A `coder::read-file` call that reads `relative`, alone (`path`) or in a
-/// batch (`paths`, each a path or `{path, line_from, line_to}`). A `stat`
-/// probe returns size and dates, not the content, so it reads nothing.
-fn is_coder_read(call: &common::ObservedFunctionCall, root: &Path, relative: &str) -> bool {
+/// A `coder::read-file` call, answered by `result`, that reads `relative`,
+/// alone (`path`) or in a batch (`paths`, each a path or `{path, line_from,
+/// line_to}`). A `stat` probe returns size and dates, not the content, so it
+/// reads nothing. A batch answers entry by entry in request order, and an
+/// entry that failed (C211, say) inside a successful call read nothing either.
+fn is_coder_read(
+    call: &common::ObservedFunctionCall,
+    result: &Value,
+    root: &Path,
+    relative: &str,
+) -> bool {
     let reads_content = |item: &Value| item.get("stat").and_then(Value::as_bool) != Some(true);
+    let answered = result.pointer("/details/results").and_then(Value::as_array);
+    let entry_ok = |index: usize| {
+        answered
+            .and_then(|entries| entries.get(index))
+            .is_none_or(|entry| {
+                entry.get("success").and_then(Value::as_bool) != Some(false)
+                    && entry.get("error").is_none_or(Value::is_null)
+            })
+    };
     let single = call
         .arguments
         .get("path")
@@ -999,8 +1007,9 @@ fn is_coder_read(call: &common::ObservedFunctionCall, root: &Path, relative: &st
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|item| reads_content(item))
-        .map(|item| item.get("path").unwrap_or(item));
+        .enumerate()
+        .filter(|(index, item)| reads_content(item) && entry_ok(*index))
+        .map(|(_, item)| item.get("path").unwrap_or(item));
     call.function_id == "coder::read-file"
         && single
             .into_iter()
@@ -1271,7 +1280,13 @@ pub(crate) mod tests {
         });
         let calls = [
             ("coder::info", json!({}), None),
-            ("agent_trigger", read_all, Some(json!({ "results": [] }))),
+            (
+                "agent_trigger",
+                read_all,
+                Some(
+                    json!({ "results": [{ "success": true }, { "success": true }, { "success": true }] }),
+                ),
+            ),
             (
                 "shell::exec",
                 unittest.clone(),
@@ -1456,8 +1471,8 @@ pub(crate) mod tests {
     }
 
     /// The read as agents make it: one `agent_trigger` naming every file,
-    /// and its result as the stack records it.
-    fn read_files(paths: Value, is_error: bool) -> Value {
+    /// and its result as the stack records it, one entry per file.
+    fn read_files(paths: Value, is_error: bool, entries: Value) -> Value {
         json!({ "messages": [
             { "message": { "role": "assistant", "content": [{
                 "type": "function_call", "id": "call-read", "function_id": "agent_trigger",
@@ -1466,6 +1481,7 @@ pub(crate) mod tests {
             { "message": {
                 "role": "function_result", "function_call_id": "call-read",
                 "function_id": "coder::read-file", "is_error": is_error,
+                "details": { "results": entries },
             } },
         ] })
     }
@@ -1487,7 +1503,9 @@ pub(crate) mod tests {
             { "path": root.join(PUBLIC_TEST_PATH), "line_from": 1, "line_to": 80 },
             TASK_PATH,
         ]);
-        let batch = observation(read_files(all.clone(), false));
+        let ok = json!({ "success": true, "content": "" });
+        let three = json!([ok, ok, ok]);
+        let batch = observation(read_files(all.clone(), false, three.clone()));
         let audit = workflow_audit(&batch, &root);
         assert_eq!(
             (audit.source_read, audit.tests_read, audit.task_read),
@@ -1495,17 +1513,20 @@ pub(crate) mod tests {
         );
         assert_eq!(audit.investigation_points(), 8);
 
-        // A batch that leaves out the tests, only stats them, or fails, did
-        // not inspect them.
-        for (paths, is_error) in [
-            (json!([SOURCE_PATH, TASK_PATH]), false),
+        // A batch that leaves out the tests, only stats them, fails, or
+        // answers their entry with an error, did not inspect them.
+        let denied = json!({ "success": false, "error": { "code": "C211" } });
+        for (paths, is_error, entries) in [
+            (json!([SOURCE_PATH, TASK_PATH]), false, json!([ok, ok])),
             (
                 json!([SOURCE_PATH, { "path": PUBLIC_TEST_PATH, "stat": true }, TASK_PATH]),
                 false,
+                three.clone(),
             ),
-            (all, true),
+            (all.clone(), true, Value::Null),
+            (all, false, json!([ok, denied, ok])),
         ] {
-            let audit = workflow_audit(&observation(read_files(paths, is_error)), &root);
+            let audit = workflow_audit(&observation(read_files(paths, is_error, entries)), &root);
             assert_eq!(audit.tests_read, None);
             assert_eq!(audit.investigation_points(), 0);
         }
@@ -1514,13 +1535,14 @@ pub(crate) mod tests {
             function_id: "coder::read-file".to_string(),
             arguments: json!({ "path": PUBLIC_TEST_PATH }),
         };
-        assert!(is_coder_read(&single, &root, PUBLIC_TEST_PATH));
-        assert!(!is_coder_read(&single, &root, SOURCE_PATH));
+        let answered = json!({ "details": { "content": "" } });
+        assert!(is_coder_read(&single, &answered, &root, PUBLIC_TEST_PATH));
+        assert!(!is_coder_read(&single, &answered, &root, SOURCE_PATH));
         let stat = common::ObservedFunctionCall {
             function_id: "coder::read-file".to_string(),
             arguments: json!({ "path": PUBLIC_TEST_PATH, "stat": true }),
         };
-        assert!(!is_coder_read(&stat, &root, PUBLIC_TEST_PATH));
+        assert!(!is_coder_read(&stat, &answered, &root, PUBLIC_TEST_PATH));
     }
 
     #[test]

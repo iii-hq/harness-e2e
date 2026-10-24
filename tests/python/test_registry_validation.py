@@ -299,10 +299,15 @@ class ValidationTests(unittest.TestCase):
         task, state = self.verification_task()
         claims = {"checks": [{"id": metric, "status": "pass", "steps": "claimed"}
                              for metric in module.PUBLIC_VERIFICATION_IDS]}
+        failures = {"checks": [{"id": metric, "status": "fail", "steps": "claimed"}
+                               for metric in module.PUBLIC_VERIFICATION_IDS]}
+        two = set(sorted(module.PUBLIC_VERIFICATION_IDS)[:2])
         for name, report, failed in (
             ("junk entry", {"checks": [{"id": "x"}]}, set()),
             ("every check claimed", claims, set()),
-            ("every check claimed, two fail", claims, set(sorted(module.PUBLIC_VERIFICATION_IDS)[:2])),
+            ("every check claimed, two fail", claims, two),
+            ("every check claimed failing", failures, set()),
+            ("every check claimed failing, two fail", failures, two),
         ):
             with self.subTest(name):
                 (task / "workspace" / "output" / "checks.json").write_text(json.dumps(report))
@@ -311,6 +316,23 @@ class ValidationTests(unittest.TestCase):
                 for metric, item in found.items():
                     if item["status"] == "measured":
                         self.assertEqual(item.get("value", item.get("numerator")), 0, metric)
+
+    def test_a_reported_failure_counts_only_once_its_check_was_executed(self):
+        task, state = self.verification_task()
+        executed_id, claimed_id = sorted(module.PUBLIC_VERIFICATION_IDS)[:2]
+        evidence = self.evidence_proof(task, executed_id, "fail", "executed")
+        command = "python executed.py"
+        self.command_receipt(task, "executed", command, [evidence], exit_code=1)
+        (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
+            {"id": executed_id, "status": "fail", "command": command,
+             "steps": "expected pass; observed failure", "evidence": [evidence]},
+            {"id": claimed_id, "status": "fail", "steps": "claimed without running"},
+        ]}))
+        with patch.object(module, "feature_probe",
+                          return_value=(self.feature(failed={executed_id, claimed_id}), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (1, 2))
+        self.assertEqual((found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), (1, 2))
 
     def test_all_passing_implementation_can_score_every_verification_metric(self):
         task, state = self.verification_task()
