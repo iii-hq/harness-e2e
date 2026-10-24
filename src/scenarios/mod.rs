@@ -1110,6 +1110,8 @@ mod tests {
                 .copied()
                 .find(|scenario| scenario.as_str() == *id)
                 .unwrap();
+            // A transposed `Memory(i)` in the registry runs another case's spec.
+            assert_eq!(scenario.spec("x").id, scenario.as_str(), "{id}");
             let materialized = scenario
                 .materialize("attempt-a", scenario.canonical_seed())
                 .unwrap();
