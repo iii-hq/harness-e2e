@@ -6133,12 +6133,7 @@ esac"#,
         );
 
         let admitted = manager
-            .start_execution_in(
-                github_parameters(),
-                "",
-                Some("o/r"),
-                Some("eval-work-1".into()),
-            )
+            .start_execution_in(github_parameters(), "", Some("o/r"), Some("eval-work-1"))
             .await
             .unwrap();
         assert_eq!(admitted.idempotency_key, "eval-work-1");
@@ -6148,12 +6143,7 @@ esac"#,
         ));
 
         let retry = manager
-            .start_execution_in(
-                github_parameters(),
-                "",
-                Some("o/r"),
-                Some("eval-work-1".into()),
-            )
+            .start_execution_in(github_parameters(), "", Some("o/r"), Some("eval-work-1"))
             .await
             .unwrap();
         assert_eq!(retry.id, admitted.id);
