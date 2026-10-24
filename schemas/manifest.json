@@ -438,6 +438,7 @@
         "release_train_recovery",
         "deepwork_batch_repair",
         "deepwork_scope_fallout",
+        "deepwork_same_file_waves",
         "cross_repo_contract_migration"
       ]
     },

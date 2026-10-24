@@ -27,6 +27,7 @@ pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
 pub mod database_migration_recovery;
 pub mod deepwork_batch_repair;
+pub mod deepwork_same_file_waves;
 pub mod deepwork_scope_fallout;
 pub mod depth_ladder;
 mod domain;
@@ -594,6 +595,7 @@ scenarios! {
     ReleaseTrainRecovery = "release_train_recovery" => release_train_recovery::ReleaseTrainRecovery,
     DeepworkBatchRepair = "deepwork_batch_repair" => deepwork_batch_repair::DeepworkBatchRepair,
     DeepworkScopeFallout = "deepwork_scope_fallout" => deepwork_scope_fallout::DeepworkScopeFallout,
+    DeepworkSameFileWaves = "deepwork_same_file_waves" => deepwork_same_file_waves::DeepworkSameFileWaves,
     CrossRepoContractMigration = "cross_repo_contract_migration" => cross_repo_contract_migration::CrossRepoContractMigration,
 }
 
@@ -846,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_sixty_two_unique_valid_scenarios() {
+    fn registry_contains_sixty_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -855,7 +857,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 62);
+        assert_eq!(ids.len(), 63);
     }
 
     #[test]

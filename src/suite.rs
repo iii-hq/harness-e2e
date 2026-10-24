@@ -69,6 +69,8 @@ fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
         Some(crate::scenarios::deepwork_batch_repair::COST_CAP_USD)
     } else if scenario_id == crate::scenarios::deepwork_scope_fallout::ID {
         Some(crate::scenarios::deepwork_scope_fallout::COST_CAP_USD)
+    } else if scenario_id == crate::scenarios::deepwork_same_file_waves::ID {
+        Some(crate::scenarios::deepwork_same_file_waves::COST_CAP_USD)
     } else {
         None
     }

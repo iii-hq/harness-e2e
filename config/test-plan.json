@@ -125,7 +125,8 @@
     "linkly_tutorial",
     "onboarding_tour",
     "deepwork_batch_repair",
-    "deepwork_scope_fallout"
+    "deepwork_scope_fallout",
+    "deepwork_same_file_waves"
   ],
   "requirements": {
     "shell_coder_sandbox": [
@@ -201,6 +202,10 @@
       "git and python3 on the executor; a model with catalog pricing, because the run has a hard cost cap"
     ],
     "deepwork_scope_fallout": [
+      "The Deepwork kit installed (profiles deepwork, deepwork-lead, deepwork-impl, deepwork-adversary), with the kanban, state, ide and fp workers",
+      "git and python3 on the executor; a model with catalog pricing, because the run has a hard cost cap"
+    ],
+    "deepwork_same_file_waves": [
       "The Deepwork kit installed (profiles deepwork, deepwork-lead, deepwork-impl, deepwork-adversary), with the kanban, state, ide and fp workers",
       "git and python3 on the executor; a model with catalog pricing, because the run has a hard cost cap"
     ]
