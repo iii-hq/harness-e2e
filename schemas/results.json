@@ -2332,14 +2332,14 @@
           ]
         },
         {
-          "description": "The stack lacked a function or database the test relies on.",
+          "description": "The stack lacked a function or database the test relies on, or does not route the configured provider or model.",
           "type": "string",
           "enum": [
             "test_environment_incomplete"
           ]
         },
         {
-          "description": "The evaluator could not validate the delivery for a reason of its own machine, such as a port already in use.",
+          "description": "The evaluator could not validate the delivery for a reason of its own machine, such as a Docker daemon that stopped answering.",
           "type": "string",
           "enum": [
             "evaluation_environment"
@@ -2360,7 +2360,7 @@
           ]
         },
         {
-          "description": "Nobody can be blamed from the evidence: another worker timed out, or the turn was cancelled without an error.",
+          "description": "Nobody can be blamed from the evidence: another worker timed out, the turn was cancelled without an error, or the provider rejected a request for a reason no rule recognises.",
           "type": "string",
           "enum": [
             "undetermined"

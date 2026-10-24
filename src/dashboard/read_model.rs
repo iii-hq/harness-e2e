@@ -19,7 +19,7 @@ use crate::assessment::{AssessmentKind, AssessmentPolicy, RunAssessmentContract}
 use crate::control::ExecutionRecord;
 use crate::identity::StackIdentity;
 use crate::report::{
-    CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
+    CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunCause, RunStatus,
     TechnicalState,
 };
 use crate::scenarios::{
@@ -440,6 +440,9 @@ struct RunMetrics {
     /// are kept as written.
     #[serde(default)]
     technical: Option<TechnicalState>,
+    /// Absent in a projection or a report written before causes.
+    #[serde(default)]
+    cause: Option<RunCause>,
     #[serde(default)]
     input_tokens: Option<f64>,
     /// The fields from here on are absent in a projection written before
@@ -1641,6 +1644,7 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         status: run.status,
         assessment: assessment.clone(),
         technical: Some(run.technical),
+        cause: run.cause,
         input_tokens: totals(|totals| totals.input_tokens),
         output_tokens: totals(|totals| totals.output_tokens),
         cache_read_tokens: totals(|totals| totals.cache_read_tokens),
@@ -1799,18 +1803,24 @@ fn side_summary(
             .iter()
             .filter(|run| run.status == RunStatus::HardGateFailed)
             .count(),
+        // By cause: a failure of the subject counts, one of anything else is
+        // infrastructure. A run written before causes keeps its status.
         technical_failed: runs
             .iter()
-            .filter(|run| {
-                matches!(
+            .filter(|run| match run.cause {
+                Some(cause) => cause.counted() && cause != RunCause::Evaluated,
+                None => matches!(
                     run.status,
                     RunStatus::SubjectError | RunStatus::ResourceLimit
-                )
+                ),
             })
             .count(),
         infra_failed: runs
             .iter()
-            .filter(|run| run.status == RunStatus::InfrastructureError)
+            .filter(|run| match run.cause {
+                Some(cause) => !cause.counted(),
+                None => run.status == RunStatus::InfrastructureError,
+            })
             .count(),
     };
     Some(TestSideSummary {
@@ -2226,6 +2236,64 @@ mod tests {
         assert_eq!(history.total, 1);
         assert_eq!(history.observations[0].mean_score, Some(90.0));
         assert_eq!(history.observations[0].median_tokens, None);
+    }
+
+    #[test]
+    fn the_tests_page_counts_failures_by_cause() {
+        use crate::report::{ContaminationScope, FailurePhase, RetryScope};
+        let mut report = super::super::tests::report();
+        let template = report.scenarios[0].runs[0].clone();
+        let mut passed = template.clone();
+        passed.finish(RunStatus::Passed);
+        let failed = |status, code: &str, message: &str| {
+            let mut run = template.clone();
+            run.push_typed_failure(
+                status,
+                FailurePhase::Execute,
+                code,
+                RetryScope::None,
+                ContaminationScope::None,
+                message,
+            );
+            run
+        };
+        // A subject error the operator caused, a turn limit, and a report
+        // written before causes, read by its status.
+        let cancelled = failed(
+            RunStatus::SubjectError,
+            "execution_cancelled",
+            crate::report::EXECUTION_CANCELLED,
+        );
+        let turns = failed(
+            RunStatus::ResourceLimit,
+            "subject_budget_exhausted",
+            "turn ended as Failed: max_turns reached",
+        );
+        let mut older = failed(RunStatus::SubjectError, "subject_execution_failed", "boom");
+        older.cause = None;
+        report.scenarios[0].runs = vec![passed, cancelled, turns, older];
+        let projection = ExecutionProjection::from_stored(&StoredRun {
+            metadata: super::super::tests::metadata(),
+            report: Some(report),
+            live_progress: None,
+            live_progress_error: None,
+        })
+        .unwrap();
+        let observations = projection
+            .tests
+            .values()
+            .flat_map(BTreeMap::values)
+            .flatten()
+            .collect::<Vec<_>>();
+        let outcomes = side_summary("version", &observations).unwrap().outcomes;
+        assert_eq!(
+            (
+                outcomes.passed,
+                outcomes.technical_failed,
+                outcomes.infra_failed
+            ),
+            (1, 2, 1)
+        );
     }
 
     #[test]

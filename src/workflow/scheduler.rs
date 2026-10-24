@@ -748,6 +748,13 @@ async fn run_step(
                 report
                     .failures
                     .push(step_failure(WorkflowFailurePhase::Execute, error));
+                if let Some(mut transcript) = registered.executor.failed_transcript(&context).await
+                {
+                    report
+                        .redaction
+                        .merge(RedactionPolicy::from_environment().redact_value(&mut transcript));
+                    report.transcript = Some(transcript);
+                }
                 finish_failed_step(&registered, &context, &mut report, started).await;
                 return report;
             }
@@ -1410,6 +1417,21 @@ mod tests {
 
     struct CountingWorkflowCleanup(Arc<AtomicUsize>);
 
+    /// A Harness turn that fails, whose session kept the error it recorded.
+    struct FailedTurn;
+
+    #[async_trait]
+    impl super::super::StepExecutor for FailedTurn {
+        async fn execute(&self, _context: StepExecutorContext) -> Result<StepExecutorOutput> {
+            bail!("turn ended as Failed: The provider rejected this request.")
+        }
+
+        async fn failed_transcript(&self, _context: &StepExecutorContext) -> Option<Value> {
+            Some(json!({"messages": [{"custom": {"custom_type": "error",
+                "data": {"code": "router/provider_rejected"}}}]}))
+        }
+    }
+
     #[async_trait]
     impl super::super::WorkflowCleanupHook for CountingWorkflowCleanup {
         async fn cleanup(&self, _context: &WorkflowCleanupContext) -> Result<()> {
@@ -1676,6 +1698,50 @@ mod tests {
         assert_eq!(workflow_cleanup_called.load(Ordering::SeqCst), 1);
         assert_eq!(report.cleanup.status, WorkflowCleanupStatus::Succeeded);
         report.checkpoint.verify(output.path()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_step_keeps_the_transcript_of_its_turn() {
+        let mut catalog = StepCatalog::new();
+        catalog
+            .register(
+                StepTypeDescriptor {
+                    id: "test.failed_turn".into(),
+                    description: "failed turn".into(),
+                    config_schema: json!({"type": "object", "additionalProperties": false}),
+                    inputs: BTreeMap::new(),
+                    outputs: BTreeMap::new(),
+                    capabilities: Vec::new(),
+                    required_functions: Vec::new(),
+                    replay_policy: ReplayPolicy::Idempotent,
+                    operational_kind: StepOperationalKind::Transformation,
+                },
+                Arc::new(FailedTurn),
+            )
+            .unwrap();
+        let mut turn = node("turn", vec![], true);
+        turn.step_type = "test.failed_turn".into();
+        let definition = WorkflowDefinition {
+            id: "failed_turn.test".into(),
+            description: "failed turn".into(),
+            limits: WorkflowLimits::default(),
+            nodes: vec![turn],
+            criteria: Vec::new(),
+        };
+        let output = tempfile::tempdir().unwrap();
+        let report = execute_workflow(
+            &definition,
+            Arc::new(catalog),
+            WorkflowExecutionRequest::local(output.path().to_path_buf()),
+        )
+        .await
+        .unwrap();
+        let step = &report.steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
+        assert_eq!(
+            step.transcript.as_ref().unwrap()["messages"][0]["custom"]["data"]["code"],
+            "router/provider_rejected"
+        );
     }
 
     #[tokio::test]
