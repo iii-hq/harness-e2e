@@ -463,8 +463,10 @@ def verification_observations(task_root, assets, state):
     validation_evidence = relative_evidence(run_root, receipt_path)
     evidence = [item for item in (report_evidence, feature_evidence, validation_evidence) if item]
     # A report that executed nothing only claims: its empty failure sets and
-    # its untouched source hold because nothing was attempted.
+    # its untouched source hold because nothing was attempted. For the same
+    # reason a reported failure is found only once its check was executed.
     empty_value = 1 if executed else 0
+    found = known_failed & report_fail & executed
     observations = []
     if not truth_complete:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
@@ -472,7 +474,7 @@ def verification_observations(task_root, assets, state):
         observations.append(ratio("verification.recall", 0, 0, evidence,
                                   "no_independently_failing_checks", empty_value=empty_value))
     else:
-        observations.append(ratio("verification.recall", len(known_failed & report_fail), len(known_failed), evidence))
+        observations.append(ratio("verification.recall", len(found), len(known_failed), evidence))
     if any(independent.get(case_id, {}).get("status") != "measured"
            for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
@@ -483,7 +485,7 @@ def verification_observations(task_root, assets, state):
         observations.append(ratio("verification.precision", 0, 0, evidence,
                                   "no_reported_failures"))
     else:
-        observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence))
+        observations.append(ratio("verification.precision", len(found), len(report_fail), evidence))
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", len(evidenced),
                               len(PUBLIC_VERIFICATION_IDS), evidence))
