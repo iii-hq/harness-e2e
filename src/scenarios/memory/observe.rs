@@ -11,6 +11,8 @@ const REMINDER_OPEN: &str = "Standing instructions —";
 /// One recall block memory appended on a step, as the `model_notice` entry holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryBlock {
+    /// The bank its opening tag names.
+    pub bank: String,
     pub turn_id: String,
     pub step: u64,
     /// Index in `transcript["messages"]`.
@@ -100,7 +102,11 @@ fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
     {
         return None;
     }
-    let text = text_at(entry, "/custom/data/text").filter(|text| text.starts_with(MEMORY_OPEN))?;
+    let text = text_at(entry, "/custom/data/text")?;
+    let (bank, _) = text
+        .strip_prefix(MEMORY_OPEN)?
+        .strip_prefix('"')?
+        .split_once('"')?;
     // `e_{turn_id}_{step}_notice_{k}`; turn ids hold `_` themselves.
     let (head, _) = text_at(entry, "/entry_id")?
         .strip_prefix("e_")?
@@ -124,6 +130,7 @@ fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
         .and_then(|(start, end)| text.get(start + 1..end))
         .map_or(0, |reminder| reminder.trim_end().len());
     Some(MemoryBlock {
+        bank: bank.to_string(),
         turn_id: turn_id.to_string(),
         step: step.parse().ok()?,
         position,
@@ -251,6 +258,7 @@ mod tests {
             (block.turn_id.as_str(), block.step, block.position),
             ("t_a", 0, 1)
         );
+        assert_eq!(block.bank, "e2e-x");
     }
 
     #[test]

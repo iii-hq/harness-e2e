@@ -201,7 +201,18 @@ fn assemble(
 }
 
 pub fn audit(evidence: &Evidence) -> Audit {
-    let observed = &evidence.observed;
+    // Another bank's block comes with an infrastructure error, never a score.
+    let own = Observed {
+        blocks: evidence
+            .observed
+            .blocks
+            .iter()
+            .filter(|block| block.bank == evidence.bank)
+            .cloned()
+            .collect(),
+        ..evidence.observed.clone()
+    };
+    let observed = &own;
     let seed_of = |line: &str| evidence.seeds.iter().find(|seed| seed.text == line);
     let holds = |block: &MemoryBlock, group: &str| {
         block
@@ -459,8 +470,15 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
         ));
     }
     for (index, exchange) in evidence.observed.exchanges.iter().enumerate() {
-        if exchange.memory_bank.is_none() {
-            problems.push(format!("exchange {index} ran without the memory hook"));
+        // A bank other than the attempt's means the turn-metadata pin never
+        // reached memory: it read `main` or a directory bank instead.
+        match exchange.memory_bank.as_deref() {
+            None => problems.push(format!("exchange {index} ran without the memory hook")),
+            Some(read) if read != evidence.bank => problems.push(format!(
+                "exchange {index}: memory read bank {read}, not the attempt's {}",
+                evidence.bank
+            )),
+            Some(_) => {}
         }
         // shortcut: the published Harness stamps no `origin.req`, so an unstamped step
         // trusts its recorded prompt unchecked; once a Harness release stamps every
@@ -520,6 +538,7 @@ mod tests {
 
     fn block(index: usize, lines: Vec<String>) -> MemoryBlock {
         MemoryBlock {
+            bank: bank(RUN),
             turn_id: format!("t{index}"),
             step: 0,
             position: 10 * index + 1,
@@ -881,6 +900,27 @@ mod tests {
         let evaluation = evaluate(case, &evidence_of(case, seen));
         assert!(evaluation.infrastructure_error.is_some());
         assert_eq!(evaluation.awards.len(), case.criteria.len());
+    }
+
+    #[test]
+    fn an_exchange_memory_read_from_another_bank_is_an_infrastructure_error() {
+        let case = case_named("memory_small_talk");
+        let answers = ["a", "b", "c", "d"];
+        let mut seen = observed(&answers, vec![]);
+        seen.exchanges[2].memory_bank = Some("main".into());
+        let error = evaluate(case, &evidence_of(case, seen))
+            .infrastructure_error
+            .expect("a foreign bank is flagged");
+        assert!(
+            error.contains("main") && error.contains(&bank(RUN)),
+            "{error}"
+        );
+
+        // A block from another bank is never scored.
+        let mut foreign = block(1, vec![DISTRACTORS[0].to_string()]);
+        foreign.bank = "main".into();
+        let found = audit(&evidence_of(case, observed(&answers, vec![foreign])));
+        assert!(found.irrelevant.is_empty(), "{:?}", found.irrelevant);
     }
 
     #[test]
