@@ -1269,8 +1269,19 @@ pub(crate) mod tests {
         snapshot.match_cases = cases(3);
         assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
 
-        // Every case matches, but Alertmanager does not call route::match.
+        // Delegation proven by a change outside dispatch/ delivers all the same.
         snapshot.match_cases = cases(0);
+        snapshot.dispatch_changed = false;
+        let points: u16 = evaluate_snapshot(&snapshot)
+            .unwrap()
+            .awards
+            .iter()
+            .filter_map(|award| award.awarded.map(u16::from))
+            .sum();
+        assert_eq!(points, 100);
+        snapshot.dispatch_changed = true;
+
+        // Every case matches, but Alertmanager does not call route::match.
         snapshot.delegation_wired = false;
         assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
 

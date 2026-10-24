@@ -1155,7 +1155,7 @@ mod tests {
         (
             ScenarioId::RegistryVerification,
             "capture replays the report against the delivery in Docker; the empty, the \
-             claim-only and the all-passing report are scored in CI",
+             claim-only, the one-check-executed and the all-passing report are scored in CI",
             &["tests/python/test_registry_validation.py"],
         ),
         (

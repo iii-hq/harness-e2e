@@ -44,13 +44,13 @@ const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::gate(
 const DIAGNOSIS_DRIVEN: AssessmentSpec = AssessmentSpec::scored(
     "diagnosis_driven",
     30,
-    "Did one envelope-mode auditor registration reject the flawed seed with a factual defect list and no prescribed fix?",
+    "Did the auditor, registered in envelope mode and as the only post-turn hook, reject the flawed seed with a factual defect list and no prescribed fix?",
 )
 .labeled("Auditor rejects the seed with facts only");
 const DECISIVE_REPAIR: AssessmentSpec = AssessmentSpec::scored(
     "decisive_repair",
     30,
-    "Did the model's own repair converge within two rounds, with full credit for one and half credit for two?",
+    "Did the model's own repair of the rejected seed leave every rule holding within two rounds, with full credit for one and half credit for two?",
 )
 .labeled("Repair converged within two rounds");
 const ASSESSMENTS: &[AssessmentSpec] = &[DATA_REPAIRED, DIAGNOSIS_DRIVEN, DECISIVE_REPAIR];
@@ -346,16 +346,16 @@ fn evaluate_observation(
                 && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
         })
         .collect();
-    let envelope_mode = registrations.len() == 1
-        && registrations[0]
-            .arguments
-            .get("function_id")
-            .and_then(Value::as_str)
-            == Some(auditor.as_str())
-        && registrations[0]
-            .arguments
-            .pointer("/config/payload")
-            .is_none();
+    // A registration repeated (a retry, say) is still the one auditor.
+    let envelope_mode = !registrations.is_empty()
+        && registrations.iter().all(|registration| {
+            registration
+                .arguments
+                .get("function_id")
+                .and_then(Value::as_str)
+                == Some(auditor.as_str())
+                && registration.arguments.pointer("/config/payload").is_none()
+        });
 
     let nudges = nudge_texts(&observation.transcript);
     // The first audit must name the REAL defects — proof the flawed seed
@@ -366,10 +366,11 @@ fn evaluate_observation(
     // data and skipping the validator is not a repair.
     let rejected_seed = nudges.iter().any(|text| names_seed_defects(text));
     let repaired = remaining.is_empty() && row_count > 0;
+    let repair_held = rejected_seed && repaired;
 
     Ok(assessment::build_evaluation([
         DATA_REPAIRED.full_or_zero(
-            rejected_seed && repaired,
+            repair_held,
             format!(
                 "validator_named_seed_defects={rejected_seed}, rows={row_count}, remaining violations: {remaining:?}"
             ),
@@ -378,19 +379,21 @@ fn evaluate_observation(
             diagnosed && envelope_mode,
             format!(
                 "first audit nudge: {:?}; observed {} post-turn registration(s); need \
-                 exactly one targeting {auditor} with no payload",
+                 every one targeting {auditor} with no payload",
                 nudges.first(),
                 registrations.len()
             ),
         ),
+        // Rounds count only toward a repair that holds.
         DECISIVE_REPAIR.award(
             match nudges.len() {
+                _ if !repair_held => 0,
                 1 => DECISIVE_REPAIR.weight(),
                 2 => 15,
                 _ => 0,
             },
             format!(
-                "{} audit rejection(s); full marks for repairing in one",
+                "{} audit rejection(s), repair_held={repair_held}; full marks for repairing in one",
                 nudges.len()
             ),
         )?,
@@ -500,42 +503,71 @@ pub(crate) mod tests {
         assessment::completion(ASSESSMENTS, &evaluation_of(messages, "", (4, remaining)))
     }
 
-    /// The null delivery (no auditor, no table) and the reference one (one
-    /// envelope-mode auditor, its rejection of the flawed seed, one repair).
-    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
-        let seed = [
+    fn seed() -> Vec<(String, i64)> {
+        [
             ("alpha", 10),
             ("beta", -5),
             ("gamma", 30),
             ("beta", 7),
             ("delta", 200),
         ]
-        .map(|(name, amount)| (name.to_string(), amount));
-        let rejection = format!("data audit failed: {}.", violations(&seed).join("; "));
+        .map(|(name, amount)| (name.to_string(), amount))
+        .to_vec()
+    }
+
+    /// The auditor's rejection of the flawed seed, and its registration.
+    fn rejection_and_auditor() -> (Value, Value) {
+        let rejection = format!("data audit failed: {}.", violations(&seed()).join("; "));
         let auditor = json!({ "message": { "role": "assistant", "content": [{
             "type": "function_call", "id": "call-0", "function_id": "engine::register_trigger",
             "arguments": { "trigger_type": HOOK_TYPE, "function_id": function_id("run") },
         }] } });
+        (nudge(&rejection), auditor)
+    }
+
+    /// The null delivery (no auditor, no table) and the reference one (one
+    /// envelope-mode auditor, its rejection of the flawed seed, one repair).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let (rejection, auditor) = rejection_and_auditor();
         [
             evaluation_of(Vec::new(), "done", (0, violations(&[]))),
             evaluation_of(
-                vec![auditor, nudge(&rejection)],
+                vec![auditor, rejection],
                 "Deleted the beta=-5 row: it was negative and duplicated beta.",
                 (4, Vec::new()),
             ),
         ]
     }
 
+    /// Repair rounds pay only for a repair that holds: a rejection ignored,
+    /// or an audit that never saw the seed, converged on nothing. Registering
+    /// the same auditor twice still diagnoses.
+    #[test]
+    fn repair_points_need_the_repaired_seed() {
+        let (rejection, auditor) = rejection_and_auditor();
+        let points = |messages: Vec<Value>, dataset: (usize, Vec<String>)| {
+            evaluation_of(messages, "Done.", dataset)
+                .awards
+                .into_iter()
+                .filter_map(|award| award.awarded.map(u16::from))
+                .sum::<u16>()
+        };
+        let ignored = points(
+            vec![auditor.clone(), rejection.clone()],
+            (5, violations(&seed())),
+        );
+        assert_eq!(ignored, u16::from(DIAGNOSIS_DRIVEN.weight()));
+        let unseen = nudge("data audit failed: audit query failed: no such table");
+        assert_eq!(points(vec![auditor.clone(), unseen], (4, Vec::new())), 0);
+        assert_eq!(
+            points(vec![auditor.clone(), auditor, rejection], (4, Vec::new())),
+            100
+        );
+    }
+
     #[test]
     fn completion_needs_a_validator_rejection_of_the_seeded_defects() {
-        let seed = vec![
-            ("alpha".to_string(), 10),
-            ("beta".to_string(), -5),
-            ("gamma".to_string(), 30),
-            ("beta".to_string(), 7),
-            ("delta".to_string(), 200),
-        ];
-        let rejection = format!("data audit failed: {}.", violations(&seed).join("; "));
+        let rejection = format!("data audit failed: {}.", violations(&seed()).join("; "));
         assert!(names_seed_defects(&rejection));
 
         // The intended path: the validator rejects the seed, the repair holds.

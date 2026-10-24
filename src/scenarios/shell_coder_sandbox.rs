@@ -1516,7 +1516,9 @@ pub(crate) mod tests {
         // A batch that leaves out the tests, only stats them, fails, or
         // answers their entry with an error, did not inspect them.
         let denied = json!({ "success": false, "error": { "code": "C211" } });
+        let errored = json!({ "success": true, "error": { "code": "C500" } });
         for (paths, is_error, entries) in [
+            (all.clone(), false, json!([ok, errored, ok])),
             (json!([SOURCE_PATH, TASK_PATH]), false, json!([ok, ok])),
             (
                 json!([SOURCE_PATH, { "path": PUBLIC_TEST_PATH, "stat": true }, TASK_PATH]),

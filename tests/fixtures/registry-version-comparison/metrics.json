@@ -633,9 +633,9 @@
       "metrics": [
         {
           "id": "verification.recall",
-          "question": "What proportion of independently failing required checks did the tester execute and report as failing, with an empty set counting only beside an executed check?",
+          "question": "What proportion of independently failing required checks did the tester execute and report as failing, with an empty set counting only for the share of required checks executed?",
           "label": "Tester reports the checks that really fail",
-          "expected": "Compare reported failing check IDs with the independently executed contract probes; a reported failure counts only when its check has a recorded execution. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1 when the tester delivered a readable report with at least one executed check, 0 when it did not.",
+          "expected": "Compare reported failing check IDs with the independently executed contract probes; a reported failure counts only when its check has a recorded execution. This measures check detection, not unique root causes. If no checks fail independently, score the empty set as the share of required checks the tester executed (executed/required), so claimed checks add nothing and a report that executed none scores 0.",
           "measurement": "ratio",
           "weight": 35,
           "gate": true,
@@ -648,9 +648,9 @@
         },
         {
           "id": "verification.precision",
-          "question": "What proportion of reported failing checks were executed by the tester and are independently reproduced as failing, with an empty set counting only beside an executed check?",
+          "question": "What proportion of reported failing checks were executed by the tester and are independently reproduced as failing, with an empty set counting only for the share of required checks executed?",
           "label": "Reported failures reproduce independently",
-          "expected": "Execute the contract probes independently and match each reported failing check by ID; a reported failure without a recorded execution is not reproduced. If both the independent and reported failure sets are empty, retain 0/0 and score precision as value 1 when at least one check was executed, 0 when none was.",
+          "expected": "Execute the contract probes independently and match each reported failing check by ID; a reported failure without a recorded execution is not reproduced. If both the independent and reported failure sets are empty, score precision as the share of required checks executed (executed/required), 0 when none was.",
           "measurement": "ratio",
           "weight": 20,
           "gate": true,

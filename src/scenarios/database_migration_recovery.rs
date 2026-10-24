@@ -56,19 +56,19 @@ const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::gate(
 const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::gate(
     "idempotent_replay",
     20,
-    "Did at least two database::transaction calls succeed, and does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
+    "Did at least two database::transaction calls that write the run's migration journal succeed, and does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
 )
 .labeled("Replaying the migration adds no duplicates");
 const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::gate(
     "source_and_sentinel_preserved",
     25,
-    "Does at least one database::transaction succeed while the six legacy rows and the sentinel row remain unchanged?",
+    "Does at least one database::transaction that writes the run's migration journal succeed while the six legacy rows and the sentinel row remain unchanged?",
 )
 .labeled("Legacy and sentinel rows stay unchanged");
 const TRANSACTION_SCOPE_AND_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "transaction_scope_and_report",
     15,
-    "Were all subject writes limited to two database::transaction calls on prefixed relations, with the exact success report returned?",
+    "Were all subject writes limited to two database::transaction calls on prefixed relations, bare or in schema main, with the exact success report returned?",
 )
 .labeled("Writes stay in two scoped transactions");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -396,6 +396,18 @@ fn evaluate_observation(observation: &ScenarioObservation, run_id: &str) -> Obje
         .iter()
         .filter(|call| call.function_id == "database::transaction" && call.is_error == Some(false))
         .count();
+    // Each pass of the migration marks the run's journal: an empty
+    // transaction, or one on other tables, replayed and preserved nothing.
+    let migration_passes = writes
+        .iter()
+        .filter(|call| {
+            call.function_id == "database::transaction"
+                && call.is_error == Some(false)
+                && write_statements(&call.arguments)
+                    .iter()
+                    .any(|sql| writes_relation(sql, &relations.journal))
+        })
+        .count();
     let non_transaction_writes = writes.len() - transactions;
     let foreign: Vec<String> = writes
         .iter()
@@ -407,9 +419,9 @@ fn evaluate_observation(observation: &ScenarioObservation, run_id: &str) -> Obje
 
     let exact_migration = target_ok && quarantine_ok && compat_ok;
     // The replay is the capability: a journal that says replay_count=2 only
-    // counts when the transaction really ran twice.
-    let idempotent = journal_ok && target_ok && quarantine_ok && successful_transactions >= 2;
-    let preserved = source_preserved(legacy_ok, sentinel_ok, successful_transactions);
+    // counts when the migration transaction really ran twice.
+    let idempotent = journal_ok && target_ok && quarantine_ok && migration_passes >= 2;
+    let preserved = source_preserved(legacy_ok, sentinel_ok, migration_passes);
     let disciplined = !writes.is_empty()
         && non_transaction_writes == 0
         && transactions == 2
@@ -429,13 +441,13 @@ fn evaluate_observation(observation: &ScenarioObservation, run_id: &str) -> Obje
             IDEMPOTENT_REPLAY.full_or_zero(
                 idempotent,
                 format!(
-                    "journal_complete_replay_2={journal_ok}, successful_transactions={successful_transactions} (need at least 2), target_rows={target_ok}, quarantine_row={quarantine_ok}"
+                    "journal_complete_replay_2={journal_ok}, journal_writing_transactions={migration_passes} (need at least 2), target_rows={target_ok}, quarantine_row={quarantine_ok}"
                 ),
             ),
             SOURCE_AND_SENTINEL_PRESERVED.full_or_zero(
                 preserved,
                 format!(
-                    "successful_transactions={successful_transactions} (need at least 1), legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"
+                    "journal_writing_transactions={migration_passes} (need at least 1), legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"
                 ),
             ),
             TRANSACTION_SCOPE_AND_REPORT.full_or_zero(
@@ -564,9 +576,9 @@ fn integer(row: &Value, column: &str) -> Option<i64> {
 }
 
 /// An untouched source only counts alongside a migration attempt: a subject
-/// that committed nothing preserved nothing.
-fn source_preserved(legacy_ok: bool, sentinel_ok: bool, successful_transactions: usize) -> bool {
-    successful_transactions > 0 && legacy_ok && sentinel_ok
+/// that committed no migration pass preserved nothing.
+fn source_preserved(legacy_ok: bool, sentinel_ok: bool, migration_passes: usize) -> bool {
+    migration_passes > 0 && legacy_ok && sentinel_ok
 }
 
 fn target_rows_exact(rows: &[Value]) -> bool {
@@ -658,10 +670,26 @@ fn write_statements(arguments: &Value) -> Vec<String> {
 }
 
 /// Relation names a statement mutates or reads that do not carry the run
-/// prefix. Names are taken after the SQL keywords that introduce a relation
-/// (`FROM`, `INTO`, `UPDATE`, `TABLE`, `VIEW`, `JOIN`), skipping the
-/// existence modifiers and subqueries.
+/// prefix.
 fn foreign_relations(sql: &str, prefix: &str) -> Vec<String> {
+    named_relations(sql)
+        .into_iter()
+        .map(|(_, name)| name)
+        .filter(|name| !name.starts_with(prefix) && !name.eq_ignore_ascii_case("sqlite_master"))
+        .collect()
+}
+
+/// Whether a statement inserts into or updates `relation`.
+fn writes_relation(sql: &str, relation: &str) -> bool {
+    named_relations(sql)
+        .iter()
+        .any(|(keyword, name)| matches!(keyword.as_str(), "INTO" | "UPDATE") && name == relation)
+}
+
+/// Each relation a statement names, with the SQL keyword that introduces it
+/// (`FROM`, `INTO`, `UPDATE`, `TABLE`, `VIEW`, `JOIN`), unquoted and without
+/// the `main.` schema, skipping the existence modifiers and subqueries.
+fn named_relations(sql: &str) -> Vec<(String, String)> {
     const INTRODUCERS: [&str; 6] = ["FROM", "INTO", "UPDATE", "TABLE", "VIEW", "JOIN"];
     const MODIFIERS: [&str; 7] = ["IF", "NOT", "EXISTS", "OR", "REPLACE", "TEMP", "TEMPORARY"];
     let tokens: Vec<&str> = sql
@@ -670,7 +698,7 @@ fn foreign_relations(sql: &str, prefix: &str) -> Vec<String> {
         })
         .filter(|token| !token.is_empty())
         .collect();
-    let mut foreign = Vec::new();
+    let mut relations = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
         let keyword = tokens[index].to_ascii_uppercase();
@@ -686,9 +714,12 @@ fn foreign_relations(sql: &str, prefix: &str) -> Vec<String> {
         let Some(candidate) = tokens.get(index) else {
             break;
         };
-        let name = candidate.trim_matches(|character| matches!(character, '`' | '"' | '\''));
+        let unquoted = candidate.replace(['`', '"', '\''], "");
+        let name = match unquoted.get(..5) {
+            Some(schema) if schema.eq_ignore_ascii_case("main.") => &unquoted[5..],
+            _ => unquoted.as_str(),
+        };
         if name.eq_ignore_ascii_case("SELECT")
-            || name.is_empty()
             || !name
                 .chars()
                 .next()
@@ -696,11 +727,9 @@ fn foreign_relations(sql: &str, prefix: &str) -> Vec<String> {
         {
             continue;
         }
-        if !name.starts_with(prefix) && !name.eq_ignore_ascii_case("sqlite_master") {
-            foreign.push(name.to_string());
-        }
+        relations.push((keyword, name.to_string()));
     }
-    foreign
+    relations
 }
 
 /// The owned relations exactly as `capture` stored them before cleanup. A
@@ -785,6 +814,15 @@ pub(crate) mod tests {
                 prefix
             ),
             vec!["orders".to_string(), "audit".to_string()]
+        );
+        assert!(foreign_relations(
+            "INSERT INTO main.e2e_run_orders_v2 (id) SELECT id FROM \"main\".\"e2e_run_legacy_orders\"",
+            prefix
+        )
+        .is_empty());
+        assert_eq!(
+            foreign_relations("DELETE FROM MAIN.audit", prefix),
+            vec!["audit".to_string()]
         );
     }
 
@@ -892,19 +930,38 @@ pub(crate) mod tests {
         }
     }
 
-    /// One assistant call per `(function_id, failed)` with its result.
+    /// One assistant call per `(function_id, failed)` with its result, each
+    /// carrying the migration's journal update.
     fn evaluation_of(
         writes: &[(&str, bool)],
         record: CapturedDeliverable,
         response: &str,
     ) -> ObjectiveEvaluation {
+        let journal = Relations::new("run").journal;
+        let pass = vec![format!(
+            "UPDATE {journal} SET status = 'complete', replay_count = replay_count + 1"
+        )];
+        let calls: Vec<_> = writes
+            .iter()
+            .map(|(function_id, failed)| (*function_id, *failed, pass.clone()))
+            .collect();
+        evaluation_with(&calls, record, response)
+    }
+
+    /// One assistant call per `(function_id, failed, statements)` with its
+    /// result.
+    fn evaluation_with(
+        calls: &[(&str, bool, Vec<String>)],
+        record: CapturedDeliverable,
+        response: &str,
+    ) -> ObjectiveEvaluation {
         let run_id = "run";
         let mut messages = Vec::new();
-        for (index, (function_id, failed)) in writes.iter().enumerate() {
+        for (index, (function_id, failed, statements)) in calls.iter().enumerate() {
             let call_id = format!("call-{index}");
             messages.push(json!({ "message": { "role": "assistant", "content": [{
                 "type": "function_call", "id": call_id, "function_id": function_id,
-                "arguments": { "db": DATABASE, "statements": [] },
+                "arguments": { "db": DATABASE, "statements": statements },
             }] } }));
             messages.push(json!({ "message": {
                 "role": "function_result", "function_call_id": call_id,
@@ -973,6 +1030,84 @@ pub(crate) mod tests {
             ),
             CompletionState::Completed
         );
+    }
+
+    /// Two transactions that leave the run's journal alone replayed nothing
+    /// and preserved nothing, whatever the tables read afterwards; the same
+    /// migration written against `main.` keeps every point.
+    #[test]
+    fn only_transactions_that_write_the_journal_replay_and_preserve() {
+        const TX: &str = "database::transaction";
+        let relations = Relations::new("run");
+        let points = |calls: &[(&str, bool, Vec<String>)], record: CapturedDeliverable| {
+            let evaluation = evaluation_with(calls, record, EXPECTED_REPORT);
+            let gates: u16 = evaluation
+                .awards
+                .iter()
+                .filter(|award| award.id != TRANSACTION_SCOPE_AND_REPORT.id())
+                .filter(|award| award.id != EXACT_MIGRATION_RESULT.id())
+                .filter_map(|award| award.awarded.map(u16::from))
+                .sum();
+            (gates, assessment::completion(ASSESSMENTS, &evaluation))
+        };
+        let migration = vec![
+            format!(
+                "INSERT OR IGNORE INTO {} (id) SELECT id FROM {}",
+                relations.target, relations.legacy
+            ),
+            format!(
+                "UPDATE {} SET replay_count = replay_count + 1",
+                relations.journal
+            ),
+        ];
+        // Migrated outside a transaction, then two empty transactions.
+        let empty = [
+            ("database::execute", false, migration.clone()),
+            (TX, false, Vec::new()),
+            (TX, false, Vec::new()),
+        ];
+        assert_eq!(
+            points(&empty, migrated_record("do-not-touch")),
+            (0, CompletionState::TaskIncomplete)
+        );
+        // Two transactions on unprefixed tables, the run's relations untouched.
+        let elsewhere = vec!["INSERT INTO orders_v2 (id) SELECT id FROM legacy_orders".to_string()];
+        let wrong_tables = [(TX, false, elsewhere.clone()), (TX, false, elsewhere)];
+        assert_eq!(
+            points(&wrong_tables, prepared_record()),
+            (0, CompletionState::TaskIncomplete)
+        );
+        // One migration, then a "replay" that only writes another table.
+        let foreign_replay = [
+            (TX, false, migration.clone()),
+            (TX, false, vec!["DELETE FROM audit_log".to_string()]),
+        ];
+        assert_eq!(
+            points(&foreign_replay, migrated_record("do-not-touch")).1,
+            CompletionState::TaskIncomplete
+        );
+        // Schema-qualified and quoted names are still the run's relations.
+        let qualified: Vec<String> = migration
+            .iter()
+            .map(|sql| {
+                sql.replace(&relations.target, &format!("main.{}", relations.target))
+                    .replace(
+                        &relations.journal,
+                        &format!("\"main\".\"{}\"", relations.journal),
+                    )
+            })
+            .collect();
+        let evaluation = evaluation_with(
+            &[(TX, false, qualified.clone()), (TX, false, qualified)],
+            migrated_record("do-not-touch"),
+            EXPECTED_REPORT,
+        );
+        let total: u16 = evaluation
+            .awards
+            .iter()
+            .filter_map(|award| award.awarded.map(u16::from))
+            .sum();
+        assert_eq!(total, 100);
     }
 
     #[test]

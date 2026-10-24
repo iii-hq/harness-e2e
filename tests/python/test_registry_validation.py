@@ -346,14 +346,39 @@ class ValidationTests(unittest.TestCase):
         (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": checks}))
         with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
-        self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"], found["verification.recall"]["value"]), (0, 0, 1))
-        self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"], found["verification.precision"]["value"]), ("measured", 0, 0, 1))
+        self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (23, 23))
+        self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), ("measured", 23, 23))
         self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.evidence_coverage"]["numerator"]), (23, 23))
         self.assertEqual(found["verification.source_preservation"]["value"], 1)
         (task / "source.patch").write_text("changed")
         with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
             changed = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual(changed["verification.source_preservation"]["value"], 0)
+
+    def test_no_failure_found_counts_only_for_the_checks_executed(self):
+        """One check executed and the other 22 only claimed: against a
+        delivery with no failing check, the empty failure sets pay one check's
+        worth, not full recall and precision."""
+        task, state = self.verification_task()
+        ids = sorted(module.PUBLIC_VERIFICATION_IDS)
+        evidence = self.evidence_proof(task, ids[0], "pass", "0")
+        command = f"curl -fsS http://api/0 > {evidence}"
+        self.command_receipt(task, "0", command, [evidence])
+        checks = [{"id": ids[0], "status": "pass", "command": command,
+                   "steps": "expected pass; observed pass", "evidence": [evidence]}]
+        checks += [{"id": check_id, "status": "pass", "steps": "claimed"} for check_id in ids[1:]]
+        (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": checks}))
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        for metric in ("verification.recall", "verification.precision"):
+            self.assertEqual((found[metric]["status"], found[metric]["numerator"], found[metric]["denominator"]),
+                             ("measured", 1, 23), metric)
+        weights = {metric["id"]: metric["weight"] for metric in json.loads(
+            (ASSETS / "metrics.json").read_text())["tests"][3]["metrics"]}
+        points = sum(round(weights[metric] * (item["value"] if "value" in item
+                                              else item["numerator"] / item["denominator"]))
+                     for metric, item in found.items())
+        self.assertEqual(points, 10)
 
     def test_empty_reused_evidence_and_unrelated_command_do_not_count(self):
         task, state = self.verification_task()
@@ -481,7 +506,7 @@ class ValidationTests(unittest.TestCase):
         task, state = self.verification_task()
         case_id = "implementation.function_removal"
         for name, actual_failures, reported_status, expected_recall, expected_precision in (
-            ("false positive", set(), "fail", (0, 0, 1), (0, 1, None)),
+            ("false positive", set(), "fail", (1, 23, None), (0, 1, None)),
             ("missed failure", {case_id}, "pass", (0, 1, None), (0, 0, None)),
         ):
             with self.subTest(name):
