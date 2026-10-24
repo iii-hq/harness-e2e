@@ -52,8 +52,9 @@ export type ExecutionMetrics = {
   cacheShare: number | null
   /** The processed prompt over the turns of the runs that report both. */
   contextPerTurn: number | null
-  /** The largest step prompt of any run's root session, and the largest
-   *  usable window. */
+  /** The mean over tests of each test's mean run peak (the largest step
+   *  prompt of a run's root session), as `scripts/harness_ab.py` takes it, and
+   *  the largest usable window. */
   peakContext: number | null
   usableContext: number | null
   compactions: UsageCoverage
@@ -235,8 +236,10 @@ export function buildExecutionMetrics(
       processed,
       attemptMetrics.map((run) => run.turns),
     ),
-    peakContext: maximum(
-      runs.map((run) => efficiency(run, 'peak_context_tokens')),
+    peakContext: mean(
+      included.map((item) =>
+        mean(item.runs.map((run) => efficiency(run, 'peak_context_tokens'))),
+      ),
     ),
     usableContext: maximum(
       runs.map((run) => efficiency(run, 'usable_context_tokens')),

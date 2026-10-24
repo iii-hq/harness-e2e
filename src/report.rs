@@ -505,6 +505,9 @@ pub struct EfficiencyReport {
     /// the Harness's own count of what it sent (claude-code adds a prompt of
     /// its own): its prompt and cache figures are not comparable with another
     /// provider's.
+    // Judged only against a heuristic estimate (a provider-counted total is the
+    // billed value), null when no session has one; the schema text above is
+    // left as it was so the result contract's fingerprint does not move.
     #[serde(default)]
     pub cache_comparable: Option<bool>,
     pub cost_usd: Option<f64>,
@@ -1610,9 +1613,12 @@ fn context_usage(
         }
         // The snapshot keeps the last step's billed usage beside the count
         // the Harness made of the same prompt.
+        // Only a heuristic count is the Harness's own: a provider-counted
+        // total is overwritten with the billed value and always agrees.
         let billed = context.get("usage").map_or(0, step_prompt);
         let counted = context.get("total").and_then(Value::as_u64).unwrap_or(0);
-        if billed > 0 && counted > 0 {
+        let heuristic = context.get("estimator").and_then(Value::as_str) == Some("heuristic");
+        if heuristic && billed > 0 && counted > 0 {
             let reconciles = (billed as f64 - counted as f64).abs()
                 <= PROMPT_RECONCILIATION_TOLERANCE * counted as f64;
             usage.cache_comparable = Some(usage.cache_comparable.unwrap_or(true) && reconciles);
@@ -1621,7 +1627,7 @@ fn context_usage(
     if usage.cache_comparable.is_none() {
         unavailable.insert(
             "cache_comparable".into(),
-            "no session snapshot pairs a billed step with the Harness's count".into(),
+            "no session has a heuristic context estimate to hold against the billed step".into(),
         );
     }
     let Some(messages) = transcript
@@ -1633,14 +1639,30 @@ fn context_usage(
         }
         return usage;
     };
-    usage.compactions = Some(
-        messages
-            .iter()
-            .filter(|entry| {
-                entry.pointer("/custom/custom_type").and_then(Value::as_str) == Some("compaction")
-            })
-            .count() as u64,
-    );
+    let recorded = messages.iter().any(|entry| entry.get("custom").is_some());
+    let snapshot_compacted = metrics.by_session.iter().any(|session| {
+        session
+            .context
+            .as_ref()
+            .and_then(|context| context.get("compacted"))
+            == Some(&Value::Bool(true))
+    });
+    if recorded || snapshot_compacted {
+        usage.compactions = Some(
+            messages
+                .iter()
+                .filter(|entry| {
+                    entry.pointer("/custom/custom_type").and_then(Value::as_str)
+                        == Some("compaction")
+                })
+                .count() as u64,
+        );
+    } else {
+        unavailable.insert(
+            "compactions".into(),
+            "the transcript records no custom entries and no snapshot says compacted".into(),
+        );
+    }
     let steps = messages
         .iter()
         .filter_map(|entry| entry.get("message"))
@@ -4515,25 +4537,34 @@ mod tests {
         };
         let compaction =
             serde_json::json!({"custom": {"custom_type": "compaction", "data": {"summary": "…"}}});
-        let session = |depth: u32, digest: &str, billed: u64, counted: u64| {
+        let session = |depth: u32,
+                       digest: &str,
+                       billed: u64,
+                       counted: u64,
+                       estimator: &str,
+                       compacted: bool| {
             serde_json::json!({
                 "session_id": format!("session-{depth}"), "depth": depth, "turns": 3,
                 "function_calls": 0, "function_call_errors": 0,
                 "input_tokens": 300, "cache_read_tokens": 6_000,
-                "context": {"usable": 596_000, "total": counted, "compacted": true,
-                    "prompt_surface_digest": digest, "usage": {"input": 10, "cache_read": billed - 10}}
+                "context": {"usable": 596_000, "total": counted, "compacted": compacted,
+                    "prompt_surface_digest": digest, "estimator": estimator, "usage": {"input": 10, "cache_read": billed - 10}}
             })
         };
-        let metrics = |child_counted: u64| -> SessionMetricsResponse {
+        let build = |child_counted: u64,
+                     estimator: &str,
+                     compacted: bool|
+         -> SessionMetricsResponse {
             serde_json::from_value(serde_json::json!({
                 "root_session_id": "session-0", "complete": true,
                 "totals": {"sessions": 2, "turns": 6, "function_calls": 0, "function_call_errors": 0,
                     "input_tokens": 600, "output_tokens": 60, "cache_read_tokens": 12_000},
-                "by_session": [session(0, "sha256:root", 3_100, 3_000),
-                    session(1, "sha256:child", 2_000, child_counted)]
+                "by_session": [session(0, "sha256:root", 3_100, 3_000, estimator, compacted),
+                    session(1, "sha256:child", 2_000, child_counted, estimator, compacted)]
             }))
             .unwrap()
         };
+        let metrics = |child_counted: u64| build(child_counted, "heuristic", true);
         let mut attempt = run(100, true);
         attempt.metrics = Some(metrics(2_000));
         attempt.transcript = Some(serde_json::json!({"messages": [
@@ -4561,7 +4592,26 @@ mod tests {
         // A provider that bills a prompt the Harness never sent.
         attempt.metrics = Some(metrics(1_500));
         attempt.update_efficiency();
-        assert_eq!(attempt.efficiency.unwrap().cache_comparable, Some(false));
+        assert_eq!(
+            attempt.efficiency.clone().unwrap().cache_comparable,
+            Some(false)
+        );
+
+        // A provider-counted total is the billed value: nothing to judge.
+        attempt.metrics = Some(build(1_500, "provider", true));
+        attempt.update_efficiency();
+        let efficiency = attempt.efficiency.clone().unwrap();
+        assert_eq!(efficiency.cache_comparable, None);
+        assert!(efficiency.unavailable.contains_key("cache_comparable"));
+
+        // Without custom entries and without a compacted snapshot, compaction
+        // is unknown, not zero.
+        attempt.metrics = Some(build(2_000, "heuristic", false));
+        attempt.transcript = Some(serde_json::json!({"messages": [usage(100, 6_000)]}));
+        attempt.update_efficiency();
+        let efficiency = attempt.efficiency.unwrap();
+        assert_eq!(efficiency.compactions, None);
+        assert!(efficiency.unavailable.contains_key("compactions"));
 
         // Steps that do not add up give no peak rather than a wrong one.
         let mut short = run(100, true);

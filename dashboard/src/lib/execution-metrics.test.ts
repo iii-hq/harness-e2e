@@ -388,7 +388,8 @@ describe('whole-execution metrics', () => {
     })
     expect(metrics.cacheShare).toBeCloseTo(3_600 / 4_000)
     expect(metrics.contextPerTurn).toBe(4_000 / 8)
-    expect(metrics.peakContext).toBe(900)
+    // The test's mean run peak, not the largest run's 900.
+    expect(metrics.peakContext).toBe(650)
     expect(metrics.usableContext).toBe(10_000)
     expect(metrics.compactions.observed).toBe(2)
     expect(metrics.cacheNotComparable).toBe(1)

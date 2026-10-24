@@ -622,8 +622,21 @@ function consolidate(
       complete: processed.complete && both.length === runs.length,
     }
   }
-  const peaks = runs.flatMap((run) =>
-    run.peakContext === null ? [] : [run.peakContext],
+  // The mean over scenarios of each scenario's mean run peak, as
+  // scripts/harness_ab.py takes it; a scenario with no peak is not measured.
+  const scenarioPeaks = new Map<string, number[]>()
+  for (const run of runs)
+    if (run.peakContext !== null)
+      scenarioPeaks.set(run.scenarioId, [
+        ...(scenarioPeaks.get(run.scenarioId) ?? []),
+        run.peakContext,
+      ])
+  const peaks = [...scenarioPeaks.values()].map(
+    (values) => sum(values) / values.length,
+  )
+  const peakRuns = [...scenarioPeaks.values()].reduce(
+    (total, values) => total + values.length,
+    0,
   )
   return {
     score: {
@@ -652,8 +665,8 @@ function consolidate(
       (run) => run.turns,
     ),
     peak_context: {
-      value: peaks.length === 0 ? null : Math.max(...peaks),
-      complete: complete(peaks.length),
+      value: peaks.length === 0 ? null : sum(peaks) / peaks.length,
+      complete: complete(peakRuns),
     },
     compactions: aggregate((run) => run.compactions, false),
     tokens_per_completion: {
@@ -696,25 +709,17 @@ const CACHE_METRICS: MetricId[] = [
 function metricRows(
   a: Record<MetricId, Aggregate>,
   b: Record<MetricId, Aggregate>,
-  /** A side ran a provider whose prompt does not match the Harness's count. */
+  /** The sides ran different providers and a run's prompt does not match the
+   *  Harness's count. */
   cacheNotComparable = false,
 ): ComparedMetric[] {
   return METRICS.map(([id, label, format]) => {
-    if (cacheNotComparable && CACHE_METRICS.includes(id))
-      return {
-        ...comparisonMetric(
-          id,
-          `${label} (not comparable)`,
-          a[id].value,
-          b[id].value,
-          format,
-        ),
-        delta: null,
-        delta_percent: null,
-        tone: 'unavailable',
-        partial: { baseline: false, candidate: false },
-      }
-    const metric = comparisonMetric(id, label, a[id].value, b[id].value, format)
+    // Shown with its difference, which carries the label's warning.
+    const shown =
+      cacheNotComparable && CACHE_METRICS.includes(id)
+        ? `${label} (not comparable)`
+        : label
+    const metric = comparisonMetric(id, shown, a[id].value, b[id].value, format)
     const partial = {
       baseline: a[id].value !== null && !a[id].complete,
       candidate: b[id].value !== null && !b[id].complete,
@@ -1302,7 +1307,12 @@ export function compareExecutions(
         )
     return consolidate(kept, planned, filtered || settled(details[which]))
   }
+  // Only two different providers make the prompt figures incomparable.
+  const providers = [parametersOf(a).provider, parametersOf(b).provider]
+  const providersDiffer =
+    providers[0] !== providers[1] && !providers.includes('not reported')
   const notComparable = (scenarioIds: string[]) =>
+    providersDiffer &&
     SIDES.some((which) =>
       runs[which].some(
         (run) => scenarioIds.includes(run.scenarioId) && !run.cacheComparable,

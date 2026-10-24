@@ -799,21 +799,50 @@ describe('comparing two executions', () => {
     })
     expect(total('compactions')).toMatchObject({ baseline: 1, candidate: 1 })
 
-    // A provider whose prompt does not match the Harness's count.
+    // A provider whose prompt does not match the Harness's count keeps its
+    // difference, labelled; the same provider on both sides is never flagged.
     const claudeCode = withCause(
       execution('c', rows),
       ['evaluated', 'evaluated'],
-      {
-        cache_comparable: false,
-      },
+      { cache_comparable: false, peak_context_tokens: 600 },
     )
-    const flagged = compareExecutions(a, claudeCode).totals.find(
-      (metric) => metric.id === 'peak_context',
-    )
-    expect(flagged).toMatchObject({
-      label: 'Peak context (not comparable)',
-      delta: null,
-    })
+    expect(
+      compareExecutions(a, claudeCode).totals.find(
+        (metric) => metric.id === 'peak_context',
+      )?.label,
+    ).toBe('Peak context')
+    claudeCode.subjects[0].provider = 'claude-code'
+    const flagged = compareExecutions(a, claudeCode)
+    expect(
+      flagged.totals.find((metric) => metric.id === 'peak_context'),
+    ).toMatchObject({ label: 'Peak context (not comparable)', delta: -300 })
+    expect(
+      flagged.totals.find((metric) => metric.id === 'cache_read'),
+    ).toMatchObject({ label: 'Cache read (not comparable)' })
+  })
+
+  it('compares the peak as the mean over tests of each test mean, not the largest run', () => {
+    const peaks = (id: string, first: number, second: number) => {
+      const detail = execution(id, [
+        { scenario: 'timer_wake' },
+        { scenario: 'registry' },
+      ])
+      detail.reports.forEach((record, index) => {
+        const run = record.report?.scenarios[0].runs[0]
+        if (run)
+          run.efficiency = {
+            ...run.efficiency,
+            peak_context_tokens: index === 0 ? first : second,
+          }
+      })
+      return detail
+    }
+    const peak = compareExecutions(
+      peaks('a', 900, 100),
+      peaks('b', 300, 100),
+    ).totals.find((metric) => metric.id === 'peak_context')
+    // Mean 500 against 200, where the largest run says 900 against 300.
+    expect(peak).toMatchObject({ baseline: 500, candidate: 200 })
   })
 
   it('warns when the runners differ and names the definitions that moved', () => {
