@@ -714,12 +714,15 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 9);
+        assert_eq!(plan.suites.len(), 12);
         for (id, cases, runs) in [
             ("regression", 9, 27),
-            ("null-canary", 9, 9),
+            ("null-canary", 10, 10),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
+            ("software-engineering-x9", 14, 126),
+            ("regression-x11", 9, 99),
+            ("context-capacity", 4, 4),
             ("deepwork", 3, 3),
             ("linkly", 1, 1),
             ("onboarding", 1, 1),
@@ -909,7 +912,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:e9886394144fee21c77ce4548388ea718cb33d9891d6e0a49b3d2de595ceac16"
+            "sha256:110541457d4acaac116778ee1549c51867dc40a6322e59c1f5adc6155a88474c"
         );
     }
 
@@ -1074,16 +1077,55 @@ mod tests {
         assert_eq!(plan.materialize("regression").unwrap().campaigns.len(), 3);
     }
 
+    /// The version-comparison suites are the daily ones with more rounds,
+    /// and the capacity lane is four tests that already exist.
+    #[test]
+    fn the_comparison_and_capacity_suites_reuse_existing_tests() {
+        let plan = embedded().unwrap();
+        for (comparison, base, rounds) in [
+            ("software-engineering-x9", "software-engineering", 9),
+            ("regression-x11", "regression", 11),
+        ] {
+            let (comparison, base) = (
+                plan.materialize(comparison).unwrap(),
+                plan.materialize(base).unwrap(),
+            );
+            assert_eq!(comparison.scenario_ids, base.scenario_ids);
+            assert_eq!(comparison.campaigns.len(), rounds);
+            assert_eq!(
+                comparison.campaigns[0]["groups"],
+                base.campaigns[0]["groups"]
+            );
+        }
+        assert_eq!(
+            plan.materialize("context-capacity").unwrap().scenario_ids,
+            [
+                "kanban_c1_foundation",
+                "kanban_c4_ticket_flow",
+                "kanban_c7_live",
+                "context_pressure"
+            ]
+        );
+    }
+
     const NULL_AGENT: &str = include_str!("../config/agents/null-agent.md");
 
-    /// The canary is the regression, run by an agent that does nothing.
+    /// The canary is the regression plus the minimal path (the one test the
+    /// `pr` and `after-release` suites add), run by an agent that does nothing.
     #[test]
     fn the_null_canary_runs_the_regression_as_an_agent_that_does_nothing() {
         let plan = embedded().unwrap();
+        let mut expected = plan.materialize("regression").unwrap().scenario_ids;
+        expected.insert(0, ScenarioId::MinimalPath.to_string());
         assert_eq!(
             plan.materialize("null-canary").unwrap().scenario_ids,
-            plan.materialize("regression").unwrap().scenario_ids
+            expected
         );
+        for suite in ["pr", "after-release"] {
+            for id in plan.materialize(suite).unwrap().scenario_ids {
+                assert!(expected.contains(&id), "{suite}: {id} escapes the canary");
+            }
+        }
         // A parent, skills, preloaded functions or a model of its own would
         // bring in the calls the null agent exists never to make.
         let (frontmatter, body) = NULL_AGENT

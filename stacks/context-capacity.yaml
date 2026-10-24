@@ -1,0 +1,57 @@
+# Select suite=context-capacity. The usable window of the model is cut to about
+# 128k tokens so long sessions cross it and the context manager compacts.
+#
+# usable = (input_limit ?? context_window - max_output_tokens) - reserved,
+# reserved = min(reserved_tokens_cap, context_window * reserved_pct / 100)
+# (context-manager/src/core/budget.rs). For deepseek-flash, 1,000,000 - 384,000
+# = 616,000 is the base; the stock reserve of 20,000 leaves 596,000. A reserve
+# of 488,000 leaves 128,000. The cap alone is not enough: pct must allow it
+# (49% of 1,000,000 = 490,000). On another model the same numbers give another
+# window; read `usable` in the run before comparing.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+    start_after:
+    - context-manager
+
+  # The context manager is a dependency of the application; it is declared
+  # here, held by the edge above, only to carry the window override. Its
+  # configuration hot-reloads, so the override needs no restart.
+  context-manager:
+    worker: package://context-manager
+    version: latest
+    start_after:
+    - llm-router
+    config_override:
+      reserved_tokens_cap: 488000
+      reserved_pct: 49
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  # Workers the measurement itself needs and that the application does not
+  # bring along. A worker the application already depends on is left out: the
+  # engine resolves it from that dependency, and declaring it here as well is a
+  # second, independent spec for the same worker, which it refuses.
+  # `browser` is one of those, and arrives with `harness`.
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

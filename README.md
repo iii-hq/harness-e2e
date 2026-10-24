@@ -197,6 +197,9 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
+| Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | Proposal: the same tests nine independent times, to compare two Harness versions. |
+| Core runtime regression ×11 (harness comparison) | `regression-x11` | Proposal: the regression eleven independent times, to compare two Harness versions. |
+| Context capacity (compaction) | `context-capacity` | Kanban chapters 1, 4 and 7 and context pressure, on the `context-capacity` stack. |
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
@@ -229,7 +232,8 @@ materializes three campaigns, `<suite>-r01` to `-r03`, with the same groups and
 seeds; every group of every round is its own job, so a round adds jobs, not
 time to a job.
 
-The `null-canary` suite runs the regression's nine tests once, with no
+The `null-canary` suite runs the regression's nine tests and `minimal_path`
+(the one test `pr` and `after-release` add to the regression) once, with no
 technical retries, and is meant to run as the `null-agent` Directory profile
 ([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
 `done` and calls no function. The executor copies `config/agents/` into the
@@ -237,6 +241,74 @@ project's agents folder whenever an execution names a profile. Every run must
 score 0 and stay `task_incomplete`; a point or a completion is a hole in that
 test's evaluator, and a function call means the agent disobeyed, not that the
 evaluator paid.
+
+### Context capacity
+
+The `context-capacity` suite exercises compaction without a long build: it runs
+`kanban_c1_foundation`, `kanban_c4_ticket_flow`, `kanban_c7_live` and
+`context_pressure` once each, on the `context-capacity` stack, which cuts the
+usable window to about 128k tokens through the context manager's
+`reserved_tokens_cap` and `reserved_pct` (`config_override` of its container;
+the configuration hot-reloads). The usable input is the model's input limit, or
+its window minus its maximum output, minus `min(reserved_tokens_cap, window *
+reserved_pct / 100)`. On `deepseek-flash` that is 1,000,000 - 384,000 = 616,000
+minus the stock 20,000 = 596,000; the stack reserves 488,000, which leaves
+128,000. The cap alone is not enough, so `reserved_pct` is 49. Another model
+gets another window from the same numbers: read `usable` in the run.
+
+Scores of this lane are not scores of the normal window. The tests keep their
+ids, so compare them only with other runs of this suite and stack, never with
+the same test on `default`. Report the number of compactions and the peak
+context of each run from the run's context snapshots.
+
+Projection, not a measurement (the usage of each step of recorded
+`deepseek-flash` sessions, assuming the session goes on the same until it
+reaches 128k; what happens after a compaction was not measured): the share of
+runs that would compact is 100% for chapter 1, 35% for chapter 4, 83% for
+chapter 7 and 100% for context pressure, and 0% for the regression tests. The
+mean subject cost per run in local runs is US$0.20, 0.12 to 0.15, 0.17 and 0.07
+to 0.09, about US$0.60 per repetition, summary not included.
+
+```bash
+gh workflow run exact-stack-e2e.yml -f suite=context-capacity -f stack=context-capacity -f model=deepseek/deepseek-flash
+```
+
+### Comparing Harness versions
+
+Proposal, pending the budget decision: `software-engineering-x9` and
+`regression-x11` repeat the daily suites nine and eleven times, the repetitions
+that rule out a quality drop of more than 5 points after failures that are not
+the Harness's are set aside. Run each once per arm, on a pair of stacks of
+[`stacks/harness-ab/`](stacks/harness-ab/), on demand when a Harness release is
+to be judged (or weekly, if the budget allows). The repetitions, the frequency
+and the ceiling are the owner's to set; changing the repetitions is changing
+`repetitions` in [config/test-plan.json](config/test-plan.json) (1 to 20).
+
+Cost per comparison, both arms, subject cost only (the judge and technical
+retries add some): the mean of each test in local `deepseek-flash` runs, summed
+over the suite, times repetitions, times two. The regression is US$0.14 a pass,
+so about US$3.1; the 14 cases of `software-engineering` are US$2.51 a pass, so
+about US$45. The earlier estimate of US$13 for software engineering and US$4
+for the regression assumed six software-engineering tests; on all 14 the
+comparison costs more. A ceiling of the kind US$50 per comparison covers both.
+
+A/A, to calibrate noise: dispatch the same stack of `stacks/harness-ab/` twice
+as both arms, the same suite and model, and compare with
+`scripts/harness_ab.py`. No difference beyond the intervals is the expected
+result; one that shows is the noise the A/B must exceed.
+
+A/B: dispatch the suite once with each stack (for example
+`1.8.44.yaml` and `1.8.50.yaml`), pass the YAML as `stack`:
+
+```bash
+gh workflow run exact-stack-e2e.yml -f suite=regression-x11 -f model=deepseek/deepseek-flash \
+  -f stack="$(cat stacks/harness-ab/1.8.50.yaml)"
+```
+
+Download the artifacts of each execution and run
+`python3 scripts/harness_ab.py A_DIR B_DIR --label-a 1.8.44 --label-b 1.8.50`.
+A command that gives a calibrated verdict is being built; until it lands this
+script is the comparison.
 
 The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 `case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
