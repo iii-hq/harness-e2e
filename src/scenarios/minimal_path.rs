@@ -166,7 +166,7 @@ impl Scenario for MinimalPath {
             content: json!({
                 "state": state,
                 "task_calls": task_calls,
-                "turns": observation.metrics.totals.turns,
+                "turns": common::assistant_turns(&observation.transcript),
                 "response": observation.response,
             })
             .into(),
@@ -228,8 +228,11 @@ impl Scenario for MinimalPath {
                 && call.arguments.get("key").and_then(Value::as_str) == Some(KEY)
         });
         let single = calls.len() == 1 && exact_writes == 1;
-        let turns = observation.metrics.totals.turns;
-        let errors = observation.metrics.totals.function_call_errors;
+        // The Harness under test reports `harness::metrics` about itself, so the
+        // turn and error criteria count the recorded conversation instead; a
+        // criterion must not be winnable by changing that counter.
+        let turns = common::assistant_turns(&observation.transcript);
+        let errors = common::function_errors(&observation.transcript);
         let reply = observation.response.trim();
         let concise = reply.contains(DONE_MARKER) && reply.lines().count() == 1;
         let state_matches = state == expected;
@@ -346,5 +349,86 @@ mod tests {
         let spec = MinimalPath.spec("run");
         spec.validate().unwrap();
         assert_eq!(spec.criteria.len(), ASSESSMENTS.len());
+    }
+
+    #[tokio::test]
+    async fn directory_search_is_discovery_in_a_real_minimal_path_replay() {
+        assert_replay_awards(None).await;
+    }
+
+    #[tokio::test]
+    async fn tampered_metrics_counters_do_not_change_the_awards() {
+        assert_replay_awards(Some((1, 0))).await;
+    }
+
+    async fn assert_replay_awards(tampered: Option<(u64, u64)>) {
+        let mut fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/minimal_path_directory_search.json"
+        ))
+        .unwrap();
+        if let Some((turns, errors)) = tampered {
+            fixture["metrics"]["totals"]["turns"] = json!(turns);
+            fixture["metrics"]["totals"]["function_call_errors"] = json!(errors);
+        }
+        let run_id = fixture["provenance"]["attempt_id"].as_str().unwrap();
+        let seed = fixture["case"]["seed"].as_u64().unwrap();
+        let materialized = crate::scenarios::ScenarioId::MinimalPath
+            .materialize(run_id, seed)
+            .unwrap();
+        let observation = ScenarioObservation {
+            case: materialized.case,
+            metrics: crate::wire::SessionMetricsResponse::from_normalized(
+                crate::wire::SessionMetricsPayload {
+                    root_session_id: fixture["provenance"]["session_id"].as_str().unwrap().into(),
+                    complete: fixture["metrics"]["complete"].as_bool().unwrap(),
+                    totals: serde_json::from_value(fixture["metrics"]["totals"].clone()).unwrap(),
+                    by_session: Vec::new(),
+                    traces: None,
+                },
+            ),
+            transcript: fixture["transcript"].clone(),
+            response: fixture["response"].as_str().unwrap().into(),
+            deliverables: vec![CapturedDeliverable {
+                id: fixture["captured_deliverable"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                kind: fixture["captured_deliverable"]["kind"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                content: fixture["captured_deliverable"]["preview"].clone().into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        };
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+
+        let evaluation = MinimalPath
+            .evaluate(&context, &observation, run_id)
+            .await
+            .unwrap();
+        let award = |id: &str| {
+            evaluation
+                .awards
+                .iter()
+                .find(|award| award.id == id)
+                .and_then(|award| award.awarded)
+                .unwrap()
+        };
+        let score = evaluation
+            .awards
+            .iter()
+            .filter_map(|award| award.awarded)
+            .map(u16::from)
+            .sum::<u16>();
+        assert_eq!(fixture["native_evaluation"]["score"], 40);
+        assert_eq!(score, 80);
+        assert_eq!(award("exact_result"), 40);
+        assert_eq!(award("single_task_call"), 13);
+        assert_eq!(award("at_most_two_task_calls"), 12);
+        assert_eq!(award("zero_friction"), 15);
+        assert_eq!(award("single_turn"), 0);
+        assert_eq!(award("at_most_two_turns"), 0);
     }
 }

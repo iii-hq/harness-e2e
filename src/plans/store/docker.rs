@@ -444,14 +444,8 @@ impl PlanStore {
     ) -> Result<PlanExecution> {
         let parameters = execution
             .parameters
-            .as_mut()
+            .as_ref()
             .context("a Docker execution needs its parameters")?;
-        let stack = parameters
-            .stack
-            .as_mut()
-            .context("Pick the stack the execution runs on in Docker.")?;
-        stack.sha256 = artifact::sha256_bytes(stack.yaml.as_bytes());
-        let parameters = &*parameters;
         let stack = parameters.stack.as_ref().context("stack")?;
         let summary = stacks::summarize(&stack.yaml)?;
         let inputs = json!({

@@ -318,12 +318,29 @@ impl PlanStore {
             Some(summary) => merge(&mut row, &summary),
             None => row["contract_pending"] = json!(true),
         }
-        if let Ok(execution) = self.read_execution(&import_id(repository, run_id)).await {
+        if let Some(execution) = self.github_execution(repository, run_id).await {
             row["execution_id"] = json!(execution.id);
             row["execution_state"] = json!(execution.state);
             row["execution_error"] = json!(execution.error);
         }
         row
+    }
+
+    pub(crate) async fn github_execution(
+        &self,
+        repository: &str,
+        run_id: u64,
+    ) -> Option<PlanExecution> {
+        self.executions().await.ok()?.into_iter().find(|execution| {
+            matches!(
+                &execution.source,
+                ExecutionSource::Github {
+                    repository: source_repository,
+                    run_id: source_run_id,
+                    ..
+                } if source_repository == repository && *source_run_id == run_id
+            )
+        })
     }
 
     /// Suite, subject, profile and runner of each run, read from its contract
@@ -438,9 +455,12 @@ impl PlanStore {
                 .await?,
         )
         .context("decode GitHub workflow run")?;
-        let id = import_id(repository, run_id);
         let _guard = self.lock.lock().await;
-        let previous = self.read_execution(&id).await.ok();
+        let previous = self.github_execution(repository, run_id).await;
+        let id = previous
+            .as_ref()
+            .map(|execution| execution.id.clone())
+            .unwrap_or_else(|| import_id(repository, run_id));
         if let Some(previous) = previous.as_ref().filter(|e| e.state == "importing") {
             return Ok((previous.clone(), false));
         }

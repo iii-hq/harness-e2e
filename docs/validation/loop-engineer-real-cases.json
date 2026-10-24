@@ -1,0 +1,373 @@
+{
+  "tested_source_revisions": {
+    "harness_e2e": "12ba0ae11009a0b0a029595d00fbd46301130bbf",
+    "eval": "b63188f6235c1b642057cd6549946aba7ee333a3",
+    "directory": "06675d9a6f5b873e8a487ef92cb0706c763eccd0"
+  },
+  "real_execution": {
+    "subject": {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "where": "harness",
+      "scenarios": [
+        "minimal_path"
+      ],
+      "runs": 1,
+      "technical_retries": 0
+    },
+    "baseline_creation_key": "loop-proof:d447f12d6f7a4ecc9f6469d8b5809f4f",
+    "before": [
+      {
+        "execution_id": "plan-493e22a3bab9bf57352d034a72fe4cbb",
+        "native_execution_ids": [
+          "d819141d946a70c83553004322061bf5"
+        ],
+        "runs": [
+          {
+            "scenario_id": "minimal_path",
+            "run_id": "67ba3b1c99f3427faa5d09a79af5dc62",
+            "attempt_id": "9848b4acac574bf0af83f6bfc5393c77",
+            "session_id": "e2e_9848b4acac574bf0af83f6bfc5393c77",
+            "completion": "task_incomplete",
+            "status": "passed",
+            "score": 10,
+            "criteria": [
+              {
+                "id": "exact_result",
+                "awarded": 0,
+                "possible": 40,
+                "gate": true,
+                "reason": "state_matches=false, successful_exact_writes=0"
+              },
+              {
+                "id": "single_task_call",
+                "awarded": 0,
+                "possible": 13,
+                "gate": false,
+                "reason": "task_calls=1, successful_exact_writes=0"
+              },
+              {
+                "id": "at_most_two_task_calls",
+                "awarded": 0,
+                "possible": 12,
+                "gate": false,
+                "reason": "task_calls=1, owned_targets=false, successful_exact_writes=0"
+              },
+              {
+                "id": "single_turn",
+                "awarded": 0,
+                "possible": 10,
+                "gate": false,
+                "reason": "turns=2"
+              },
+              {
+                "id": "at_most_two_turns",
+                "awarded": 10,
+                "possible": 10,
+                "gate": false,
+                "reason": "turns=2"
+              },
+              {
+                "id": "zero_friction",
+                "awarded": 0,
+                "possible": 15,
+                "gate": false,
+                "reason": "function_call_errors=0, single_task_call=false, single_line_confirmation=false"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "execution_id": "plan-b3adee88e310d4c0531b10afa5d11eda",
+        "native_execution_ids": [
+          "7f2a253b7f0a92523b5779ab7e45245a"
+        ],
+        "runs": [
+          {
+            "scenario_id": "minimal_path",
+            "run_id": "e261e3bf03b240f191bd3f50003968e0",
+            "attempt_id": "9a741ae0c8664be58a89bb4cbe13a96e",
+            "session_id": "e2e_9a741ae0c8664be58a89bb4cbe13a96e",
+            "completion": "task_incomplete",
+            "status": "passed",
+            "score": 10,
+            "criteria": [
+              {
+                "id": "exact_result",
+                "awarded": 0,
+                "possible": 40,
+                "gate": true,
+                "reason": "state_matches=false, successful_exact_writes=0"
+              },
+              {
+                "id": "single_task_call",
+                "awarded": 0,
+                "possible": 13,
+                "gate": false,
+                "reason": "task_calls=1, successful_exact_writes=0"
+              },
+              {
+                "id": "at_most_two_task_calls",
+                "awarded": 0,
+                "possible": 12,
+                "gate": false,
+                "reason": "task_calls=1, owned_targets=false, successful_exact_writes=0"
+              },
+              {
+                "id": "single_turn",
+                "awarded": 0,
+                "possible": 10,
+                "gate": false,
+                "reason": "turns=2"
+              },
+              {
+                "id": "at_most_two_turns",
+                "awarded": 10,
+                "possible": 10,
+                "gate": false,
+                "reason": "turns=2"
+              },
+              {
+                "id": "zero_friction",
+                "awarded": 0,
+                "possible": 15,
+                "gate": false,
+                "reason": "function_call_errors=0, single_task_call=false, single_line_confirmation=false"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "after_creation_key": "loop-proof:0b311b04a8e24cab9e03c65df211ede2",
+    "after": {
+      "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0",
+      "native_execution_ids": [
+        "b36e6d2e8e9e542d1af43087f90414ed"
+      ],
+      "runs": [
+        {
+          "scenario_id": "minimal_path",
+          "run_id": "0f56e4f05cd146748ace08bd9742b258",
+          "attempt_id": "fcc94f5f320a4689b279462ca0f2dc3c",
+          "session_id": "e2e_fcc94f5f320a4689b279462ca0f2dc3c",
+          "completion": "completed",
+          "status": "passed",
+          "score": 65,
+          "criteria": [
+            {
+              "id": "exact_result",
+              "awarded": 40,
+              "possible": 40,
+              "gate": true,
+              "reason": "state_matches=true, successful_exact_writes=1"
+            },
+            {
+              "id": "single_task_call",
+              "awarded": 13,
+              "possible": 13,
+              "gate": false,
+              "reason": "task_calls=1, successful_exact_writes=1"
+            },
+            {
+              "id": "at_most_two_task_calls",
+              "awarded": 12,
+              "possible": 12,
+              "gate": false,
+              "reason": "task_calls=1, owned_targets=true, successful_exact_writes=1"
+            },
+            {
+              "id": "single_turn",
+              "awarded": 0,
+              "possible": 10,
+              "gate": false,
+              "reason": "turns=5"
+            },
+            {
+              "id": "at_most_two_turns",
+              "awarded": 0,
+              "possible": 10,
+              "gate": false,
+              "reason": "turns=5"
+            },
+            {
+              "id": "zero_friction",
+              "awarded": 0,
+              "possible": 15,
+              "gate": false,
+              "reason": "function_call_errors=1, single_task_call=true, single_line_confirmation=true"
+            }
+          ]
+        }
+      ]
+    },
+    "concurrent_start_replies": [
+      {
+        "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0"
+      },
+      {
+        "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0"
+      },
+      {
+        "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0"
+      },
+      {
+        "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0"
+      },
+      {
+        "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0"
+      },
+      {
+        "execution_id": "plan-e46e62e9612535b963f28181ebbe82c0"
+      }
+    ],
+    "checks": {
+      "six_concurrent_retries_one_execution": true,
+      "one_automatic_cycle_no_child_cycle": true,
+      "rename_does_not_change_creation_identity": true,
+      "restart_retry_preserves_id_and_one_native_run": true,
+      "conflicting_parameters_refused_without_another_execution": true,
+      "24_real_completion_redeliveries_and_child_events_do_not_duplicate": true,
+      "no_second_native_model_run": true,
+      "functional_task_completed": true
+    },
+    "cycle_id": "cycle_857920db6ae74e449d635fa7b77b8f16",
+    "outcome": {
+      "code": "inconclusive",
+      "detail": "3 pertinent finding(s) (3 ImprovementOpportunity); candidate work is not configured (config.candidate)"
+    },
+    "findings": [
+      {
+        "class": "improvement_opportunity",
+        "signal": "criterion",
+        "observation": "run minimal_path/0f56e4f05cd146748ace08bd9742b258: criterion at_most_two_turns awarded 0 of 10: turns=5"
+      },
+      {
+        "class": "improvement_opportunity",
+        "signal": "criterion",
+        "observation": "run minimal_path/0f56e4f05cd146748ace08bd9742b258: criterion zero_friction awarded 0 of 15: function_call_errors=1, single_task_call=true, single_line_confirmation=true"
+      },
+      {
+        "class": "improvement_opportunity",
+        "signal": "criterion",
+        "observation": "run minimal_path/0f56e4f05cd146748ace08bd9742b258: criterion single_turn awarded 0 of 10: turns=5"
+      }
+    ],
+    "api_registration_gap_after_restart": {
+      "observed": true,
+      "completed_with_read_only_readiness_check": true
+    }
+  },
+  "completion_admission": {
+    "before": [
+      {
+        "cycle_id": "cycle_3985e92118f8426aa05d15ef69aa2f0a",
+        "input": {
+          "execution_id": "plan-b3adee88e310d4c0531b10afa5d11eda"
+        }
+      },
+      {
+        "cycle_id": "cycle_1ad64b31938a4e39bc098489ed7ead53",
+        "input": {
+          "execution_id": "7f2a253b7f0a92523b5779ab7e45245a"
+        }
+      },
+      {
+        "cycle_id": "cycle_1acec99a622d407ebe804fa729df3229",
+        "input": {
+          "execution_id": "plan-493e22a3bab9bf57352d034a72fe4cbb"
+        }
+      },
+      {
+        "cycle_id": "cycle_1c363d8f8503406aa1f682d46680224c",
+        "input": {
+          "execution_id": "d819141d946a70c83553004322061bf5"
+        }
+      }
+    ],
+    "after": {
+      "canonical_cycles": 1,
+      "child_cycles": 0,
+      "redelivered_completion_events": 24
+    }
+  },
+  "discovery": {
+    "query": {
+      "capabilities": [
+        "set a value in state by scope and key"
+      ]
+    },
+    "baseline_registry_version": "1.2.43",
+    "baseline_executable_sha256": "c2b826e3c7cfa0271d8eeec03696f7dea3f34d2f3b18562155d27d527bd276b2",
+    "before_workers": [],
+    "after_workers": [
+      {
+        "functions": [
+          {
+            "description": "Store or write a value at a key in a state scope; it persists across sessions",
+            "function_id": "state::set"
+          },
+          {
+            "description": "Atomically set a value only if it currently equals `expected` (omit `expected` to mean 'only if absent').",
+            "function_id": "state::compare-and-set"
+          },
+          {
+            "description": "Read the value stored at a key in a state scope",
+            "function_id": "state::get"
+          },
+          {
+            "description": "Update part of a stored value: set, merge, increment, append or remove fields",
+            "function_id": "state::update"
+          },
+          {
+            "description": "Delete the value stored at a key in a state scope",
+            "function_id": "state::delete"
+          },
+          {
+            "description": "List every value stored in a state scope",
+            "function_id": "state::list"
+          },
+          {
+            "description": "List the keys stored in a state scope",
+            "function_id": "state::list_keys"
+          },
+          {
+            "description": "List all state scopes (groups) that hold values",
+            "function_id": "state::list_groups"
+          }
+        ],
+        "namespace": "state"
+      }
+    ],
+    "candidate_executable_sha256": "587bf52fa7791b1b72996585e4bc4389cef624794b60a99beb1f225587d92b32",
+    "strict_contract_lookup_namespace": "loop-engineer-qualification"
+  },
+  "evaluator_replay": {
+    "fixture": "tests/fixtures/minimal_path_directory_search.json",
+    "fixture_sha256": "68034d7155d299c4c199126f3b2e9302c5d94528f00449a94877f8df6fb2a38c",
+    "native_execution_id": "62b84851fac3cb1c5cb357b77bbe8144",
+    "before_score": 40,
+    "after_score": 80,
+    "exact_result_points_unchanged": 40,
+    "turn_criteria_still_zero": true,
+    "method": "Replay the same captured native transcript, metrics and deliverable through MinimalPath.evaluate; no provider call or State access"
+  },
+  "sentinel": {
+    "source_execution_id": "plan-0f2a4d4feea07c57c5982764f3764ae9",
+    "boundary": "Historical native failures replayed directly through Sentinel report ingestion; this is not a live Eval forwarding test",
+    "recorded_first": 2,
+    "deduped_second": 2,
+    "recorded_second": 0,
+    "classifications": [
+      "insufficient_evidence",
+      "insufficient_evidence"
+    ]
+  },
+  "qualification_limits": [
+    "The real model run proves this task completed; it is not a statistical efficiency comparison.",
+    "GitHub response-loss and cancellation use a local gh test double, not a fault injected into a remote workflow.",
+    "No autonomous candidate was configured in the live proof. Independent usage metering and external Release Control promotion remain unqualified.",
+    "The original grading capture does not independently establish a Workers source revision."
+  ]
+}

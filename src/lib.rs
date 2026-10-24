@@ -18,6 +18,7 @@ pub(crate) mod plans;
 pub mod redaction;
 pub mod report;
 pub mod result_contract;
+pub(crate) mod runtime_artifact;
 pub mod scenarios;
 pub mod schema;
 pub mod screenshot;

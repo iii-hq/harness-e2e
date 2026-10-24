@@ -651,6 +651,33 @@ def built_versions(versions: dict[str, str], contract: dict[str, Any]) -> dict[s
     return dict(sorted({**versions, **{pin["worker"]: f"@{pin['commit'][:7]}" for pin in pins}}.items()))
 
 
+def harness_source(contract: dict[str, Any]) -> str | None:
+    """`HARNESS_E2E_HARNESS_SOURCE` for the runner: the Harness the stack built
+    from a commit, as the build was verified (`prepare_execution.py`
+    `verified_build`), canonical JSON of its repository, folder, full commit
+    and binary digest. None when the stack builds no Harness from a commit;
+    a Harness pin without a verified digest is refused, never filled in from
+    what was asked for."""
+    pins = [pin for pin in ((contract.get("runtime") or {}).get("commits") or {}).values()
+            if isinstance(pin, dict) and pin.get("worker") == APPLICATION]
+    if not pins:
+        return None
+    if len(pins) > 1:
+        raise ValueError("runtime.commits builds more than one Harness")
+    pin = pins[0]
+    repository, path = pin.get("repository"), pin.get("path")
+    revision, digest = str(pin.get("commit") or ""), str(pin.get("binary_sha256") or "")
+    if not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repository):
+        raise ValueError("runtime.commits Harness repository must be <owner>/<name>")
+    if not isinstance(path, str) or ".." in Path(path).parts or path.startswith("/"):
+        raise ValueError("runtime.commits Harness path must stay inside its repository")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("runtime.commits Harness commit must be a full commit sha")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError("runtime.commits Harness has no verified binary_sha256")
+    return canonical({"repository": repository, "path": path, "revision": revision, "binary_sha256": digest})
+
+
 def scoped_config_name(namespace: str, name: str) -> str:
     """A configuration id both Compose and the engine accept.
 
@@ -770,6 +797,8 @@ def project_scaffold(
     # A worker the stack built from a commit is a path:// worker that is
     # still the package it was built from, known by its path.
     commits = runtime.get("commits") or {}
+    # Only a group's runner checks the Harness it drives against the build.
+    verified_source = None if assembling else harness_source(contract)
     assembled = (runtime.get("compose") or {}).get("containers") or {}
     built = {assembled[name]["worker"]: pin["worker"] for name, pin in commits.items() if name in assembled}
 
@@ -921,6 +950,8 @@ def project_scaffold(
                     "HARNESS_E2E_STACK_VERSIONS": canonical(versions),
                     "HARNESS_E2E_STACK_DIGEST": canonical_sha256(runtime["lock"]),
                 })
+            if verified_source:
+                container.setdefault("environment", {})["HARNESS_E2E_HARNESS_SOURCE"] = verified_source
         elif worker == APPLICATION and harness_override:
             container["config_name"] = scoped_config_name(namespace, "harness")
             container.setdefault("config_override", {}).update(harness_override)

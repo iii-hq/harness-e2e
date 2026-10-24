@@ -43,6 +43,36 @@ pub enum StackIdentity {
     },
 }
 
+/// A validated source build, bound to the executable the runner observed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessSourceIdentity {
+    pub repository: String,
+    pub path: String,
+    pub revision: String,
+    pub binary_sha256: String,
+}
+
+impl HarnessSourceIdentity {
+    pub fn from_environment() -> Result<Option<Self>> {
+        nonempty_env("HARNESS_E2E_HARNESS_SOURCE")
+            .map(|raw| serde_json::from_str(&raw).context("parse Harness source build identity"))
+            .transpose()
+    }
+
+    pub fn attest(self, binary: Option<&str>) -> Result<Self> {
+        required_value(self.repository.clone(), "Harness source repository")?;
+        required_value(self.path.clone(), "Harness source path")?;
+        validate_git_revision(&self.revision, "Harness source revision")?;
+        validate_sha256(&self.binary_sha256, "Harness source executable digest")?;
+        anyhow::ensure!(
+            binary == Some(self.binary_sha256.as_str()),
+            "running Harness executable differs from the validated source build"
+        );
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SystemUnderTestIdentity {
     pub stack: StackIdentity,
@@ -50,6 +80,12 @@ pub struct SystemUnderTestIdentity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
     pub harness_version: String,
+    /// Digest of the running Harness executable, captured by the local runner.
+    /// Absent when the host or Compose process cannot be observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_binary_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_source: Option<HarnessSourceIdentity>,
     pub e2e_repository: String,
     pub e2e_revision: String,
     pub contract_hashes: BTreeMap<String, String>,
@@ -101,6 +137,8 @@ impl SystemUnderTestIdentity {
             engine_version: required_value(engine_version, "engine version")?,
             engine_revision: nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
             harness_version: required_value(harness_version, "Harness version")?,
+            harness_binary_sha256: None,
+            harness_source: None,
             e2e_repository: identity_value(
                 "HARNESS_E2E_REPOSITORY",
                 env!("HARNESS_E2E_BUILD_REPOSITORY"),
@@ -118,6 +156,14 @@ impl SystemUnderTestIdentity {
     pub fn validate(&self) -> Result<()> {
         required_value(self.engine_version.clone(), "engine version")?;
         required_value(self.harness_version.clone(), "Harness version")?;
+        if let Some(digest) = &self.harness_binary_sha256 {
+            validate_sha256(digest, "Harness binary digest")?;
+        }
+        if let Some(source) = &self.harness_source {
+            source
+                .clone()
+                .attest(self.harness_binary_sha256.as_deref())?;
+        }
         if let Some(revision) = &self.engine_revision {
             required_value(revision.clone(), "engine revision")?;
         }
@@ -194,6 +240,39 @@ fn validate_sha256(value: &str, label: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_source_revision_is_attested_only_by_its_built_executable() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let source = super::HarnessSourceIdentity {
+            repository: "iii-hq/workers".into(),
+            path: "harness".into(),
+            revision: format!("abcdef0{}", "1".repeat(33)),
+            binary_sha256: digest.clone(),
+        };
+        assert!(source.clone().attest(None).is_err());
+        assert!(source
+            .clone()
+            .attest(Some(&format!("sha256:{}", "b".repeat(64))))
+            .is_err());
+        let attested = source.clone().attest(Some(&digest)).unwrap();
+        let value = serde_json::to_value(&attested).unwrap();
+        let decoded: super::HarnessSourceIdentity = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, source);
+        let other = super::HarnessSourceIdentity {
+            revision: format!("abcdef0{}", "2".repeat(33)),
+            ..source
+        };
+        assert_ne!(
+            attested.revision, other.revision,
+            "equal seven-character prefixes are not source identity"
+        );
+        let invalid = super::HarnessSourceIdentity {
+            revision: "abcdef0".into(),
+            ..other
+        };
+        assert!(invalid.attest(Some(&digest)).is_err());
+    }
+
     #[test]
     fn build_identity_is_immutable_in_a_git_checkout() {
         assert_ne!(env!("HARNESS_E2E_BUILD_REPOSITORY"), "unknown");

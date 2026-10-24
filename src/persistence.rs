@@ -526,10 +526,14 @@ impl Persistence {
     }
     /// Delete an execution's receipt; with `tombstone`, remember that it was
     /// deleted, so an import does not bring it back on its own.
-    pub(crate) async fn delete_execution_receipt(&self, id: &str, tombstone: bool) -> Result<()> {
+    pub(crate) async fn delete_execution_receipt(
+        &self,
+        id: &str,
+        tombstone: Option<&str>,
+    ) -> Result<()> {
         let mut statements = Vec::new();
-        if tombstone {
-            statements.push(json!({"sql": "INSERT INTO deleted_imports(id, deleted_at) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET deleted_at=excluded.deleted_at", "params": [id, chrono::Utc::now().to_rfc3339()]}));
+        if let Some(tombstone) = tombstone {
+            statements.push(json!({"sql": "INSERT INTO deleted_imports(id, deleted_at) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET deleted_at=excluded.deleted_at", "params": [tombstone, chrono::Utc::now().to_rfc3339()]}));
         }
         statements
             .push(json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}));
@@ -555,11 +559,12 @@ impl Persistence {
     pub(crate) async fn skip_import(
         &self,
         id: &str,
+        marker: &str,
         run_updated_at: &str,
         reason: &str,
     ) -> Result<()> {
         self.transaction(vec![
-            json!({"sql": "INSERT INTO skipped_imports(id, run_updated_at, reason, skipped_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET run_updated_at=excluded.run_updated_at, reason=excluded.reason, skipped_at=excluded.skipped_at", "params": [id, run_updated_at, reason, chrono::Utc::now().to_rfc3339()]}),
+            json!({"sql": "INSERT INTO skipped_imports(id, run_updated_at, reason, skipped_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET run_updated_at=excluded.run_updated_at, reason=excluded.reason, skipped_at=excluded.skipped_at", "params": [marker, run_updated_at, reason, chrono::Utc::now().to_rfc3339()]}),
             json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}),
         ])
         .await
