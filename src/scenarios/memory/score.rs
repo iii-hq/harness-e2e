@@ -480,6 +480,20 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             )),
             Some(_) => {}
         }
+        // A block that failed to parse vanishes; memory's own count catches it.
+        let parsed: usize = evidence
+            .observed
+            .blocks
+            .iter()
+            .filter(|block| block.turn_id == exchange.turn_id && block.step == 0)
+            .map(|block| block.lines.len())
+            .sum();
+        if parsed != exchange.memory_recalled {
+            problems.push(format!(
+                "exchange {index}: memory recalled {} memories, {parsed} lines parsed",
+                exchange.memory_recalled
+            ));
+        }
         // shortcut: the published Harness stamps no `origin.req`, so an unstamped step
         // trusts its recorded prompt unchecked; once a Harness release stamps every
         // step, change `!= Some(false)` to `== Some(true)`.
@@ -532,6 +546,7 @@ mod tests {
             position: 10 * index + 2,
             memory_bank: Some(bank(RUN)),
             system_sha: None,
+            memory_recalled: 0,
             answer: answer.into(),
         }
     }
@@ -548,12 +563,20 @@ mod tests {
         }
     }
 
+    /// Each exchange's `memory_recalled` counts its own step-0 block's lines.
     fn observed(answers: &[&str], blocks: Vec<MemoryBlock>) -> Observed {
         Observed {
             exchanges: answers
                 .iter()
                 .enumerate()
-                .map(|(index, answer)| exchange(index, answer))
+                .map(|(index, answer)| Exchange {
+                    memory_recalled: blocks
+                        .iter()
+                        .filter(|block| block.turn_id == format!("t{index}") && block.step == 0)
+                        .map(|block| block.lines.len())
+                        .sum(),
+                    ..exchange(index, answer)
+                })
                 .collect(),
             blocks,
             compactions: Vec::new(),
@@ -742,7 +765,10 @@ mod tests {
     #[test]
     fn an_unstamped_step_trusts_the_prompt_the_observer_recorded() {
         // The origin the published Harness writes: no `req` to hash against.
+        let recalled = "<memory bank=\"e2e-a\">\nRelevant remembered memories:\n- The user lives in Lisbon. (2026-10-23)\n</memory>";
         let transcript = json!({"messages": [
+            {"entry_id": "e_t_a_0_notice_0",
+             "custom": {"custom_type": "model_notice", "data": {"kind": "hook", "text": recalled}}},
             {"entry_id": "e_t_a_0_assistant",
              "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
              "origin": {"memory_bank": "e2e-a", "memory_banks": ["e2e-a"],
@@ -921,6 +947,27 @@ mod tests {
         foreign.bank = "main".into();
         let found = audit(&evidence_of(case, observed(&answers, vec![foreign])));
         assert!(found.irrelevant.is_empty(), "{:?}", found.irrelevant);
+    }
+
+    #[test]
+    fn a_recall_count_without_its_lines_is_an_infrastructure_error() {
+        let case = case_named("memory_small_talk");
+        let answers = ["a", "b", "c", "d"];
+        // Memory says it recalled two, but no block parsed: a quiet pass would be vacuous.
+        let mut dropped = observed(&answers, vec![]);
+        dropped.exchanges[1].memory_recalled = 2;
+        let error = evaluate(case, &evidence_of(case, dropped))
+            .infrastructure_error
+            .expect("a dropped block is flagged");
+        assert!(error.contains("exchange 1"), "{error}");
+
+        let lines = vec![DISTRACTORS[0].to_string(), DISTRACTORS[1].to_string()];
+        let matched = observed(&answers, vec![block(1, lines)]);
+        assert_eq!(matched.exchanges[1].memory_recalled, 2);
+        assert_eq!(
+            evaluate(case, &evidence_of(case, matched)).infrastructure_error,
+            None
+        );
     }
 
     #[test]

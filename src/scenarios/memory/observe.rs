@@ -35,6 +35,9 @@ pub struct Exchange {
     pub memory_bank: Option<String>,
     /// `origin.req.system_sha` of that entry.
     pub system_sha: Option<String>,
+    /// `origin.memory_recalled` of that entry: the lines memory says its block
+    /// holds; absent when it recalled nothing.
+    pub memory_recalled: usize,
     /// Text of the turn's last assistant entry that has any.
     pub answer: String,
 }
@@ -197,6 +200,10 @@ fn note_assistant(exchanges: &mut Vec<Exchange>, position: usize, entry: &Value)
             position,
             memory_bank: text_at(entry, "/origin/memory_bank").map(str::to_string),
             system_sha: text_at(entry, "/origin/req/system_sha").map(str::to_string),
+            memory_recalled: entry
+                .pointer("/origin/memory_recalled")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize,
             answer: text.unwrap_or_default(),
         }),
     }
@@ -295,18 +302,25 @@ mod tests {
                 "t_b",
                 0,
                 "thinking",
-                json!({"memory_bank": "e2e-x", "req": {"system_sha": sha}}),
+                json!({"memory_bank": "e2e-x", "memory_recalled": 3, "req": {"system_sha": sha}}),
             ),
-            assistant("t_b", 1, "final answer", json!({"memory_bank": "e2e-x"})),
+            assistant(
+                "t_b",
+                1,
+                "final answer",
+                json!({"memory_bank": "e2e-x", "memory_recalled": 9}),
+            ),
             assistant("t_b", 2, "  ", json!({})),
         ]));
         assert_eq!(observed.exchanges.len(), 2);
         assert_eq!(observed.exchanges[0].memory_bank, None);
+        assert_eq!(observed.exchanges[0].memory_recalled, 0);
         let second = &observed.exchanges[1];
         assert_eq!(second.turn_id, "t_b");
         assert_eq!(second.position, 3);
         assert_eq!(second.memory_bank.as_deref(), Some("e2e-x"));
         assert_eq!(second.system_sha.as_deref(), Some(sha.as_str()));
+        assert_eq!(second.memory_recalled, 3);
         assert_eq!(second.answer, "final answer");
     }
 
