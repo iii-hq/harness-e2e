@@ -242,9 +242,10 @@ evaluator paid.
 
 `cargo test` holds the same canary without a model, and its counterpart, for
 every test a suite schedules. Each is scored as the runner scores it against a
-null delivery (no call, `done`, one turn), which must earn 0 and stay
-`task_incomplete`, and a reference delivery, which must complete with 100;
-both run ten times and a result that changes between rounds fails as drift.
+null delivery (no call, one turn, a reply of `done` or one that only claims the
+result), which must earn 0 and stay `task_incomplete`, and a reference
+delivery, which must complete with 100; both run ten times and a result that
+changes between rounds fails as drift.
 The evaluators of the Registry, trending-topics, chess, form-flow,
 state-machine, Linkly and onboarding tests score what a live stack, Docker or
 a browser left behind, so the test names each of them, with the reason and the

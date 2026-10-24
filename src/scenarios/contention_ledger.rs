@@ -74,7 +74,7 @@ const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
-    "Is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
+    "Once a writer has run under the root, is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
 )
 .labeled("Final answer is the short balanced line");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -573,10 +573,12 @@ fn evaluate_observation(
                 completion_records.len(),
             ),
         ),
+        // The marker is in the prompt: only a run whose writers ran backs it.
         VERIFIED_REPORT.full_or_zero(
-            report_verified && operational_errors == 0,
+            audit.children_in_tree > 0 && report_verified && operational_errors == 0,
             format!(
-                "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                "writers_in_tree={}, report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                audit.children_in_tree,
                 observation.response.chars().count(),
                 observation.metrics.totals.function_call_errors,
             ),
@@ -1140,9 +1142,10 @@ pub(crate) mod tests {
         )
     }
 
-    /// The null delivery (no writer, no table) and the reference one (one
-    /// barrier wake armed, three writers spawned in one response, each with
-    /// its own five increments, and the wake fired by the third done key).
+    /// The null delivery (no writer, no table, only the report's marker) and
+    /// the reference one (one barrier wake armed, three writers spawned in
+    /// one response, each with its own five increments, and the wake fired
+    /// by the third done key).
     pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
         let names = Names::new("run");
         let mut root = vec![common::ObservedFunctionCall {
@@ -1174,7 +1177,7 @@ pub(crate) mod tests {
                 0,
                 Vec::new(),
                 &LedgerSnapshot::empty(),
-                "done",
+                REPORT_MARKER,
             ),
             evaluation_of(
                 transcript(&root, &barrier),

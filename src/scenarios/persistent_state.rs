@@ -41,7 +41,7 @@ const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
 const CONCISE_MIGRATION_CONFIRMATION: AssessmentSpec = AssessmentSpec::scored(
     "concise_migration_confirmation",
     10,
-    "Is the final response concise and does it state that revision 2 contains three items?",
+    "After a successful write of the owned key, is the final response concise and does it state that revision 2 contains three items?",
 )
 .labeled("Reply briefly confirms revision 2 has three items");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -287,7 +287,10 @@ impl Scenario for PersistentState {
             && gamma_once;
 
         let reply = observation.response.trim();
-        let concise = !reply.is_empty()
+        // A confirmation confirms something only after the write: the
+        // prompt names revision 2 and three items, so a reply alone can say it.
+        let concise = !writes.is_empty()
+            && !reply.is_empty()
             && reply.lines().count() <= 3
             && reply.chars().count() <= 400
             && mentions_number(reply, 2)
@@ -311,7 +314,8 @@ impl Scenario for PersistentState {
                 CONCISE_MIGRATION_CONFIRMATION.full_or_zero(
                     concise,
                     format!(
-                        "lines={}, chars={}, mentions_revision_2={}, mentions_3_items={}",
+                        "successful_owned_writes={}, lines={}, chars={}, mentions_revision_2={}, mentions_3_items={}",
+                        writes.len(),
                         reply.lines().count(),
                         reply.chars().count(),
                         mentions_number(reply, 2),
@@ -395,9 +399,11 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    /// The null delivery (a text-only reply, the record untouched) and the
-    /// reference one (read the key, write the migrated record once).
+    /// The null delivery (the record untouched and a reply that only claims
+    /// the migration) and the reference one (read the key, write the migrated
+    /// record once, confirm).
     pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        let reply = "Migrated to revision 2 with 3 items.";
         let scope = scope("control");
         let mut messages = Vec::new();
         for (index, (function_id, arguments)) in [
@@ -421,13 +427,8 @@ pub(crate) mod tests {
             } }));
         }
         [
-            evaluation_of(json!({ "messages": [] }), baseline(), "done").await,
-            evaluation_of(
-                json!({ "messages": messages }),
-                expected(),
-                "Migrated to revision 2 with 3 items.",
-            )
-            .await,
+            evaluation_of(json!({ "messages": [] }), baseline(), reply).await,
+            evaluation_of(json!({ "messages": messages }), expected(), reply).await,
         ]
     }
 

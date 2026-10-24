@@ -1163,9 +1163,10 @@ mod tests {
 
     /// The null agent without a model, and its counterpart. Every scheduled
     /// test is scored as the runner scores it against two deliveries: the
-    /// null one (no call, `done`, one turn) earns 0 and stays
-    /// `task_incomplete`; the reference one completes with 100. Both run ten
-    /// times: a result that differs between rounds is named as drift.
+    /// null one (no call, one turn, a reply of `done` or one that only
+    /// claims the result) earns 0 and stays `task_incomplete`; the reference
+    /// one completes with 100. Both run ten times: a result that differs
+    /// between rounds is named as drift.
     #[tokio::test]
     async fn every_scheduled_test_pays_nothing_for_nothing_and_everything_for_the_task() {
         use crate::report::CompletionState;
