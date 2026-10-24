@@ -19,6 +19,8 @@ pub const ID: &str = "persistent_state";
 const KEY: &str = "migration_record";
 const OWNER: &str = "quality-suite";
 const DELIVERABLE_ID: &str = "migration_record";
+/// State functions that only read: a call to one writes nowhere.
+const STATE_READS: [&str; 3] = ["state::get", "state::list", "state::list_groups"];
 
 const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::gate(
     "exact_migrated_state",
@@ -29,7 +31,7 @@ const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::gate(
 const READ_THEN_WRITE_ONCE: AssessmentSpec = AssessmentSpec::scored(
     "read_then_write_once",
     25,
-    "Did the subject read the owned key before exactly one successful state::set, with no errors or writes elsewhere?",
+    "Did the subject read the owned key before exactly one successful state::set, with no errors and no state write elsewhere (getting or listing state reads it)?",
 )
 .labeled("Read the key, then wrote it once");
 const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
@@ -248,7 +250,7 @@ impl Scenario for PersistentState {
             .iter()
             .filter(|call| {
                 call.function_id.starts_with("state::")
-                    && call.function_id != "state::get"
+                    && !STATE_READS.contains(&call.function_id.as_str())
                     && !targets_owned(&call.arguments, &scope)
             })
             .count();
@@ -460,6 +462,34 @@ pub(crate) mod tests {
             confirmation(right),
             Some(CONCISE_MIGRATION_CONFIRMATION.weight())
         );
+        // The migrated record the subject never wrote is not its to confirm.
+        let unwritten = evaluation_of(json!({ "messages": [] }), expected(), REPLY).await;
+        assert_eq!(confirmation(unwritten), Some(0));
+    }
+
+    /// Listing the scope first reads it: the read-then-write discipline holds.
+    #[tokio::test]
+    async fn listing_the_scope_is_a_read_not_a_foreign_write() {
+        let mut transcript = read_then_write(expected());
+        let messages = transcript["messages"].as_array_mut().unwrap();
+        let list = [
+            json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": "list", "function_id": "state::list",
+                "arguments": { "scope": scope("control") },
+            }] } }),
+            json!({ "message": {
+                "role": "function_result", "function_call_id": "list",
+                "function_id": "state::list", "is_error": false,
+            } }),
+        ];
+        messages.splice(0..0, list);
+        let evaluation = evaluation_of(transcript, expected(), REPLY).await;
+        let total: u16 = evaluation
+            .awards
+            .iter()
+            .filter_map(|award| award.awarded.map(u16::from))
+            .sum();
+        assert_eq!(total, 100);
     }
 
     #[test]

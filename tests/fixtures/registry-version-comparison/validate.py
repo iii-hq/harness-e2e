@@ -92,8 +92,11 @@ def ratio(metric_id, numerator, denominator, evidence, reason=None, empty_value=
                     "reason": reason or "zero_denominator", "evidence": evidence}
         return {"id": metric_id, "status": "not_applicable", "numerator": 0,
                 "denominator": 0, "reason": reason or "zero_denominator", "evidence": evidence}
-    return {"id": metric_id, "status": "measured", "numerator": numerator,
-            "denominator": denominator, "evidence": evidence}
+    measured = {"id": metric_id, "status": "measured", "numerator": numerator,
+                "denominator": denominator, "evidence": evidence}
+    if reason:
+        measured["reason"] = reason
+    return measured
 
 
 def controller_command(state, command, timeout=120):
@@ -462,25 +465,27 @@ def verification_observations(task_root, assets, state):
     report_evidence = relative_evidence(run_root, checks_path)
     validation_evidence = relative_evidence(run_root, receipt_path)
     evidence = [item for item in (report_evidence, feature_evidence, validation_evidence) if item]
-    # A report that executed nothing only claims: its empty failure sets and
-    # its untouched source hold because nothing was attempted. For the same
-    # reason a reported failure is found only once its check was executed.
-    empty_value = 1 if executed else 0
+    # A report only claims what it did not execute: an empty failure set holds
+    # for the required checks it executed and no further, so it counts as
+    # executed/required, and a report that executed nothing earns nothing. For
+    # the same reason a reported failure is found only once its check was
+    # executed.
+    executed_share = (len(executed), len(PUBLIC_VERIFICATION_IDS))
     found = known_failed & report_fail & executed
     observations = []
     if not truth_complete:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
     elif not known_failed:
-        observations.append(ratio("verification.recall", 0, 0, evidence,
-                                  "no_independently_failing_checks", empty_value=empty_value))
+        observations.append(ratio("verification.recall", *executed_share, evidence,
+                                  "no_independently_failing_checks"))
     else:
         observations.append(ratio("verification.recall", len(found), len(known_failed), evidence))
     if any(independent.get(case_id, {}).get("status") != "measured"
            for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
     elif not report_fail and not known_failed:
-        observations.append(ratio("verification.precision", 0, 0, evidence,
-                                  "no_failures_to_reproduce", empty_value=empty_value))
+        observations.append(ratio("verification.precision", *executed_share, evidence,
+                                  "no_failures_to_reproduce"))
     elif not report_fail:
         observations.append(ratio("verification.precision", 0, 0, evidence,
                                   "no_reported_failures"))

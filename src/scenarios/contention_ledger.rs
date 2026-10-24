@@ -43,14 +43,14 @@ const DATABASE_WRITES: [&str; 3] = [
 const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::gate_in(
     "balanced_ledger",
     35,
-    "Does the counter table hold one row reading exactly 15, and the audit table exactly the 15 rows writer 0-2 by step 1-5?",
+    "Does the counter table hold one row reading exactly 15, and the audit table exactly the 15 rows writer 0-2 by step 1-5, written by the three writer subagents and not by the root?",
     EvaluationDimension::Deliverable,
 )
 .labeled("Ledger reads 15 with all 15 audit rows");
 const WRITERS_INCREMENTED: AssessmentSpec = AssessmentSpec::gate(
     "writers_incremented",
     15,
-    "Did each of the three writer subagents run as a direct child of the root and send at least five atomic increments of the shared counter?",
+    "Did each of the three writer subagents run as a direct child of the root and send at least five atomic increments of the shared counter in database primary?",
 )
 .labeled("Three writer subagents each incremented the counter");
 const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::scored(
@@ -62,7 +62,7 @@ const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::scored(
 const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::gate(
     "parent_woken",
     10,
-    "Did the completion wake skip at least two done-key writes and then fire exactly once, so the root was woken only after all three writers had finished?",
+    "Did the three writer subagents run under the root, and did the completion wake skip at least two done-key writes and then fire exactly once, so the root was woken only after all three writers had finished?",
 )
 .labeled("Root woke once, after all writers finished");
 const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
@@ -466,6 +466,8 @@ fn evaluate_observation(
     let calls = common::function_calls(&observation.transcript);
     let audit = writer_audit(observation, writers, names);
     let root_clean = root_avoids_increments(&calls, names);
+    // The ledger proves no update was lost only when the writers made it.
+    let written_by_writers = balanced && audit.all_children_incremented && root_clean;
     let contended = audit.all_children_contended && audit.no_extra_sessions && root_clean;
 
     let registrations: Vec<_> = calls
@@ -511,7 +513,9 @@ fn evaluate_observation(
         .count();
     // The wake the parent depends on: it waited through the first writers'
     // done keys and fired once. How it was armed is scored separately.
-    let parent_woken = retired == 1 && pending >= usize::from(WRITERS) - 1;
+    let parent_woken = audit.children_in_tree == usize::from(WRITERS)
+        && retired == 1
+        && pending >= usize::from(WRITERS) - 1;
     let barrier_woke = completion_records.len() == usize::from(WRITERS)
         && retired == 1
         && pending == usize::from(WRITERS) - 1;
@@ -531,13 +535,14 @@ fn evaluate_observation(
 
     assessment::build_evaluation([
         BALANCED_LEDGER.full_or_zero(
-            balanced,
+            written_by_writers,
             format!(
                 "accumulator_rows={}, accumulator={}, audit_rows={}, \
-             sequences_exact={sequences_exact}",
+             sequences_exact={sequences_exact}, writers_incremented={}, root_clean={root_clean}",
                 snapshot.accumulator_rows,
                 snapshot.accumulator,
                 snapshot.audit_rows(),
+                audit.all_children_incremented,
             ),
         ),
         WRITERS_INCREMENTED.full_or_zero(
@@ -558,7 +563,9 @@ fn evaluate_observation(
         PARENT_WOKEN.full_or_zero(
             parent_woken,
             format!(
-                "completion_records={}, skipped_while_waiting={pending}, fired={retired}",
+                "children_in_tree={}/{WRITERS}, completion_records={}, \
+             skipped_while_waiting={pending}, fired={retired}",
+                audit.children_in_tree,
                 completion_records.len(),
             ),
         ),
@@ -750,11 +757,22 @@ fn writer_audit(
     }
 }
 
+/// A database write to `primary`, named or as the default an omitted `db`
+/// selects; a write to another database never reaches the ledger.
+fn writes_primary(call: &common::ObservedFunctionCall) -> bool {
+    DATABASE_WRITES.contains(&call.function_id.as_str())
+        && call
+            .arguments
+            .get("db")
+            .and_then(Value::as_str)
+            .is_none_or(|db| db == DATABASE)
+}
+
 /// Atomic increments of the shared counter among `calls`, failed or not.
 fn increments(calls: &[common::ObservedFunctionCall], names: &Names) -> usize {
     calls
         .iter()
-        .filter(|call| DATABASE_WRITES.contains(&call.function_id.as_str()))
+        .filter(|call| writes_primary(call))
         .flat_map(|call| common::sql_statements(&call.arguments))
         .filter(|sql| is_increment(sql, &names.ledger))
         .count()
@@ -777,7 +795,7 @@ fn writer_calls_contended(
     let mut pairs: BTreeSet<(i64, i64)> = BTreeSet::new();
     let mut unreadable_insert = false;
     for (position, call) in calls.iter().enumerate() {
-        if !DATABASE_WRITES.contains(&call.function_id.as_str()) {
+        if !writes_primary(call) {
             continue;
         }
         for sql in common::sql_statements(&call.arguments) {
@@ -1143,12 +1161,9 @@ pub(crate) mod tests {
         )
     }
 
-    /// The null delivery (no writer, no table, only the report's marker) and
-    /// the reference one (one barrier wake armed, three writers spawned in
-    /// one response, each with its own five increments, and the wake fired
-    /// by the third done key).
-    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
-        let names = Names::new("run");
+    /// The root's calls: one barrier wake armed, then three writers spawned in
+    /// one response.
+    fn armed_root(names: &Names) -> Vec<common::ObservedFunctionCall> {
         let mut root = vec![common::ObservedFunctionCall {
             function_id: "engine::register_trigger".to_string(),
             arguments: json!({
@@ -1168,6 +1183,16 @@ pub(crate) mod tests {
                     arguments: json!({ "session_id": session_id }),
                 }),
         );
+        root
+    }
+
+    /// The null delivery (no writer, no table, only the report's marker) and
+    /// the reference one (one barrier wake armed, three writers spawned in
+    /// one response, each with its own five increments, and the wake fired
+    /// by the third done key).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let names = Names::new("run");
+        let root = armed_root(&names);
         let barrier = [("skipped", false), ("skipped", false), ("delivered", true)];
         let writers = (0..WRITERS)
             .map(|writer| (writer, contended_writer_calls(&names, writer)))
@@ -1248,14 +1273,15 @@ pub(crate) mod tests {
     }
 
     /// A writer that ran and wrote nothing does not back the marker: the
-    /// ledger it names has to be there.
+    /// ledger it names has to be there. Nor does a balanced ledger that no
+    /// writer ran under.
     #[test]
     fn the_report_needs_the_balanced_ledger_it_claims() {
-        let verified = |snapshot: &LedgerSnapshot| {
+        let verified = |children: u8, snapshot: &LedgerSnapshot| {
             evaluation_of(
                 transcript(&[], &[]),
-                1,
-                vec![(0, Vec::new())],
+                children,
+                (0..children).map(|writer| (writer, Vec::new())).collect(),
                 snapshot,
                 REPORT_MARKER,
             )
@@ -1264,8 +1290,79 @@ pub(crate) mod tests {
             .find(|award| award.id == VERIFIED_REPORT.id())
             .and_then(|award| award.awarded)
         };
-        assert_eq!(verified(&LedgerSnapshot::empty()), Some(0));
-        assert_eq!(verified(&balanced()), Some(VERIFIED_REPORT.weight()));
+        assert_eq!(verified(1, &LedgerSnapshot::empty()), Some(0));
+        assert_eq!(verified(1, &balanced()), Some(VERIFIED_REPORT.weight()));
+        assert_eq!(verified(0, &balanced()), Some(0));
+    }
+
+    /// Writers that wrote another database left the ledger alone, and a root
+    /// that wrote the ledger and its done keys itself ran no writer: neither
+    /// earns the ledger, the increments or the wake. A writer that omits
+    /// `db` writes `primary`.
+    #[test]
+    fn only_the_writers_writes_to_primary_count() {
+        let names = Names::new("run");
+        let barrier = [("skipped", false), ("skipped", false), ("delivered", true)];
+        let awarded = |evaluation: ObjectiveEvaluation| {
+            evaluation
+                .awards
+                .into_iter()
+                .map(|award| (award.id, award.awarded.unwrap_or(0)))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let with_db = |db: Option<&str>| {
+            (0..WRITERS)
+                .map(|writer| {
+                    let mut calls = contended_writer_calls(&names, writer);
+                    for call in calls
+                        .iter_mut()
+                        .filter(|call| call.function_id != "state::set")
+                    {
+                        match db {
+                            Some(db) => call.arguments["db"] = json!(db),
+                            None => {
+                                call.arguments.as_object_mut().unwrap().remove("db");
+                            }
+                        }
+                    }
+                    (writer, calls)
+                })
+                .collect::<Vec<_>>()
+        };
+        let scratch = awarded(evaluation_of(
+            transcript(&armed_root(&names), &barrier),
+            WRITERS,
+            with_db(Some("scratch")),
+            &LedgerSnapshot::empty(),
+            REPORT_MARKER,
+        ));
+        for id in [
+            BALANCED_LEDGER.id(),
+            WRITERS_INCREMENTED.id(),
+            CONTENDED_WRITES.id(),
+        ] {
+            assert_eq!(scratch[id], 0, "{id}");
+        }
+
+        let mut solo = armed_root(&names)[..1].to_vec();
+        solo.extend((0..WRITERS).flat_map(|writer| contended_writer_calls(&names, writer)));
+        let solo = awarded(evaluation_of(
+            transcript(&solo, &barrier),
+            0,
+            Vec::new(),
+            &balanced(),
+            REPORT_MARKER,
+        ));
+        assert!(solo.values().all(|points| *points == 0), "{solo:?}");
+
+        let defaulted = evaluation_of(
+            transcript(&armed_root(&names), &barrier),
+            WRITERS,
+            with_db(None),
+            &balanced(),
+            REPORT_MARKER,
+        );
+        assert_eq!(awarded(defaulted).values().sum::<u8>(), 100);
     }
 
     #[test]

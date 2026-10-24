@@ -302,7 +302,8 @@ test names the reason and the deterministic controls CI runs instead
 it names:
 
 - Registry implementation and verification: `tests/python/test_registry_validation.py`
-  scores the empty, the claim-only and the all-passing report, and
+  scores the empty, the claim-only, the one-check-executed and the all-passing
+  report, and
   `tests/python/test_registry_feature_probe.py` the feature probe's failure
   regressions.
 - Trending topics: the evaluator, lifecycle and focus controls
