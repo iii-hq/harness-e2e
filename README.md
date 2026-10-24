@@ -316,10 +316,12 @@ about US$45. The earlier estimate of US$13 for software engineering and US$4
 for the regression assumed six software-engineering tests; on all 14 the
 comparison costs more. A ceiling of the kind US$50 per comparison covers both.
 
-A/A, to calibrate noise: dispatch the same stack of `stacks/harness-ab/` twice
-as both arms, the same suite and model, and compare with
-`scripts/harness_ab.py`. No difference beyond the intervals is the expected
-result; one that shows is the noise the A/B must exceed.
+A/A, to check the calibration: dispatch the same stack of
+`stacks/harness-ab/` twice as both arms, the same suite and model, and compare
+them as below. "Cannot tell" or "no difference" is the expected result: the
+rule is calibrated so that halves of one version read better, worse or
+"quality fell" in fewer than 5% of comparisons (3 of 240 on the arms of the
+pair below).
 
 A/B: dispatch the suite once with each stack (for example
 `1.8.44.yaml` and `1.8.50.yaml`), pass the YAML as `stack`:
@@ -329,10 +331,74 @@ gh workflow run exact-stack-e2e.yml -f suite=regression-x11 -f model=deepseek/de
   -f stack="$(cat stacks/harness-ab/1.8.50.yaml)"
 ```
 
-Download the artifacts of each execution and run
-`python3 scripts/harness_ab.py A_DIR B_DIR --label-a 1.8.44 --label-b 1.8.50`.
-A command that gives a calibrated verdict is being built; until it lands this
-script is the comparison.
+Download the artifacts of each execution and compare them:
+
+```bash
+harness-e2e compare A_DIR B_DIR --label-a 1.8.44 --label-b 1.8.50
+```
+
+Each argument is a `results.json` or a directory read for every
+`results.json` below it, a run seen twice counted once. `--margin` (5 points),
+`--equivalence` (0.05), `--permutations` (10,000) and `--seed` (0) change the
+rule; `--json` prints the comparison whole. The Console's comparison of two
+executions shows the same verdict, read by the worker
+(`e2e::dashboard::execution-verdict`), and the Trends overview shows it for
+each combination of the latest release against the previous one, or says
+there is none when a side ran one run per test.
+`python3 scripts/harness_ab.py A_DIR B_DIR` keeps its tables per metric and
+per scenario, whose intervals only describe the spread, and ends with this
+verdict.
+
+Only counted runs enter, those whose cause is the subject's (a report older
+than causes falls back to `technical`, with a warning), and a test only where
+both arms ran the same definition (`behavior_sha256`); the tests left out are
+listed with why. Quality is the official score, the mean over tests of each
+test's mean, with a margin of 5 points. Cost is the efficiency that decides,
+set before looking: `cost.subject_usd`, the sum over tests of each test's
+mean, read as a relative change. Completion, time, the processed prompt, the
+context per turn and its peak are shown beside it and decide nothing. Each
+question is a permutation test that exchanges the A and B labels within each
+test, one-sided at α = 0.025: quality non-inferior (B shifted up by the
+margin, B ahead), inferior beyond the margin (shifted, B behind), fell (B
+behind); cost within ±5% (B divided by 0.95, B ahead, and by 1.05, B behind),
+cheaper, more expensive. The algorithm, down to the generator (SplitMix64) and
+the shuffle (Fisher–Yates), is written at the top of
+[src/verdict.rs](src/verdict.rs), for Release Control to reproduce on
+[tests/fixtures/verdict/](tests/fixtures/verdict/expected.json), the pair
+below.
+
+| Verdict | When |
+|---|---|
+| better | quality non-inferior and cost cheaper |
+| no difference | quality non-inferior and cost within ±5% |
+| worse | quality inferior beyond the margin, or non-inferior and more expensive |
+| cannot tell | anything else |
+
+"Cannot tell" adds "quality fell" when quality fell by an amount the runs
+cannot bound. It says how many runs per test each arm would need to settle the
+margin at the observed Δ, from the pooled within-test σ
+(n = Σₖ 2σₖ² / (K² ((M + Δ) / 2.8)²)), and how many are missing; there is no
+number when the drop already reaches the margin, and above 30 it reads "more
+than 30". A test that fell more than the margin on its own is a warning with
+its own p-value, and decides nothing.
+
+On the 1.8.44 → 1.8.50 pair, five runs per arm, both suites cannot tell.
+Software engineering is 19.8% cheaper (p < 0.001), but its quality, −3.9
+points, is neither within the margin (p = 0.33) nor below it. The
+regression's quality, −4.2 points, and its cost, +5.1%, are both undecided.
+Either would take more than 30 runs per test to settle.
+
+Below the verdict comes each criterion's health per configuration: one arm's
+test, with its definition, stack and model. Runs are read first, as
+evaluated, zeroed, prerequisite failed or infrastructure, by their cause.
+Then the criteria of the counted runs that fall short in exactly the same
+runs make one group: the four Kanban board criteria (empty, retry, settings,
+total) that fell together in two runs of 1.8.50 are one case, not four, and
+so are the Registry verification's recall and precision. Each criterion has
+its rate of full points, n and a Wilson 95% interval, and from 10 counted runs
+is saturated, never full or oscillating; below 10 it is insufficient data.
+The comparison lists the groups whose points moved, largest first. All of it
+warns; nothing is hidden or held back.
 
 The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 `case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`

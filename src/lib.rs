@@ -24,6 +24,7 @@ pub mod screenshot;
 pub mod subscription;
 pub mod suite;
 pub mod test_plan;
+pub mod verdict;
 pub mod wire;
 pub mod worker;
 pub mod workflow;

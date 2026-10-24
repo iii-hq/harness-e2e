@@ -52,6 +52,25 @@ const view = (a = imported(), b = local(), choice = {}) =>
   )
 
 describe('execution comparison page', () => {
+  it('shows the worker’s verdict above the tests it counts, only when the page has one', () => {
+    expect(view()).not.toContain('data-comparison-verdict')
+    const a = imported()
+    const b = local()
+    const html = renderToStaticMarkup(
+      <ComparisonView
+        comparison={compareExecutions(a, b, {})}
+        sides={{ a, b }}
+        swap="#swap"
+        verdict={{ value: null, error: null }}
+        onCount={() => undefined}
+      />,
+    )
+    expect(html).toContain('data-comparison-verdict="loading"')
+    expect(html.indexOf('data-comparison-verdict')).toBeLessThan(
+      html.indexOf('Tests in this comparison'),
+    )
+  })
+
   it('hands the chat the counted tests, the ones left out and why, and what changed', () => {
     expect(
       comparisonInvestigation(

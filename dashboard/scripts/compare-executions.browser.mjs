@@ -176,6 +176,42 @@ const read = []
 const renamed = []
 const deleted = []
 const reimported = []
+// The worker's verdict on the pair: it cannot tell yet.
+const verdicts = []
+const verdict = {
+  verdict: 'cannot_tell',
+  qualifier: null,
+  unavailable: null,
+  reasons: [
+    'Quality -2.0 points: neither within the 5-point margin (p = 0.400) nor below it (p = 0.600).',
+  ],
+  rule: {
+    margin: 5,
+    equivalence: 0.05,
+    alpha: 0.025,
+    permutations: 10000,
+    seed: 0,
+  },
+  quality: null,
+  cost: null,
+  repetitions: {
+    have: { a: 1, b: 1 },
+    sigma: null,
+    needed: null,
+    missing: null,
+    more_than: null,
+    note: null,
+  },
+  figures: [],
+  tests: [],
+  dropped: [],
+  runs: {
+    a: { counted: 4, excluded: 1, causes: {} },
+    b: { counted: 5, excluded: 0, causes: {} },
+  },
+  warnings: [],
+  criteria: { min_runs: 10, configurations: [], changes: [] },
+}
 // At the end fifty older executions join, to load older ones.
 const older = Array.from({ length: 50 }, (_, index) => ({
   ...b,
@@ -216,6 +252,10 @@ const trigger = (name, request = {}) => {
       throw new Error('Only a finished execution can be deleted.')
     deleted.push(request.execution_id)
     return {}
+  }
+  if (id === 'execution-verdict') {
+    verdicts.push(request)
+    return verdict
   }
   if (id === 'execution-get') {
     if (request.execution_id === b.id && failB > 0) {
@@ -337,7 +377,9 @@ try {
     await page.locator('[data-stack-only="b"] dd').innerText(),
     'llm-router',
   )
-  // No verdict anywhere.
+  // The worker's verdict on A and B; cannot tell is never better or worse.
+  await page.locator('[data-comparison-verdict="cannot_tell"]').waitFor()
+  assert.ok(verdicts.some((asked) => asked.a === a.id && asked.b === b.id))
   assert.doesNotMatch(
     await page.locator('[data-harness-e2e-dashboard]').innerText(),
     /better|worse|improv|regress|winner/i,

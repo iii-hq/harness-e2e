@@ -14,11 +14,16 @@ older than causes is counted as `earlier_rule`, valid or not as its report
 said. A scenario is compared only where both arms ran the same definition
 (`behavior_sha256`).
 
+The verdict is `harness-e2e compare`'s, the one rule the Console and Release
+Control show too: this script prints it after its tables, from the runner in
+HARNESS_E2E_BIN or on PATH, and says so when there is none.
+
 Per metric it prints arm A, arm B, B − A and B / A − 1, with 95% intervals
 from a bootstrap stratified by scenario (runs resampled within each scenario
-and arm). Completion and score are the mean over scenarios, each scenario
-weighing the same; tokens, cost, time and call errors are the sum over
-scenarios of each one's mean, what one pass over them takes.
+and arm). They describe the spread and decide nothing. Completion and score
+are the mean over scenarios, each scenario weighing the same; tokens, cost,
+time and call errors are the sum over scenarios of each one's mean, what one
+pass over them takes.
 
 The prompt processed is input plus cache reads and writes; context per turn
 divides it by the turns; the peak is the largest prompt one step of the root
@@ -31,7 +36,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
+import shutil
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -233,6 +241,8 @@ def percent(value: float | None, ci: tuple[float, float] | None) -> str:
 
 def report(result: dict, label_a: str, label_b: str) -> str:
     lines = [f"## {label_b} contra {label_a}", "",
+             "Os intervalos descrevem a variação e não decidem nada: o veredito, no fim, é o de "
+             "`harness-e2e compare`.", "",
              f"| Métrica | {label_a} | {label_b} | Δ (IC 95%) | Δ relativo (IC 95%) |", "|---|---|---|---|---|"]
     for key, label, _ in METRICS:
         row = result["pooled"][key]
@@ -277,6 +287,20 @@ def report(result: dict, label_a: str, label_b: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def verdict(a: Path, b: Path, label_a: str, label_b: str, as_json: bool = False) -> str:
+    """`harness-e2e compare A B`: the calibrated verdict, or why there is none."""
+    binary = os.environ.get("HARNESS_E2E_BIN") or shutil.which("harness-e2e")
+    if not binary:
+        return "Veredito indisponível: defina HARNESS_E2E_BIN ou ponha harness-e2e no PATH.\n"
+    command = [binary, "compare", str(a), str(b), "--label-a", label_a, "--label-b", label_b]
+    try:
+        return subprocess.run(command + (["--json"] if as_json else []), check=True,
+                              capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = getattr(error, "stderr", None) or str(error)
+        return f"Veredito indisponível: {detail.strip()}\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("a", type=Path)
@@ -288,8 +312,15 @@ def main() -> int:
     args = parser.parse_args()
     result = analyse(runs_of(args.a), runs_of(args.b), args.resamples)
     if args.json:
+        answer = verdict(args.a, args.b, args.label_a, args.label_b, as_json=True)
+        try:
+            result["verdict"] = json.loads(answer)
+        except ValueError:
+            result["verdict"] = answer.strip()
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     sys.stdout.write(report(result, args.label_a, args.label_b))
+    sys.stdout.write("\n### Veredito (harness-e2e compare)\n\n```\n"
+                     + verdict(args.a, args.b, args.label_a, args.label_b) + "```\n")
     return 0
 
 

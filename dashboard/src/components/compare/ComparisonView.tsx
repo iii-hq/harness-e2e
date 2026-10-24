@@ -75,6 +75,7 @@ import { runResultState } from '@/lib/result-status'
 import { type ScreenshotEntry, screenshotsOf } from '@/lib/screenshots'
 import '@/components/execution/execution-page.css'
 import './compare.css'
+import { VerdictCard, type VerdictLoad } from './VerdictCard'
 
 export type Sides = { a: DashboardExecutionDetail; b: DashboardExecutionDetail }
 type Which = 'a' | 'b'
@@ -1469,12 +1470,15 @@ export function ComparisonView({
   swap,
   here,
   refreshError = null,
+  verdict,
   onCount,
   onRunTest,
 }: {
   comparison: ExecutionComparison
   sides: Sides
   bridge?: DashboardDataBridge | null
+  /** The worker's calibrated verdict on the pair; none, no card. */
+  verdict?: VerdictLoad
   /** This comparison's hash, its choice included: where a run's transcript
    *  or evidence record opened from it goes back to. */
   here?: string
@@ -1612,6 +1616,7 @@ export function ComparisonView({
         ) : null}
       </section>
 
+      {verdict ? <VerdictCard load={verdict} /> : null}
       <TestPicker comparison={comparison} onCount={onCount} />
       <Highlights comparison={comparison} onShow={show} />
       <Totals comparison={comparison} />

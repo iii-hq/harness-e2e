@@ -18,6 +18,7 @@ import {
   useState,
 } from 'react'
 import { ComparisonView, type Sides } from '@/components/compare/ComparisonView'
+import type { VerdictLoad } from '@/components/compare/VerdictCard'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ExecutionMoreMenu } from '@/components/execution/NeedsAttention'
 import { InvestigationAction } from '@/components/InvestigationAction'
@@ -159,6 +160,7 @@ export async function loadExecutionPair(
 }
 
 const LIVE = ['running', 'importing', 'cancelling']
+const NO_VERDICT: VerdictLoad = { value: null, error: null }
 
 function pair(one: string, two: string) {
   return one === two ? one : `${one} → ${two}`
@@ -511,6 +513,7 @@ export function ExecutionComparePage({
 }) {
   const [sides, setSides] = useState<Sides | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [verdict, setVerdict] = useState<VerdictLoad>(NO_VERDICT)
   const [choice, setChoice] = useState<Choice>(() =>
     typeof window === 'undefined'
       ? { include: [], exclude: [] }
@@ -543,6 +546,19 @@ export function ExecutionComparePage({
       if (!request.isCurrent()) return
       setSides(loaded)
       setError(null)
+      // Apart: the comparison shows while the worker reads the verdict.
+      next.getExecutionVerdict(left, right).then(
+        (value) => {
+          if (request.isCurrent()) setVerdict({ value, error: null })
+        },
+        (cause) => {
+          if (request.isCurrent())
+            setVerdict({
+              value: null,
+              error: cause instanceof Error ? cause.message : String(cause),
+            })
+        },
+      )
     } catch (cause) {
       if (request.isCurrent())
         setError(cause instanceof Error ? cause.message : String(cause))
@@ -552,6 +568,7 @@ export function ExecutionComparePage({
   useEffect(() => {
     setSides(null)
     setError(null)
+    setVerdict(NO_VERDICT)
     void load()
   }, [load])
 
@@ -688,6 +705,7 @@ export function ExecutionComparePage({
           viewParams(choice),
         )}
         refreshError={error}
+        verdict={verdict}
         onCount={(ids) =>
           setChoice(
             ids === null

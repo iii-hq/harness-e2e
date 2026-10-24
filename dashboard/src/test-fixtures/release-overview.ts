@@ -1,5 +1,6 @@
 import type { CiSyncStatus } from '@/lib/dashboard-data-source'
 import type { ReleaseOverview } from '@/lib/release-overview'
+import type { VerdictSummary } from '@/lib/verdict'
 import ciSyncFixture from '@/test-fixtures/ci-sync.json'
 import overviewFixture from '@/test-fixtures/release-overview.json'
 
@@ -15,3 +16,52 @@ export const ciSync = ciSyncFixture as unknown as Record<
   'off' | 'quick' | 'backfill' | 'keeping_up' | 'signed_out' | 'paused',
   CiSyncStatus
 >
+
+/** The calibrated verdict of the Harness A/B pair 1.8.44 → 1.8.50 on
+ *  software engineering, as `harness-e2e compare` reads
+ *  tests/fixtures/verdict/ (rounded): cheaper, quality undecided. */
+export const cannotTell: VerdictSummary = {
+  verdict: 'cannot_tell',
+  qualifier: null,
+  unavailable: null,
+  reasons: [
+    'Quality -3.9 points: neither within the 5-point margin (p = 0.325) nor below it (p = 0.676).',
+    'Cost -19.8%: cheaper (p < 0.001).',
+  ],
+  rule: {
+    margin: 5,
+    equivalence: 0.05,
+    alpha: 0.025,
+    permutations: 10000,
+    seed: 0,
+  },
+  quality: {
+    state: 'inconclusive',
+    a: 88.2917,
+    b: 84.4333,
+    delta: -3.8583,
+    tests: 6,
+    p_non_inferior: 0.3254,
+    p_inferior: 0.6759,
+    p_fell: 0.0594,
+  },
+  cost: {
+    state: 'cheaper',
+    a: 0.788,
+    b: 0.632,
+    relative: -0.198,
+    tests: 6,
+    p_cheaper: 0.0001,
+    p_more_expensive: 1,
+    p_within_low: 0.9977,
+    p_within_high: 0.0001,
+  },
+  repetitions: {
+    have: { a: 4, b: 4 },
+    sigma: 9.1286,
+    needed: null,
+    missing: null,
+    more_than: 30,
+    note: null,
+  },
+}

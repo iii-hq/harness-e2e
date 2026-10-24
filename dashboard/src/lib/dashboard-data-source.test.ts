@@ -151,6 +151,21 @@ describe('live dashboard transport', () => {
     })
   })
 
+  it('asks the worker for the verdict on two executions, A first', async () => {
+    const trigger = vi.fn(async () => ({ verdict: 'cannot_tell' }))
+    installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
+    installDashboardRuntimeConfig({
+      functions: { execution_verdict: 'execution-verdict' },
+    } as RuntimeConfig)
+    await expect(
+      (await getDashboardDataBridge()).getExecutionVerdict('plan-a', 'plan-b'),
+    ).resolves.toEqual({ verdict: 'cannot_tell' })
+    expect(trigger).toHaveBeenCalledWith('execution-verdict', {
+      a: 'plan-a',
+      b: 'plan-b',
+    })
+  })
+
   it('asks for a series over time and looks each version range up once', async () => {
     const trigger = vi.fn(async (id: string) =>
       id === 'version-compare'
