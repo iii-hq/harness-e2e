@@ -46,14 +46,55 @@ async function semantics(page, title) {
 
 async function focusStyle(link) {
   return link.evaluate(node => {
-    const properties = ['outline', 'outlineOffset', 'boxShadow', 'backgroundColor', 'backgroundImage',
-      'borderColor', 'borderWidth', 'color', 'textDecoration', 'opacity', 'transform', 'content'];
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const rgba = color => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data];
+    };
+    const luminance = color => color.slice(0, 3).map(value => {
+      value /= 255;
+      return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+    }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+    const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + .05)
+      / (Math.min(luminance(a), luminance(b)) + .05);
+    const background = element => {
+      let value = [255, 255, 255];
+      const layers = [];
+      for (let current = element; current; current = current.parentElement) layers.unshift(rgba(getComputedStyle(current).backgroundColor));
+      for (const layer of layers) value = value.map((channel, index) => layer[index] * layer[3] / 255 + channel * (1 - layer[3] / 255));
+      return value;
+    };
     const styles = [];
     for (let current = node; current; current = current.parentElement) {
       if (current !== node && current.querySelectorAll('a[href],button,input,select,textarea').length > 1) break;
       for (const pseudo of [null, '::before', '::after']) {
         const css = getComputedStyle(current, pseudo);
-        styles.push(properties.map(property => css[property]));
+        if (pseudo && ['none', 'normal'].includes(css.content)) continue;
+        if (css.display === 'none' || css.visibility !== 'visible') continue;
+        let opacity = Number(css.opacity);
+        for (let parent = current.parentElement; parent; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity);
+        const bg = background(current);
+        const visible = color => {
+          const value = rgba(color), alpha = value[3] / 255 * opacity;
+          return alpha > 0 && contrast(bg.map((channel, index) => value[index] * alpha + channel * (1 - alpha)), bg) >= 3;
+        };
+        if (!['none', 'hidden'].includes(css.outlineStyle) && parseFloat(css.outlineWidth) >= 1 && visible(css.outlineColor)) {
+          styles.push(['outline', css.outline, css.outlineOffset]);
+        }
+        for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+          if (parseFloat(css[`border${side}Width`]) >= 1 && visible(css[`border${side}Color`])) styles.push(['border', side, css[`border${side}Width`], css[`border${side}Color`]]);
+        }
+        if ((css.boxShadow.match(/rgba?\([^)]*\)/g) ?? []).some(visible)
+            && /[1-9]/.test(css.boxShadow.replace(/rgba?\([^)]*\)/g, ''))) styles.push(['shadow', css.boxShadow]);
+        if (css.textDecorationLine !== 'none' && visible(css.textDecorationColor)) styles.push(['decoration', css.textDecoration]);
+        if (current.parentElement) {
+          const outside = background(current.parentElement);
+          if (contrast(bg.map((channel, index) => channel * opacity + outside[index] * (1 - opacity)), outside) >= 3) styles.push(['background', bg]);
+        }
       }
     }
     return styles;
@@ -78,8 +119,10 @@ async function keyboardFocus(page, link, name) {
     if (await link.evaluate(node => document.activeElement === node)) break;
   }
   await expect(link).toBeFocused();
-  // ponytail: recognizes common CSS focus indicators, not contrast or arbitrary visual effects.
-  await expect.poll(() => focusStyle(link)).not.toEqual(before);
+  await expect.poll(async () => {
+    const after = await focusStyle(link);
+    return after.some(indicator => !before.some(previous => JSON.stringify(previous) === JSON.stringify(indicator)));
+  }, { message: 'Keyboard focus needs a visible indicator with at least 3:1 contrast' }).toBe(true);
   await page.evaluate(() => {
     const marker = Symbol.for('harness.focus-check');
     for (const animation of document.getAnimations()) if (animation[marker]) animation.play();

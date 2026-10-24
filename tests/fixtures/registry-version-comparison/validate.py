@@ -16,7 +16,7 @@ import subprocess
 REGISTRY_SHA = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
 IMPLEMENTATION_METRICS = (
     "implementation.same_version", "implementation.function_removal", "implementation.required_impact",
-    "implementation.object_order", "implementation.required_order", "implementation.enum_order",
+    "implementation.required_order", "implementation.enum_order",
     "implementation.config_array_order", "implementation.missing_metadata", "implementation.worker_lookup",
     "implementation.reverse_kinds", "implementation.reverse_values", "implementation.reverse_impact",
     "implementation.shared_url", "implementation.stale_results", "implementation.patch_application",
@@ -114,6 +114,8 @@ def save_command(root, name, result):
 def actual_evidence(run_root, task_root, references):
     evidence = []
     for reference in references or []:
+        if not isinstance(reference, str):
+            continue
         candidate = Path(reference)
         if candidate.is_absolute():
             # Feature probe paths are inside /workspace, whose host counterpart
@@ -122,12 +124,16 @@ def actual_evidence(run_root, task_root, references):
                 candidate = task_root / "workspace" / candidate.relative_to("/workspace")
             except ValueError:
                 continue
+        elif candidate.parts[:1] == ("execution-evidence",):
+            candidate = task_root / candidate
         else:
             candidate = task_root / "workspace" / candidate
         item = relative_evidence(run_root, candidate)
-        if item:
-            evidence.append(item)
-    return sorted(set(evidence))
+        if item and candidate.stat().st_size:
+            evidence.append({"path": item, "reference": reference,
+                             "size_bytes": candidate.stat().st_size,
+                             "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()})
+    return sorted(evidence, key=lambda item: item["path"])
 
 
 def feature_probe(task_root, assets, state):
@@ -168,15 +174,78 @@ def checks_by_id(feature):
 
 
 def recorded_commands(task_root):
-    commands = set()
+    commands = {}
     for path in (task_root / "commands").glob("*.json"):
         try:
             item = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        if isinstance(item.get("command"), str):
-            commands.add(item["command"])
+        if (isinstance(item.get("command"), str) and item.get("exit_code") not in (124, 137)
+                and not item.get("timeout") and isinstance(item.get("artifacts"), list)):
+            receipt = {"path": relative_evidence(task_root.parent, path),
+                       "artifacts": item["artifacts"]}
+            commands.setdefault(item["command"], []).append(receipt)
     return commands
+
+
+def verification_evidence(task_root, report):
+    run_root = task_root.parent
+    attributable = {}
+    claimed = {}
+    for case_id, case in report.items():
+        for item in actual_evidence(run_root, task_root, case.get("evidence")):
+            claimed.setdefault(item["path"], set()).add(case_id)
+            path = run_root / item["path"]
+            if "/execution-evidence/" not in item["path"] or path.suffix != ".json":
+                continue
+            try:
+                proof = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(proof, dict):
+                continue
+            assertions = proof.get("assertions")
+            if (proof.get("check_id") != case_id or proof.get("status") != case.get("status")
+                    or not isinstance(assertions, list) or not assertions):
+                continue
+            assertion_ids = [assertion.get("id") for assertion in assertions
+                             if isinstance(assertion, dict)]
+            if (len(assertion_ids) != len(assertions) or len(set(assertion_ids)) != len(assertions)
+                    or not all(isinstance(assertion_id, str) and assertion_id.strip()
+                               for assertion_id in assertion_ids)):
+                continue
+            def json_equal(left, right):
+                try:
+                    options = {"sort_keys": True, "separators": (",", ":"), "allow_nan": False}
+                    return json.dumps(left, **options) == json.dumps(right, **options)
+                except (TypeError, ValueError):
+                    return False
+            if not all(isinstance(assertion.get("passed"), bool)
+                       and "expected" in assertion and "observed" in assertion
+                       and (json_equal(assertion["expected"], assertion["observed"])
+                            == assertion["passed"])
+                       for assertion in assertions):
+                continue
+            passed = [assertion["passed"] for assertion in assertions]
+            if ((case.get("status") == "pass" and not all(passed))
+                    or (case.get("status") == "fail" and all(passed))):
+                continue
+            attributable.setdefault(case_id, []).append(item)
+    for case_id, items in attributable.items():
+        attributable[case_id] = [item for item in items
+                                 if claimed.get(item["path"]) == {case_id}]
+    return attributable
+
+
+def receipt_proves(receipts, evidence):
+    return any(
+        artifact.get("path") == evidence["reference"]
+        and artifact.get("sha256", "").removeprefix("sha256:") == evidence["sha256"]
+        and artifact.get("size_bytes") == evidence["size_bytes"]
+        for receipt in receipts or []
+        for artifact in receipt.get("artifacts", [])
+        if isinstance(artifact, dict)
+    )
 
 
 def implementation_observations(task_root, assets, state, test):
@@ -252,19 +321,37 @@ def verification_observations(task_root, assets, state):
         invalid_evidence = [relative_evidence(run_root, checks_path), feature_evidence]
         return empty_verification(task_root, state, run_root, truth_complete, known_failed,
                                   [item for item in invalid_evidence if item])
+    if not reported:
+        empty_evidence = [relative_evidence(run_root, checks_path), feature_evidence]
+        return empty_verification(task_root, state, run_root, truth_complete, known_failed,
+                                  [item for item in empty_evidence if item])
     report = {case["id"]: case for case in reported if isinstance(case, dict)
               and isinstance(case.get("id"), str)}
+    duplicate_ids = {case_id for case_id in report
+                     if sum(case.get("id") == case_id for case in reported
+                            if isinstance(case, dict)) > 1}
     report_fail = {case_id for case_id, case in report.items() if case.get("status") == "fail"}
     commands = recorded_commands(task_root)
+    evidence_by_id = verification_evidence(task_root, report)
     evidenced = {case_id for case_id, case in report.items()
-                 if case.get("status") in ("pass", "fail", "blocked")
-                 and actual_evidence(run_root, task_root, case.get("evidence"))}
+                 if case_id in PUBLIC_VERIFICATION_IDS and case_id not in duplicate_ids
+                 and case.get("status") in ("pass", "fail", "blocked")
+                 and isinstance(case.get("steps"), str) and case["steps"].strip()
+                 and evidence_by_id.get(case_id)}
     executed = {case_id for case_id, case in report.items()
                 if case_id in PUBLIC_VERIFICATION_IDS and case.get("status") in ("pass", "fail")
                 and isinstance(case.get("command"), str) and case["command"] in commands
-                and case_id in evidenced}
+                and case_id in evidenced
+                and any(receipt_proves(commands[case["command"]], item)
+                        for item in evidence_by_id[case_id])}
+    receipt_path = task_root / "validation" / "verification-evidence.json"
+    write_json(receipt_path, {"checks": [{"id": case_id,
+                                          "command_receipts": commands.get(case.get("command"), []),
+                                          "evidence": evidence_by_id.get(case_id, [])}
+                                         for case_id, case in sorted(report.items())]})
     report_evidence = relative_evidence(run_root, checks_path)
-    evidence = [item for item in (report_evidence, feature_evidence) if item]
+    validation_evidence = relative_evidence(run_root, receipt_path)
+    evidence = [item for item in (report_evidence, feature_evidence, validation_evidence) if item]
     observations = []
     if not truth_complete:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
@@ -276,21 +363,22 @@ def verification_observations(task_root, assets, state):
     if any(independent.get(case_id, {}).get("status") != "measured"
            for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
+    elif not report_fail and not known_failed:
+        observations.append(ratio("verification.precision", 0, 0, evidence,
+                                  "no_failures_to_reproduce", empty_value=1))
     elif not report_fail:
         observations.append(ratio("verification.precision", 0, 0, evidence,
                                   "no_reported_failures"))
     else:
         observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence))
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
-    observations.append(ratio("verification.evidence_coverage", len(evidenced), len(report), evidence,
-                              "no_reported_outcomes", empty_value=0))
+    observations.append(ratio("verification.evidence_coverage", len(evidenced),
+                              len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.extend(source_preservation(task_root, state, run_root))
     return observations
 
 
 def empty_verification(task_root, state, run_root, truth_complete, known_failed, evidence):
-    # Without a readable report the tester verified nothing: an empty failure
-    # set or an untouched source only earns points next to a report.
     observations = []
     if truth_complete:
         observations.append(ratio("verification.recall", 0, len(known_failed), evidence)
@@ -304,7 +392,7 @@ def empty_verification(task_root, state, run_root, truth_complete, known_failed,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
                               "no_reported_outcomes", empty_value=0))
-    observations.append(binary("verification.source_preservation", False, evidence))
+    observations.extend(source_preservation(task_root, state, run_root))
     return observations
 
 

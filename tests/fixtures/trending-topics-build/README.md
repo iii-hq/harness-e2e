@@ -30,15 +30,16 @@ records whether each control had its intended outcome. A nonzero process exit
 alone is not accepted as a successfully detected defect.
 
 Four positive controls combine two different designs with the original and
-deterministically varied feeds. A fifth checks article line breaks rendered with
+varied feeds. The attempt variant is generated after delivery, with its random seed
+archived in the feed for deterministic replay. A fifth checks article line breaks rendered with
 `<br>`, and a sixth shows the edition in a header outside `<main>`. Variation
 preserves six topics and the schema,
 but changes edition, IDs, nonsequential ranks, text and URLs and shuffles the
-array. The alternate design uses native ordered-list numbering. The 23 negative
+array. The alternate design uses native ordered-list numbering. The negative
 controls exercise a placeholder, hardcoded data, a missing edition, missing/duplicate topics, hidden
 ranks and misleading accessible labels, incorrect DOM and CSS ordering, hidden
 or incomplete/clipped content, source/back links, history and direct entry,
-missing keyboard/focus support (including animated links without a focus indicator),
+missing keyboard/focus support (including transparent, low-contrast and animated focus decoys),
 mobile overflow and a blocking overlay.
 The summary records test-package hashes and rejects changes to those files
 during validation. Reports identify control variants, not model-delivery SHAs.
@@ -72,9 +73,10 @@ There is no screenshot diff, prescribed design or aesthetic score.
 The public brief defines visible rank as text or native ordered-list numbering.
 Visual reading order is top-to-bottom, then left-to-right for vertically
 overlapping title rectangles. CSS-counter-only ranks are not part of this contract.
-The focus check observes common style changes on a link, its isolated ancestors
-and pseudo-elements. It does not establish WCAG contrast conformance or recognize
-every possible animated/masked effect. Body checks reject hidden text and common
+The focus check requires a newly visible outline, border, shadow, decoration or
+background indicator with at least 3:1 contrast on the link, its isolated ancestors
+or pseudo-elements. Transparent or imperceptible style changes do not count.
+This is not a general WCAG conformance audit or a test of every masked effect. Body checks reject hidden text and common
 vertical clipping; they are not a general proof of visual legibility. Screenshots
 remain available for inspection without assigning aesthetic points.
 

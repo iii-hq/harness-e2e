@@ -3,25 +3,30 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
 
 const PROJECTS = ['desktop', 'mobile'];
 const CRITERIA = ['B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B09', 'B10'];
 const EVIDENCE_TITLE = 'evidence captures home and first article through a real click';
 
-export const variedFeed = {
-  edition: '2031-Q4 <control>',
-  topics: [4, 0, 5, 1, 3, 2].map((index) => {
-    const id = `signal-${index + 1}`;
-    return {
-      id,
-      rank: [41, 7, 29, 13, 37, 19][index],
-      title: `Signal ${index + 1}: <not markup> & “quoted”`,
-      source_body: `Control story ${index + 1} keeps <tags> as text, punctuation & symbols.\nLine two says: “don't hardcode me.”`,
-      url: index === 0 ? 'https://root.trend-e2e.test#source'
-        : `https://varied.trend-e2e.test/${id}?edition=2031-Q4&slot=${index + 1}`,
-    };
-  }),
-};
+export function variedFeed(seed) {
+  const suffix = createHash('sha256').update(seed).digest('hex').slice(0, 12);
+  return {
+    variant_seed: seed,
+    edition: `2031-Q4 <control> ${suffix}`,
+    topics: [4, 0, 5, 1, 3, 2].map((index) => {
+      const id = `signal-${suffix}-${index + 1}`;
+      return {
+        id,
+        rank: [41, 7, 29, 13, 37, 19][index],
+        title: `Signal ${suffix} ${index + 1}: <not markup> & “quoted”`,
+        source_body: `Control story ${suffix} ${index + 1} keeps <tags> as text, punctuation & symbols.\nLine two says: “don't hardcode me.”`,
+        url: index === 0 ? `https://root.trend-e2e.test#${suffix}`
+          : `https://varied.trend-e2e.test/${id}?edition=2031-Q4&slot=${index + 1}`,
+      };
+    }),
+  };
+}
 
 function message(error) {
   return typeof error === 'string' ? error : error?.message ?? JSON.stringify(error);
@@ -233,11 +238,11 @@ async function load(path, dataset) {
 }
 
 async function main(args) {
-  if (args[0] === '--feed-variant' && args.length === 3) {
+  if (args[0] === '--feed-variant' && (args.length === 3 || args.length === 4)) {
     const original = await load(args[1], 'original');
     if (original.error) throw new Error(`Cannot read original feed: ${original.error}`);
     expectedTitles(original.value);
-    await writeFile(args[2], `${JSON.stringify(variedFeed, null, 2)}\n`, { flag: 'wx' });
+    await writeFile(args[2], `${JSON.stringify(variedFeed(args[3] ?? randomBytes(16).toString('hex')), null, 2)}\n`, { flag: 'wx' });
     return;
   }
   if (args[0] === '--summarize' && args.length === 7) {
@@ -250,7 +255,7 @@ async function main(args) {
     process.stdout.write(`${JSON.stringify(summarize(values.slice(0, 2), values.slice(2)), null, 2)}\n`);
     return;
   }
-  throw new Error('Usage: evaluate.mjs --feed-variant <original-feed> <new-varied-feed> | --summarize <original-report> <varied-report> <original-feed> <varied-feed> <original-exit> <varied-exit>');
+  throw new Error('Usage: evaluate.mjs --feed-variant <original-feed> <new-varied-feed> [seed] | --summarize <original-report> <varied-report> <original-feed> <varied-feed> <original-exit> <varied-exit>');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

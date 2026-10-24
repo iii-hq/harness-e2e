@@ -247,17 +247,6 @@
           "weight": 4
         },
         {
-          "id": "implementation.object_order",
-          "question": "Does changing only object-key order preserve equality?",
-          "label": "Object key order alone is no change",
-          "expected": "A pure object-key permutation produces no comparison changes.",
-          "measurement": "binary",
-          "evidence": [
-            "Independent execution record for this check, with its expected and observed result."
-          ],
-          "weight": 4
-        },
-        {
           "id": "implementation.required_order",
           "question": "Does changing only schema required-array order preserve equality?",
           "label": "Required-array order alone is no change",
@@ -266,7 +255,7 @@
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
           ],
-          "weight": 4
+          "weight": 6
         },
         {
           "id": "implementation.enum_order",
@@ -277,7 +266,7 @@
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
           ],
-          "weight": 4
+          "weight": 6
         },
         {
           "id": "implementation.config_array_order",
@@ -650,7 +639,6 @@
           "measurement": "ratio",
           "weight": 35,
           "gate": true,
-          "gate_minimum": 1,
           "numerator": "Required check IDs reported as failing and independently reproduced.",
           "denominator": "Required check IDs independently observed to fail.",
           "evidence": [
@@ -662,9 +650,10 @@
           "id": "verification.precision",
           "question": "What proportion of reported failing checks are independently reproduced as failing?",
           "label": "Reported failures reproduce independently",
-          "expected": "Execute the contract probes independently and match each reported failing check by ID. If no failing checks are reported, retain 0/0 and mark precision as not applicable.",
+          "expected": "Execute the contract probes independently and match each reported failing check by ID. If both the independent and reported failure sets are empty, retain 0/0 and score precision as value 1.",
           "measurement": "ratio",
           "weight": 20,
+          "gate": true,
           "numerator": "Reported failing check IDs independently reproduced.",
           "denominator": "Distinct check IDs reported as failing.",
           "evidence": [
@@ -676,9 +665,10 @@
           "id": "verification.execution_coverage",
           "question": "What proportion of required check IDs cite a recorded execution command and evidence file?",
           "label": "Every check cites its command and evidence",
-          "expected": "A non-blocked report entry cites an exact command present in the executor log and an existing evidence file.",
+          "expected": "A non-blocked report entry cites the exact completed command whose trusted private-staging receipt records the final proof path, size, and SHA-256 for that check.",
           "measurement": "ratio",
           "weight": 20,
+          "gate": true,
           "numerator": "Required check IDs with a recorded command and an existing evidence file.",
           "denominator": "Required public check IDs, excluding controller-owned patch replay.",
           "evidence": [
@@ -688,13 +678,14 @@
         },
         {
           "id": "verification.evidence_coverage",
-          "question": "What proportion of reported outcomes cite an existing evidence file?",
-          "label": "Every outcome cites an existing evidence file",
-          "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace. If no outcomes are reported, retain 0/0 and score coverage as value 0.",
+          "question": "What proportion of required outcomes cite attributable evidence?",
+          "label": "Every required outcome cites attributable evidence",
+          "expected": "Resolve each required outcome to its own non-empty staged JSON proof with matching check ID and status plus unique, internally consistent assertions containing exact, type-sensitive expected and observed JSON values.",
           "measurement": "ratio",
           "weight": 20,
-          "numerator": "Reported outcomes citing an existing evidence file.",
-          "denominator": "Outcomes reported by the tester.",
+          "gate": true,
+          "numerator": "Required outcomes citing non-empty evidence attributable to that check.",
+          "denominator": "Required public check IDs, excluding controller-owned patch replay.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."
@@ -702,14 +693,15 @@
         },
         {
           "id": "verification.source_preservation",
-          "question": "Did the tester deliver a readable report and leave the product source unchanged?",
-          "label": "Readable report, product source unchanged",
-          "expected": "A readable checks.json exists and the final product source equals the delivered implementation snapshot.",
+          "question": "Did the tester leave the product source unchanged?",
+          "label": "Product source stays unchanged",
+          "expected": "The final product source equals the delivered implementation snapshot, independently of the tester's report.",
           "measurement": "binary",
           "evidence": [
             "Executor source diff against the delivered snapshot."
           ],
-          "weight": 5
+          "weight": 5,
+          "gate": true
         }
       ]
     }

@@ -74,7 +74,7 @@ on external site availability.
 
 Required controls use the accessible names above; topic links use their titles.
 They must be real links, reachable with Tab, activated with Enter, and have
-visible focus. Each page has an identifying document title, one main landmark
+visible focus with an indicator of at least 3:1 contrast. Each page has an identifying document title, one main landmark
 and one level-one heading: the blog name on the home page and the topic title on
 the article page.
 
