@@ -21,12 +21,12 @@ containers:
 
   # The context manager is a dependency of the application; it is declared
   # here, held by the edge above, only to carry the window override. Its
-  # configuration hot-reloads, so the override needs no restart.
+  # configuration hot-reloads, so the override needs no restart. It names no
+  # `start_after`: Compose refuses an edge to a container the stack does not
+  # declare, and its own dependencies come from its package.
   context-manager:
     worker: package://context-manager
     version: latest
-    start_after:
-    - llm-router
     config_override:
       reserved_tokens_cap: 488000
       reserved_pct: 49

@@ -304,6 +304,7 @@ pub(crate) fn summarize(yaml: &str) -> Result<StackSummary> {
         }
     }
     let mut listed = Vec::new();
+    let mut edges = std::collections::BTreeMap::new();
     for (name, container) in containers {
         let name = text(name).unwrap_or_else(|| format!("{name:?}"));
         if !container.is_mapping() {
@@ -339,12 +340,55 @@ pub(crate) fn summarize(yaml: &str) -> Result<StackSummary> {
                 ));
             }
         }
+        // Compose's checks of `start_after`, before it starts anything. A
+        // template declares containers of its own, so with one an edge to a
+        // container the stack does not declare may still hold.
+        let mut targets = Vec::new();
+        for target in container
+            .get("start_after")
+            .and_then(Value::as_sequence)
+            .into_iter()
+            .flatten()
+            .filter_map(text)
+        {
+            if target == name {
+                warnings.push(format!("{name} starts after itself; Compose refuses it."));
+            } else if containers.contains_key(target.as_str()) {
+                targets.push(target);
+            } else if stack.get("template").is_none() {
+                warnings.push(format!(
+                    "{name} starts after {target}, which the stack does not declare; Compose refuses it."
+                ));
+            }
+        }
+        edges.insert(name.clone(), targets);
         listed.push(StackContainer {
             name,
             worker: container.get("worker").and_then(text),
             version: container.get("version").and_then(text),
             commit: commit.and_then(text),
         });
+    }
+    // Start what waits on nothing left, as Compose orders them: whatever
+    // never starts waits on a cycle.
+    loop {
+        let free = edges
+            .iter()
+            .filter(|(_, targets)| targets.iter().all(|target| !edges.contains_key(target)))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        if free.is_empty() {
+            break;
+        }
+        for name in free {
+            edges.remove(&name);
+        }
+    }
+    if !edges.is_empty() {
+        warnings.push(format!(
+            "{} wait on a cycle of `start_after`; Compose refuses it.",
+            edges.into_keys().collect::<Vec<_>>().join(", ")
+        ));
     }
     Ok(StackSummary {
         iii: stack.get("iii").and_then(text),
@@ -544,6 +588,14 @@ mod tests {
                 "{id}"
             );
         }
+        // The pinned A/B arms are not in the catalog, and read as cleanly.
+        for entry in
+            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/stacks/harness-ab")).unwrap()
+        {
+            let path = entry.unwrap().path();
+            let summary = summarize(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(summary.warnings, Vec::<String>::new(), "{path:?}");
+        }
         assert_eq!(summarize(&repository["default"]).unwrap().template, None);
         assert_eq!(
             summarize(&repository["harness-template"])
@@ -639,6 +691,28 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn a_start_after_compose_refuses_is_a_warning() {
+        let summary = summarize(
+            "containers:\n  harness:\n    worker: package://harness\n    version: latest\n    start_after: [context-manager, harness]\n  context-manager:\n    worker: package://context-manager\n    version: latest\n    start_after: [llm-router]\n  a:\n    worker: package://a\n    version: latest\n    start_after: [b]\n  b:\n    worker: package://b\n    version: latest\n    start_after: [a]\n  c:\n    worker: package://c\n    version: latest\n    start_after: [a]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            summary.warnings,
+            vec![
+                "harness starts after itself; Compose refuses it.",
+                "context-manager starts after llm-router, which the stack does not declare; Compose refuses it.",
+                "a, b, c wait on a cycle of `start_after`; Compose refuses it.",
+            ]
+        );
+        // A template may declare the container an edge names.
+        let templated = summarize(
+            "template: harness\ncontainers:\n  context-manager:\n    worker: package://context-manager\n    version: latest\n    start_after: [llm-router]\n",
+        )
+        .unwrap();
+        assert!(templated.warnings.is_empty(), "{:?}", templated.warnings);
     }
 
     #[test]
