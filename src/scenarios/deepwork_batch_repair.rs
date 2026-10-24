@@ -322,7 +322,7 @@ args: {args}"#,
         let mut failures = Vec::new();
         let root = workspace_root(run_id);
         common::kill_processes_under(&root).await;
-        if let Err(error) = remove_board(context, run_id).await {
+        if let Err(error) = remove_board(context, &project_name(run_id)).await {
             failures.push(format!("board: {error:#}"));
         }
         // The repository, its worktrees and every deepwork branch live in the
@@ -386,7 +386,7 @@ async fn prepare_workspace(root: &Path, script: &Path, counter: &Path) -> Result
     Ok(())
 }
 
-async fn git(repo: &Path, args: &[&str]) -> Result<String> {
+pub(super) async fn git(repo: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repo)
@@ -408,7 +408,7 @@ async fn git(repo: &Path, args: &[&str]) -> Result<String> {
 
 // ---------------------------------------------------------------- board
 
-async fn find_project(context: &E2eContext, name: &str) -> Result<Option<String>> {
+pub(super) async fn find_project(context: &E2eContext, name: &str) -> Result<Option<String>> {
     let listed = context
         .trigger_value("kanban::project::list", json!({ "include_archived": true }))
         .await?;
@@ -421,7 +421,7 @@ async fn find_project(context: &E2eContext, name: &str) -> Result<Option<String>
 }
 
 /// Every live ticket of the run's project, read in full.
-async fn project_tickets(context: &E2eContext, project_id: &str) -> Result<Vec<Value>> {
+pub(super) async fn project_tickets(context: &E2eContext, project_id: &str) -> Result<Vec<Value>> {
     let listed = context
         .trigger_value(
             "kanban::ticket::list",
@@ -444,9 +444,8 @@ async fn project_tickets(context: &E2eContext, project_id: &str) -> Result<Vec<V
 
 /// Deletes only what this run created: the tickets of its own project, then
 /// archives the project (kanban has no project delete).
-async fn remove_board(context: &E2eContext, run_id: &str) -> Result<()> {
-    let name = project_name(run_id);
-    let Some(project_id) = find_project(context, &name).await? else {
+pub(super) async fn remove_board(context: &E2eContext, name: &str) -> Result<()> {
+    let Some(project_id) = find_project(context, name).await? else {
         return Ok(());
     };
     let listed = context
@@ -482,7 +481,7 @@ async fn remove_board(context: &E2eContext, run_id: &str) -> Result<()> {
     }
 }
 
-fn activity_status_moves(ticket: &Value) -> Vec<(String, String)> {
+pub(super) fn activity_status_moves(ticket: &Value) -> Vec<(String, String)> {
     ticket["activity"]
         .as_array()
         .into_iter()
@@ -514,7 +513,7 @@ fn card_index(ticket: &Value) -> Option<usize> {
     CARD_FILES.iter().position(|file| files.contains(file))
 }
 
-fn has_label(ticket: &Value, label: &str) -> bool {
+pub(super) fn has_label(ticket: &Value, label: &str) -> bool {
     ticket["labels"]
         .as_array()
         .into_iter()
@@ -524,7 +523,7 @@ fn has_label(ticket: &Value, label: &str) -> bool {
 
 // ---------------------------------------------------------------- state
 
-async fn state_get(context: &E2eContext, scope: &str, key: &str) -> Value {
+pub(super) async fn state_get(context: &E2eContext, scope: &str, key: &str) -> Value {
     match context
         .trigger_value("state::get", json!({ "scope": scope, "key": key }))
         .await
@@ -534,7 +533,7 @@ async fn state_get(context: &E2eContext, scope: &str, key: &str) -> Value {
     }
 }
 
-async fn state_list(context: &E2eContext, scope: &str) -> Value {
+pub(super) async fn state_list(context: &E2eContext, scope: &str) -> Value {
     match context
         .trigger_value("state::list", json!({ "scope": scope }))
         .await
@@ -545,7 +544,7 @@ async fn state_list(context: &E2eContext, scope: &str) -> Value {
     }
 }
 
-fn non_empty(value: &Value) -> bool {
+pub(super) fn non_empty(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Array(items) => !items.is_empty(),
@@ -769,7 +768,7 @@ async fn collect(context: &E2eContext, observation: &ScenarioObservation, run_id
     evidence
 }
 
-fn ticket_summary(ticket: &Value) -> Value {
+pub(super) fn ticket_summary(ticket: &Value) -> Value {
     json!({
         "key": ticket["key"],
         "title": ticket["title"],
@@ -794,7 +793,7 @@ fn ticket_summary(ticket: &Value) -> Value {
     })
 }
 
-fn wall_minutes(run_ticket: &Value) -> Value {
+pub(super) fn wall_minutes(run_ticket: &Value) -> Value {
     let parse = |text: &str| chrono::DateTime::parse_from_rfc3339(text).ok();
     let created = run_ticket["created_at"].as_str().and_then(parse);
     let done = activity_status_moves(run_ticket)

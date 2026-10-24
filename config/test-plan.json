@@ -124,7 +124,8 @@
     "registry_verification",
     "linkly_tutorial",
     "onboarding_tour",
-    "deepwork_batch_repair"
+    "deepwork_batch_repair",
+    "deepwork_scope_fallout"
   ],
   "requirements": {
     "shell_coder_sandbox": [
@@ -196,6 +197,10 @@
       "The Onboarding agent profile (ade-worker-builder) the harness template ships, served by the Directory"
     ],
     "deepwork_batch_repair": [
+      "The Deepwork kit installed (profiles deepwork, deepwork-lead, deepwork-impl, deepwork-adversary), with the kanban, state, ide and fp workers",
+      "git and python3 on the executor; a model with catalog pricing, because the run has a hard cost cap"
+    ],
+    "deepwork_scope_fallout": [
       "The Deepwork kit installed (profiles deepwork, deepwork-lead, deepwork-impl, deepwork-adversary), with the kanban, state, ide and fp workers",
       "git and python3 on the executor; a model with catalog pricing, because the run has a hard cost cap"
     ]

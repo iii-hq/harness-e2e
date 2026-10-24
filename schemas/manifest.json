@@ -437,6 +437,7 @@
         "browser_cross_site",
         "release_train_recovery",
         "deepwork_batch_repair",
+        "deepwork_scope_fallout",
         "cross_repo_contract_migration"
       ]
     },
