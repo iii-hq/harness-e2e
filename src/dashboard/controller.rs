@@ -713,6 +713,7 @@ impl Controller {
         if !started {
             return Ok(None);
         }
+        let id = execution.id.clone();
         self.emit_change("started", &execution.id).await;
         self.finish_import(&id).await;
         self.plan_store.read_execution(&id).await.map(Some)
@@ -1045,9 +1046,10 @@ pub(super) mod tests {
 
     use super::*;
     use crate::plans::store::tests::{
-        exact_stack_bundle, fake_gh, manager, manager_with_gh, FakeRunner,
+        exact_stack_bundle, fake_gh, import_stub, manager, manager_with_gh, save_execution,
+        FakeRunner,
     };
-    use crate::plans::store::PlanStore;
+    use crate::plans::store::{ExecutionSource, PlanStore};
 
     /// A controller without a control plane, on this plan store.
     pub(in crate::dashboard) fn without_control_plane(
@@ -1457,6 +1459,72 @@ esac"#
             (imported.id, imported.state.as_str()),
             (import_id("o/r", 1), "failed")
         );
+    }
+
+    #[tokio::test]
+    async fn a_sync_reimport_finishes_the_stable_execution_id() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = importing_run_1(root.path(), "");
+        let mut stable = import_stub();
+        stable.id = "plan-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        stable.idempotency_key = "eval-work-stable".into();
+        stable.state = "failed".into();
+        stable.source = ExecutionSource::Github {
+            repository: "o/r".into(),
+            run_id: 1,
+            run_attempt: 1,
+            url: "https://github.com/o/r/actions/runs/1".into(),
+            release_control_execution_id: None,
+            stack: None,
+            run_updated_at: Some("2026-10-20T10:00:00Z".into()),
+            sync_attempts: 1,
+            conclusion: None,
+            status: None,
+            follow: Default::default(),
+        };
+        save_execution(&controller.plan_store, &stable).await;
+
+        let imported = controller.sync_import("o/r", 1).await.unwrap().unwrap();
+        assert_eq!(imported.id, stable.id);
+        assert_ne!(imported.state, "importing");
+        assert!(controller
+            .plan_store
+            .read_execution(&import_id("o/r", 1))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_stable_github_execution_blocks_ci_reimport() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = importing_run_1(root.path(), "");
+        let mut stable = import_stub();
+        stable.id = "plan-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+        stable.state = "completed".into();
+        stable.source = ExecutionSource::Github {
+            repository: "o/r".into(),
+            run_id: 1,
+            run_attempt: 1,
+            url: "https://github.com/o/r/actions/runs/1".into(),
+            release_control_execution_id: None,
+            stack: None,
+            run_updated_at: Some("2026-10-20T11:00:00Z".into()),
+            sync_attempts: 0,
+            conclusion: Some("success".into()),
+            status: None,
+            follow: Default::default(),
+        };
+        save_execution(&controller.plan_store, &stable).await;
+
+        controller.delete_execution(&stable.id).await.unwrap();
+        let marker = import_id("o/r", 1);
+        assert!(controller.plan_store.import_deleted(&marker).await.unwrap());
+        assert!(!controller
+            .plan_store
+            .import_deleted(&stable.id)
+            .await
+            .unwrap());
+        assert!(controller.sync_import("o/r", 1).await.unwrap().is_none());
     }
 
     #[tokio::test]

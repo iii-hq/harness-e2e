@@ -1125,11 +1125,15 @@ impl PlanStore {
         if matches!(execution.source, ExecutionSource::Docker { .. }) {
             self.remove_docker_folder(id).await;
         }
+        let tombstone = match &execution.source {
+            ExecutionSource::Github {
+                repository, run_id, ..
+            } => Some(import_id(repository, *run_id)),
+            _ => None,
+        };
         self.change_saved(
-            self.persistence()?.delete_execution_receipt(
-                id,
-                matches!(execution.source, ExecutionSource::Github { .. }),
-            ),
+            self.persistence()?
+                .delete_execution_receipt(id, tombstone.as_deref()),
             |saved| {
                 saved.remove(id);
             },
@@ -1155,6 +1159,8 @@ impl PlanStore {
     pub(crate) async fn skip_import(
         &self,
         id: &str,
+        repository: &str,
+        run_id: u64,
         run_updated_at: &str,
         reason: &str,
     ) -> Result<()> {
@@ -1165,7 +1171,12 @@ impl PlanStore {
             "An import of this run began meanwhile; it is not skipped."
         );
         self.change_saved(
-            self.persistence()?.skip_import(id, run_updated_at, reason),
+            self.persistence()?.skip_import(
+                id,
+                &import_id(repository, run_id),
+                run_updated_at,
+                reason,
+            ),
             |saved| {
                 saved.remove(id);
             },
@@ -3947,11 +3958,25 @@ esac"#,
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let first = manager(root.path(), runner.clone());
         let reason = "This run keeps no e2e-contract artifact; GitHub keeps artifacts for 90 days";
-        let failed = PlanExecution {
+        let mut failed = PlanExecution {
             state: "failed".into(),
             error: Some(reason.into()),
             ..import_stub()
         };
+        failed.source = ExecutionSource::Github {
+            repository: "owner/repo".into(),
+            run_id: 1,
+            run_attempt: 1,
+            url: String::new(),
+            release_control_execution_id: None,
+            stack: None,
+            run_updated_at: None,
+            sync_attempts: 1,
+            conclusion: None,
+            status: None,
+            follow: Default::default(),
+        };
+        let marker = import_id("owner/repo", 1);
         let kept = PlanExecution {
             id: "plan-kept".into(),
             idempotency_key: "kept".into(),
@@ -3960,9 +3985,9 @@ esac"#,
         };
         first.write_execution(&failed).await.unwrap();
         first.write_execution(&kept).await.unwrap();
-        assert_eq!(first.import_skipped(&failed.id).await.unwrap(), None);
+        assert_eq!(first.import_skipped(&marker).await.unwrap(), None);
         first
-            .skip_import(&failed.id, "2026-10-20T11:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-20T11:00:00Z", reason)
             .await
             .unwrap();
         // Its execution goes, with no tombstone: a re-run imports again.
@@ -3977,31 +4002,23 @@ esac"#,
             serde_json::to_value(restarted.executions().await.unwrap()).unwrap()
         );
         assert_eq!(
-            restarted
-                .import_skipped(&failed.id)
-                .await
-                .unwrap()
-                .as_deref(),
+            restarted.import_skipped(&marker).await.unwrap().as_deref(),
             Some("2026-10-20T11:00:00Z")
         );
         // Skipped again once GitHub ran it again, it keeps the later time.
         restarted
-            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-21T09:00:00Z", reason)
             .await
             .unwrap();
         assert_eq!(
-            restarted
-                .import_skipped(&failed.id)
-                .await
-                .unwrap()
-                .as_deref(),
+            restarted.import_skipped(&marker).await.unwrap().as_deref(),
             Some("2026-10-21T09:00:00Z")
         );
 
         // An import begun meanwhile is not deleted under it.
         restarted.write_execution(&import_stub()).await.unwrap();
         assert!(restarted
-            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-21T09:00:00Z", reason)
             .await
             .is_err());
         assert_eq!(
@@ -4015,7 +4032,7 @@ esac"#,
         };
         restarted.write_execution(&completed).await.unwrap();
         assert!(restarted
-            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-21T09:00:00Z", reason)
             .await
             .is_err());
         assert_eq!(
@@ -4360,6 +4377,10 @@ esac"#,
             system_under_test: None,
             rerun: None,
         }
+    }
+
+    pub(crate) async fn save_execution(store: &PlanStore, execution: &PlanExecution) {
+        store.write_execution(execution).await.unwrap();
     }
 
     #[tokio::test]
