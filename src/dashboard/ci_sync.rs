@@ -351,7 +351,13 @@ async fn decide(controller: &Controller, row: &Value) -> Result<bool> {
         &controller.github_repository,
         row["run_id"].as_u64().unwrap_or_default(),
     );
-    let execution = controller.plan_store.read_execution(&id).await.ok();
+    let execution = controller
+        .plan_store
+        .github_execution(
+            &controller.github_repository,
+            row["run_id"].as_u64().unwrap_or_default(),
+        )
+        .await;
     let deleted = controller.plan_store.import_deleted(&id).await?;
     Ok(needs_import(row, execution.as_ref(), deleted))
 }
@@ -507,9 +513,13 @@ case "$*" in
         ];
         let mut not_needed = vec![
             imported("importing", None, same, 0),
-            PlanExecution {
-                idempotency_key: "github-start:o/r#1".into(),
-                ..imported("completed", None, earlier, 0)
+            {
+                let mut execution = imported("completed", None, earlier, 0);
+                let ExecutionSource::Github { follow, .. } = &mut execution.source else {
+                    unreachable!()
+                };
+                follow.followed = true;
+                execution
             },
             imported("completed", None, same, 0),
             imported("interrupted", None, None, 0),

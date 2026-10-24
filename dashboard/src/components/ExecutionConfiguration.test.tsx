@@ -5,6 +5,7 @@ import type { PlanExecution } from '@/lib/plan-execution'
 
 const execution: PlanExecution = {
   id: 'plan-imported',
+  idempotency_key: 'github:iii-hq/harness-e2e#35823421664',
   label: 'Software engineering',
   parameters: {
     suite: {

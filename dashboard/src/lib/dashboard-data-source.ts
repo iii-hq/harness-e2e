@@ -412,6 +412,7 @@ export type DashboardSubjectSummary = JsonObject & {
 
 export type DashboardExecutionSummary = JsonObject & {
   id: string
+  idempotency_key?: string
   label?: string
   run_id?: string
   attempt?: number
@@ -836,6 +837,7 @@ export type DashboardDataBridge = {
   startExecution(request: {
     parameters: ExecutionParameters
     label: string
+    idempotency_key?: string
   }): Promise<{ execution_id: string }>
   /** Runs one scenario of a finished execution again, its group whole: here,
    *  or in Docker as the execution's next attempt. */

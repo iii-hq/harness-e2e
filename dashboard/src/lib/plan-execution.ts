@@ -23,6 +23,7 @@ export type PlanSlot = {
 /** One execution, run here or imported: the origin is `source`. */
 export type PlanExecution = {
   id: string
+  idempotency_key: string
   label: string | null
   parameters: ExecutionParameters | null
   source: ExecutionSource

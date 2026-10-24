@@ -133,6 +133,9 @@ pub(super) struct ExecutionStartRequest {
     /// Empty or absent uses the default name.
     #[serde(default)]
     pub label: String,
+    /// Repeating this key with the same parameters returns the first execution.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -447,7 +450,11 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 let controller = controller.clone();
                 async move {
                     let started = controller
-                        .start_execution(request.parameters, &request.label)
+                        .start_execution(
+                            request.parameters,
+                            &request.label,
+                            request.idempotency_key.as_deref(),
+                        )
                         .await
                         .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)
@@ -1261,6 +1268,7 @@ fn execution_haystack(execution: &Value) -> String {
         string_field(execution, "label"),
         string_field(execution, "id"),
         string_field(execution, "run_id"),
+        string_field(execution, "idempotency_key"),
         source
             .get("sha")
             .and_then(Value::as_str)
@@ -1339,6 +1347,9 @@ mod response_contract_tests {
             json!({"name": "OPENAI_API_KEY", "value": "sk-x"})
         )
         .is_err());
+        let start_schema =
+            serde_json::to_value(schemars::schema_for!(ExecutionStartRequest)).unwrap();
+        assert!(start_schema["properties"]["idempotency_key"].is_object());
         for payload in [
             json!({"id": "plan-local", "snapshot": {"models": []}}),
             json!({"execution_id": "plan-imported", "state": "importing"}),

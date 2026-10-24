@@ -49,7 +49,7 @@ impl PlanStore {
                 "completed" | "interrupted" => "incomplete",
                 other => other,
             };
-            let mut value = json!({"id": execution.id, "label": label, "run_id": execution.id,
+            let mut value = json!({"id": execution.id, "idempotency_key": execution.idempotency_key, "label": label, "run_id": execution.id,
                 "plan_execution": summary,
                 "state": execution.state, "parameters": execution.parameters, "source": execution.source, "stack": execution.stack,
                 "attempt": 1, "workflow_name": null, "workflow_url": null,

@@ -17,7 +17,7 @@ use crate::control::{
 };
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
-    import_id, ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest,
+    import_id, native_runs, ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest,
     GithubRunsListRequest, SuiteView,
 };
 use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
@@ -104,17 +104,16 @@ impl Controller {
             }
             controller.observe_control_plane();
         }
-        controller.observe_docker_executions();
+        controller.observe_plan_executions();
         if controller.control.is_some() {
             super::ci_sync::spawn(&controller);
         }
         Ok(controller)
     }
 
-    /// A Docker execution changes in the background: its groups move, then
-    /// its import installs native runs. Each change refreshes the summaries
-    /// and tells the Console.
-    fn observe_docker_executions(self: &Arc<Self>) {
+    /// A plan execution changes in the background. Each change refreshes the
+    /// summaries and tells the Console.
+    fn observe_plan_executions(self: &Arc<Self>) {
         let mut changes = self.plan_store.changes();
         let controller = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -548,10 +547,16 @@ impl Controller {
         &self,
         parameters: ExecutionParameters,
         label: &str,
+        idempotency_key: Option<&str>,
     ) -> Result<Value> {
         let execution = self
             .plan_store
-            .start_execution_in(parameters, label, Some(&self.github_repository))
+            .start_execution_in(
+                parameters,
+                label,
+                Some(&self.github_repository),
+                idempotency_key,
+            )
             .await?;
         self.invalidate_summaries().await;
         self.emit_change("started", &execution.id).await;
@@ -637,9 +642,24 @@ impl Controller {
         metadata.request.url = self.defaults.url.clone();
         self.set_current_job(metadata.clone()).await;
         self.invalidate_summaries().await;
-        self.emit_change(change_kind(&record), &record.execution_id)
-            .await;
+        if !record.phase.terminal()
+            || self
+                .should_emit_terminal_change(&record.execution_id)
+                .await?
+        {
+            self.emit_change(change_kind(&record), &record.execution_id)
+                .await;
+        }
         Ok(())
+    }
+
+    async fn should_emit_terminal_change(&self, execution_id: &str) -> Result<bool> {
+        Ok(!self
+            .plan_store
+            .executions()
+            .await?
+            .iter()
+            .any(|execution| native_runs(execution).any(|id| id == execution_id)))
     }
 
     async fn set_current_job(&self, metadata: RunMetadata) {
@@ -831,6 +851,56 @@ pub(super) mod tests {
         let overview = controller.release_overview().await.unwrap();
         assert!(overview.releases.is_empty() && overview.locals.is_empty());
         assert_eq!((overview.verdict, overview.unversioned), (None, 0));
+    }
+
+    #[tokio::test]
+    async fn terminal_changes_emit_for_the_plan_and_standalone_run_not_its_native_child() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let store = manager(root.path(), runner);
+        let controller = without_control_plane(store.clone(), root.path());
+        controller.read_model().await.unwrap();
+        assert!(controller.read_model.read().await.is_some());
+        controller.observe_plan_executions();
+        let plan = store
+            .start_execution(
+                ExecutionParameters {
+                    suite: None,
+                    scenarios: vec!["minimal_path".into()],
+                    runs: 1,
+                    technical_retries: 0,
+                    model: "model".into(),
+                    provider: "provider".into(),
+                    agent: None,
+                    r#where: crate::plans::store::Where::Harness,
+                    stack: None,
+                },
+                "",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while controller.read_model.read().await.is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            store.read_execution(&plan.id).await.unwrap().state,
+            "completed"
+        );
+        let child = plan.slots[0].execution_id.as_str();
+
+        assert!(!controller.should_emit_terminal_change(child).await.unwrap());
+        assert!(controller
+            .should_emit_terminal_change(&plan.id)
+            .await
+            .unwrap());
+        assert!(controller
+            .should_emit_terminal_change("standalone-native-run")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

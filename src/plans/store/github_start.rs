@@ -14,14 +14,12 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use super::docker::dispatch_suite;
-use super::github::{import_id, stopped_by};
+use super::github::stopped_by;
 use super::{now, sequential_groups, ExecutionSource, PlanExecution, PlanStore, Rerun};
 use crate::plans::stacks;
 use crate::test_plan::MasterPlan;
 
 const WORKFLOW: &str = "exact-stack-e2e.yml";
-/// Marks an execution this worker started on GitHub, apart from imports.
-const KEY_PREFIX: &str = "github-start:";
 
 const NOT_INSTALLED: &str = "The GitHub CLI (`gh`) is not installed for the Harness E2E worker. Install it, then run `gh auth login`.";
 const NOT_SIGNED_IN: &str =
@@ -69,9 +67,7 @@ impl GithubFollow {
 /// page follows the run until it ends and the worker imports it.
 pub(crate) fn github_started(execution: &PlanExecution) -> bool {
     match &execution.source {
-        ExecutionSource::Github { follow, .. } => {
-            follow.followed || execution.idempotency_key.starts_with(KEY_PREFIX)
-        }
+        ExecutionSource::Github { follow, .. } => follow.followed,
         _ => false,
     }
 }
@@ -205,6 +201,32 @@ impl PlanStore {
         if let Some(agent) = &parameters.agent {
             fields.push(format!("inputs[profile]={agent}"));
         }
+        fields.push(format!("inputs[request]={}", execution.id));
+        // Persist the admission before asking GitHub to start paid work. If
+        // the dispatch result is lost, the request in the run title lets the
+        // follower recover it without issuing another POST.
+        execution.slots.clear();
+        execution.source = ExecutionSource::Github {
+            repository: repository.to_owned(),
+            run_id: 0,
+            run_attempt: 1,
+            url: String::new(),
+            release_control_execution_id: None,
+            stack: None,
+            run_updated_at: None,
+            sync_attempts: 0,
+            conclusion: None,
+            status: Some("dispatching".into()),
+            follow: GithubFollow {
+                followed: true,
+                ..GithubFollow::default()
+            },
+        };
+        execution.state = "running".into();
+        execution.updated_at = now();
+        self.write_execution(&execution).await?;
+        self.spawn_follow_github(&execution.id);
+
         let endpoint = format!("repos/{repository}/actions/workflows/{WORKFLOW}/dispatches");
         let mut args = vec![
             "api",
@@ -218,21 +240,26 @@ impl PlanStore {
             args.push("-f");
             args.push(field);
         }
-        let response = self.gh(self.github.api_timeout, &args).await?;
+        let response = match self.gh(self.github.api_timeout, &args).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(execution_id = %execution.id, error = %format!("{error:#}"), "GitHub dispatch outcome is unknown; follow the persisted request");
+                return Ok(execution);
+            }
+        };
         let run: Value = serde_json::from_slice(&response).unwrap_or(Value::Null);
-        let run_id = run["workflow_run_id"]
+        let Some(run_id) = run["workflow_run_id"]
             .as_u64()
             .or_else(|| run["id"].as_u64())
-            .context("GitHub accepted the dispatch but returned no run; update `gh` on the worker's machine.")?;
+        else {
+            tracing::warn!(execution_id = %execution.id, "GitHub accepted the dispatch without returning a run; follow the persisted request");
+            return Ok(execution);
+        };
         let url = run["html_url"]
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| format!("https://github.com/{repository}/actions/runs/{run_id}"));
 
-        execution.id = import_id(repository, run_id);
-        execution.idempotency_key = format!("{KEY_PREFIX}{repository}#{run_id}");
-        // The import installs the runs GitHub produced.
-        execution.slots = Vec::new();
         execution.source = ExecutionSource::Github {
             repository: repository.to_owned(),
             run_id,
@@ -251,11 +278,7 @@ impl PlanStore {
         };
         execution.state = "running".into();
         execution.updated_at = now();
-        {
-            let _guard = self.lock.lock().await;
-            self.write_execution(&execution).await?;
-        }
-        self.spawn_follow_github(&execution.id);
+        self.write_execution(&execution).await?;
         Ok(execution)
     }
 
@@ -285,6 +308,109 @@ impl PlanStore {
             }
             if !execution.active() {
                 return Ok(());
+            }
+            if *run_id == 0 {
+                let runs = self
+                    .gh(
+                        self.github.api_timeout,
+                        &[
+                            "api",
+                            &format!(
+                                "repos/{repository}/actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&per_page=100"
+                            ),
+                        ],
+                    )
+                    .await
+                    .and_then(|bytes| {
+                        serde_json::from_slice::<Value>(&bytes)
+                            .context("decode GitHub workflow runs")
+                    });
+                match runs {
+                    Ok(runs) => {
+                        let suffix = format!(" · {id}");
+                        if let Some(run) = runs["workflow_runs"].as_array().and_then(|runs| {
+                            runs.iter().find(|run| {
+                                run["display_title"]
+                                    .as_str()
+                                    .is_some_and(|title| title.ends_with(&suffix))
+                            })
+                        }) {
+                            let found = run["id"].as_u64().unwrap_or_default();
+                            if found > 0 {
+                                let _guard = self.lock.lock().await;
+                                let mut execution = self.read_execution(id).await?;
+                                if let ExecutionSource::Github {
+                                    run_id,
+                                    run_attempt,
+                                    url,
+                                    status,
+                                    ..
+                                } = &mut execution.source
+                                {
+                                    *run_id = found;
+                                    *run_attempt = run["run_attempt"].as_u64().unwrap_or(1) as u32;
+                                    *url = run["html_url"]
+                                        .as_str()
+                                        .map(str::to_owned)
+                                        .unwrap_or_else(|| {
+                                            format!(
+                                                "https://github.com/{repository}/actions/runs/{found}"
+                                            )
+                                        });
+                                    *status = Some(if execution.cancel_requested {
+                                        "cancel_pending".to_owned()
+                                    } else {
+                                        run["status"].as_str().unwrap_or("queued").to_owned()
+                                    });
+                                }
+                                execution.updated_at = now();
+                                self.write_execution(&execution).await?;
+                                continue;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "find the dispatched GitHub run");
+                    }
+                }
+                tokio::time::sleep(self.github.follow_interval).await;
+                continue;
+            }
+            if execution.cancel_requested
+                && matches!(
+                    &execution.source,
+                    ExecutionSource::Github {
+                        status: Some(status),
+                        ..
+                    } if status == "cancel_pending"
+                )
+            {
+                match self
+                    .gh(
+                        self.github.api_timeout,
+                        &[
+                            "api",
+                            "-X",
+                            "POST",
+                            &format!("repos/{repository}/actions/runs/{run_id}/cancel"),
+                        ],
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        let _guard = self.lock.lock().await;
+                        let mut execution = self.read_execution(id).await?;
+                        if let ExecutionSource::Github { status, .. } = &mut execution.source {
+                            *status = Some("cancelling".into());
+                        }
+                        execution.updated_at = now();
+                        self.write_execution(&execution).await?;
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "cancel the GitHub run");
+                    }
+                }
             }
             let run = self
                 .gh(
@@ -328,6 +454,7 @@ impl PlanStore {
                         let _guard = self.lock.lock().await;
                         let mut execution = self.read_execution(id).await?;
                         let mut changed = done;
+                        let cancel_requested = execution.cancel_requested;
                         if let ExecutionSource::Github {
                             status: current,
                             run_attempt,
@@ -335,6 +462,14 @@ impl PlanStore {
                             ..
                         } = &mut execution.source
                         {
+                            let status = if cancel_requested
+                                && current.as_deref() == Some("cancel_pending")
+                                && !done
+                            {
+                                "cancel_pending".to_owned()
+                            } else {
+                                status.clone()
+                            };
                             let mut next = follow.clone();
                             next.head_branch = run["head_branch"].as_str().map(str::to_owned);
                             next.head_sha = run["head_sha"].as_str().map(str::to_owned);
