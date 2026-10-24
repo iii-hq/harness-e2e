@@ -23,6 +23,7 @@ pub struct SeedEvidence {
     pub text: String,
     pub group: String,
     pub needed_on: Vec<usize>,
+    pub related_on: Vec<usize>,
     /// False when the case withheld the seed (a baseline, or unused distractors).
     pub planted: bool,
 }
@@ -92,7 +93,8 @@ pub struct Evidence {
 pub struct Audit {
     /// A group an exchange needs that is neither injected there nor still visible.
     pub missing: Vec<(usize, String)>,
-    /// Injected lines their exchange does not need, or that no seed names.
+    /// Injected lines their exchange neither needs nor relates to, or that no
+    /// seed names.
     pub irrelevant: Vec<(usize, String)>,
     /// Injected lines whose group was already injected and is still visible.
     pub duplicates: Vec<(usize, String)>,
@@ -146,12 +148,14 @@ fn assemble(
         text: (*text).to_string(),
         group: "distractor".to_string(),
         needed_on: Vec::new(),
+        related_on: Vec::new(),
         planted: planted && case.distractors,
     });
     let memories = case.memories.iter().map(|seed| SeedEvidence {
         text: render(seed.text, run_id),
         group: seed.group.to_string(),
         needed_on: seed.needed_on.to_vec(),
+        related_on: seed.related_on.to_vec(),
         planted,
     });
     let prompts = observed
@@ -235,7 +239,10 @@ pub fn audit(evidence: &Evidence) -> Audit {
         let earlier = visible_at(observed, block.position);
         for (index, line) in block.lines.iter().enumerate() {
             audit.injected.push((exchange, line.clone()));
-            let Some(seed) = seed_of(line).filter(|seed| seed.needed_on.contains(&exchange)) else {
+            let seed = seed_of(line);
+            let needed = seed.is_some_and(|seed| seed.needed_on.contains(&exchange));
+            let related = seed.is_some_and(|seed| seed.related_on.contains(&exchange));
+            let Some(seed) = seed.filter(|_| needed || related) else {
                 audit.irrelevant.push((exchange, line.clone()));
                 continue;
             };
@@ -243,9 +250,10 @@ pub fn audit(evidence: &Evidence) -> Audit {
                 .iter()
                 .any(|before| seed_of(before).is_some_and(|other| other.group == seed.group))
                 || earlier.iter().any(|before| holds(before, &seed.group));
+            // A related line is allowed, so it counts only when it repeats.
             if repeated {
                 audit.duplicates.push((exchange, line.clone()));
-            } else {
+            } else if needed {
                 audit.relevant += 1;
             }
         }
@@ -852,6 +860,39 @@ mod tests {
         assert!(found.missing.is_empty(), "{:?}", found.missing);
         assert!(found.irrelevant.is_empty());
         assert_eq!(found.relevant, 2);
+    }
+
+    #[test]
+    fn a_related_fact_is_neither_required_nor_irrelevant() {
+        let case = case_named("memory_session_repeat");
+        let (limit, approver) = (line(case, 0), line(case, 1));
+        let answers = ["a", "b", "c", "d"];
+        // The approver shares the subject of exchange 0 without being needed there.
+        let found = audit(&evidence_of(
+            case,
+            observed(
+                &answers,
+                vec![
+                    block(0, vec![limit.clone(), approver.clone()]),
+                    block(3, vec![approver.clone()]),
+                ],
+            ),
+        ));
+        assert!(found.irrelevant.is_empty(), "{:?}", found.irrelevant);
+        assert_eq!(found.relevant, 1);
+        // Still a repeat while its earlier line is visible.
+        assert_eq!(found.duplicates, [(3, approver)]);
+        assert!(found.missing.is_empty(), "{:?}", found.missing);
+
+        // Related exchanges are never required.
+        let found = audit(&evidence_of(
+            case,
+            observed(&answers, vec![block(0, vec![limit])]),
+        ));
+        assert_eq!(
+            found.missing,
+            [(1, "approver".to_string()), (2, "approver".to_string())]
+        );
     }
 
     #[test]

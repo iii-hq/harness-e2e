@@ -13,6 +13,9 @@ pub struct Seed {
     pub group: &'static str,
     /// Exchanges (0-based) whose task needs this fact.
     pub needed_on: &'static [usize],
+    /// Exchanges where the fact is on topic but not needed: allowed there,
+    /// never required.
+    pub related_on: &'static [usize],
 }
 
 /// One standing rule to store; it belongs in the system prompt.
@@ -26,7 +29,8 @@ pub struct RuleSeed {
 pub enum Check {
     /// Every `(exchange, group)` a seed needs is injected there or still visible.
     NeededInjected,
-    /// No injected line outside its seed's `needed_on`; unknown lines count.
+    /// No injected line outside its seed's `needed_on` and `related_on`;
+    /// unknown lines count.
     NothingIrrelevant,
     /// No line whose group is already in the same block or a visible earlier block.
     NoDuplicates,
@@ -107,6 +111,7 @@ const fn seed(text: &'static str, group: &'static str, needed_on: &'static [usiz
         text,
         group,
         needed_on,
+        related_on: &[],
     }
 }
 
@@ -363,11 +368,15 @@ pub const CASES: [Case; 11] = [
                 "limit",
                 &[0, 1, 2, 3],
             ),
-            seed(
-                "Raising the payments API rate limit needs approval from the on-call lead named lead-{lead}.",
-                "approver",
-                &[1, 2],
-            ),
+            // Every prompt names the rate limit, so the approver is on topic throughout.
+            Seed {
+                related_on: &[0, 3],
+                ..seed(
+                    "Raising the payments API rate limit needs approval from the on-call lead named lead-{lead}.",
+                    "approver",
+                    &[1, 2],
+                )
+            },
         ],
         rules: &[],
         prompt: "What is the payments API rate limit, and which file sets it?",
