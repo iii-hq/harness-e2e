@@ -17,6 +17,8 @@ const SCHEMA: &str = "memory-evaluation/1";
 /// Where memory's section starts in the system prompt.
 const SECTION_START: &str = "\n\n# Memory — bank: ";
 const RULE_TRUNCATED: &str = "[rule truncated";
+/// Where the rules start in memory's section, after its fixed header.
+const RULES_START: &str = "\nThe rules below are the user's standing instructions.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeedEvidence {
@@ -314,7 +316,9 @@ fn measurements(evidence: &Evidence) -> Vec<Measurement> {
         ),
         tokens(
             "memory_rules_tokens",
-            first_section(evidence).map_or(0, str::len),
+            first_section(evidence)
+                .and_then(|section| section.find(RULES_START).map(|start| section.len() - start))
+                .unwrap_or(0),
         ),
         tokens(
             "memory_reminder_tokens",
@@ -1204,12 +1208,31 @@ mod tests {
         // Rounded up once over the sum: (9 + 10 + 3) / 4, not 3 + 3.
         assert_eq!(measured("memory_injected_tokens"), (5.0, "tokens"));
         assert_eq!(measured("memory_turns_without_hook"), (1.0, "count"));
-        let section = HEADER.len() + "body".len();
-        assert_eq!(
-            measured("memory_rules_tokens"),
-            (section.div_ceil(4) as f64, "tokens")
-        );
+        // A section with no rules: memory's fixed header alone counts nothing.
+        assert_eq!(measured("memory_rules_tokens"), (0.0, "tokens"));
         assert_eq!(measured("memory_reminder_tokens"), (3.0, "tokens"));
+    }
+
+    #[test]
+    fn memory_rules_tokens_count_the_rules_only() {
+        let rules_tokens = |case: &Case, prompt: &str| {
+            let evidence = evidence_with(case, observed(&["x"], vec![]), prompt, Some("ok"));
+            let found = evidence
+                .measurements
+                .iter()
+                .find(|m| m.id == "memory_rules_tokens");
+            found.unwrap().value
+        };
+        let header_only = format!("{PROMPT}{HEADER}");
+        assert_eq!(
+            rules_tokens(case_named("memory_relevant_recall"), &header_only),
+            0.0
+        );
+        let case = case_named("memory_value_preference");
+        let prompt = rules_prompt(case);
+        let rules = &prompt[prompt.find("\nThe rules below").unwrap()..];
+        assert!(rules_tokens(case, &prompt) > 0.0);
+        assert_eq!(rules_tokens(case, &prompt), rules.len().div_ceil(4) as f64);
     }
 
     #[test]
