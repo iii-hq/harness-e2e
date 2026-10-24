@@ -20,9 +20,9 @@ import {
   type TrendPoint,
 } from '@/lib/trends'
 
-/** A difference in its tone (Trends.dc.html): DeltaValue coloured by which
- *  way the measure is better, on a tinted pill; "no change" when it rounds
- *  to nothing. */
+/** A difference on a pill (Trends.dc.html), untoned: whether it is better
+ *  or worse is the calibrated verdict's, not one difference's; "no change"
+ *  when it rounds to nothing. */
 export function DeltaPill({
   metric,
   value,
@@ -34,16 +34,12 @@ export function DeltaPill({
   return (
     <span
       className="tr-delta"
-      data-tone={deltaTone(deltaDirection(value), metric.better)}
+      data-tone={deltaTone(deltaDirection(value), 'neither')}
     >
       {value === 0 ? (
         'no change'
       ) : (
-        <DeltaValue
-          value={value}
-          format={deltaFormat(metric)}
-          betterWhen={metric.better}
-        />
+        <DeltaValue value={value} format={deltaFormat(metric)} />
       )}
     </span>
   )

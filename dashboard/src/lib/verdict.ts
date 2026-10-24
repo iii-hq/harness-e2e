@@ -4,7 +4,12 @@
 // The rule lives in the worker; only the wording is here.
 
 export type VerdictState = 'better' | 'no_difference' | 'worse' | 'cannot_tell'
-export type QualityState = 'non_inferior' | 'inferior' | 'fell' | 'inconclusive'
+export type QualityState =
+  | 'improved'
+  | 'non_inferior'
+  | 'inferior'
+  | 'fell'
+  | 'inconclusive'
 export type CostState =
   | 'equivalent'
   | 'cheaper'
@@ -27,6 +32,7 @@ export type VerdictQuality = {
   b: number
   delta: number
   tests: number
+  p_improved: number
   p_non_inferior: number
   p_inferior: number
   p_fell: number
@@ -39,6 +45,7 @@ export type VerdictCost = {
   b: number
   relative: number
   tests: number
+  /** Each against α / 2. */
   p_cheaper: number
   p_more_expensive: number
   p_within_low: number
@@ -60,13 +67,15 @@ export type VerdictRepetitions = {
 export type VerdictSummary = {
   /** Null when there is no calibrated verdict; `unavailable` says why. */
   verdict: VerdictState | null
-  qualifier: 'quality_fell' | null
+  qualifier: 'quality_fell' | 'trade_off' | null
   unavailable: string | null
   reasons: string[]
   rule: VerdictRule
   quality: VerdictQuality | null
   cost: VerdictCost | null
   repetitions: VerdictRepetitions
+  /** A test that fell more than the margin among them. */
+  warnings: string[]
 }
 
 export type CriterionChange = {
@@ -90,15 +99,20 @@ export type CriteriaConfiguration = {
     infrastructure: number
   }
   sufficient: boolean
+  /** The criteria some counted run evaluated. */
   criteria: Array<{
     id: string
     full: number
     n: number
+    /** Counted runs that left it unevaluated. */
+    not_evaluated: number
     rate: number
     low: number
     high: number
     class: 'saturated' | 'never_full' | 'oscillating' | 'insufficient_data'
   }>
+  /** The criteria no counted run evaluated. */
+  not_evaluated: string[]
   groups: Array<{ criteria: string[]; failing: number; of: number }>
 }
 
@@ -122,18 +136,22 @@ export type ExecutionVerdict = VerdictSummary & {
     p_fell: number
     warning: boolean
   }>
-  dropped: Array<{ scenario: string; reason: string }>
+  dropped: Array<{ scenario: string; behavior: string | null; reason: string }>
   runs: Sides<{
     counted: number
     excluded: number
     causes: Record<string, number>
   }>
-  warnings: string[]
   criteria: {
     min_runs: number
     configurations: CriteriaConfiguration[]
     changes: CriterionChange[]
   }
+}
+
+/** One per change: a scenario can move under two definitions. */
+export function changeKey(change: CriterionChange): string {
+  return `${change.scenario}:${change.behavior ?? ''}:${change.criteria.join(',')}`
 }
 
 const LABEL: Record<VerdictState, string> = {
@@ -143,21 +161,26 @@ const LABEL: Record<VerdictState, string> = {
   cannot_tell: 'Cannot tell yet',
 }
 
+const QUALIFIER = {
+  quality_fell: 'quality fell, by an amount the runs cannot bound',
+  trade_off:
+    'quality improved and the cost rose, a trade-off the rule does not weigh',
+}
+
 /** `Better`, `Cannot tell yet: quality fell…`, or that there is none. */
 export function verdictHeadline(summary: VerdictSummary): string {
   if (!summary.verdict) return 'No calibrated verdict'
   const label = LABEL[summary.verdict]
-  return summary.qualifier === 'quality_fell'
-    ? `${label}: quality fell, by an amount the runs cannot bound`
-    : label
+  return summary.qualifier ? `${label}: ${QUALIFIER[summary.qualifier]}` : label
 }
 
-/** Green for better, red for worse, faint for the rest. */
+/** Green for better, red for worse or a fall, faint for the rest. */
 export function verdictTone(
   summary: VerdictSummary,
 ): 'positive' | 'negative' | 'neutral' {
   if (summary.verdict === 'better') return 'positive'
-  if (summary.verdict === 'worse' || summary.qualifier) return 'negative'
+  if (summary.verdict === 'worse' || summary.qualifier === 'quality_fell')
+    return 'negative'
   return 'neutral'
 }
 
@@ -186,5 +209,5 @@ export function ruleText({
   permutations,
   seed,
 }: VerdictRule): string {
-  return `Quality within ${margin} points, cost within ±${Math.round(equivalence * 100)}%: permutation tests within each test, one-sided α ${alpha}, ${permutations.toLocaleString('en-US')} permutations, seed ${seed}.`
+  return `Quality within ${margin} points, cost within ±${Math.round(equivalence * 100)}%: permutation tests within each test, one-sided α ${alpha} (cheaper or more expensive at α / 2), ${permutations.toLocaleString('en-US')} permutations, seed ${seed}.`
 }

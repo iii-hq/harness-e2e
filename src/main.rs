@@ -180,10 +180,10 @@ struct CompareArgs {
     a: PathBuf,
     /// Arm B, compared with A.
     b: PathBuf,
-    /// Points of quality B may lose and still be non-inferior (default 5).
+    /// Points of quality B may lose and still be non-inferior, above 0 (default 5).
     #[arg(long)]
     margin: Option<f64>,
-    /// Relative cost change that counts as no change (default 0.05).
+    /// Relative cost change that counts as no change, between 0 and 1 (default 0.05).
     #[arg(long)]
     equivalence: Option<f64>,
     /// Permutations of each test (default 10000).
@@ -264,11 +264,21 @@ fn compare(args: CompareArgs) -> Result<()> {
         seed: args.seed.unwrap_or(default.seed),
         ..default
     };
-    let comparison = verdict::compare(
-        &verdict::read_arm(&args.a)?,
-        &verdict::read_arm(&args.b)?,
-        &rule,
+    anyhow::ensure!(rule.margin > 0.0, "--margin must be above 0");
+    anyhow::ensure!(
+        rule.equivalence > 0.0 && rule.equivalence < 1.0,
+        "--equivalence must be between 0 and 1"
     );
+    let (a, skipped_a) = verdict::read_arm(&args.a)?;
+    let (b, skipped_b) = verdict::read_arm(&args.b)?;
+    let mut comparison = verdict::compare(&a, &b, &rule);
+    for (label, skipped) in [(&args.label_a, skipped_a), (&args.label_b, skipped_b)] {
+        comparison.warnings.extend(
+            skipped
+                .into_iter()
+                .map(|warning| format!("{label}: {warning}")),
+        );
+    }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&comparison)?);
     } else {
@@ -511,20 +521,29 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(verdict::read_arm(arm.path()).unwrap().len(), 30);
+        // A truncated results.json is skipped, and said.
+        std::fs::create_dir(arm.path().join("cut")).unwrap();
+        std::fs::write(arm.path().join("cut/results.json"), "{\"scenarios\": [").unwrap();
+        let (runs, skipped) = verdict::read_arm(arm.path()).unwrap();
+        assert_eq!(runs.len(), 30);
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].starts_with("Skipped ") && skipped[0].contains("cut/results.json"));
         assert!(verdict::read_arm(&fixtures.join("missing")).is_err());
-        compare(CompareArgs {
+        let args = |margin: Option<f64>, equivalence: Option<f64>| CompareArgs {
             a: fixtures.join("se-1.8.44.json"),
             b: arm.path().to_owned(),
-            margin: None,
-            equivalence: None,
+            margin,
+            equivalence,
             permutations: Some(100),
             seed: None,
             label_a: "A".into(),
             label_b: "B".into(),
             json: true,
-        })
-        .unwrap();
+        };
+        compare(args(None, None)).unwrap();
+        for (margin, equivalence) in [(Some(0.0), None), (None, Some(1.0)), (None, Some(0.0))] {
+            assert!(compare(args(margin, equivalence)).is_err());
+        }
     }
 
     #[test]

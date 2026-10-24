@@ -296,6 +296,9 @@ describe('trends page parts', () => {
     expect(html).toContain(
       `<p class="tr-footnote tr-reference">${pointTime(current)} against ${pointTime(previous)}</p>`,
     )
+    // The delta is not called better or worse: that is the verdict's.
+    expect(html).toMatch(/tr-delta" data-tone="neutral"/)
+    expect(html).not.toMatch(/, (better|worse)</)
     const alone = renderToStaticMarkup(
       <SmallChart
         metric={metric}
@@ -366,6 +369,8 @@ describe('trends page parts', () => {
       'Nothing recorded changed: same iii, stack, workers and test definitions.',
     )
     expect(html).toContain('>no change<')
+    expect(html).not.toMatch(/tr-delta" data-tone="(positive|negative)"/)
+    expect(html).not.toMatch(/, (better|worse)</)
     expect(html).toContain(
       'iii 0.24.3-rc.1 · harness 1.8.36 · stack default (21 workers)',
     )

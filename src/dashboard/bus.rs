@@ -413,7 +413,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_VERDICT,
-        "Compare two executions over their technically valid runs, test by test under one definition: B better than A, no different, worse, or cannot tell yet, with the reasons, the repetitions missing and each criterion's health per side. The verdict `harness-e2e compare` gives.",
+        "Compare two executions over their counted runs, test by test under one definition: B better than A, no different, worse, or cannot tell yet, with the reasons, the repetitions missing and each criterion's health per side. The verdict `harness-e2e compare` gives.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionVerdictRequest| {
@@ -1150,11 +1150,12 @@ pub(super) async fn execution_verdict(
         let bundle = execution_bundle(controller, ExecutionGetRequest { execution_id }).await?;
         sides.push(verdict_runs(&bundle.detail));
     }
-    Ok(crate::verdict::compare(
-        &sides[0],
-        &sides[1],
-        &crate::verdict::Rule::default(),
-    ))
+    // Tens of thousands of permutations: off the async workers.
+    tokio::task::spawn_blocking(move || {
+        crate::verdict::compare(&sides[0], &sides[1], &crate::verdict::Rule::default())
+    })
+    .await
+    .context("compare two executions")
 }
 
 /// The runs of an execution detail's available reports.
@@ -1516,7 +1517,7 @@ mod response_contract_tests {
         );
         assert_eq!(
             keys(&answer["quality"]),
-            "a,b,delta,p_fell,p_inferior,p_non_inferior,state,tests"
+            "a,b,delta,p_fell,p_improved,p_inferior,p_non_inferior,state,tests"
         );
         assert_eq!(
             keys(&answer["cost"]),
@@ -1529,7 +1530,11 @@ mod response_contract_tests {
         assert_eq!(keys(&answer["criteria"]), "changes,configurations,min_runs");
         assert_eq!(
             keys(&answer["criteria"]["configurations"][0]),
-            "behavior,criteria,groups,runs,scenario,side,sufficient"
+            "behavior,criteria,groups,not_evaluated,runs,scenario,side,sufficient"
+        );
+        assert_eq!(
+            keys(&answer["criteria"]["configurations"][0]["criteria"][0]),
+            "class,full,high,id,low,n,not_evaluated,rate"
         );
         assert_eq!(
             keys(&answer["criteria"]["changes"][0]),
@@ -1606,7 +1611,7 @@ mod response_contract_tests {
         );
         assert_eq!(
             keys(&verdict["compared"][0]["calibrated"]),
-            "cost,qualifier,quality,reasons,repetitions,rule,unavailable,verdict"
+            "cost,qualifier,quality,reasons,repetitions,rule,unavailable,verdict,warnings"
         );
         assert_eq!(verdict["latest"], "1.9.3");
         assert_eq!(verdict["left_out"], json!([]));

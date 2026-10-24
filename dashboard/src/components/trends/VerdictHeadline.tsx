@@ -82,10 +82,7 @@ export function VerdictHeadline({
                   {index > 0 ? ' · ' : null}
                   <span className="tr-move" data-move="moved">
                     {move.metric.label}{' '}
-                    <DeltaPill
-                      metric={{ ...move.metric, better: 'neither' }}
-                      value={move.delta}
-                    />
+                    <DeltaPill metric={move.metric} value={move.delta} />
                   </span>
                 </Fragment>
               ))}

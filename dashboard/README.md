@@ -145,11 +145,11 @@ declares, inside that execution's directory, up to 10 MB. **Rerun selected**
 opens Run again with B's parameters and only the ticked scenarios. Above the
 tests, the **verdict** is the worker's (`e2e::dashboard::execution-verdict`,
 the rule of `harness-e2e compare`): better, no difference, worse or cannot tell
-yet over every technically valid run of both, whatever the reader counts, with
-its reasons, the runs per test each side has and those missing, the tests that
-fell more than the margin, the criteria groups that moved the score and the
-criterion health per side. A verdict that fails to load says so and the rest of
-the page stays.
+yet over every counted run of both, read once both have finished, whatever
+the reader counts, with its reasons, the runs per test each side has and those
+missing, the tests that fell more than the margin, the criteria groups that
+moved the score and the criterion health per side. A verdict that fails to
+load says so and the rest of the page stays.
 
 **Trends** opens on the release overview. Under **Harness evolution**, the
 verdict names the latest Harness release against the previous one with the

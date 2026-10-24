@@ -22,6 +22,7 @@ import {
   ExecutionComparePage,
   loadCandidates,
   loadExecutionPair,
+  verdictWaits,
   viewParams,
 } from '@/pages/ExecutionComparePage'
 import { imported, local } from '@/test-fixtures/execution-comparison'
@@ -69,6 +70,13 @@ describe('execution comparison page', () => {
     expect(html.indexOf('data-comparison-verdict')).toBeLessThan(
       html.indexOf('Tests in this comparison'),
     )
+  })
+
+  it('asks the worker for the verdict once both executions finished, not while one runs', () => {
+    expect(verdictWaits({ a: imported(), b: local() })).toBe(false)
+    expect(
+      verdictWaits({ a: imported(), b: { ...local(), status: 'running' } }),
+    ).toBe(true)
   })
 
   it('hands the chat the counted tests, the ones left out and why, and what changed', () => {

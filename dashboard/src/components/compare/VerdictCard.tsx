@@ -1,6 +1,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { plural } from '@/lib/format'
 import {
+  changeKey,
   type ExecutionVerdict,
   repetitionsText,
   ruleText,
@@ -8,27 +9,31 @@ import {
   verdictTone,
 } from '@/lib/verdict'
 
-/** The verdict as the page holds it: loading while both are null. */
+/** The verdict as the page holds it: loading while both are null, waiting
+ *  while a side still runs. */
 export type VerdictLoad = {
   value: ExecutionVerdict | null
   error: string | null
+  waiting?: boolean
 }
 
 const signed = (value: number) =>
   `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(1)}`
 
 /** Whether B is better than A, worse, no different or cannot tell yet, as
- *  the worker reads it over every technically valid run of both, whatever
- *  tests the page counts below; with its reasons, the repetitions and the
- *  criteria that explain the change. Warnings only: nothing is hidden. */
+ *  the worker reads it over every counted run of both, whatever tests the
+ *  page counts below; with its reasons, the repetitions and the criteria
+ *  that explain the change. Warnings only: nothing is hidden. */
 export function VerdictCard({ load }: { load: VerdictLoad }) {
-  const { value: verdict, error } = load
+  const { value: verdict, error, waiting } = load
   if (!verdict)
     return (
       <section
         className="cmp-card cmp-verdict"
         aria-labelledby="cmp-verdict"
-        data-comparison-verdict={error ? 'error' : 'loading'}
+        data-comparison-verdict={
+          error ? 'error' : waiting ? 'waiting' : 'loading'
+        }
       >
         <span id="cmp-verdict" className="cmp-eyebrow">
           Verdict · B compared with A
@@ -40,7 +45,9 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
           </p>
         ) : (
           <p className="cmp-faint" role="status">
-            Reading the verdict…
+            {waiting
+              ? 'The verdict is read once both executions finish.'
+              : 'Reading the verdict…'}
           </p>
         )}
       </section>
@@ -54,6 +61,10 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
     .filter((criterion) => criterion.class !== 'insufficient_data')
   const classCount = (name: string, label: string) =>
     `${classes.filter((criterion) => criterion.class === name).length} ${label}`
+  const unevaluated = criteria.configurations.reduce(
+    (total, configuration) => total + configuration.not_evaluated.length,
+    0,
+  )
   const health = [
     `Criterion health: ${plural(criteria.configurations.length, 'configuration')}`,
     insufficient > 0
@@ -61,6 +72,9 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
       : null,
     classes.length > 0
       ? `${classCount('saturated', 'criteria saturated')}, ${classCount('never_full', 'never full')}, ${classCount('oscillating', 'oscillating')}`
+      : null,
+    unevaluated > 0
+      ? `${plural(unevaluated, 'criterion', 'criteria')} no counted run evaluated`
       : null,
   ]
     .filter(Boolean)
@@ -107,7 +121,7 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
           </span>
           <ul className="cmp-verdict-list" data-verdict-changes>
             {criteria.changes.map((change) => (
-              <li key={`${change.scenario}:${change.criteria.join(',')}`}>
+              <li key={changeKey(change)}>
                 <span className="cmp-mono cmp-strong">{change.scenario}</span>{' '}
                 {change.criteria.join(', ')}: short in {change.failing.a} of{' '}
                 {change.runs.a} runs on A, {change.failing.b} of {change.runs.b}{' '}
@@ -121,7 +135,7 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
         {`${health}.`}
       </p>
       <p className="cmp-faint">
-        {`Over every technically valid run of both executions, whatever the tests counted below. ${ruleText(verdict.rule)}`}
+        {`Over every counted run of both executions, whatever the tests counted below. ${ruleText(verdict.rule)}`}
       </p>
     </section>
   )

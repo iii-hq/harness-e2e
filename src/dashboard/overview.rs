@@ -505,6 +505,7 @@ fn delta(
 /// not its cause or its criteria.
 fn verdict_run(run: &TrendRun) -> crate::verdict::Run {
     crate::verdict::Run {
+        attempt_id: run.attempt_id.clone(),
         scenario: run.test.clone(),
         behavior: run.behavior_sha256.clone(),
         counted: run.counted,
@@ -744,8 +745,34 @@ pub(super) mod tests {
         };
         let dropped = calibrated(repeated(90.0), repeated(60.0));
         assert_eq!(dropped.verdict, Some(crate::verdict::Verdict::Worse));
+        // The read model keeps no cause, and the summary carries the warnings.
+        assert!(dropped.warnings[0].contains("carry no cause"));
+        assert!(dropped
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("t0 fell 30.0 points")));
         let quality = dropped.quality.unwrap();
         assert_eq!((quality.a, quality.b, quality.tests), (91.5, 61.5, 4));
+        // Runs are read in attempt order, whatever order the read model holds.
+        let noisy = |prefix: &str, scores: [f64; 4]| {
+            (0..3)
+                .flat_map(|test| {
+                    scores.iter().enumerate().map(move |(i, score)| TrendRun {
+                        attempt_id: format!("{prefix}{i}"),
+                        ..scored(&format!("t{test}"), *score)
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let (before, latest) = (
+            noisy("p", [70.0, 95.0, 80.0, 90.0]),
+            noisy("l", [60.0, 100.0, 85.0, 75.0]),
+        );
+        let reversed = latest.iter().rev().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            calibrated(before.clone(), latest),
+            calibrated(before, reversed)
+        );
     }
 
     #[test]

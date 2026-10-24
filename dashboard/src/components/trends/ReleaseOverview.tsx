@@ -90,6 +90,16 @@ function Combinations({ verdict }: { verdict: Verdict }) {
                   {`No calibrated verdict: ${uncalibratedText(item)}`}
                 </span>
               )}
+              {summary?.warnings.map((warning) => (
+                <span
+                  key={warning}
+                  className="tr-note"
+                  data-tone="warn"
+                  data-verdict-warning
+                >
+                  {warning}
+                </span>
+              ))}
               {item.tests_left_out.length > 0 ? (
                 <span className="tr-faint">
                   {`Left out: ${item.tests_left_out.join(', ')}`}
@@ -347,9 +357,8 @@ export function ReleaseOverview({
                       <div key={item.id}>
                         <dt>{item.label}</dt>
                         <dd>
-                          {/* Untoned: better or worse is the verdict's. */}
                           <DeltaPill
-                            metric={{ ...item, better: 'neither' }}
+                            metric={item}
                             value={aggregateDelta(
                               item,
                               against.latest_aggregate,
