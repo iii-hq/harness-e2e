@@ -281,7 +281,7 @@
   },
   {
     "scenario": "validation_self_repair",
-    "expected": "test_environment_incomplete",
+    "expected": "resource_limit",
     "failure": {
       "status": "subject_error",
       "domain": "subject",

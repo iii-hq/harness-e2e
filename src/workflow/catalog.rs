@@ -196,6 +196,13 @@ pub trait StepExecutor: Send + Sync {
         Ok(())
     }
 
+    /// The transcript of a step whose execution failed, read before cleanup,
+    /// so its failure is classified by the error the Harness recorded, as a
+    /// native run's is.
+    async fn failed_transcript(&self, _context: &StepExecutorContext) -> Option<Value> {
+        None
+    }
+
     async fn cleanup(&self, _context: &StepExecutorContext) -> Result<()> {
         Ok(())
     }
