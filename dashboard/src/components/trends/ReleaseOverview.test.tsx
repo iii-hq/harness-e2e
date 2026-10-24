@@ -247,6 +247,12 @@ describe('release overview', () => {
 })
 
 describe('release panel', () => {
+  it('shows each combination’s warnings, never hiding the verdict', () => {
+    const html = panel(8)
+    expect(html).toContain('data-verdict-warning')
+    expect(html).toContain('16 runs carry no cause')
+  })
+
   it('opens what changed at the latest release, combination by combination', () => {
     const html = panel(8)
     for (const text of [

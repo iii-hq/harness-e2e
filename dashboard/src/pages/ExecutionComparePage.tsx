@@ -162,6 +162,11 @@ export async function loadExecutionPair(
 const LIVE = ['running', 'importing', 'cancelling']
 const NO_VERDICT: VerdictLoad = { value: null, error: null }
 
+/** Whether a side still runs: the verdict waits for both to finish. */
+export function verdictWaits(sides: Sides) {
+  return [sides.a, sides.b].some((side) => LIVE.includes(String(side.status)))
+}
+
 function pair(one: string, two: string) {
   return one === two ? one : `${one} → ${two}`
 }
@@ -546,6 +551,13 @@ export function ExecutionComparePage({
       if (!request.isCurrent()) return
       setSides(loaded)
       setError(null)
+      // The worker permutes for the verdict: once, when both have finished,
+      // not on every event of a side still running.
+      if (verdictWaits(loaded)) {
+        setVerdict({ value: null, error: null, waiting: true })
+        return
+      }
+      setVerdict((current) => (current.waiting ? NO_VERDICT : current))
       // Apart: the comparison shows while the worker reads the verdict.
       next.getExecutionVerdict(left, right).then(
         (value) => {

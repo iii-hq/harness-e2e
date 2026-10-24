@@ -520,7 +520,10 @@
             "missing": null,
             "more_than": null,
             "note": null
-          }
+          },
+          "warnings": [
+            "16 runs carry no cause (from a report older than causes, or read where causes are not kept) and were classified by the earlier rule: every subject error left the mean, and a failure of the evaluator itself could count as a valid zero."
+          ]
         }
       }
     ],

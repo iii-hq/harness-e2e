@@ -33,21 +33,26 @@
       "b": "se-1.8.50.json",
       "verdict": "cannot_tell",
       "quality": "inconclusive",
-      "cost": "cheaper"
+      "cost": "cheaper",
+      "qualifier": null,
+      "repetitions": {"needed": null, "missing": null, "more_than": 30}
     },
     "regression": {
       "a": "regression-1.8.44.json",
       "b": "regression-1.8.50.json",
       "verdict": "cannot_tell",
       "quality": "inconclusive",
-      "cost": "inconclusive"
+      "cost": "inconclusive",
+      "qualifier": null,
+      "repetitions": {"needed": null, "missing": null, "more_than": 30}
     }
   },
   "calibration": {
-    "note": "Each arm against itself: its counted runs split per test into seeded halves (SplitMix64 from `seed`, one generator over every split), better, worse or quality fell counting as a false signal.",
+    "note": "A version against itself: both arms drawn with replacement, test by test, from one arm's counted runs (the arms in turn; SplitMix64 from `seed`, one generator over every draw, index = next() % runs), `runs_per_arm` runs per test on each; better, worse or a qualifier count as a false signal. Each trial's rule has `permutations` (fewer than the default, to keep the test fast; a permutation p counting the observed round is valid at any count) and seed = the trial's index.",
     "seed": 5,
-    "splits_per_arm": 60,
-    "permutations": 300,
+    "runs_per_arm": [5, 9, 11],
+    "trials_per_size": 480,
+    "permutations": 200,
     "max_false_signal_rate": 0.05
   }
 }

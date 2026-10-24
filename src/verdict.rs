@@ -3,13 +3,15 @@
 //! comparison and the Trends overview read it from here; Release Control
 //! reproduces it from this description and `tests/fixtures/verdict/`.
 //!
-//! Inputs. Counted runs only: those whose `cause` counts (a report older
-//! than causes falls back to `technical == "valid"`, with a warning). A test
-//! is a (`scenario_id`, `behavior_sha256`) both arms ran; any other is
-//! dropped and listed. Within a test the runs are ordered by `attempt_id`
-//! (byte order); tests by `scenario_id`, then `behavior_sha256` (none
-//! first). A figure reads the tests with a value on both sides, and there is
-//! a verdict only when some test has two runs or more on each.
+//! Inputs. Counted runs only: those whose `cause` counts (a run without a
+//! cause falls back to `technical == "valid"`, with a warning). A test is a
+//! (`scenario_id`, `behavior_sha256`) both arms ran; any other is dropped and
+//! listed, one entry per definition. Within a test the runs are ordered by
+//! `attempt_id` (byte order); tests by `scenario_id`, then `behavior_sha256`
+//! (none first). A figure reads the tests with a value on both sides, and
+//! there is a verdict only when some test has two runs or more on each. An
+//! arm that mixes models or stacks, sides that differ in more than the
+//! Harness, and a results.json that does not parse are warnings.
 //!
 //! Figures. Quality is the official run score: the suite figure is the mean
 //! over tests of each test's mean, Δ = (Σ mean_B − Σ mean_A) / K. Cost is
@@ -27,24 +29,37 @@
 //! are A's. A round whose statistic t ≤ observed + 1e-12 counts low, one
 //! with t ≥ observed − 1e-12 counts high; p = (count + 1) / (rounds + 1).
 //!
-//! Tests, each one-sided at α = 0.025. Quality as is: `p_fell` is low.
-//! Quality with B + margin: `p_non_inferior` is high, `p_inferior` low.
-//! Cost as is: `p_cheaper` low, `p_more_expensive` high. Cost with
-//! B / (1 − equivalence): `p_within_low` is high; with B / (1 + equivalence):
-//! `p_within_high` is low.
+//! Tests, each one-sided, α = 0.025. Quality as is: `p_fell` is low,
+//! `p_improved` high. Quality with B + margin: `p_non_inferior` is high,
+//! `p_inferior` low. Cost as is: `p_cheaper` low, `p_more_expensive` high.
+//! Cost with B / (1 − equivalence): `p_within_low` is high; with
+//! B / (1 + equivalence): `p_within_high` is low.
 //!
-//! States. Quality: non-inferior when `p_non_inferior` < α, else inferior
-//! when `p_inferior` < α, else fell when `p_fell` < α, else inconclusive.
-//! Cost: equivalent when both `p_within_*` < α, else cheaper, else more
-//! expensive, else inconclusive. Verdict: better = non-inferior and cheaper;
-//! no difference = non-inferior and equivalent; worse = inferior, or
-//! non-inferior and more expensive; anything else cannot tell, qualified
-//! `quality_fell` when quality fell by an amount the runs cannot bound.
+//! States. Quality: improved when `p_improved` < α, else non-inferior when
+//! `p_non_inferior` < α, else inferior when `p_inferior` < α, else fell when
+//! `p_fell` < α, else inconclusive. Cost: equivalent when both `p_within_*`
+//! < α, else cheaper when `p_cheaper` < α / 2, else more expensive when
+//! `p_more_expensive` < α / 2, else inconclusive. Verdict: worse = inferior,
+//! or more expensive unless improved; better = improved or non-inferior, and
+//! cheaper; no difference = improved or non-inferior, and equivalent;
+//! anything else cannot tell, qualified `trade_off` when quality improved
+//! and cost rose, `quality_fell` when quality fell by an amount the runs
+//! cannot bound. A version against itself reads better, worse or a qualifier
+//! at most about 2α = 5% of the time: quality falls at α (inferior needs a
+//! fall beyond the margin too), cheaper or more expensive at α / 2 each. The
+//! table is monotone: a quality state further up (inferior, fell,
+//! inconclusive, non-inferior, improved) or a cost no longer more expensive
+//! never reads worse.
 //!
-//! Repetitions. When the runs cannot tell, the repetitions per arm the margin
-//! needs at the observed Δ: n = Σ_k 2σ_k² / (K² ((M + Δ) / 2.8)²), σ_k² the
-//! mean of the arms' sample variances of test k (the pooled one where a test
-//! has none); no number when M + Δ ≤ 0, and "more than 30" above 30.
+//! Repetitions. When the runs cannot tell and quality is neither improved
+//! nor non-inferior, the runs per arm that settle the margin at the observed
+//! Δ (non-inferior when M + Δ > 0, inferior below):
+//! n = Σ_k 2s_k² / (K² (|M + Δ| / 2.8)²), s_k² the sample variance of test
+//! k's pool as the margin tests exchange it (A's values and B's plus M). n is
+//! then at least the fewest runs per arm whose smallest p, 1 / Π C(2n, n)
+//! over the tests whose pool is not constant, is below α, and at least one
+//! more than the fewest runs a test has; no number when M + Δ = 0, and "more
+//! than 30" above 30.
 mod criteria;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,7 +85,8 @@ pub struct Rule {
     pub margin: f64,
     /// Relative cost change that counts as no change.
     pub equivalence: f64,
-    /// One-sided, for each test.
+    /// One-sided, for each quality test and the equivalence; each cost
+    /// direction is tested at half of it.
     pub alpha: f64,
     pub permutations: usize,
     pub seed: u64,
@@ -107,13 +123,19 @@ pub struct Run {
     /// False for a provider whose prompt does not match the Harness's count.
     pub cache_comparable: Option<bool>,
     pub criteria: Vec<Points>,
+    /// `provider/model`, from its results document.
+    pub model: Option<String>,
+    /// Each worker's resolved version, `iii` the engine and `lock` the stack
+    /// lock digest, from its results document; empty when not recorded.
+    pub stack: BTreeMap<String, String>,
 }
 
 /// What one criterion awarded in a run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Points {
     pub id: String,
-    pub awarded: f64,
+    /// None when the evaluator did not evaluate it.
+    pub awarded: Option<f64>,
     pub possible: f64,
 }
 
@@ -124,6 +146,26 @@ pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> Vec<Run> {
     let mut seen = BTreeSet::new();
     let mut runs = Vec::new();
     for document in documents {
+        let subject = &document["subject"];
+        let model = subject["provider"]
+            .as_str()
+            .zip(subject["model"].as_str())
+            .map(|(provider, model)| format!("{provider}/{model}"));
+        let system = &document["system_under_test"];
+        let mut stack = system["stack"]["stack_versions"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, version)| Some((name.clone(), version.as_str()?.to_owned())))
+            .collect::<BTreeMap<_, _>>();
+        for (name, value) in [
+            ("iii", &system["engine_version"]),
+            ("lock", &system["stack"]["stack_lock_digest"]),
+        ] {
+            if let Some(value) = value.as_str() {
+                stack.insert(name.to_owned(), value.to_owned());
+            }
+        }
         for scenario in document["scenarios"].as_array().into_iter().flatten() {
             let Some(id) = scenario["scenario_id"].as_str() else {
                 continue;
@@ -136,22 +178,20 @@ pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> Vec<Run> {
                 if !attempt.is_empty() && !seen.insert(attempt.to_owned()) {
                     continue;
                 }
-                runs.push(run_of(
-                    id,
-                    scenario["behavior_sha256"].as_str(),
-                    attempt,
-                    run,
-                ));
+                runs.push(Run {
+                    model: model.clone(),
+                    stack: stack.clone(),
+                    ..run_of(id, scenario["behavior_sha256"].as_str(), attempt, run)
+                });
             }
         }
     }
     runs
 }
 
-/// One arm's runs: a results.json, or every results.json below a directory.
-/// A file that does not parse is skipped, as the root bundle's copies are
-/// counted once.
-pub fn read_arm(path: &std::path::Path) -> anyhow::Result<Vec<Run>> {
+/// One arm's runs: a results.json, or every results.json below a directory,
+/// and a warning for each file that could not be read or parsed (skipped).
+pub fn read_arm(path: &std::path::Path) -> anyhow::Result<(Vec<Run>, Vec<String>)> {
     fn files(path: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
         if path.is_file() {
             out.push(path.to_owned());
@@ -172,15 +212,25 @@ pub fn read_arm(path: &std::path::Path) -> anyhow::Result<Vec<Run>> {
     }
     let mut paths = Vec::new();
     files(path, &mut paths).with_context(|| format!("read {}", path.display()))?;
-    let documents = paths
-        .iter()
-        .filter_map(|path| serde_json::from_slice::<Value>(&std::fs::read(path).ok()?).ok())
-        .collect::<Vec<_>>();
+    let (mut documents, mut skipped) = (Vec::new(), Vec::new());
+    for file in &paths {
+        match std::fs::read(file)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
+        {
+            Ok(document) => documents.push(document),
+            Err(error) => skipped.push(format!("Skipped {}: {error}.", file.display())),
+        }
+    }
     let runs = runs_of(&documents);
     if runs.is_empty() {
-        anyhow::bail!("no run in any results.json at {}", path.display());
+        anyhow::bail!(
+            "no run in any readable results.json at {} ({} skipped)",
+            path.display(),
+            skipped.len()
+        );
     }
-    Ok(runs)
+    Ok((runs, skipped))
 }
 
 fn run_of(scenario: &str, behavior: Option<&str>, attempt: &str, run: &Value) -> Run {
@@ -196,7 +246,7 @@ fn run_of(scenario: &str, behavior: Option<&str>, attempt: &str, run: &Value) ->
         .filter_map(|criterion| {
             Some(Points {
                 id: criterion["id"].as_str()?.to_owned(),
-                awarded: criterion["awarded"].as_f64().unwrap_or(0.0),
+                awarded: criterion["awarded"].as_f64(),
                 possible: criterion["possible"].as_f64()?,
             })
         })
@@ -216,6 +266,7 @@ fn run_of(scenario: &str, behavior: Option<&str>, attempt: &str, run: &Value) ->
         peak_context_tokens: run["efficiency"]["peak_context_tokens"].as_f64(),
         cache_comparable: run["efficiency"]["cache_comparable"].as_bool(),
         criteria,
+        ..Run::default()
     }
 }
 
@@ -249,11 +300,16 @@ pub enum Verdict {
 pub enum Qualifier {
     /// Quality fell, by an amount the runs cannot bound.
     QualityFell,
+    /// Quality improved and the cost rose: the rule does not weigh one
+    /// against the other.
+    TradeOff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QualityState {
+    /// B scores higher than A.
+    Improved,
     /// B loses less than the margin.
     NonInferior,
     /// B loses more than the margin.
@@ -282,6 +338,7 @@ pub struct Quality {
     /// B − A, in points.
     pub delta: f64,
     pub tests: usize,
+    pub p_improved: f64,
     pub p_non_inferior: f64,
     pub p_inferior: f64,
     pub p_fell: f64,
@@ -296,6 +353,7 @@ pub struct Cost {
     /// B / A − 1.
     pub relative: f64,
     pub tests: usize,
+    /// Each against α / 2.
     pub p_cheaper: f64,
     pub p_more_expensive: f64,
     /// Against B costing `equivalence` less or more; both under α is
@@ -322,12 +380,14 @@ pub struct Figure {
 pub struct Repetitions {
     /// The fewest counted runs a compared test has on each side.
     pub have: Sides<usize>,
-    /// Pooled within-test standard deviation of the score, per run.
+    /// Pooled within-test standard deviation of the score, per run: the
+    /// noise, shown; `needed` reads the spread the margin tests exchange.
     pub sigma: Option<f64>,
-    /// Per arm, for the margin at the observed Δ; only when the runs cannot
-    /// tell and a number exists.
+    /// Per arm, to settle the margin at the observed Δ (non-inferior, or
+    /// inferior when Δ is below −margin); only when the runs cannot tell and
+    /// a number exists.
     pub needed: Option<usize>,
-    /// `needed` less the fewest of `have`.
+    /// `needed` less the fewest of `have`, at least 1.
     pub missing: Option<usize>,
     /// Set to the cap when more than it would be needed.
     pub more_than: Option<usize>,
@@ -349,11 +409,14 @@ pub struct TestDelta {
     pub warning: bool,
 }
 
+/// A definition of a test left out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Dropped {
     pub scenario: String,
-    /// `definition_changed`, `only_in_a`, `only_in_b`, `no_counted_run_in_a`
-    /// or `no_counted_run_in_b`.
+    pub behavior: Option<String>,
+    /// `definition_changed` (the other side ran the scenario under another
+    /// definition), `only_in_a`, `only_in_b`, `no_counted_run_in_a` or
+    /// `no_counted_run_in_b`.
     pub reason: String,
 }
 
@@ -401,6 +464,9 @@ pub struct Summary {
     pub quality: Option<Quality>,
     pub cost: Option<Cost>,
     pub repetitions: Repetitions,
+    /// The comparison's warnings, a test that fell more than the margin
+    /// among them.
+    pub warnings: Vec<String>,
 }
 
 impl Comparison {
@@ -414,6 +480,7 @@ impl Comparison {
             quality: self.quality,
             cost: self.cost,
             repetitions: self.repetitions,
+            warnings: self.warnings,
         }
     }
 }
@@ -588,9 +655,12 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
             rule,
         );
         let k = scores.len() as f64;
-        let (p_non_inferior, p_inferior, p_fell) = (shifted.high, shifted.low, fell.low);
+        let (p_improved, p_non_inferior, p_inferior, p_fell) =
+            (fell.high, shifted.high, shifted.low, fell.low);
         Quality {
-            state: if p_non_inferior < rule.alpha {
+            state: if p_improved < rule.alpha {
+                QualityState::Improved
+            } else if p_non_inferior < rule.alpha {
                 QualityState::NonInferior
             } else if p_inferior < rule.alpha {
                 QualityState::Inferior
@@ -603,6 +673,7 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
             b: scores.iter().map(|cell| mean(&cell.b)).sum::<f64>() / k,
             delta: fell.observed,
             tests: scores.len(),
+            p_improved,
             p_non_inferior,
             p_inferior,
             p_fell,
@@ -627,9 +698,9 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
         Cost {
             state: if p_within_low < rule.alpha && p_within_high < rule.alpha {
                 CostState::Equivalent
-            } else if plain.low < rule.alpha {
+            } else if plain.low < rule.alpha / 2.0 {
                 CostState::Cheaper
-            } else if plain.high < rule.alpha {
+            } else if plain.high < rule.alpha / 2.0 {
                 CostState::MoreExpensive
             } else {
                 CostState::Inconclusive
@@ -644,19 +715,18 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
             p_within_high,
         }
     });
-    let verdict = quality.as_ref().map(|quality| {
-        match (quality.state, cost.as_ref().map(|cost| cost.state)) {
-            (QualityState::Inferior, _) => Verdict::Worse,
-            (QualityState::NonInferior, Some(CostState::Cheaper)) => Verdict::Better,
-            (QualityState::NonInferior, Some(CostState::Equivalent)) => Verdict::NoDifference,
-            (QualityState::NonInferior, Some(CostState::MoreExpensive)) => Verdict::Worse,
-            _ => Verdict::CannotTell,
-        }
-    });
-    let qualifier = quality
+    let states = quality
         .as_ref()
-        .filter(|quality| quality.state == QualityState::Fell)
-        .map(|_| Qualifier::QualityFell);
+        .map(|quality| (quality.state, cost.as_ref().map(|cost| cost.state)));
+    let verdict = states.map(|states| verdict_of(states.0, states.1));
+    let qualifier = match (verdict, states) {
+        (Some(Verdict::CannotTell), Some((QualityState::Fell, _))) => Some(Qualifier::QualityFell),
+        (
+            Some(Verdict::CannotTell),
+            Some((QualityState::Improved, Some(CostState::MoreExpensive))),
+        ) => Some(Qualifier::TradeOff),
+        _ => None,
+    };
 
     let tests = scores
         .iter()
@@ -688,11 +758,12 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
     let mut warnings = Vec::new();
     if earlier > 0 {
         warnings.push(format!(
-            "{earlier} runs come from reports older than causes and were classified by the \
-             earlier rule: every subject error left the mean, and a failure of the evaluator \
-             itself could count as a valid zero."
+            "{earlier} runs carry no cause (from a report older than causes, or read where \
+             causes are not kept) and were classified by the earlier rule: every subject error \
+             left the mean, and a failure of the evaluator itself could count as a valid zero."
         ));
     }
+    warnings.extend(configuration_warnings(a, b));
     warnings.extend(tests.iter().filter(|test| test.warning).map(|test| {
         format!(
             "{} fell {:.1} points, more than the {}-point margin (its own p = {:.3}).",
@@ -718,6 +789,31 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
         warnings,
         criteria: criteria::health(a, b, &shared),
     }
+}
+
+/// The verdict table; no cost reads like an inconclusive one.
+fn verdict_of(quality: QualityState, cost: Option<CostState>) -> Verdict {
+    let holds = matches!(quality, QualityState::Improved | QualityState::NonInferior);
+    match (quality, cost) {
+        (QualityState::Inferior, _) => Verdict::Worse,
+        (QualityState::Improved, Some(CostState::MoreExpensive)) => Verdict::CannotTell,
+        (_, Some(CostState::MoreExpensive)) => Verdict::Worse,
+        (_, Some(CostState::Cheaper)) if holds => Verdict::Better,
+        (_, Some(CostState::Equivalent)) if holds => Verdict::NoDifference,
+        _ => Verdict::CannotTell,
+    }
+}
+
+/// The fewest runs per arm, up to one above the cap, whose smallest
+/// permutation p over `tests` tests that vary, 1 / Π C(2n, n), is below α.
+fn fewest_runs(tests: usize, alpha: f64) -> Option<usize> {
+    // ln C(2n, n).
+    let ln_ways = |n: usize| {
+        (1..=n)
+            .map(|i| ((n + i) as f64 / i as f64).ln())
+            .sum::<f64>()
+    };
+    (1..=REPETITIONS_CAP + 1).find(|n| tests as f64 * ln_ways(*n) > (1.0 / alpha).ln())
 }
 
 fn repetitions(
@@ -748,45 +844,132 @@ fn repetitions(
         more_than: None,
         note: None,
     };
-    let (Some(quality), Some(Verdict::CannotTell), Some(pooled)) = (quality, verdict, pooled)
-    else {
+    let (Some(quality), Some(Verdict::CannotTell)) = (quality, verdict) else {
         return repetitions;
     };
-    if quality.state == QualityState::NonInferior {
-        repetitions.note = Some("Quality is already non-inferior: the cost is undecided.".into());
-        return repetitions;
+    match quality.state {
+        QualityState::NonInferior => {
+            repetitions.note =
+                Some("Quality is already non-inferior: the cost is undecided.".into());
+            return repetitions;
+        }
+        QualityState::Improved => {
+            repetitions.note = Some(
+                "Quality improved and the cost rose: more runs do not settle a trade-off.".into(),
+            );
+            return repetitions;
+        }
+        _ => {}
     }
-    let room = rule.margin + quality.delta;
-    if room <= 0.0 {
-        repetitions.note = Some(format!(
-            "No number: the observed drop already reaches the {}-point margin.",
-            rule.margin
-        ));
-        return repetitions;
-    }
-    let k = scores.len() as f64;
-    let spread = scores
+    // The margin tests exchange A's values with B's plus the margin: their
+    // spread, the arms' difference included, is what the runs must beat.
+    let pools = scores
         .iter()
         .map(|cell| {
-            let own = [variance(&cell.a), variance(&cell.b)];
-            let own = own.iter().flatten().collect::<Vec<_>>();
-            if own.is_empty() {
-                pooled
-            } else {
-                own.iter().copied().sum::<f64>() / own.len() as f64
-            }
+            let pool = cell.a.iter().copied();
+            pool.chain(cell.b.iter().map(|v| v + rule.margin))
+                .collect::<Vec<_>>()
         })
-        .map(|variance| 2.0 * variance)
+        .collect::<Vec<_>>();
+    let room = (rule.margin + quality.delta).abs();
+    let k = scores.len() as f64;
+    let spread = pools
+        .iter()
+        .map(|pool| 2.0 * variance(pool).unwrap_or(0.0))
         .sum::<f64>();
+    let varying = pools
+        .iter()
+        .filter(|pool| pool.iter().any(|v| *v != pool[0]))
+        .count();
+    let floor = fewest_runs(varying, rule.alpha).unwrap_or(usize::MAX);
     let n = spread / (k * k * (room / POWER_Z).powi(2));
-    let needed = n.ceil().max(1.0) as usize;
-    if needed > REPETITIONS_CAP {
+    // `as` saturates: a number too large to hold reads "more than".
+    let needed = (n.ceil() as usize).max(floor).max(have.a.min(have.b) + 1);
+    if room <= TIE {
+        repetitions.note = Some(format!(
+            "No number: the observed drop is the {}-point margin itself.",
+            rule.margin
+        ));
+    } else if needed > REPETITIONS_CAP {
         repetitions.more_than = Some(REPETITIONS_CAP);
     } else {
         repetitions.needed = Some(needed);
-        repetitions.missing = Some(needed.saturating_sub(have.a.min(have.b)));
+        repetitions.missing = Some(needed - have.a.min(have.b));
     }
     repetitions
+}
+
+/// An arm that mixes models or stacks, and sides that differ in more than
+/// the Harness.
+fn configuration_warnings(a: &[Run], b: &[Run]) -> Vec<String> {
+    fn models(runs: &[Run]) -> BTreeSet<&str> {
+        runs.iter().filter_map(|run| run.model.as_deref()).collect()
+    }
+    fn stacks(runs: &[Run]) -> Vec<&BTreeMap<String, String>> {
+        let set = runs
+            .iter()
+            .map(|run| &run.stack)
+            .filter(|stack| !stack.is_empty())
+            .collect::<BTreeSet<_>>();
+        set.into_iter().collect()
+    }
+    /// Each entry the stacks do not agree on, with its values in order.
+    fn differences(stacks: &[&BTreeMap<String, String>], skip: &[&str]) -> Vec<String> {
+        let names = stacks
+            .iter()
+            .flat_map(|stack| stack.keys())
+            .filter(|name| !skip.contains(&name.as_str()))
+            .collect::<BTreeSet<_>>();
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let mut values = Vec::new();
+                for stack in stacks {
+                    let value = stack.get(name).map_or("none", String::as_str);
+                    if !values.contains(&value) {
+                        values.push(value);
+                    }
+                }
+                (values.len() > 1).then(|| format!("{name} {}", values.join(" / ")))
+            })
+            .collect()
+    }
+    let mut warnings = Vec::new();
+    for (side, runs) in [("A", a), ("B", b)] {
+        let models = models(runs);
+        if models.len() > 1 {
+            warnings.push(format!(
+                "{side} mixes models: {}.",
+                models.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+        let stacks = stacks(runs);
+        if stacks.len() > 1 {
+            warnings.push(format!(
+                "{side} mixes {} stacks: {}.",
+                stacks.len(),
+                differences(&stacks, &[]).join(", ")
+            ));
+        }
+    }
+    let (models_a, models_b) = (models(a), models(b));
+    if models_a.len() == 1 && models_b.len() == 1 && models_a != models_b {
+        warnings.push(format!(
+            "The sides ran different models (A / B): {} / {}.",
+            models_a.first().unwrap(),
+            models_b.first().unwrap()
+        ));
+    }
+    if let ([stack_a], [stack_b]) = (stacks(a).as_slice(), stacks(b).as_slice()) {
+        let differ = differences(&[stack_a, stack_b], &["harness", "lock"]);
+        if !differ.is_empty() {
+            warnings.push(format!(
+                "The sides' stacks differ in more than the Harness (A / B): {}.",
+                differ.join(", ")
+            ));
+        }
+    }
+    warnings
 }
 
 /// Completion, then the supporting figures, over the tests compared.
@@ -886,28 +1069,35 @@ fn dropped(
         by
     }
     let (in_a, in_b) = (definitions(a), definitions(b));
-    let compared = |scenario: &str| {
-        cells_a
-            .keys()
-            .any(|key| key.0 == scenario && cells_b.contains_key(key))
+    let keys = in_a
+        .iter()
+        .chain(&in_b)
+        .flat_map(|(scenario, behaviors)| {
+            behaviors.iter().map(move |behavior| (*scenario, *behavior))
+        })
+        .collect::<BTreeSet<_>>();
+    let ran = |side: &BTreeMap<&str, BTreeSet<Option<&str>>>,
+               (scenario, behavior): (&str, Option<&str>)| {
+        side.get(scenario)
+            .is_some_and(|behaviors| behaviors.contains(&behavior))
     };
-    in_a.keys()
-        .chain(in_b.keys())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter(|scenario| !compared(scenario))
-        .map(|scenario| {
-            let reason = match (in_a.get(scenario), in_b.get(scenario)) {
-                (Some(left), Some(right)) if left.is_disjoint(right) => "definition_changed",
-                (Some(_), None) => "only_in_a",
-                (None, Some(_)) => "only_in_b",
-                _ if !cells_a.keys().any(|key| key.0 == **scenario) => "no_counted_run_in_a",
-                _ => "no_counted_run_in_b",
+    keys.into_iter()
+        .filter_map(|key| {
+            let owned = (key.0.to_owned(), key.1.map(str::to_owned));
+            let reason = match (ran(&in_a, key), ran(&in_b, key)) {
+                (true, true) if !cells_a.contains_key(&owned) => "no_counted_run_in_a",
+                (true, true) if !cells_b.contains_key(&owned) => "no_counted_run_in_b",
+                (true, true) => return None,
+                (true, false) if in_b.contains_key(key.0) => "definition_changed",
+                (false, true) if in_a.contains_key(key.0) => "definition_changed",
+                (true, false) => "only_in_a",
+                _ => "only_in_b",
             };
-            Dropped {
-                scenario: (*scenario).to_owned(),
+            Some(Dropped {
+                scenario: owned.0,
+                behavior: owned.1,
                 reason: reason.to_owned(),
-            }
+            })
         })
         .collect()
 }
@@ -942,6 +1132,12 @@ fn reasons(quality: Option<&Quality>, cost: Option<&Cost>, rule: &Rule) -> Vec<S
         let (delta, margin) = (q.delta, rule.margin);
         let (within, below) = (p(q.p_non_inferior), p(q.p_inferior));
         reasons.push(match q.state {
+            QualityState::Improved => {
+                format!(
+                    "Quality {delta:+.1} points: improved ({}).",
+                    p(q.p_improved)
+                )
+            }
             QualityState::NonInferior => {
                 format!("Quality {delta:+.1} points: within the {margin}-point margin ({within}).")
             }
@@ -1008,9 +1204,14 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
         (Some(verdict), _) => line(format!(
             "Verdict, {label_b} against {label_a}: {}{}",
             verdict.label(),
-            comparison.qualifier.map_or("", |_| {
-                " (quality fell, by an amount the runs cannot bound)"
-            })
+            match comparison.qualifier {
+                Some(Qualifier::QualityFell) =>
+                    " (quality fell, by an amount the runs cannot bound)",
+                Some(Qualifier::TradeOff) => {
+                    " (quality improved and the cost rose: a trade-off the rule does not weigh)"
+                }
+                None => "",
+            }
         )),
         (None, Some(why)) => line(format!("No calibrated verdict: {why}")),
         (None, None) => {}
@@ -1066,7 +1267,7 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
     match (r.needed, r.missing, r.more_than, &r.note) {
         (Some(needed), Some(missing), _, _) => {
             repetitions += &format!(
-                "; about {needed} per arm would bound the {}-point margin at the observed Δ: {missing} more",
+                "; about {needed} per arm would settle the {}-point margin at the observed Δ: {missing} more",
                 rule.margin
             )
         }
@@ -1095,8 +1296,15 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
     }
     for dropped in &comparison.dropped {
         line(format!(
-            "  {} left out: {}",
+            "  {}{} left out: {}",
             dropped.scenario,
+            dropped
+                .behavior
+                .as_deref()
+                .map_or(String::new(), |behavior| format!(
+                    " ({})",
+                    behavior.get(..15).unwrap_or(behavior)
+                )),
             dropped.reason.replace('_', " ")
         ));
     }
@@ -1118,8 +1326,8 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
     }
     out.push_str(&criteria::text(&comparison.criteria, label_a, label_b));
     out.push_str(&format!(
-        "Rule: permutation tests within each test, one-sided α {} each, margin {} points, cost \
-         within ±{}%, {} permutations, seed {}.\n",
+        "Rule: permutation tests within each test, one-sided α {} each (cheaper or more \
+         expensive at α / 2), margin {} points, cost within ±{}%, {} permutations, seed {}.\n",
         rule.alpha,
         rule.margin,
         rule.equivalence * 100.0,
@@ -1194,95 +1402,105 @@ mod tests {
                 state(expected["cost"].clone()),
                 "{suite}"
             );
-            assert_eq!(comparison.qualifier, None, "{suite}");
-            assert!(comparison
-                .warnings
-                .iter()
-                .all(|w| !w.contains("older than causes")));
-            // How many more repetitions, or why there is no number.
-            let r = &comparison.repetitions;
+            assert_eq!(
+                serde_json::to_value(comparison.qualifier).unwrap(),
+                expected["qualifier"],
+                "{suite}"
+            );
+            // One model, one stack per arm, and only the Harness differs.
             assert!(
-                r.needed.is_some() || r.more_than.is_some() || r.note.is_some(),
+                comparison.warnings.iter().all(|w| !w.contains("no cause")
+                    && !w.contains("mixes")
+                    && !w.contains("differ")),
+                "{suite}: {:?}",
+                comparison.warnings
+            );
+            // How many more repetitions, never none while it cannot tell.
+            let r = &comparison.repetitions;
+            assert_eq!(
+                serde_json::json!({"needed": r.needed, "missing": r.missing, "more_than": r.more_than}),
+                expected["repetitions"],
                 "{suite}"
             );
         }
-        // The port collision is the evaluator's machine: out of the mean.
+        // The run the subject's own stack broke is a counted zero.
         let b = fixture("se-1.8.50.json");
         let se = compare(&fixture("se-1.8.44.json"), &b, &rule);
-        assert_eq!(se.runs.b.causes.get("evaluation_environment"), Some(&1));
-        assert_eq!(se.runs.b.counted, 29);
+        assert_eq!(se.runs.b.causes.get("evaluated"), Some(&30));
+        assert_eq!(se.runs.b.counted, 30);
         let quality = se.quality.as_ref().unwrap();
-        assert!((quality.delta + 3.86).abs() < 0.01, "{}", quality.delta);
-        assert!((se.cost.as_ref().unwrap().relative + 0.198).abs() < 0.001);
+        assert!((quality.delta + 6.99).abs() < 0.01, "{}", quality.delta);
+        assert!(se.cost.as_ref().unwrap().relative < -0.05);
         assert!(se
             .tests
             .iter()
             .any(|test| test.scenario == "kanban_c3_board" && test.warning));
     }
 
-    #[test]
-    fn counted_as_a_valid_zero_the_port_collision_pulls_quality_down() {
-        let mut b = fixture("se-1.8.50.json");
-        for run in &mut b {
-            if run.cause.as_deref() == Some("evaluation_environment") {
-                run.cause = Some("evaluated".into());
-                run.counted = true;
-            }
-        }
-        let comparison = compare(&fixture("se-1.8.44.json"), &b, &Rule::default());
-        let quality = comparison.quality.unwrap();
-        assert!((quality.delta + 6.99).abs() < 0.01, "{}", quality.delta);
-        assert_eq!(comparison.verdict, Some(Verdict::CannotTell));
+    /// Both arms drawn with replacement from one arm's counted runs, test by
+    /// test, `n` runs each: the same version against itself.
+    fn same_version(tests: &[Vec<Run>], n: usize, rng: &mut SplitMix64) -> [Vec<Run>; 2] {
+        ["a", "b"].map(|side| {
+            tests
+                .iter()
+                .flat_map(|runs| {
+                    (0..n)
+                        .map(|i| Run {
+                            attempt_id: format!("{side}{i:02}"),
+                            ..runs[(rng.next_u64() % runs.len() as u64) as usize].clone()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        })
     }
 
     #[test]
-    fn halves_of_one_version_rarely_give_a_false_signal() {
+    fn a_version_against_itself_gives_a_false_signal_in_fewer_than_one_comparison_in_twenty() {
         let calibration = &expected()["calibration"];
-        let splits = calibration["splits_per_arm"].as_u64().unwrap() as usize;
-        let rule = Rule {
-            permutations: calibration["permutations"].as_u64().unwrap() as usize,
-            ..Rule::default()
-        };
-        let mut rng = SplitMix64(calibration["seed"].as_u64().unwrap());
-        let (mut trials, mut false_signals) = (0, 0);
-        for arm in [
+        let number = |key: &str| calibration[key].as_u64().unwrap() as usize;
+        let arms = [
             "se-1.8.44.json",
             "se-1.8.50.json",
             "regression-1.8.44.json",
             "regression-1.8.50.json",
-        ] {
-            let runs = fixture(arm);
-            let mut by = BTreeMap::<&str, Vec<&Run>>::new();
-            for run in runs.iter().filter(|run| run.counted) {
-                by.entry(&run.scenario).or_default().push(run);
+        ]
+        .map(|arm| {
+            let mut by = BTreeMap::<String, Vec<Run>>::new();
+            for run in fixture(arm).into_iter().filter(|run| run.counted) {
+                by.entry(run.scenario.clone()).or_default().push(run);
             }
-            for _ in 0..splits {
-                let (mut one, mut two) = (Vec::new(), Vec::new());
-                for runs in by.values() {
-                    let mut runs = runs.clone();
-                    rng.shuffle(&mut runs);
-                    let half = runs.len() / 2;
-                    one.extend(runs[..half].iter().map(|run| (*run).clone()));
-                    two.extend(runs[half..].iter().map(|run| (*run).clone()));
-                }
-                let comparison = compare(&one, &two, &rule);
-                trials += 1;
+            by.into_values().collect::<Vec<_>>()
+        });
+        let mut rng = SplitMix64(number("seed") as u64);
+        let ceiling = calibration["max_false_signal_rate"].as_f64().unwrap();
+        for n in calibration["runs_per_arm"].as_array().unwrap() {
+            let n = n.as_u64().unwrap() as usize;
+            let trials = number("trials_per_size");
+            let mut false_signals = 0;
+            for trial in 0..trials {
+                let [a, b] = same_version(&arms[trial % arms.len()], n, &mut rng);
+                let rule = Rule {
+                    permutations: number("permutations"),
+                    seed: trial as u64,
+                    ..Rule::default()
+                };
+                let comparison = compare(&a, &b, &rule);
                 false_signals += usize::from(
                     matches!(comparison.verdict, Some(Verdict::Better | Verdict::Worse))
                         || comparison.qualifier.is_some(),
                 );
             }
+            let rate = false_signals as f64 / trials as f64;
+            assert!(
+                rate < ceiling,
+                "{n} runs per arm: {false_signals} of {trials} gave a false signal"
+            );
         }
-        let rate = false_signals as f64 / trials as f64;
-        let ceiling = calibration["max_false_signal_rate"].as_f64().unwrap();
-        assert!(
-            rate < ceiling,
-            "{false_signals} of {trials} splits gave a false signal"
-        );
     }
 
     #[test]
-    fn one_run_per_test_has_no_calibrated_verdict_and_dropped_tests_say_why() {
+    fn one_run_per_test_has_no_calibrated_verdict_and_dropped_definitions_say_why() {
         let run = |attempt: &str, scenario: &str, behavior: &str, score: f64| Run {
             attempt_id: attempt.into(),
             scenario: scenario.into(),
@@ -1304,6 +1522,8 @@ mod tests {
         infra.cause = Some("provider_infrastructure".into());
         let b = [
             run("b1", "t1", "s1", 60.0),
+            // Compared under s1, t1 also ran under another definition on B.
+            run("b5", "t1", "s1b", 50.0),
             run("b2", "t2", "other", 90.0),
             infra,
         ];
@@ -1317,12 +1537,18 @@ mod tests {
             comparison
                 .dropped
                 .iter()
-                .map(|d| (d.scenario.as_str(), d.reason.as_str()))
+                .map(|d| (
+                    d.scenario.as_str(),
+                    d.behavior.as_deref().unwrap(),
+                    d.reason.as_str()
+                ))
                 .collect::<Vec<_>>(),
             [
-                ("t2", "definition_changed"),
-                ("t3", "only_in_a"),
-                ("t4", "only_in_b")
+                ("t1", "s1b", "definition_changed"),
+                ("t2", "other", "definition_changed"),
+                ("t2", "s2", "definition_changed"),
+                ("t3", "s3", "only_in_a"),
+                ("t4", "s4", "only_in_b")
             ]
         );
         assert_eq!(comparison.runs.b.excluded, 1);
@@ -1341,25 +1567,27 @@ mod tests {
         assert!(compare(&older, &older, &Rule::default()).warnings[0].contains("older than causes"));
     }
 
+    /// Three tests, each with these scores and a cost a hair apart per run.
+    fn arm(prefix: &str, scores: [f64; 5], cost: f64) -> Vec<Run> {
+        (0..3)
+            .flat_map(|test| {
+                scores.iter().enumerate().map(move |(i, score)| Run {
+                    attempt_id: format!("{prefix}{test}{i}"),
+                    scenario: format!("t{test}"),
+                    behavior: Some(format!("s{test}")),
+                    cause: Some("evaluated".into()),
+                    counted: true,
+                    score: Some(*score),
+                    completed: true,
+                    cost_usd: Some(cost * (1.0 + i as f64 * 0.001)),
+                    ..Run::default()
+                })
+            })
+            .collect()
+    }
+
     #[test]
     fn clear_changes_read_as_better_no_difference_and_worse() {
-        let arm = |prefix: &str, scores: [f64; 5], cost: f64| {
-            (0..3)
-                .flat_map(|test| {
-                    scores.iter().enumerate().map(move |(i, score)| Run {
-                        attempt_id: format!("{prefix}{test}{i}"),
-                        scenario: format!("t{test}"),
-                        behavior: Some(format!("s{test}")),
-                        cause: Some("evaluated".into()),
-                        counted: true,
-                        score: Some(*score),
-                        completed: true,
-                        cost_usd: Some(cost * (1.0 + i as f64 * 0.001)),
-                        ..Run::default()
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
         let base = arm("a", [90.0, 91.0, 92.0, 90.0, 91.0], 1.0);
         let rule = Rule::default();
         let verdict = |b: Vec<Run>| compare(&base, &b, &rule).verdict;
@@ -1384,12 +1612,201 @@ mod tests {
         assert_eq!(fell.verdict, Some(Verdict::CannotTell));
         assert_eq!(fell.qualifier, Some(Qualifier::QualityFell));
         assert!(fell.repetitions.note.is_some());
-        let unsure = compare(
-            &base,
-            &arm("b", [70.0, 100.0, 80.0, 95.0, 85.0], 1.0),
-            &rule,
-        );
+        // Fallen, or undecided, and more expensive is worse.
+        let fell = compare(&base, &arm("b", [85.0, 86.0, 87.0, 85.0, 86.0], 2.0), &rule);
+        assert_eq!(fell.quality.unwrap().state, QualityState::Fell);
+        assert_eq!((fell.verdict, fell.qualifier), (Some(Verdict::Worse), None));
+        let noisy = [70.0, 100.0, 80.0, 95.0, 85.0];
+        let unsure = compare(&base, &arm("b", noisy, 1.0), &rule);
         assert_eq!(unsure.verdict, Some(Verdict::CannotTell));
         assert!(unsure.repetitions.missing.is_some() || unsure.repetitions.more_than.is_some());
+        assert_eq!(
+            compare(&base, &arm("b", noisy, 2.0), &rule).verdict,
+            Some(Verdict::Worse)
+        );
+        // Clearly higher quality for a higher cost is a trade-off, not worse.
+        let dearer = compare(&base, &arm("b", [96.0, 97.0, 98.0, 96.0, 97.0], 2.0), &rule);
+        assert_eq!(
+            dearer.quality.as_ref().unwrap().state,
+            QualityState::Improved
+        );
+        assert_eq!(
+            (dearer.verdict, dearer.qualifier),
+            (Some(Verdict::CannotTell), Some(Qualifier::TradeOff))
+        );
+        assert!(dearer.repetitions.note.unwrap().contains("trade-off"));
+        assert!(dearer.reasons[0].contains("improved"));
+    }
+
+    #[test]
+    fn raising_b_scores_or_lowering_its_cost_never_reads_worse() {
+        // worse < cannot tell = no difference < better.
+        let rank = |verdict: Option<Verdict>| match verdict.unwrap() {
+            Verdict::Worse => 0,
+            Verdict::CannotTell | Verdict::NoDifference => 1,
+            Verdict::Better => 2,
+        };
+        let quality_rank =
+            |comparison: &Comparison| match comparison.quality.as_ref().unwrap().state {
+                QualityState::Inferior => 0,
+                QualityState::Fell => 1,
+                QualityState::Inconclusive => 2,
+                QualityState::NonInferior => 3,
+                QualityState::Improved => 4,
+            };
+        let mut rng = SplitMix64(11);
+        let mut draw = |low: u64, span: u64| (low + rng.next_u64() % span) as f64;
+        let rule = Rule {
+            permutations: 300,
+            ..Rule::default()
+        };
+        let mut moved = 0;
+        for case in 0..24 {
+            // B a few points behind; half the cases start with B 30% dearer,
+            // so the more expensive row is read.
+            let dearer = if case % 2 == 0 { 30 } else { 0 };
+            let mut runs = |prefix: &str, low: u64, dearer: u64| {
+                (0..3)
+                    .flat_map(|test| (0..5).map(move |i| (test, i)))
+                    .map(|(test, i)| Run {
+                        attempt_id: format!("{prefix}{test}{i}"),
+                        scenario: format!("t{test}"),
+                        cause: Some("evaluated".into()),
+                        counted: true,
+                        score: Some(draw(low, 11)),
+                        cost_usd: Some(draw(95 + dearer, 11) / 100.0),
+                        ..Run::default()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let (a, mut b) = (runs("a", 85, 0), runs("b", 80, dearer));
+            let mut before = compare(&a, &b, &rule);
+            for step in 0..12 {
+                // One test's runs at a time: its scores up, or its cost down.
+                let test = format!("t{}", draw(0, 3));
+                let raise = step % 2 == 0;
+                let (up, cut) = (draw(1, 4), draw(80, 20) / 100.0);
+                for run in b.iter_mut().filter(|run| run.scenario == test) {
+                    if raise {
+                        *run.score.as_mut().unwrap() += up;
+                    } else {
+                        *run.cost_usd.as_mut().unwrap() *= cut;
+                    }
+                }
+                let after = compare(&a, &b, &rule);
+                assert!(
+                    rank(after.verdict) >= rank(before.verdict),
+                    "case {case} step {step}: {:?} then {:?}",
+                    before.reasons,
+                    after.reasons
+                );
+                moved += usize::from(after.verdict != before.verdict);
+                if raise {
+                    assert!(
+                        quality_rank(&after) >= quality_rank(&before),
+                        "case {case} step {step}"
+                    );
+                }
+                before = after;
+            }
+        }
+        // The steps did move verdicts, so the property was put to the test.
+        assert!(moved >= 10, "{moved}");
+    }
+
+    #[test]
+    fn the_repetitions_read_the_spread_the_margin_tests_exchange_and_are_never_zero() {
+        // Nine tests at 100 on both sides and one that falls 100 → 60, cost
+        // −20%: no noise within an arm, yet the permutation test cannot tell
+        // until about 40 runs per arm.
+        let ten = |prefix: &str, n: usize, fallen: f64, cost: f64| {
+            (0..10)
+                .flat_map(|test| (0..n).map(move |i| (test, i)))
+                .map(|(test, i)| Run {
+                    attempt_id: format!("{prefix}{test}{i:02}"),
+                    scenario: format!("t{test}"),
+                    cause: Some("evaluated".into()),
+                    counted: true,
+                    score: Some(if test == 9 { fallen } else { 100.0 }),
+                    cost_usd: Some(cost * (1.0 + i as f64 * 0.001)),
+                    ..Run::default()
+                })
+                .collect::<Vec<_>>()
+        };
+        let rule = Rule {
+            permutations: 2_000,
+            ..Rule::default()
+        };
+        for n in [5, 10, 20] {
+            let comparison = compare(&ten("a", n, 100.0, 1.0), &ten("b", n, 60.0, 0.8), &rule);
+            assert_eq!(comparison.verdict, Some(Verdict::CannotTell), "{n}");
+            let r = &comparison.repetitions;
+            assert_eq!(
+                (r.needed, r.missing, r.more_than),
+                (None, None, Some(30)),
+                "{n}"
+            );
+        }
+        // Beyond the margin, the runs that would show it inferior.
+        let a = [85.0, 95.0, 90.0, 82.0, 98.0];
+        let below = compare(
+            &arm("a", a, 1.0),
+            &arm("b", [87.0, 77.0, 90.0, 82.0, 74.0], 1.0),
+            &Rule::default(),
+        );
+        let quality = below.quality.as_ref().unwrap();
+        assert!(quality.delta < -5.0, "{}", quality.delta);
+        assert_eq!(below.verdict, Some(Verdict::CannotTell));
+        let r = &below.repetitions;
+        assert!(r.note.is_none(), "{:?}", r.note);
+        assert!(r.missing.is_some_and(|missing| missing > 0) || r.more_than.is_some());
+        // No permutation p reaches α = 0.025 below 4 runs per arm with one
+        // test, 3 with two, 2 with three.
+        assert_eq!(
+            [1, 2, 3].map(|tests| fewest_runs(tests, 0.025)),
+            [Some(4), Some(3), Some(2)]
+        );
+    }
+
+    #[test]
+    fn an_arm_that_mixes_models_or_stacks_and_sides_that_differ_beyond_the_harness_warn() {
+        let document = |model: &str, harness: &str, router: &str| {
+            serde_json::json!({
+                "subject": {"provider": "deepseek", "model": model},
+                "system_under_test": {"engine_version": "0.24.6", "stack": {
+                    "stack_versions": {"harness": harness, "llm-router": router},
+                    "stack_lock_digest": format!("sha256:{harness}{router}")}},
+                "scenarios": [{"scenario_id": "t", "behavior_sha256": "sha256:t", "runs": [
+                    {"attempt_id": format!("{model}{harness}{router}"), "cause": "evaluated",
+                     "score": 90, "cost": {"subject_usd": 1.0}}]}]
+            })
+        };
+        let a = runs_of([&document("flash", "1.8.44", "1.4.36")]);
+        let b = runs_of([&document("flash", "1.8.50", "1.4.36")]);
+        assert_eq!(a[0].model.as_deref(), Some("deepseek/flash"));
+        assert_eq!(a[0].stack["iii"], "0.24.6");
+        // Only the Harness differs: nothing to say.
+        assert!(compare(&a, &b, &Rule::default()).warnings.is_empty());
+        let mixed = runs_of([
+            &document("flash", "1.8.50", "1.4.36"),
+            &document("pro", "1.8.50", "1.4.37"),
+        ]);
+        assert_eq!(
+            compare(&a, &mixed, &Rule::default()).warnings,
+            [
+                "B mixes models: deepseek/flash, deepseek/pro.",
+                "B mixes 2 stacks: llm-router 1.4.36 / 1.4.37, lock sha256:1.8.501.4.36 / \
+                 sha256:1.8.501.4.37."
+            ]
+        );
+        let other = runs_of([&document("pro", "1.8.50", "1.4.37")]);
+        assert_eq!(
+            compare(&a, &other, &Rule::default()).warnings,
+            [
+                "The sides ran different models (A / B): deepseek/flash / deepseek/pro.",
+                "The sides' stacks differ in more than the Harness (A / B): llm-router 1.4.36 / \
+                 1.4.37."
+            ]
+        );
     }
 }

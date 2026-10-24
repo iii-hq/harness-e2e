@@ -210,7 +210,7 @@ const verdict = {
     b: { counted: 5, excluded: 0, causes: {} },
   },
   warnings: [],
-  criteria: { min_runs: 10, configurations: [], changes: [] },
+  criteria: { min_runs: 9, configurations: [], changes: [] },
 }
 // At the end fifty older executions join, to load older ones.
 const older = Array.from({ length: 50 }, (_, index) => ({
@@ -508,8 +508,12 @@ try {
   // B still running is followed; a refresh that fails keeps the comparison
   // on screen, its open row included, says so, and clears once one works.
   b.status = 'running'
+  const asked = verdicts.length
   await page.goto(`${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}`)
   await page.locator('[data-comparison-live]').waitFor()
+  // The verdict waits for B to finish instead of permuting on every event.
+  await page.locator('[data-comparison-verdict="waiting"]').waitFor()
+  assert.equal(verdicts.length, asked)
   await page.getByRole('button', { name: 'minimal_path', exact: true }).click()
   const open = page.locator('[data-scenario-detail="minimal_path"]')
   await open.waitFor()

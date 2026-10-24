@@ -1205,6 +1205,7 @@ impl DashboardReadModel {
                     super::trends::TrendRun {
                         test: test.clone(),
                         behavior_sha256: behavior_sha256.clone(),
+                        attempt_id: run.assessment.attempt_id.clone(),
                         // ponytail: a projection written before runs kept their
                         // technical state counts a run by its score (an invalid
                         // run's is dropped): a valid unscored run of one is left

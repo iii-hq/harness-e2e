@@ -184,7 +184,7 @@ class HarnessAbTest(unittest.TestCase):
             text = MODULE.verdict(*arms, "1.8.44", "1.8.50")
             answer = json.loads(MODULE.verdict(*arms, "1.8.44", "1.8.50", as_json=True))
         self.assertIn("Verdict, 1.8.50 against 1.8.44: cannot tell", text)
-        self.assertIn("Cost -19.8%: cheaper", text)
+        self.assertIn("Cost -19.5%: cheaper", text)
         self.assertEqual((answer["verdict"], answer["cost"]["state"]), ("cannot_tell", "cheaper"))
 
     def test_without_the_runner_it_says_there_is_no_verdict(self):

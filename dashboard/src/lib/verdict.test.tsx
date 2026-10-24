@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { VerdictCard } from '@/components/compare/VerdictCard'
 import {
+  changeKey,
   type ExecutionVerdict,
   repetitionsText,
   verdictHeadline,
@@ -26,11 +27,8 @@ const pair: ExecutionVerdict = {
       causes: { evaluated: 29, evaluation_environment: 1 },
     },
   },
-  warnings: [
-    'kanban_c3_board fell 16.0 points, more than the 5-point margin (its own p = 0.220).',
-  ],
   criteria: {
-    min_runs: 10,
+    min_runs: 9,
     configurations: [
       {
         side: 'b',
@@ -48,12 +46,14 @@ const pair: ExecutionVerdict = {
             id: 'criterion_empty',
             full: 3,
             n: 5,
+            not_evaluated: 0,
             rate: 0.6,
             low: 0.23,
             high: 0.88,
             class: 'insufficient_data',
           },
         ],
+        not_evaluated: ['criterion_precision'],
         groups: [{ criteria: ['criterion_empty'], failing: 2, of: 5 }],
       },
     ],
@@ -86,16 +86,25 @@ describe('calibrated verdict', () => {
     expect(verdictHeadline({ ...cannotTell, qualifier: 'quality_fell' })).toBe(
       'Cannot tell yet: quality fell, by an amount the runs cannot bound',
     )
+    const tradeOff = { ...cannotTell, qualifier: 'trade_off' as const }
+    expect(verdictHeadline(tradeOff)).toBe(
+      'Cannot tell yet: quality improved and the cost rose, a trade-off the rule does not weigh',
+    )
     expect(verdictHeadline({ ...cannotTell, verdict: null })).toBe(
       'No calibrated verdict',
     )
     expect(verdictTone({ ...cannotTell, verdict: 'worse' })).toBe('negative')
+    expect(verdictTone({ ...cannotTell, qualifier: 'quality_fell' })).toBe(
+      'negative',
+    )
+    // A trade-off is no fall.
+    expect(verdictTone(tradeOff)).toBe('neutral')
     expect(verdictTone(cannotTell)).toBe('neutral')
   })
 
   it('says how many repetitions are missing, with a ceiling, or why there is no number', () => {
     expect(repetitionsText(cannotTell)).toBe(
-      'At least 4 runs per test on A, 4 on B · σ 9.1 points per run; more than 30 runs per test on each side would be needed to settle the 5-point margin.',
+      'At least 4 runs per test on A, 5 on B · σ 15.3 points per run; more than 30 runs per test on each side would be needed to settle the 5-point margin.',
     )
     const some = {
       ...cannotTell,
@@ -127,15 +136,17 @@ describe('calibrated verdict', () => {
     for (const text of [
       'data-comparison-verdict="cannot_tell"',
       'Cannot tell yet',
-      'Cost -19.8%: cheaper (p &lt; 0.001).',
+      'Cost -19.5%: cheaper (p &lt; 0.001).',
       'more than 30 runs per test',
       'kanban_c3_board fell 16.0 points',
       'criterion_empty, criterion_retry, criterion_total, criterion_settings: short in 0 of 5 runs on A, 2 of 5 on B',
       '−14.0 points',
-      'Criterion health: 1 configuration · 1 with fewer than 10 counted runs: insufficient data.',
-      'Quality within 5 points, cost within ±5%: permutation tests within each test, one-sided α 0.025, 10,000 permutations, seed 0.',
+      'Criterion health: 1 configuration · 1 with fewer than 9 counted runs: insufficient data · 1 criterion no counted run evaluated.',
+      'Over every counted run of both executions',
+      'Quality within 5 points, cost within ±5%: permutation tests within each test, one-sided α 0.025 (cheaper or more expensive at α / 2), 10,000 permutations, seed 0.',
     ])
       expect(html).toContain(text)
+    expect(html).not.toContain('technically valid')
     expect(
       renderToStaticMarkup(
         <VerdictCard load={{ value: null, error: 'execution not found' }} />,
@@ -144,5 +155,19 @@ describe('calibrated verdict', () => {
     expect(
       renderToStaticMarkup(<VerdictCard load={{ value: null, error: null }} />),
     ).toContain('Reading the verdict…')
+    const waiting = renderToStaticMarkup(
+      <VerdictCard load={{ value: null, error: null, waiting: true }} />,
+    )
+    expect(waiting).toContain('data-comparison-verdict="waiting"')
+    expect(waiting).toContain(
+      'The verdict is read once both executions finish.',
+    )
+  })
+
+  it('keys a change by its definition too: a scenario can move under two', () => {
+    const change = pair.criteria.changes[0]
+    expect(changeKey(change)).not.toBe(
+      changeKey({ ...change, behavior: 'sha256:c3-new' }),
+    )
   })
 })

@@ -557,7 +557,15 @@ impl Controller {
             }
         }
         let summaries = self.summaries_of(key, &model).await?;
-        let overview = Arc::new(super::overview::overview(&summaries, &model.trend_runs()));
+        // Each combination's verdict permutes: off the async workers, the
+        // lock held so concurrent readers wait for this one instead of
+        // repeating it.
+        let runs = model.trend_runs();
+        let read = summaries.clone();
+        let overview =
+            tokio::task::spawn_blocking(move || Arc::new(super::overview::overview(&read, &runs)))
+                .await
+                .context("compute the release overview")?;
         #[cfg(test)]
         if self.reads_live_runs_again(&summaries) {
             return Ok(overview);
