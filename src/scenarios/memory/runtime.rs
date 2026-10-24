@@ -26,6 +26,8 @@ const EMBEDDER: &str = "all-MiniLM-L6-v2";
 const POLL: Duration = Duration::from_secs(2);
 const EMBEDDER_WAIT: Duration = Duration::from_secs(300);
 const VECTOR_WAIT: Duration = Duration::from_secs(180);
+/// How long lexical-only must hold before it is believed.
+const LEXICAL_SETTLE: Duration = Duration::from_secs(15);
 
 /// What one attempt holds between `setup` and `cleanup`.
 struct Run {
@@ -93,19 +95,34 @@ pub fn record(sink: &Mutex<Vec<PromptRecord>>, session_id: &str, input: &Value) 
     json!({"decision": "continue"})
 }
 
+/// Whether lexical-only, first answered at `first`, has held long enough: a
+/// stack whose MiniLM is still starting answers lexical-only too.
+pub fn lexical_settled(first: Instant, now: Instant) -> bool {
+    now.duration_since(first) >= LEXICAL_SETTLE
+}
+
 /// A bank that was never created, or is already in the trash.
 pub fn bank_already_gone(error: &str) -> bool {
     error.contains("bank_not_found")
 }
 
 /// Waits until memory ranks with MiniLM or lexical-only, the two modes the
-/// cases are calibrated for, and says which.
+/// suite accepts, and says which. MiniLM is taken at once; lexical-only once
+/// two answers at least `LEXICAL_SETTLE` apart both say so.
 async fn wait_for_embedder(context: &E2eContext) -> Result<Retrieval> {
     let deadline = Instant::now() + EMBEDDER_WAIT;
+    let mut first_lexical = None;
     loop {
         // Memory may not be registered yet; an error is the same as no answer.
         let last = match context.trigger_value("memory::doctor", json!({})).await {
             Ok(doctor) => match embedder(&doctor) {
+                Embedder::Ready(Retrieval::Lexical) => {
+                    let now = Instant::now();
+                    if lexical_settled(*first_lexical.get_or_insert(now), now) {
+                        return Ok(Retrieval::Lexical);
+                    }
+                    doctor.to_string()
+                }
                 Embedder::Ready(retrieval) => return Ok(retrieval),
                 Embedder::Other(detail) => {
                     bail!("memory embeds with {detail}, not MiniLM: an embed key reached the stack")
@@ -355,9 +372,30 @@ mod tests {
             embedder(&doctor(true, true, paid)),
             Embedder::Other(paid.to_string())
         );
-        // No vector while the router is still down says nothing yet.
+        // Memory reports a config that turns embeddings off as ok.
+        let disabled = "embeddings disabled by config; recall is lexical-only";
+        assert_eq!(
+            embedder(&doctor(true, true, disabled)),
+            Embedder::Ready(Retrieval::Lexical)
+        );
+        assert_eq!(
+            embedder(&doctor(true, false, "router::embed timed out")),
+            Embedder::Pending
+        );
+        // No vector while the router or state is still down says nothing yet.
         assert_eq!(embedder(&doctor(false, false, LEXICAL)), Embedder::Pending);
+        let mut state_down = doctor(true, false, LEXICAL);
+        state_down["checks"][2]["ok"] = json!(false);
+        assert_eq!(embedder(&state_down), Embedder::Pending);
         assert_eq!(embedder(&json!({"checks": []})), Embedder::Pending);
+    }
+
+    #[test]
+    fn lexical_is_believed_once_it_holds_for_fifteen_seconds() {
+        let first = Instant::now();
+        assert!(!lexical_settled(first, first));
+        assert!(!lexical_settled(first, first + Duration::from_secs(14)));
+        assert!(lexical_settled(first, first + Duration::from_secs(15)));
     }
 
     #[test]
