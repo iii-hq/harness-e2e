@@ -27,8 +27,15 @@ export type DashboardRoute =
        *  transcript. */
       view?: 'evidence' | 'transcript' | null
     }
-  /** Two executions, A (base) and B. */
-  | { page: 'compare'; left: string | null; right: string | null }
+  /** Executions side by side, in the order chosen. `reference` and
+   *  `compared`, from the hash's params, pick the reference and the one read
+   *  against it in detail; null for the defaults, the first and the next. */
+  | {
+      page: 'compare'
+      executionIds: string[]
+      reference: string | null
+      compared: string | null
+    }
   /** Two evaluated system versions of the test catalog. */
   | { page: 'versions'; left: string | null; right: string | null }
   /** A test's runs; `compare` is two of them, A and B, in the hash's
@@ -167,7 +174,14 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
       runId: null,
     }
   }
-  if (head === 'compare' || head === 'versions') {
+  if (head === 'compare')
+    return {
+      page: 'compare',
+      executionIds: [...new Set(rest)],
+      reference: params.get('reference'),
+      compared: params.get('compared'),
+    }
+  if (head === 'versions') {
     return {
       page: head,
       left: rest[0] ?? null,
@@ -215,12 +229,13 @@ function pairHash(head: string, left: string | null, right: string | null) {
   return right ? `${route}/${encodeSegment(right)}` : route
 }
 
-/** Two executions: A (the base) then B. */
+/** Executions side by side, in the order given: the first is the reference
+ *  unless the hash's params say otherwise. */
 export function hashForComparison(
-  left: string | null = null,
-  right: string | null = null,
+  ...ids: Array<string | null | undefined>
 ): string {
-  return pairHash('compare', left, right)
+  const segments = ids.filter((id): id is string => Boolean(id))
+  return dashboardHash(['compare', ...segments.map(encodeSegment)].join('/'))
 }
 
 /** A run's page opened from a comparison: its link carries the comparison's
@@ -237,9 +252,8 @@ export function comparisonOrigin(rawHash: string): string | null {
   const route = from ? routeFromHash(from) : null
   return from &&
     route?.page === 'compare' &&
-    route.left &&
-    route.right &&
-    from.split('?')[0] === hashForComparison(route.left, route.right)
+    route.executionIds.length >= 2 &&
+    from.split('?')[0] === hashForComparison(...route.executionIds)
     ? from
     : null
 }
@@ -295,7 +309,8 @@ export function hashForTrends(params?: URLSearchParams): string {
 
 export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'execution') return `${route.page}:${route.executionId}`
-  if (route.page === 'compare' || route.page === 'versions') {
+  if (route.page === 'compare') return `compare:${route.executionIds.join(':')}`
+  if (route.page === 'versions') {
     return `${route.page}:${route.left ?? ''}:${route.right ?? ''}`
   }
   if (route.page === 'test-history')
