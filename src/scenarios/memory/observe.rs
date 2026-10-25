@@ -24,6 +24,13 @@ pub struct MemoryBlock {
     pub memory_bytes: usize,
     /// Bytes from "Standing instructions —" up to "</memory>", 0 when the block has none.
     pub reminder_bytes: usize,
+    /// That reminder's text, for the scorer to read; never persisted.
+    #[serde(skip)]
+    pub reminder: String,
+    /// The case labels whose canaries the reminder holds, on the attempt's
+    /// own bank only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reminder_holds: Vec<String>,
 }
 
 /// One turn, read from its step-0 assistant entry.
@@ -165,11 +172,11 @@ fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
             lines.push(strip_date(memory).to_string());
         }
     }
-    let reminder_bytes = text
+    let reminder = text
         .find(&format!("\n{REMINDER_OPEN}"))
         .zip(text.rfind(MEMORY_CLOSE))
         .and_then(|(start, end)| text.get(start + 1..end))
-        .map_or(0, |reminder| reminder.trim_end().len());
+        .map_or("", str::trim_end);
     Some(MemoryBlock {
         bank: bank.to_string(),
         turn_id: turn_id.to_string(),
@@ -177,7 +184,9 @@ fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
         position,
         lines,
         memory_bytes,
-        reminder_bytes,
+        reminder_bytes: reminder.len(),
+        reminder: reminder.to_string(),
+        reminder_holds: Vec::new(),
     })
 }
 
@@ -322,6 +331,7 @@ mod tests {
             "- Fact one. (2026-10-23)".len() + "- Fact two. (2026-10-23)".len()
         );
         assert_eq!(block.reminder_bytes, reminder.trim_end().len());
+        assert_eq!(block.reminder, reminder.trim_end());
     }
 
     #[test]

@@ -308,7 +308,8 @@ rule fit and the two value cases with their baselines, eight cases cover:
 - `memory_sibling_facts`: two services on Postgres 16 both reach the turn that
   asks which services use it.
 - `memory_rule_changed_mid_session`: a rule edited, then removed, arrives as
-  one update each time, and the system prompt never changes.
+  one update each time, the per-turn rules reminder follows it, and the
+  system prompt never changes.
 - `memory_bank_edits_mid_session`: a memory deleted, one superseded, one
   rewritten and one saved between turns reach the next turn as they now stand.
 - `memory_bank_trashed_mid_session`: once the bank is trashed, the next turn

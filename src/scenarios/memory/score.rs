@@ -219,6 +219,21 @@ fn named_bank(text: &str) -> Option<&str> {
 fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapshot) -> Evidence {
     let own = bank(run_id);
     let foreign = |text: &str| named_bank(text).is_some_and(|named| named != own);
+    let case_canaries: BTreeMap<String, String> = labels(case)
+        .into_iter()
+        .map(|label| (label.to_string(), canary(run_id, label)))
+        .collect();
+    // The reminder is the bank's rules: only which canaries an own block's holds is kept.
+    for block in observed.blocks.iter_mut() {
+        let reminder = std::mem::take(&mut block.reminder);
+        if block.bank == own {
+            block.reminder_holds = case_canaries
+                .iter()
+                .filter(|(_, value)| reminder.contains(value.as_str()))
+                .map(|(label, _)| label.clone())
+                .collect();
+        }
+    }
     // The evidence is persisted: a fallback to the user's own bank must not
     // copy their memories or rules into it. Blocks keep their line count.
     for block in observed.blocks.iter_mut().filter(|block| block.bank != own) {
@@ -302,10 +317,7 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
         schema: SCHEMA.to_string(),
         bank: own.clone(),
         retrieval: snapshot.retrieval,
-        canaries: labels(case)
-            .into_iter()
-            .map(|label| (label.to_string(), canary(run_id, label)))
-            .collect(),
+        canaries: case_canaries,
         seeds: distractors.chain(memories).chain(learned).collect(),
         rules: case
             .rules
@@ -611,6 +623,11 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
             holds,
             omits,
         } => update_on(evidence, exchange, holds, omits),
+        Check::ReminderOn {
+            exchange,
+            holds,
+            omits,
+        } => reminder_on(evidence, exchange, holds, omits),
         Check::SectionFrozen => section_frozen(evidence),
         Check::BankGoneFrom { exchange } => bank_gone_from(evidence, exchange),
         Check::Learned { canary } => learned(evidence, canary),
@@ -698,6 +715,46 @@ fn update_on(
         )
     } else {
         (false, problems.join("; "))
+    }
+}
+
+fn reminder_on(
+    evidence: &Evidence,
+    exchange: usize,
+    holds: Option<&str>,
+    omits: &[&str],
+) -> (bool, String) {
+    let Some(turn) = evidence
+        .observed
+        .exchanges
+        .get(exchange)
+        .map(|e| &e.turn_id)
+    else {
+        return (false, format!("exchange {exchange} never answered"));
+    };
+    let held: Vec<&str> = evidence
+        .observed
+        .blocks
+        .iter()
+        .filter(|block| block.bank == evidence.bank && &block.turn_id == turn)
+        .flat_map(|block| block.reminder_holds.iter().map(String::as_str))
+        .collect();
+    let lacking = holds.filter(|label| !held.contains(label));
+    let carried: Vec<&str> = omits
+        .iter()
+        .copied()
+        .filter(|label| held.contains(label))
+        .collect();
+    if lacking.is_none() && carried.is_empty() {
+        (
+            true,
+            format!("exchange {exchange}'s reminder holds {held:?}, as planned"),
+        )
+    } else {
+        (
+            false,
+            format!("exchange {exchange}'s reminder lacks {lacking:?} and holds {carried:?}"),
+        )
     }
 }
 
@@ -1173,6 +1230,8 @@ mod tests {
             position: 10 * index + 1,
             memory_bytes: lines.iter().map(String::len).sum(),
             reminder_bytes: 0,
+            reminder: String::new(),
+            reminder_holds: Vec::new(),
             lines,
         }
     }
@@ -2144,6 +2203,39 @@ mod tests {
         assert_eq!(award(&collapsed, "both_siblings_injected"), Some(0));
     }
 
+    /// A reminder-only block on exchange `index` restating the rule with
+    /// the prefix for `label`.
+    fn reminded(index: usize, label: &str) -> MemoryBlock {
+        MemoryBlock {
+            reminder: format!(
+                "Standing instructions — apply every one to this reply:\nPrefix [{}].",
+                canary(RUN, label)
+            ),
+            ..block(index, vec![])
+        }
+    }
+
+    #[test]
+    fn a_reminder_keeps_only_which_canaries_it_holds() {
+        let case = case_named("memory_rule_changed_mid_session");
+        let mut foreign = reminded(1, "after");
+        foreign.bank = "main".into();
+        let evidence = evidence_of(
+            case,
+            observed(&["a", "b"], vec![reminded(1, "after"), foreign]),
+        );
+        assert_eq!(evidence.observed.blocks[0].reminder_holds, ["after"]);
+        assert!(evidence.observed.blocks[1].reminder_holds.is_empty());
+        // The reminder is the bank's rules: its text never reaches the evidence.
+        assert!(evidence
+            .observed
+            .blocks
+            .iter()
+            .all(|b| b.reminder.is_empty()));
+        let persisted = serde_json::to_string(&evidence).unwrap();
+        assert!(!persisted.contains("Standing instructions"), "{persisted}");
+    }
+
     #[test]
     fn a_rule_edit_and_its_removal_each_arrive_as_one_update() {
         let case = case_named("memory_rule_changed_mid_session");
@@ -2151,11 +2243,13 @@ mod tests {
             "{HEADER}\n## commit-messages\nPrefix [{}].\n",
             canary(RUN, "after")
         );
-        let run = |updates: Vec<RulesUpdate>, answers: &[&str]| {
-            let mut seen = observed(answers, vec![]);
+        let reminders = || vec![reminded(0, "before"), reminded(1, "after")];
+        let run_with = |updates: Vec<RulesUpdate>, answers: &[&str], blocks| {
+            let mut seen = observed(answers, blocks);
             seen.rules_updates = updates;
             evaluate(case, &evidence_with(case, seen, &rules_prompt(case), None))
         };
+        let run = |updates, answers: &[&str]| run_with(updates, answers, reminders());
         let (before, after) = (
             format!("[{}] Fix crash", canary(RUN, "before")),
             format!("[{}] Add toggle", canary(RUN, "after")),
@@ -2166,13 +2260,40 @@ mod tests {
         );
         assert_eq!(delivered.infrastructure_error, None);
         for (id, weight) in [
-            ("edit_sent_as_update", 30),
-            ("removal_sent_as_update", 20),
+            ("edit_sent_as_update", 20),
+            ("removal_sent_as_update", 15),
+            ("edit_reminded", 10),
+            ("removal_reminded", 5),
             ("system_prompt_unchanged", 20),
             ("edited_rule_obeyed", 20),
             ("removed_rule_not_applied", 10),
         ] {
             assert_eq!(award(&delivered, id), Some(weight), "{id}");
+        }
+        // The reminder after the edit still restates the old rule, or is missing.
+        let updates = || vec![update(1, &edited), update(2, HEADER)];
+        let answers = [before.as_str(), after.as_str(), "Bump lodash"];
+        let stale = vec![reminded(0, "before"), reminded(1, "before")];
+        let stale = run_with(updates(), &answers, stale);
+        assert_eq!(award(&stale, "edit_reminded"), Some(0));
+        let both = MemoryBlock {
+            reminder: format!(
+                "{}\n{}",
+                reminded(1, "after").reminder,
+                reminded(1, "before").reminder
+            ),
+            ..block(1, vec![])
+        };
+        let both = run_with(updates(), &answers, vec![reminded(0, "before"), both]);
+        assert_eq!(award(&both, "edit_reminded"), Some(0));
+        let missing = run_with(updates(), &answers, vec![reminded(0, "before")]);
+        assert_eq!(award(&missing, "edit_reminded"), Some(0));
+        // The reminder after the removal still restates either rule.
+        for label in ["after", "before"] {
+            let kept = [reminders(), vec![reminded(2, label)]].concat();
+            let kept = run_with(updates(), &answers, kept);
+            assert_eq!(award(&kept, "removal_reminded"), Some(0), "{label}");
+            assert_eq!(award(&kept, "edit_reminded"), Some(10), "{label}");
         }
         // The removal never arrived: the edit is still the last word.
         let stale = run(

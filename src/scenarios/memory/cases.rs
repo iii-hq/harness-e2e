@@ -93,6 +93,14 @@ pub enum Check {
         holds: Option<&'static str>,
         omits: &'static [&'static str],
     },
+    /// Exchange `exchange`'s per-turn rules reminder, on the attempt's bank,
+    /// holds the canary for `holds` and none of those for `omits` (no
+    /// reminder holds none).
+    ReminderOn {
+        exchange: usize,
+        holds: Option<&'static str>,
+        omits: &'static [&'static str],
+    },
     /// Every exchange's system prompt carries memory's section, equal to
     /// exchange 0's: a rules change arrives as an update, never as an edit.
     SectionFrozen,
@@ -138,7 +146,9 @@ impl Check {
             | Check::Reached { canary, .. }
             | Check::Stored { canary, .. }
             | Check::NowhereContains { canary } => (Some(canary), &[]),
-            Check::UpdateOn { holds, omits, .. } => (holds, omits),
+            Check::UpdateOn { holds, omits, .. } | Check::ReminderOn { holds, omits, .. } => {
+                (holds, omits)
+            }
             _ => (None, &[]),
         };
         first.into_iter().chain(rest.iter().copied())
@@ -1026,7 +1036,7 @@ pub const CASES: [Case; 23] = [
         criteria: &[
             gate(
                 "edit_sent_as_update",
-                30,
+                20,
                 Check::UpdateOn {
                     exchange: 1,
                     holds: Some("after"),
@@ -1036,8 +1046,30 @@ pub const CASES: [Case; 23] = [
                 "Did the edited rule reach the next turn as one update holding the new prefix and not the old one?",
             ),
             gate(
+                "edit_reminded",
+                10,
+                Check::ReminderOn {
+                    exchange: 1,
+                    holds: Some("after"),
+                    omits: &["before"],
+                },
+                "Reminder after the edit restates it",
+                "Did the next turn's rules reminder hold the new prefix and not the old one?",
+            ),
+            gate(
+                "removal_reminded",
+                5,
+                Check::ReminderOn {
+                    exchange: 2,
+                    holds: None,
+                    omits: &["after", "before"],
+                },
+                "Reminder after the removal drops it",
+                "Did the turn after the removal get no reminder holding either prefix?",
+            ),
+            gate(
                 "removal_sent_as_update",
-                20,
+                15,
                 Check::UpdateOn {
                     exchange: 2,
                     holds: None,
