@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context, Result};
 use iii_sdk::protocol::TriggerRequest;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::context::E2eContext;
 
@@ -83,18 +83,12 @@ pub(crate) async fn observe_workers(
         status["namespace"] == namespace,
         "Compose namespace differs from the suite"
     );
-    let ready: Vec<(String, u64)> = status["containers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|container| container["state"] == "ready")
-        .filter_map(|container| {
-            Some((
-                container["container"].as_str()?.to_string(),
-                container["pid"].as_u64()?,
-            ))
-        })
-        .collect();
+    let ready = attestable(
+        status["containers"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    );
     tokio::task::spawn_blocking(move || {
         ready
             .into_iter()
@@ -106,6 +100,29 @@ pub(crate) async fn observe_workers(
     })
     .await
     .context("observe Compose executables")
+}
+
+/// `(name, pid)` of every ready container whose name no other container
+/// shares: two under one name (two projects in the namespace) cannot say
+/// which one ran, so neither is attested.
+fn attestable(containers: &[Value]) -> Vec<(String, u64)> {
+    let named_once = |name: &Value| {
+        containers
+            .iter()
+            .filter(|container| container["container"] == *name)
+            .count()
+            == 1
+    };
+    containers
+        .iter()
+        .filter(|container| container["state"] == "ready" && named_once(&container["container"]))
+        .filter_map(|container| {
+            Some((
+                container["container"].as_str()?.to_string(),
+                container["pid"].as_u64()?,
+            ))
+        })
+        .collect()
 }
 
 fn named(executable: &std::path::Path, worker: &str) -> bool {
@@ -141,9 +158,18 @@ fn capture_compose(supervisor: u64, worker: &str) -> Result<Observation> {
             );
             found.push(captured);
         }
-        let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))?;
-        for child in children.split_whitespace() {
-            pending.push((child.parse()?, Some(pid)));
+        // Children of every thread, not only the main one: a second
+        // process started from another thread must count too.
+        for task in std::fs::read_dir(format!("/proc/{pid}/task"))? {
+            let children = match std::fs::read_to_string(task?.path().join("children")) {
+                Ok(children) => children,
+                // The thread ended between the listing and the read.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for child in children.split_whitespace() {
+                pending.push((child.parse()?, Some(pid)));
+            }
         }
     }
     ensure!(
@@ -243,6 +269,106 @@ mod tests {
             crate::artifact::sha256_bytes(&std::fs::read(&executable).unwrap())
         );
         assert!(capture(u64::from(std::process::id()), "context-manager").is_err());
+    }
+
+    /// Reads a live local stack, nothing else: `compose::status` and procfs.
+    /// `E2E_LIVE_ENGINE=ws://127.0.0.1:49134 E2E_LIVE_NAMESPACE=<ns> cargo test
+    /// --lib live_stack -- --ignored --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs a live local Compose stack"]
+    async fn live_stack_reports_every_attestable_worker() {
+        let url = std::env::var("E2E_LIVE_ENGINE").unwrap();
+        let client = iii_sdk::register_worker(
+            &url,
+            iii_sdk::InitOptions {
+                namespace: std::env::var("E2E_LIVE_NAMESPACE").ok(),
+                ..iii_sdk::InitOptions::default()
+            },
+        );
+        for _ in 0..100 {
+            if client.get_connection_state() == iii_sdk::runtime::IIIConnectionState::Connected {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let context = E2eContext::from_client(client);
+        let workers = observe_workers(&context, &url).await.unwrap();
+        for (worker, observed) in &workers {
+            println!("{worker} pid={} sha256={}", observed.pid, observed.digest);
+        }
+        assert!(!workers.is_empty());
+    }
+
+    #[test]
+    fn a_name_two_containers_share_is_never_attested() {
+        let container = |name: &str, state: &str, pid: u64| json!({"container": name, "state": state, "pid": pid});
+        assert_eq!(
+            attestable(&[
+                container("harness", "ready", 1),
+                container("context-manager", "ready", 2),
+                container("context-manager", "ready", 3),
+                container("llm-router", "failed", 4),
+            ]),
+            vec![("harness".to_string(), 1)]
+        );
+    }
+
+    /// A worker started from a thread other than the supervisor's main one
+    /// is found, and one hidden beside the main thread's worker makes the
+    /// worker unattested.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_worker_started_from_any_thread_counts_and_two_are_never_attested() {
+        let worker = format!("w{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let directory = std::env::temp_dir().join(format!("e2e-threads-{worker}"));
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join(&worker);
+        std::fs::copy("/bin/bash", &executable).unwrap();
+        // A supervisor that starts one worker from a thread that stays alive
+        // (so it stays the child's parent), and with `main` one more from its
+        // main thread.
+        let supervise = |main: bool| {
+            std::process::Command::new("python3")
+                .args([
+                    "-c",
+                    "import subprocess, sys, threading, time\n\
+                     start = lambda: subprocess.Popen([sys.argv[1], '-c', 'sleep 30; :'])\n\
+                     threading.Thread(target=lambda: (start(), time.sleep(30)), daemon=True).start()\n\
+                     if sys.argv[2] == 'main':\n    start()\n\
+                     time.sleep(30)\n",
+                ])
+                .arg(&executable)
+                .arg(if main { "main" } else { "thread" })
+                .spawn()
+                .unwrap()
+        };
+        let observe = |supervisor: &std::process::Child| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                let observed = capture_compose(u64::from(supervisor.id()), &worker);
+                if observed.is_ok() || std::time::Instant::now() > deadline {
+                    break observed;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+        let mut one = supervise(false);
+        let observed = observe(&one).unwrap();
+        assert_ne!(observed.pid, u64::from(one.id()));
+        let mut two = supervise(true);
+        // Give both workers time to start: a refusal must not be a race.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let refused = observe(&two).unwrap_err();
+        assert!(refused.to_string().contains("exactly one"), "{refused:#}");
+        for supervisor in [&mut one, &mut two] {
+            let _ = std::process::Command::new("pkill")
+                .args(["-KILL", "-P", &supervisor.id().to_string()])
+                .status();
+            let _ = supervisor.kill();
+            let _ = supervisor.wait();
+        }
+        std::fs::remove_file(executable).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
