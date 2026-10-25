@@ -251,9 +251,10 @@ pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> (Vec<Run>,
     let mut warnings = Vec::new();
     if !conflicts.is_empty() {
         warnings.push(format!(
-            "{} runs repeat an attempt already read for the same test, with other content; the \
-             first read is kept: {}.",
+            "{} {} an attempt already read for the same test, with other content; the first \
+             read is kept: {}.",
             conflicts.len(),
+            number(conflicts.len(), "run repeats", "runs repeat"),
             listed(&conflicts)
         ));
     }
@@ -902,9 +903,11 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
     let mut warnings = Vec::new();
     if earlier > 0 {
         warnings.push(format!(
-            "{earlier} runs carry no cause (from a report older than causes, or read where \
-             causes are not kept) and were classified by the earlier rule: every subject error \
-             left the mean, and a failure of the evaluator itself could count as a valid zero."
+            "{earlier} {} no cause (from a report older than causes, or read where causes are \
+             not kept) and {} classified by the earlier rule: every subject error left the mean, \
+             and a failure of the evaluator itself could count as a valid zero.",
+            number(earlier, "run carries", "runs carry"),
+            number(earlier, "was", "were")
         ));
     }
     warnings.extend(input_warnings(a, b, &shared));
@@ -932,12 +935,13 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
     warnings.extend(tests.iter().filter(|test| test.warning).map(|test| {
         format!(
             "{} fell {:.1} points, beyond the {}-point margin on its own ({} Holm-adjusted over \
-             {} tests): the verdict cannot read better or no difference.",
+             {} {}): the verdict cannot read better or no difference.",
             test.scenario,
             -test.delta,
             rule.margin,
             p(test.p_inferior_adjusted),
-            tests.len()
+            tests.len(),
+            number(tests.len(), "test", "tests")
         )
     }));
     Comparison {
@@ -1015,6 +1019,15 @@ fn holm(p: &[f64]) -> Vec<f64> {
     adjusted
 }
 
+/// The singular or the plural wording, for `n` of something: "1 run", "2 runs".
+fn number<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
+    if n == 1 {
+        one
+    } else {
+        many
+    }
+}
+
 /// "t0 ×3, t2 ×1": how many of `runs` each test has, and their number.
 fn tally<'a>(runs: impl IntoIterator<Item = &'a Run>) -> (usize, String) {
     let mut by = BTreeMap::<&str, usize>::new();
@@ -1051,7 +1064,9 @@ fn input_warnings(a: &[Run], b: &[Run], shared: &[Key]) -> Vec<String> {
             let (n, names) = tally(compared().filter(|run| leaves(run)));
             if n > 0 {
                 warnings.push(format!(
-                    "{side}: {n} counted runs have {what} and leave the {figure}: {names}."
+                    "{side}: {n} counted {} {what} and {} the {figure}: {names}.",
+                    number(n, "run has", "runs have"),
+                    number(n, "leaves", "leave")
                 ));
             }
         }
@@ -1073,8 +1088,10 @@ fn input_warnings(a: &[Run], b: &[Run], shared: &[Key]) -> Vec<String> {
                 .join(", ");
             let (n, names) = tally(unknown);
             warnings.push(format!(
-                "{side}: {n} runs carry a cause this version does not know ({causes}) and were \
-                 classified by `technical`: {names}."
+                "{side}: {n} {} a cause this version does not know ({causes}) and {} \
+                 classified by `technical`: {names}.",
+                number(n, "run carries", "runs carry"),
+                number(n, "was", "were")
             ));
         }
     }
@@ -2215,6 +2232,43 @@ mod tests {
             .any(|w| w.starts_with("core fell 22.0 points, beyond the 5-point margin")));
     }
 
+    /// A warning about one run or one test says so in the singular.
+    #[test]
+    fn a_warning_about_one_run_says_run() {
+        let rule = Rule {
+            permutations: 200,
+            ..Rule::default()
+        };
+        let side = |prefix: &str, score: f64| {
+            (0..8)
+                .map(|i| run(&format!("{prefix}{i}"), "t", score + f64::from(i), 0.1))
+                .collect::<Vec<_>>()
+        };
+        let mut b = side("b", 60.0);
+        b[0].cause = None;
+        b[1].cost_usd = None;
+        b[2].cause = Some("subject_crashed_new_kind".into());
+        let warnings = compare(&side("a", 90.0), &b, &rule).warnings;
+        for warning in [
+            "1 run carries no cause (from a report older than causes, or read where causes are \
+             not kept) and was classified by the earlier rule",
+            "B: 1 counted run has no subject cost and leaves the cost: t ×1.",
+            "B: 1 run carries a cause this version does not know (subject_crashed_new_kind) and \
+             was classified by `technical`: t ×1.",
+        ] {
+            assert!(
+                warnings.iter().any(|w| w.starts_with(warning)),
+                "{warning}\n{warnings:#?}"
+            );
+        }
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Holm-adjusted over 1 test)")),
+            "{warnings:#?}"
+        );
+    }
+
     /// Up to four tests with uneven runs per side, scores and costs drawn.
     fn uneven(rng: &mut SplitMix64, dearer: f64) -> (Vec<Run>, Vec<Run>) {
         let mut draw = |low: u64, span: u64| (low + rng.next_u64() % span) as f64;
@@ -2420,7 +2474,7 @@ mod tests {
         assert_eq!(
             doubts,
             [
-                "1 runs repeat an attempt already read for the same test, with other content; \
+                "1 run repeats an attempt already read for the same test, with other content; \
                  the first read is kept: t0 a0.",
                 "4 attempt ids appear under more than one test, kept under each: a0 (t0, t1), \
                  a1 (t0, t1), a2 (t0, t1), a3 (t0, t1)."
@@ -2452,8 +2506,8 @@ mod tests {
             "B: 2 counted runs have no numeric score and leave the quality: t0 ×2.",
             "B: 5 counted runs have no subject cost and leave the cost: t0 ×1, t1 ×4.",
             "B: 2 counted runs have a subject cost at or below 0 and leave the cost: t0 ×2.",
-            "B: 1 runs carry a cause this version does not know (subject_crashed_new_kind) and \
-             were classified by `technical`: t1 ×1.",
+            "B: 1 run carries a cause this version does not know (subject_crashed_new_kind) and \
+             was classified by `technical`: t1 ×1.",
             "The cost is read over 1 of the 2 tests, without t1: no subject cost above 0 on a side.",
         ] {
             assert!(comparison.warnings.contains(&warning.to_owned()), "{warning}\n{:#?}", comparison.warnings);

@@ -13,7 +13,7 @@ import { cannotTell } from '@/test-fixtures/release-overview'
 const pair: ExecutionVerdict = {
   ...cannotTell,
   warnings: [
-    'B: 1 counted runs have no subject cost and leave the cost: registry_implementation ×1.',
+    'B: 1 counted run has no subject cost and leaves the cost: registry_implementation ×1.',
   ],
   figures: [],
   tests: [],
@@ -173,7 +173,7 @@ describe('calibrated verdict', () => {
       'Cannot tell yet',
       'Cost -19.5%: cheaper (p &lt; 0.001).',
       'more than 30 runs per test',
-      'B: 1 counted runs have no subject cost and leave the cost',
+      'B: 1 counted run has no subject cost and leaves the cost',
       'criterion_empty, criterion_retry, criterion_total, criterion_settings: short in 0 of 5 runs on A, 2 of 5 on B, −14.0 points',
       'verification.precision: short in 0 of 4 runs on A, 0 of 5 on B, not evaluated in 0 on A and 2 on B, −8.0 points',
       'A: 30 of 30 runs have no stack in their results',

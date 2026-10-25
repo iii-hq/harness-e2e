@@ -186,7 +186,7 @@ const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
-    "Are the source and tests read without error, one file or a batch at a time (a stat probe or a failed batch entry reads nothing), and is the public failure reproduced before the first production edit?",
+    "Are the source, tests and task read without error before the first production edit, one file or a batch at a time (a stat probe or a failed batch entry reads nothing), and is the public failure reproduced before that edit?",
 )
 .labeled("Failure reproduced before the first edit");
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
@@ -762,7 +762,14 @@ impl WorkflowAudit {
         if self.coder_info.is_some() {
             points += 4;
         }
-        if self.source_read.is_some() && self.tests_read.is_some() && self.task_read.is_some() {
+        // A file first read after the edit informed nothing the edit did.
+        let before_edit = |read: Option<usize>| {
+            read.is_some_and(|read| self.first_source_edit.is_none_or(|edit| read < edit))
+        };
+        if before_edit(self.source_read)
+            && before_edit(self.tests_read)
+            && before_edit(self.task_read)
+        {
             points += 8;
         }
         if self.red_before_edit {
@@ -1484,6 +1491,48 @@ pub(crate) mod tests {
                 "details": { "results": entries },
             } },
         ] })
+    }
+
+    /// A file first read after the first production edit informed nothing
+    /// the edit did: the reads earn their points only all before it.
+    #[test]
+    fn reads_after_the_first_edit_are_no_investigation() {
+        let root = PathBuf::from("/tmp/scenario-workspaces/shell-coder-test");
+        let batch = |id: &str, paths: &[&str]| {
+            let entries = vec![json!({ "success": true, "content": "" }); paths.len()];
+            vec![
+                json!({ "message": { "role": "assistant", "content": [{
+                    "type": "function_call", "id": id, "function_id": "coder::read-file",
+                    "arguments": { "paths": paths },
+                }] } }),
+                json!({ "message": {
+                    "role": "function_result", "function_call_id": id,
+                    "function_id": "coder::read-file", "is_error": false,
+                    "details": { "results": entries },
+                } }),
+            ]
+        };
+        let edit = json!({ "message": { "role": "assistant", "content": [{
+            "type": "function_call", "id": "call-edit", "function_id": "coder::update-file",
+            "arguments": { "files": [{ "path": SOURCE_PATH, "ops": [{ "op": "replace" }] }] },
+        }] } });
+        let points = |messages: Vec<Value>| {
+            let observation = ScenarioObservation::for_test(
+                crate::scenarios::ScenarioId::ShellCoderSandbox,
+                "test",
+                json!({ "messages": messages }),
+                "",
+                Vec::new(),
+            );
+            workflow_audit(&observation, &root).investigation_points()
+        };
+        let mut first = batch("early", &[SOURCE_PATH, PUBLIC_TEST_PATH, TASK_PATH]);
+        first.push(edit.clone());
+        assert_eq!(points(first), 8);
+        let mut late = batch("early", &[SOURCE_PATH, TASK_PATH]);
+        late.push(edit);
+        late.extend(batch("late", &[PUBLIC_TEST_PATH]));
+        assert_eq!(points(late), 0);
     }
 
     #[test]

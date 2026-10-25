@@ -56,19 +56,19 @@ const EXACT_MIGRATION_RESULT: AssessmentSpec = AssessmentSpec::gate(
 const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::gate(
     "idempotent_replay",
     20,
-    "Did at least two database::transaction calls that write the run's migration journal succeed, and does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
+    "Did at least two database::transaction calls that write the run's migration journal commit, and does the journal show one complete order-money-v2 entry with replay_count=2 and no duplicates, with exact target and quarantine rows?",
 )
 .labeled("Replaying the migration adds no duplicates");
 const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::gate(
     "source_and_sentinel_preserved",
     25,
-    "Does at least one database::transaction that writes the run's migration journal succeed while the six legacy rows and the sentinel row remain unchanged?",
+    "Does at least one database::transaction that writes the run's migration journal commit while the six legacy rows and the sentinel row remain unchanged?",
 )
 .labeled("Legacy and sentinel rows stay unchanged");
 const TRANSACTION_SCOPE_AND_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "transaction_scope_and_report",
     15,
-    "Were all subject writes limited to two database::transaction calls on prefixed relations, bare or in schema main, with the exact success report returned?",
+    "Were all subject writes limited to two committed database::transaction calls on prefixed relations, bare or in schema main, with the exact success report returned?",
 )
 .labeled("Writes stay in two scoped transactions");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -392,17 +392,13 @@ fn evaluate_observation(observation: &ScenarioObservation, run_id: &str) -> Obje
         .iter()
         .filter(|call| call.function_id == "database::transaction")
         .count();
-    let successful_transactions = writes
-        .iter()
-        .filter(|call| call.function_id == "database::transaction" && call.is_error == Some(false))
-        .count();
+    let successful_transactions = writes.iter().filter(|call| committed(call)).count();
     // Each pass of the migration marks the run's journal: an empty
     // transaction, or one on other tables, replayed and preserved nothing.
     let migration_passes = writes
         .iter()
         .filter(|call| {
-            call.function_id == "database::transaction"
-                && call.is_error == Some(false)
+            committed(call)
                 && write_statements(&call.arguments)
                     .iter()
                     .any(|sql| writes_relation(sql, &relations.journal))
@@ -573,6 +569,19 @@ fn text<'a>(row: &'a Value, column: &str) -> Option<&'a str> {
 
 fn integer(row: &Value, column: &str) -> Option<i64> {
     row.get(column).and_then(Value::as_i64)
+}
+
+/// A `database::transaction` that returned without error and did not answer
+/// `committed: false`: a rolled-back transaction wrote nothing.
+fn committed(call: &common::ObservedFunctionOutcome) -> bool {
+    call.function_id == "database::transaction"
+        && call.is_error == Some(false)
+        && call
+            .details
+            .as_ref()
+            .and_then(|details| details.get("committed"))
+            .and_then(Value::as_bool)
+            != Some(false)
 }
 
 /// An untouched source only counts alongside a migration attempt: a subject
@@ -955,7 +964,10 @@ pub(crate) mod tests {
         record: CapturedDeliverable,
         response: &str,
     ) -> ObjectiveEvaluation {
-        let run_id = "run";
+        evaluation_of_transcript(transcript_of(calls), record, response)
+    }
+
+    fn transcript_of(calls: &[(&str, bool, Vec<String>)]) -> Value {
         let mut messages = Vec::new();
         for (index, (function_id, failed, statements)) in calls.iter().enumerate() {
             let call_id = format!("call-{index}");
@@ -968,14 +980,22 @@ pub(crate) mod tests {
                 "function_id": function_id, "is_error": failed,
             } }));
         }
+        json!({ "messages": messages })
+    }
+
+    fn evaluation_of_transcript(
+        transcript: Value,
+        record: CapturedDeliverable,
+        response: &str,
+    ) -> ObjectiveEvaluation {
         let observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::DatabaseMigrationRecovery,
-            run_id,
-            json!({ "messages": messages }),
+            "run",
+            transcript,
             response,
             vec![record],
         );
-        evaluate_observation(&observation, run_id)
+        evaluate_observation(&observation, "run")
     }
 
     fn completion_of(writes: &[(&str, bool)], sentinel_value: &str) -> CompletionState {
@@ -1108,6 +1128,41 @@ pub(crate) mod tests {
             .filter_map(|award| award.awarded.map(u16::from))
             .sum();
         assert_eq!(total, 100);
+    }
+
+    /// A transaction the database answered `committed: false` rolled back:
+    /// it is no pass of the migration, though no error was raised.
+    #[test]
+    fn a_transaction_that_did_not_commit_is_no_pass() {
+        const TX: &str = "database::transaction";
+        let journal = Relations::new("run").journal;
+        let pass = vec![format!(
+            "UPDATE {journal} SET replay_count = replay_count + 1"
+        )];
+        let mut transcript = transcript_of(&[(TX, false, pass.clone()), (TX, false, pass)]);
+        let points = |transcript: Value| {
+            evaluation_of_transcript(transcript, migrated_record("do-not-touch"), EXPECTED_REPORT)
+                .awards
+                .into_iter()
+                .map(|award| (award.id, award.awarded))
+                .collect::<Vec<_>>()
+        };
+        transcript["messages"][1]["message"]["details"] = json!({ "committed": true });
+        transcript["messages"][3]["message"]["details"] = json!({ "committed": true });
+        let both = points(transcript.clone());
+        assert!(both
+            .iter()
+            .all(|(_, awarded)| awarded.is_some_and(|points| points > 0)));
+        transcript["messages"][3]["message"]["details"] =
+            json!({ "committed": false, "error": "SQLITE_BUSY" });
+        let rolled_back = points(transcript);
+        for (id, awarded) in rolled_back {
+            let expected = [
+                EXACT_MIGRATION_RESULT.id(),
+                SOURCE_AND_SENTINEL_PRESERVED.id(),
+            ];
+            assert_eq!(awarded == Some(0), !expected.contains(&id.as_str()), "{id}");
+        }
     }
 
     #[test]
