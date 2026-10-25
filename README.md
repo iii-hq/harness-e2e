@@ -201,7 +201,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
 | Memory quality | `memory` | What the memory worker injects into a live session, nineteen cases three times each, on the `memory` stack. |
-| Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from automation, four cases three times each, on the `memory` stack. |
+| Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, four cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -348,9 +348,10 @@ included. The measured session then runs as in `memory`:
 - `memory_learn_correction`: a correction of a planted fact is learned; the
   stale fact left out and retired are scored, since they rest on the
   extraction model's wording.
-- `memory_automation_not_learned`: an automation session asking memory to
+- `memory_automation_not_learned`: a non-user session asking memory to
   remember a release command leaves the bank as setup planted it, once
-  extraction has read the session.
+  extraction has read the session. It runs as the runner's own `e2e` kind,
+  which memory treats like `automation` and every other non-user kind.
 
 Extraction calls a model, so these gates move with it: memory pins it with
 `extraction_model` (`deepseek::deepseek-flash` on the `memory` stack), and the

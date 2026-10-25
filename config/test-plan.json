@@ -457,7 +457,7 @@
     {
       "id": "memory-learning",
       "label": "Memory learning",
-      "purpose": "Does memory learn what the user says in a chat, and only from the user? Before the measured session, a teacher session of the user's own kind states a fact, an instruction or a correction; memory's extraction must keep it, and the later session must get it and use it. A deploy key said in passing must never be stored, injected or answered, and an automation session asking memory to remember must teach it nothing. Extraction calls a model, so these gates move with that model, unlike the memory suite's; the fact and instruction cases compare with the memory suite's baselines. Not covered: what a sub-agent teaches, and learning into a bank other than the session's.",
+      "purpose": "Does memory learn what the user says in a chat, and only from the user? Before the measured session, a teacher session of the user's own kind states a fact, an instruction or a correction; memory's extraction must keep it, and the later session must get it and use it. A deploy key said in passing must never be stored, injected or answered, and a non-user (test or automation) session asking memory to remember must teach it nothing. Extraction calls a model, so these gates move with that model, unlike the memory suite's; the fact and instruction cases compare with the memory suite's baselines. Not covered: what a sub-agent teaches, and learning into a bank other than the session's.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",

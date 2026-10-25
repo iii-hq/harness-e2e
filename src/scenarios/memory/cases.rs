@@ -1425,8 +1425,8 @@ pub const CASES: [Case; 23] = [
     },
     Case {
         id: "memory_automation_not_learned",
-        title: "Automation sessions teach memory nothing",
-        summary: "An automation session asks memory to remember a release command, and once memory's extraction has read it the bank holds nothing new.",
+        title: "Non-user sessions teach memory nothing",
+        summary: "A test session (kind \"e2e\", which memory treats like \"automation\" and every other non-user kind) asks memory to remember a release command, and once memory's extraction has read it the bank holds nothing new.",
         protects: "Automation and test sessions never teach memory anything, even when they say \"remember\". If it fails, every scripted run writes its fixtures into the user's memory.",
         baseline: false,
         distractors: false,
@@ -1443,7 +1443,7 @@ pub const CASES: [Case; 23] = [
             "nothing_learned_from_automation",
             100,
             Check::BankUnchanged,
-            "Nothing learned from an automation session",
+            "Nothing learned from a non-user session",
             "Once memory's extraction read the session, did the bank hold no memory and no rule beyond what setup planted?",
         )],
     },
@@ -1968,6 +1968,14 @@ mod tests {
                 "oldregion"
             ]
         );
+    }
+
+    /// The non-user case runs as the runner's own kind, and its card says so.
+    #[test]
+    fn the_non_user_case_names_the_kind_its_session_runs_as() {
+        let case = case_named("memory_automation_not_learned");
+        let kind = format!("\"{}\"", crate::wire::E2E_SESSION_KIND);
+        assert!(case.summary.contains(&kind), "{}", case.summary);
     }
 
     #[test]
