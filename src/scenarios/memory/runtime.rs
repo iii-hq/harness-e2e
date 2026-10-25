@@ -413,6 +413,25 @@ fn teacher_send(run_id: &str, index: usize, message: String) -> SendRequest {
     }
 }
 
+/// The bank memory read on each of the teacher's turns in `transcript`;
+/// every one other than the attempt's is kept for `cleanup` to purge.
+fn record_strays(run_id: &str, transcript: &Value) -> Vec<Option<String>> {
+    let bank = bank(run_id);
+    let read: Vec<Option<String>> = observe(transcript)
+        .exchanges
+        .into_iter()
+        .map(|exchange| exchange.memory_bank)
+        .collect();
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        for stray in read.iter().flatten().filter(|read| **read != bank) {
+            if !run.strays.contains(stray) {
+                run.strays.push(stray.clone());
+            }
+        }
+    }
+    read
+}
+
 /// Sends the case's teacher messages, waits until memory's extraction has
 /// read them, and keeps the bank as it then stands.
 async fn teach(
@@ -423,51 +442,49 @@ async fn teach(
 ) -> Result<()> {
     let session = enroll_teacher(run_id);
     let bank = bank(run_id);
-    for (index, template) in case.teacher.iter().enumerate() {
-        let response: SendResponse = context
-            .trigger(
-                "harness::send",
-                teacher_send(run_id, index, render(template, run_id)),
-            )
-            .await
-            .context("harness::send to the teacher")?;
-        if !response.accepted
-            || response.session_id != session
-            || response.merged == Some(true)
-            || response.queued == Some(true)
-        {
-            bail!("harness::send to the teacher returned an unexpected response: {response:?}");
+    let sent: Result<()> = async {
+        for (index, template) in case.teacher.iter().enumerate() {
+            let response: SendResponse = context
+                .trigger(
+                    "harness::send",
+                    teacher_send(run_id, index, render(template, run_id)),
+                )
+                .await
+                .context("harness::send to the teacher")?;
+            if !response.accepted
+                || response.session_id != session
+                || response.merged == Some(true)
+                || response.queued == Some(true)
+            {
+                bail!("harness::send to the teacher returned an unexpected response: {response:?}");
+            }
+            context
+                .wait_for_turn(
+                    case.id,
+                    &session,
+                    &response.turn_id,
+                    TEACHER_WAIT,
+                    false,
+                    None,
+                )
+                .await
+                .with_context(|| format!("teacher turn {index}"))?;
         }
-        context
-            .wait_for_turn(
-                case.id,
-                &session,
-                &response.turn_id,
-                TEACHER_WAIT,
-                false,
-                None,
-            )
-            .await
-            .with_context(|| format!("teacher turn {index}"))?;
+        Ok(())
     }
+    .await;
+    // Read even when a turn failed: the turns before it may have been read
+    // on another bank, and cleanup purges whatever is recorded here.
     let transcript = context
         .transcript(&session)
         .await
-        .context("the teacher's transcript")?;
-    let read: Vec<Option<String>> = observe(&transcript)
-        .exchanges
-        .into_iter()
-        .map(|exchange| exchange.memory_bank)
-        .collect();
-    let strays: Vec<String> = read
-        .iter()
-        .flatten()
-        .filter(|read| **read != bank)
-        .cloned()
-        .collect();
-    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
-        run.strays = strays;
-    }
+        .context("the teacher's transcript");
+    let read = match &transcript {
+        Ok(transcript) => record_strays(run_id, transcript),
+        Err(_) => Vec::new(),
+    };
+    sent?;
+    let transcript = transcript?;
     // Waited for even when memory read another bank: cleanup then retires
     // what extraction wrote there once it is all in.
     let taught = extraction(context, &session, &bank, &transcript).await?;
@@ -876,6 +893,8 @@ pub async fn cleanup(context: &E2eContext, case: &Case, run_id: &str) -> Result<
                     .context("session::delete")
                     .map(drop)
             }
+            // Only what this attempt's teacher wrote: memories whose source
+            // session is the teacher, and learned lines holding this run's canaries.
             Undo::Purge { bank, session } => purge(context, &bank, &session, &canaries).await,
             Undo::DeleteBank(name) => match context
                 .trigger_value("memory::bank::delete", json!({"name": name}))
@@ -1172,6 +1191,40 @@ mod tests {
         run.strays.clear();
         assert_eq!(undo(Some(&run), run_id), [Undo::DeleteBank(bank(run_id))]);
         assert_eq!(undo(None, run_id), [Undo::DeleteBank(bank(run_id))]);
+    }
+
+    #[test]
+    fn a_teach_failing_on_a_later_turn_leaves_the_earlier_strays_for_cleanup() {
+        let case = CASES.iter().find(|case| case.teacher.len() > 1).unwrap();
+        let run_id = "teacher-strays";
+        register(case, run_id);
+        let session = enroll_teacher(run_id);
+        // Turn 0 was read on `main`; turn 1 then failed, so its transcript
+        // holds turn 0 alone.
+        let turn = |id: &str, bank: &str| {
+            json!({"entry_id": format!("e_{id}_0_assistant"),
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+                   "origin": {"turn_id": id, "memory_bank": bank}})
+        };
+        let read = record_strays(run_id, &json!({"messages": [turn("t_0", "main")]}));
+        assert_eq!(read, [Some("main".to_string())]);
+        // A later read naming the same stray bank and the attempt's adds nothing.
+        record_strays(
+            run_id,
+            &json!({"messages": [turn("t_0", "main"), turn("t_1", &bank(run_id))]}),
+        );
+        let run = lock_unpoisoned(runs()).remove(run_id).unwrap();
+        assert_eq!(
+            undo(Some(&run), run_id),
+            [
+                Undo::DeleteTeacher(session.clone()),
+                Undo::Purge {
+                    bank: "main".into(),
+                    session
+                },
+                Undo::DeleteBank(bank(run_id))
+            ]
+        );
     }
 
     #[test]
