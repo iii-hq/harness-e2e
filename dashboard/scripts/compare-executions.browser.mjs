@@ -200,6 +200,7 @@ const verdict = {
     needed: null,
     missing: null,
     more_than: null,
+    settles: [],
     note: null,
   },
   figures: [],
@@ -210,7 +211,7 @@ const verdict = {
     b: { counted: 5, excluded: 0, causes: {} },
   },
   warnings: [],
-  criteria: { min_runs: 9, configurations: [], changes: [] },
+  criteria: { min_runs: 9, configurations: [], changes: [], warnings: [] },
 }
 // At the end fifty older executions join, to load older ones.
 const older = Array.from({ length: 50 }, (_, index) => ({
@@ -380,8 +381,14 @@ try {
   // The worker's verdict on A and B; cannot tell is never better or worse.
   await page.locator('[data-comparison-verdict="cannot_tell"]').waitFor()
   assert.ok(verdicts.some((asked) => asked.a === a.id && asked.b === b.id))
+  // The rule line names its tests (improved, fell…) whatever the result:
+  // exactly that line is left out of the wording check.
+  const ruleLine =
+    "Over every counted run of both executions, whatever the tests counted below. Quality within 5 points, cost within ±5%: permutation tests within each test, one-sided α 0.025 (improved, fell, cheaper and more expensive at α / 2; each test's fall beyond the margin Holm-adjusted), 10,000 permutations, seed 0."
+  const shown = await page.locator('[data-harness-e2e-dashboard]').innerText()
+  assert.ok(shown.includes(ruleLine))
   assert.doesNotMatch(
-    await page.locator('[data-harness-e2e-dashboard]').innerText(),
+    shown.replace(ruleLine, ''),
     /better|worse|improv|regress|winner/i,
   )
 
