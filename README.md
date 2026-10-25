@@ -362,7 +362,10 @@ infrastructure error. The two value cases share the `memory` suite's
 baselines, whose task is the same. The teacher and extraction run outside the
 subject's session and its cost cap, so each run records `memory_learned`
 (memories and learned rule lines extraction kept) and `memory_extraction_ms`.
-Cleanup deletes the teacher session before it trashes the bank, and when
+That is how long the runner waited for memory's cursor once it had read the
+session, not how long extraction took: memory extracts in the background as a
+turn ends, so it is usually 0, and a nonzero value is extraction still running
+after the runner saw the turn finish. Cleanup deletes the teacher session before it trashes the bank, and when
 memory read another bank on a teacher turn, it retires there what the
 teacher's extraction wrote.
 

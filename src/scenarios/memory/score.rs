@@ -471,6 +471,8 @@ fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
             "memory_learned",
             read.learned().count() + read.learned_lines().count(),
         ));
+        // shortcut: memory reports no pass duration, so this is the runner's
+        // wait past the turn (usually 0); measure the pass once memory reports it.
         measured.push(Measurement {
             id: "memory_extraction_ms".to_string(),
             value: read.waited_ms as f64,
