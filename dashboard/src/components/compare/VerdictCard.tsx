@@ -125,7 +125,11 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
                 <span className="cmp-mono cmp-strong">{change.scenario}</span>{' '}
                 {change.criteria.join(', ')}: short in {change.failing.a} of{' '}
                 {change.runs.a} runs on A, {change.failing.b} of {change.runs.b}{' '}
-                on B, {signed(change.delta)} points
+                on B
+                {change.not_evaluated.a + change.not_evaluated.b > 0
+                  ? `, not evaluated in ${change.not_evaluated.a} on A and ${change.not_evaluated.b} on B`
+                  : null}
+                , {signed(change.delta)} points
               </li>
             ))}
           </ul>
@@ -134,6 +138,12 @@ export function VerdictCard({ load }: { load: VerdictLoad }) {
       <p className="cmp-faint" data-verdict-health>
         {`${health}.`}
       </p>
+      {criteria.warnings.map((warning) => (
+        <p className="cmp-warning" key={warning}>
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>{warning}</span>
+        </p>
+      ))}
       <p className="cmp-faint">
         {`Over every counted run of both executions, whatever the tests counted below. ${ruleText(verdict.rule)}`}
       </p>

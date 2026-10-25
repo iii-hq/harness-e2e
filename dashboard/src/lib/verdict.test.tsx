@@ -12,6 +12,9 @@ import { cannotTell } from '@/test-fixtures/release-overview'
 
 const pair: ExecutionVerdict = {
   ...cannotTell,
+  warnings: [
+    'B: 1 counted runs have no subject cost and leave the cost: registry_implementation ×1.',
+  ],
   figures: [],
   tests: [],
   dropped: [],
@@ -34,6 +37,8 @@ const pair: ExecutionVerdict = {
         side: 'b',
         scenario: 'kanban_c3_board',
         behavior: 'sha256:c3',
+        model: 'deepseek/deepseek-flash',
+        stack: { harness: '1.8.50', iii: '0.24.6' },
         runs: {
           evaluated: 5,
           zeroed: 0,
@@ -68,10 +73,24 @@ const pair: ExecutionVerdict = {
           'criterion_settings',
         ],
         failing: { a: 0, b: 2 },
+        not_evaluated: { a: 0, b: 0 },
         runs: { a: 5, b: 5 },
         points: { a: 35, b: 21 },
         delta: -14,
       },
+      {
+        scenario: 'registry_verification',
+        behavior: 'sha256:rv',
+        criteria: ['verification.precision'],
+        failing: { a: 0, b: 0 },
+        not_evaluated: { a: 0, b: 2 },
+        runs: { a: 4, b: 5 },
+        points: { a: 20, b: 12 },
+        delta: -8,
+      },
+    ],
+    warnings: [
+      'A: 30 of 30 runs have no stack in their results: criterion health cannot tell their configuration apart, nor the comparison whether the side mixes them.',
     ],
   },
 }
@@ -85,6 +104,12 @@ describe('calibrated verdict', () => {
     )
     expect(verdictHeadline({ ...cannotTell, qualifier: 'quality_fell' })).toBe(
       'Cannot tell yet: quality fell, by an amount the runs cannot bound',
+    )
+    expect(verdictHeadline({ ...cannotTell, qualifier: 'test_inferior' })).toBe(
+      'Cannot tell yet: a test fell beyond the margin on its own',
+    )
+    expect(verdictTone({ ...cannotTell, qualifier: 'test_inferior' })).toBe(
+      'negative',
     )
     const tradeOff = { ...cannotTell, qualifier: 'trade_off' as const }
     expect(verdictHeadline(tradeOff)).toBe(
@@ -116,7 +141,17 @@ describe('calibrated verdict', () => {
       },
     }
     expect(repetitionsText(some)).toContain(
-      'about 12 runs per test on each side would settle the 5-point margin: 8 more.',
+      'about 12 runs per test on each side, those made kept, would settle the 5-point margin with a predicted 80%: 8 more.',
+    )
+    const both = {
+      ...some,
+      repetitions: {
+        ...some.repetitions,
+        settles: ['quality' as const, 'cost' as const],
+      },
+    }
+    expect(repetitionsText(both)).toContain(
+      'would settle the 5-point margin and the cost with a predicted 80%',
     )
     const none = {
       ...cannotTell,
@@ -138,12 +173,13 @@ describe('calibrated verdict', () => {
       'Cannot tell yet',
       'Cost -19.5%: cheaper (p &lt; 0.001).',
       'more than 30 runs per test',
-      'kanban_c3_board fell 16.0 points',
-      'criterion_empty, criterion_retry, criterion_total, criterion_settings: short in 0 of 5 runs on A, 2 of 5 on B',
-      '−14.0 points',
+      'B: 1 counted runs have no subject cost and leave the cost',
+      'criterion_empty, criterion_retry, criterion_total, criterion_settings: short in 0 of 5 runs on A, 2 of 5 on B, −14.0 points',
+      'verification.precision: short in 0 of 4 runs on A, 0 of 5 on B, not evaluated in 0 on A and 2 on B, −8.0 points',
+      'A: 30 of 30 runs have no stack in their results',
       'Criterion health: 1 configuration · 1 with fewer than 9 counted runs: insufficient data · 1 criterion no counted run evaluated.',
       'Over every counted run of both executions',
-      'Quality within 5 points, cost within ±5%: permutation tests within each test, one-sided α 0.025 (cheaper or more expensive at α / 2), 10,000 permutations, seed 0.',
+      'Quality within 5 points, cost within ±5%: permutation tests within each test, one-sided α 0.025 (improved, fell, cheaper and more expensive at α / 2; each test&#x27;s fall beyond the margin Holm-adjusted), 10,000 permutations, seed 0.',
     ])
       expect(html).toContain(text)
     expect(html).not.toContain('technically valid')

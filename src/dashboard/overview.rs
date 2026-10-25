@@ -740,19 +740,17 @@ pub(super) mod tests {
         assert!(once.unavailable.unwrap().starts_with("One run per test"));
         let repeated = |score: f64| {
             (0..4)
-                .flat_map(|test| (0..4).map(move |i| scored(&format!("t{test}"), score + i as f64)))
+                .flat_map(|test| (0..8).map(move |i| scored(&format!("t{test}"), score + i as f64)))
                 .collect::<Vec<_>>()
         };
         let dropped = calibrated(repeated(90.0), repeated(60.0));
         assert_eq!(dropped.verdict, Some(crate::verdict::Verdict::Worse));
         // The read model keeps no cause, and the summary carries the warnings.
         assert!(dropped.warnings[0].contains("carry no cause"));
-        assert!(dropped
-            .warnings
-            .iter()
-            .any(|warning| warning.starts_with("t0 fell 30.0 points")));
+        assert!(dropped.warnings.iter().any(|warning| warning
+            .starts_with("t0 fell 30.0 points, beyond the 5-point margin on its own")));
         let quality = dropped.quality.unwrap();
-        assert_eq!((quality.a, quality.b, quality.tests), (91.5, 61.5, 4));
+        assert_eq!((quality.a, quality.b, quality.tests), (93.5, 63.5, 4));
         // Runs are read in attempt order, whatever order the read model holds.
         let noisy = |prefix: &str, scores: [f64; 4]| {
             (0..3)

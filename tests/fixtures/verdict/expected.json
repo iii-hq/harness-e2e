@@ -1,5 +1,5 @@
 {
-  "note": "Golden expectations for src/verdict.rs on the Harness A/B pair 1.8.44 -> 1.8.50 (5 runs per arm, only the Harness changes). States, not p-values: any reproduction of the rule (Release Control) must reach the same states with the default rule and reproduce the PRNG vectors exactly. `first` holds u64 values as decimal strings.",
+  "note": "Golden expectations for src/verdict.rs on the Harness A/B pair 1.8.44 -> 1.8.50 (5 runs per arm, only the Harness changes). States and repetitions, not p-values: any reproduction of the rule (Release Control) must reach the same states with the default rule and reproduce the PRNG vectors exactly. `first` holds u64 values as decimal strings.",
   "rule": {
     "margin": 5,
     "equivalence": 0.05,
@@ -35,7 +35,7 @@
       "quality": "inconclusive",
       "cost": "cheaper",
       "qualifier": null,
-      "repetitions": {"needed": null, "missing": null, "more_than": 30}
+      "repetitions": {"needed": null, "missing": null, "more_than": 30, "settles": ["quality"]}
     },
     "regression": {
       "a": "regression-1.8.44.json",
@@ -44,7 +44,7 @@
       "quality": "inconclusive",
       "cost": "inconclusive",
       "qualifier": null,
-      "repetitions": {"needed": null, "missing": null, "more_than": 30}
+      "repetitions": {"needed": null, "missing": null, "more_than": 30, "settles": ["quality", "cost"]}
     }
   },
   "calibration": {
