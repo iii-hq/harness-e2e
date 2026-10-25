@@ -663,7 +663,7 @@ fn update_on(
     evidence: &Evidence,
     exchange: usize,
     holds: Option<&str>,
-    omits: Option<&str>,
+    omits: &[&str],
 ) -> (bool, String) {
     let Some(updates) = updates_on(evidence, exchange) else {
         return (false, format!("exchange {exchange} never answered"));
@@ -679,7 +679,7 @@ fn update_on(
         );
     };
     let wanted = holds.map(|label| (label, true));
-    let unwanted = omits.map(|label| (label, false));
+    let unwanted = omits.iter().map(|label| (*label, false));
     let mut problems = Vec::new();
     for (label, held) in wanted.into_iter().chain(unwanted) {
         match evidence.canaries.get(label) {
@@ -2181,6 +2181,16 @@ mod tests {
         );
         assert_eq!(award(&stale, "removal_sent_as_update"), Some(0));
         assert_eq!(award(&stale, "removed_rule_not_applied"), Some(0));
+        // The removal brought the original rule back instead.
+        let original = format!(
+            "{HEADER}\n## commit-messages\nPrefix [{}].\n",
+            canary(RUN, "before")
+        );
+        let reverted = run(
+            vec![update(1, &edited), update(2, &original)],
+            &[&before, &after, "Bump lodash"],
+        );
+        assert_eq!(award(&reverted, "removal_sent_as_update"), Some(0));
         let silent = run(vec![], &[&before, &after, "Bump lodash"]);
         assert_eq!(award(&silent, "edit_sent_as_update"), Some(0));
         assert_eq!(award(&silent, "removal_sent_as_update"), Some(0));

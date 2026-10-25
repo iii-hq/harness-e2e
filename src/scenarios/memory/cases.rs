@@ -87,11 +87,11 @@ pub enum Check {
         canary: &'static str,
     },
     /// Exchange `exchange` carries exactly one rules update, holding the
-    /// canary for `holds` and not the one for `omits`.
+    /// canary for `holds` and none of those for `omits`.
     UpdateOn {
         exchange: usize,
         holds: Option<&'static str>,
-        omits: Option<&'static str>,
+        omits: &'static [&'static str],
     },
     /// Every exchange's system prompt carries memory's section, equal to
     /// exchange 0's: a rules change arrives as an update, never as an edit.
@@ -131,17 +131,17 @@ pub enum Check {
 impl Check {
     /// The labels whose canaries the check reads.
     pub fn canaries(self) -> impl Iterator<Item = &'static str> {
-        let (first, second) = match self {
+        let (first, rest): (_, &[&str]) = match self {
             Check::AnswerContains { canary, .. }
             | Check::AnswerOmits { canary, .. }
             | Check::Learned { canary }
             | Check::Reached { canary, .. }
             | Check::Stored { canary, .. }
-            | Check::NowhereContains { canary } => (Some(canary), None),
+            | Check::NowhereContains { canary } => (Some(canary), &[]),
             Check::UpdateOn { holds, omits, .. } => (holds, omits),
-            _ => (None, None),
+            _ => (None, &[]),
         };
-        first.into_iter().chain(second)
+        first.into_iter().chain(rest.iter().copied())
     }
 }
 
@@ -1030,7 +1030,7 @@ pub const CASES: [Case; 23] = [
                 Check::UpdateOn {
                     exchange: 1,
                     holds: Some("after"),
-                    omits: Some("before"),
+                    omits: &["before"],
                 },
                 "Edited rule sent as one update",
                 "Did the edited rule reach the next turn as one update holding the new prefix and not the old one?",
@@ -1041,10 +1041,10 @@ pub const CASES: [Case; 23] = [
                 Check::UpdateOn {
                     exchange: 2,
                     holds: None,
-                    omits: Some("after"),
+                    omits: &["after", "before"],
                 },
                 "Removed rule sent as an update",
-                "Did the removal reach the next turn as one update without the removed prefix?",
+                "Did the removal reach the next turn as one update without the removed prefix or the original one?",
             ),
             // shortcut: memory keeps the rules it told a session in-process, so a
             // memory restart mid-attempt re-renders the section and fails this
@@ -1658,7 +1658,7 @@ pub(crate) const CHANGING: Case = Case {
             Check::UpdateOn {
                 exchange: 1,
                 holds: Some("after"),
-                omits: Some("before"),
+                omits: &["before"],
             },
             "Edited rule sent as one update",
             "Did the edited rule reach the next turn as one update?",
