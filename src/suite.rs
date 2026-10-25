@@ -243,6 +243,10 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    let initial_workers = crate::runtime_artifact::observe_workers(&context, &config.url)
+        .await
+        .inspect_err(|error| tracing::warn!(%error, "worker binary identity is unavailable"))
+        .unwrap_or_default();
     let initial_artifact = crate::runtime_artifact::observe(&context, &config.url)
         .await
         .inspect_err(|error| tracing::warn!(%error, "Harness binary identity is unavailable"))
@@ -489,6 +493,11 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .ok();
     system_under_test.harness_binary_sha256 =
         crate::runtime_artifact::confirmed_digest(initial_artifact, final_artifact);
+    let final_workers = crate::runtime_artifact::observe_workers(&context, &config.url)
+        .await
+        .unwrap_or_default();
+    system_under_test.worker_binaries =
+        crate::runtime_artifact::confirmed_digests(initial_workers, final_workers);
     system_under_test.harness_source = source_build.filter(|source| {
         Some(source.binary_sha256.as_str()) == system_under_test.harness_binary_sha256.as_deref()
     });
@@ -3853,6 +3862,7 @@ mod tests {
             engine_revision: None,
             harness_version: "1.8.0".into(),
             harness_binary_sha256: None,
+            worker_binaries: Default::default(),
             harness_source: None,
             e2e_repository: "iii-hq/harness-e2e".into(),
             e2e_revision: "0".repeat(40),

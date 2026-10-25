@@ -1,4 +1,6 @@
-//! Independent identity of the binary exercised by a local suite.
+//! Independent identity of the binaries exercised by a local suite.
+
+use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context, Result};
 use iii_sdk::protocol::TriggerRequest;
@@ -22,7 +24,35 @@ pub(crate) fn confirmed_digest(
         .map(|same| same.digest)
 }
 
+/// The digest of every worker the two observations agree on: same process,
+/// same start, same executable.
+pub(crate) fn confirmed_digests(
+    before: BTreeMap<String, Observation>,
+    mut after: BTreeMap<String, Observation>,
+) -> BTreeMap<String, String> {
+    before
+        .into_iter()
+        .filter_map(|(worker, first)| {
+            (after.remove(&worker).as_ref() == Some(&first)).then_some((worker, first.digest))
+        })
+        .collect()
+}
+
+/// The running Harness executable.
 pub(crate) async fn observe(context: &E2eContext, engine_url: &str) -> Result<Observation> {
+    observe_workers(context, engine_url)
+        .await?
+        .remove("harness")
+        .context("Compose has no ready Harness process")
+}
+
+/// The running executable of every ready Compose container whose process
+/// tree holds exactly one executable named after the container. Others
+/// (scripts, runtimes, several or none) are left out, never guessed.
+pub(crate) async fn observe_workers(
+    context: &E2eContext,
+    engine_url: &str,
+) -> Result<BTreeMap<String, Observation>> {
     ensure!(
         cfg!(target_os = "linux"),
         "executable capture requires Linux procfs"
@@ -53,21 +83,42 @@ pub(crate) async fn observe(context: &E2eContext, engine_url: &str) -> Result<Ob
         status["namespace"] == namespace,
         "Compose namespace differs from the suite"
     );
-    let pid = status["containers"]
+    let ready: Vec<(String, u64)> = status["containers"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|container| container["container"] == "harness" && container["state"] == "ready")
-        .and_then(|container| container["pid"].as_u64())
-        .context("Compose has no ready Harness process")?;
-    tokio::task::spawn_blocking(move || capture_compose(pid)).await?
+        .filter(|container| container["state"] == "ready")
+        .filter_map(|container| {
+            Some((
+                container["container"].as_str()?.to_string(),
+                container["pid"].as_u64()?,
+            ))
+        })
+        .collect();
+    tokio::task::spawn_blocking(move || {
+        ready
+            .into_iter()
+            .filter_map(|(worker, pid)| {
+                let observed = capture_compose(pid, &worker).ok()?;
+                Some((worker, observed))
+            })
+            .collect()
+    })
+    .await
+    .context("observe Compose executables")
 }
 
-fn capture_compose(supervisor: u64) -> Result<Observation> {
+fn named(executable: &std::path::Path, worker: &str) -> bool {
+    executable
+        .file_name()
+        .is_some_and(|name| name == worker || *name == *format!("{worker} (deleted)"))
+}
+
+fn capture_compose(supervisor: u64, worker: &str) -> Result<Observation> {
     let started = start_ticks(supervisor)?;
     let mut pending = vec![(supervisor, None)];
     let mut seen = std::collections::HashSet::new();
-    let mut harnesses = Vec::new();
+    let mut found = Vec::new();
     while let Some((pid, expected_parent)) = pending.pop() {
         if !seen.insert(pid) {
             continue;
@@ -82,16 +133,13 @@ fn capture_compose(supervisor: u64) -> Result<Observation> {
             "Compose child changed parent during capture"
         );
         let executable = std::fs::read_link(format!("/proc/{pid}/exe"))?;
-        if executable
-            .file_name()
-            .is_some_and(|name| name == "harness" || name == "harness (deleted)")
-        {
-            let captured = capture(pid)?;
+        if named(&executable, worker) {
+            let captured = capture(pid, worker)?;
             ensure!(
                 captured.start_ticks == discovered_start,
-                "Harness PID was reused after discovery"
+                "{worker} PID was reused after discovery"
             );
-            harnesses.push(captured);
+            found.push(captured);
         }
         let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))?;
         for child in children.split_whitespace() {
@@ -99,10 +147,10 @@ fn capture_compose(supervisor: u64) -> Result<Observation> {
         }
     }
     ensure!(
-        harnesses.len() == 1,
-        "Compose must own exactly one Harness executable"
+        found.len() == 1,
+        "Compose must own exactly one {worker} executable"
     );
-    let observation = harnesses.pop().context("Harness was not observed")?;
+    let observation = found.pop().context("the worker was not observed")?;
     let mut ancestor = observation.pid;
     for _ in 0..256 {
         if ancestor == supervisor || ancestor == 0 {
@@ -112,11 +160,11 @@ fn capture_compose(supervisor: u64) -> Result<Observation> {
     }
     ensure!(
         ancestor == supervisor,
-        "Harness left the Compose process tree"
+        "{worker} left the Compose process tree"
     );
     ensure!(
         start_ticks(observation.pid)? == observation.start_ticks,
-        "Harness PID was reused after capture"
+        "{worker} PID was reused after capture"
     );
     ensure!(
         start_ticks(supervisor)? == started,
@@ -147,21 +195,21 @@ fn start_ticks(pid: u64) -> Result<u64> {
     Ok(process_identity(pid)?.1)
 }
 
-fn capture(pid: u64) -> Result<Observation> {
-    ensure!(pid > 0, "Harness PID must be positive");
-    let started = start_ticks(pid).context("identify Harness process")?;
+fn capture(pid: u64, worker: &str) -> Result<Observation> {
+    ensure!(pid > 0, "{worker} PID must be positive");
+    let started = start_ticks(pid).with_context(|| format!("identify {worker} process"))?;
     let path = std::path::PathBuf::from(format!("/proc/{pid}/exe"));
-    let executable = std::fs::read_link(&path).context("resolve Harness executable")?;
+    let executable =
+        std::fs::read_link(&path).with_context(|| format!("resolve {worker} executable"))?;
     ensure!(
-        executable
-            .file_name()
-            .is_some_and(|name| name == "harness" || name == "harness (deleted)"),
-        "Compose PID is not a Harness executable"
+        named(&executable, worker),
+        "Compose PID is not a {worker} executable"
     );
-    let bytes = std::fs::read(&path).context("read running Harness executable")?;
+    let bytes =
+        std::fs::read(&path).with_context(|| format!("read running {worker} executable"))?;
     ensure!(
         start_ticks(pid)? == started,
-        "Harness PID was reused during capture"
+        "{worker} PID was reused during capture"
     );
     Ok(Observation {
         pid,
@@ -176,9 +224,47 @@ mod tests {
 
     #[test]
     fn unrelated_and_missing_processes_never_attest_harness() {
-        assert!(capture(0).is_err());
-        assert!(capture(u64::MAX).is_err());
-        assert!(capture(u64::from(std::process::id())).is_err());
+        assert!(capture(0, "harness").is_err());
+        assert!(capture(u64::MAX, "harness").is_err());
+        assert!(capture(u64::from(std::process::id()), "harness").is_err());
+    }
+
+    #[test]
+    fn any_worker_executable_named_after_its_container_is_attested() {
+        let executable = std::env::current_exe().unwrap();
+        let name = executable
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let own = capture(u64::from(std::process::id()), &name).unwrap();
+        assert_eq!(
+            own.digest,
+            crate::artifact::sha256_bytes(&std::fs::read(&executable).unwrap())
+        );
+        assert!(capture(u64::from(std::process::id()), "context-manager").is_err());
+    }
+
+    #[test]
+    fn only_workers_unchanged_across_the_suite_are_confirmed() {
+        let at = |pid, digest: &str| Observation {
+            pid,
+            start_ticks: 1,
+            digest: digest.into(),
+        };
+        let before = BTreeMap::from([
+            ("harness".to_string(), at(1, "h")),
+            ("context-manager".to_string(), at(2, "c")),
+            ("llm-router".to_string(), at(3, "r")),
+        ]);
+        let after = BTreeMap::from([
+            ("harness".to_string(), at(1, "h")),
+            ("context-manager".to_string(), at(9, "c")),
+        ]);
+        assert_eq!(
+            confirmed_digests(before, after),
+            BTreeMap::from([("harness".to_string(), "h".to_string())])
+        );
     }
 
     #[test]
@@ -228,7 +314,7 @@ mod tests {
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let observed = loop {
-            match capture_compose(u64::from(wrapper.id())) {
+            match capture_compose(u64::from(wrapper.id()), "harness") {
                 Ok(observed) => break observed,
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -237,6 +323,9 @@ mod tests {
             }
         };
         assert_ne!(observed.pid, u64::from(wrapper.id()));
+        // The same tree holds no context-manager: one worker's executable is
+        // never attested as another's.
+        assert!(capture_compose(u64::from(wrapper.id()), "context-manager").is_err());
         assert_eq!(
             observed.digest,
             crate::artifact::sha256_bytes(&std::fs::read(&executable).unwrap())
@@ -276,7 +365,7 @@ mod tests {
             .spawn()
             .unwrap();
         std::fs::remove_file(&executable).unwrap();
-        let captured = capture(u64::from(process.id())).unwrap();
+        let captured = capture(u64::from(process.id()), "harness").unwrap();
         assert_eq!(captured.digest, expected);
         let _ = process.kill();
         process.wait().unwrap();
@@ -286,7 +375,7 @@ mod tests {
             .stdin(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        let after = capture(u64::from(replacement.id())).unwrap();
+        let after = capture(u64::from(replacement.id()), "harness").unwrap();
         let _ = replacement.kill();
         replacement.wait().unwrap();
         std::fs::remove_file(&executable).unwrap();

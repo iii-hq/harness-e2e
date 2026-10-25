@@ -569,6 +569,13 @@
         },
         "stack": {
           "$ref": "#/definitions/StackIdentity"
+        },
+        "worker_binaries": {
+          "description": "Digest of every running worker executable named after its Compose container, by worker, unchanged from the start to the end of the suite. A worker left out could not be observed.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     }
