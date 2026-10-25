@@ -2562,7 +2562,11 @@
         "memory_sibling_facts",
         "memory_rule_changed_mid_session",
         "memory_bank_edits_mid_session",
-        "memory_bank_trashed_mid_session"
+        "memory_bank_trashed_mid_session",
+        "memory_learn_then_recall",
+        "memory_learn_rule_then_obey",
+        "memory_learn_correction",
+        "memory_automation_not_learned"
       ]
     },
     "ScenarioMeasurement": {

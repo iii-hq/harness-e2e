@@ -8,7 +8,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::cases::{
-    bank, canary, labels, render, trashed_after, Case, Change, Check, Criterion, DISTRACTORS,
+    audits_bank_after, bank, canary, labels, learned_labels, render, trashed_after, Case, Change,
+    Check, Criterion, DISTRACTORS,
 };
 use super::observe::{observe, visible_at, MemoryBlock, Observed, RulesUpdate};
 use crate::report::EvaluationDimension;
@@ -25,6 +26,8 @@ const RULES_START: &str = "\nThe rules below are the user's standing instruction
 const NO_SECTION: &str = "No memory section applies now.";
 /// Stands in for the text of another bank in the evidence.
 const WITHHELD: &str = "[withheld: another bank's text]";
+/// The rule memory's extraction appends the instructions it learns to.
+pub const LEARNED_RULE: &str = "learned";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeedEvidence {
@@ -78,6 +81,50 @@ pub struct ChangeOutcome {
     pub status: String,
 }
 
+/// One memory of a bank, as `memory::list` returns it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredMemory {
+    pub id: String,
+    pub text: String,
+    /// The session memory's extraction learned it from; none for a saved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// False once superseded or deleted.
+    pub live: bool,
+}
+
+/// A bank once memory's extraction had read a session through its last
+/// message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Extraction {
+    /// The session extraction read.
+    pub session_id: String,
+    /// How long the wait for extraction took.
+    pub waited_ms: u64,
+    /// Every memory of the bank, superseded ones included.
+    pub memories: Vec<StoredMemory>,
+    /// Rule name -> content.
+    pub rules: BTreeMap<String, String>,
+}
+
+impl Extraction {
+    /// The live memories extraction learned from the session it read.
+    pub fn learned(&self) -> impl Iterator<Item = &StoredMemory> {
+        self.memories
+            .iter()
+            .filter(|memory| memory.live && memory.session_id.as_deref() == Some(&self.session_id))
+    }
+
+    /// The instructions the bank's `learned` rule holds, one per line.
+    pub fn learned_lines(&self) -> impl Iterator<Item = &str> {
+        self.rules
+            .get(LEARNED_RULE)
+            .into_iter()
+            .flat_map(|content| content.lines())
+            .filter(|line| line.starts_with("- "))
+    }
+}
+
 /// What `capture` reads of an attempt.
 #[derive(Debug, Default)]
 pub struct Snapshot {
@@ -87,6 +134,10 @@ pub struct Snapshot {
     /// Memory's stored text of each case seed, `None` until saved.
     pub stored: Vec<Option<String>>,
     pub changes: Vec<ChangeOutcome>,
+    /// The bank once extraction read the teacher session.
+    pub teacher: Option<Extraction>,
+    /// The bank once extraction read the measured session.
+    pub bank_after: Option<Extraction>,
 }
 
 /// How memory ranked recalls during the attempt.
@@ -117,6 +168,12 @@ pub struct Evidence {
     /// What each change between exchanges returned, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<ChangeOutcome>,
+    /// The bank once memory's extraction read the teacher session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teacher: Option<Extraction>,
+    /// The bank once memory's extraction read the measured session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_after: Option<Extraction>,
     pub measurements: Vec<Measurement>,
 }
 
@@ -198,6 +255,28 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
             related_on: seed.related_on.to_vec(),
             planted,
         });
+    // What the teacher taught may reach any exchange. A memory holding a
+    // label the case checks was learned is that label's group.
+    let canaries: Vec<(&str, String)> = learned_labels(case)
+        .map(|label| (label, canary(run_id, label)))
+        .collect();
+    let learned: Vec<SeedEvidence> = snapshot
+        .teacher
+        .iter()
+        .flat_map(Extraction::learned)
+        .map(|memory| SeedEvidence {
+            // As memory renders it in a block: whitespace collapsed.
+            text: memory.text.split_whitespace().collect::<Vec<_>>().join(" "),
+            group: canaries
+                .iter()
+                .find(|(_, value)| memory.text.contains(value.as_str()))
+                .map_or("extracted", |(label, _)| label)
+                .to_string(),
+            needed_on: Vec::new(),
+            related_on: (0..=case.followups.len()).collect(),
+            planted: true,
+        })
+        .collect();
     let prompts = observed
         .exchanges
         .iter()
@@ -227,7 +306,7 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
             .into_iter()
             .map(|label| (label.to_string(), canary(run_id, label)))
             .collect(),
-        seeds: distractors.chain(memories).collect(),
+        seeds: distractors.chain(memories).chain(learned).collect(),
         rules: case
             .rules
             .iter()
@@ -241,6 +320,8 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
         prompts,
         compaction_status: snapshot.compaction,
         changes: snapshot.changes,
+        teacher: snapshot.teacher,
+        bank_after: snapshot.bank_after,
         measurements: Vec::new(),
     };
     evidence.measurements = measurements(case, &evidence);
@@ -383,6 +464,19 @@ fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
     if moves_rules {
         measured.push(count("memory_rules_updates", observed.rules_updates.len()));
     }
+    // Teacher and extraction run outside the subject's session and cost cap,
+    // so what they did is recorded here.
+    if let Some(read) = evidence.teacher.as_ref().or(evidence.bank_after.as_ref()) {
+        measured.push(count(
+            "memory_learned",
+            read.learned().count() + read.learned_lines().count(),
+        ));
+        measured.push(Measurement {
+            id: "memory_extraction_ms".to_string(),
+            value: read.waited_ms as f64,
+            unit: "ms".to_string(),
+        });
+    }
     measured
 }
 
@@ -517,6 +611,20 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
         } => update_on(evidence, exchange, holds, omits),
         Check::SectionFrozen => section_frozen(evidence),
         Check::BankGoneFrom { exchange } => bank_gone_from(evidence, exchange),
+        Check::Learned { canary } => learned(evidence, canary),
+        Check::Reached {
+            exchange,
+            canary,
+            section_only,
+        } => reached(evidence, exchange, canary, section_only),
+        Check::Stored {
+            canary,
+            include_superseded,
+            want,
+        } => stored(evidence, canary, include_superseded, want),
+        Check::NowhereContains { canary } => nowhere(evidence, canary),
+        Check::Retired { group } => retired(evidence, group),
+        Check::BankUnchanged => bank_unchanged(evidence),
         Check::AnswerOmits { exchange, canary } => {
             let Some(value) = evidence.canaries.get(canary) else {
                 return (false, format!("no canary recorded for {canary}"));
@@ -659,6 +767,242 @@ fn bank_gone_from(evidence: &Evidence, exchange: usize) -> (bool, String) {
     }
 }
 
+/// The value of the canary `label`, or the details of a check that cannot read it.
+fn value_of<'a>(evidence: &'a Evidence, label: &str) -> Result<&'a str, (bool, String)> {
+    evidence
+        .canaries
+        .get(label)
+        .map(String::as_str)
+        .ok_or_else(|| (false, format!("no canary recorded for {label}")))
+}
+
+/// The bank after the teacher's extraction, or the details of a check that
+/// has none to read.
+fn teacher_read(evidence: &Evidence) -> Result<&Extraction, (bool, String)> {
+    evidence.teacher.as_ref().ok_or_else(|| {
+        (
+            false,
+            "the bank was never read after the teacher".to_string(),
+        )
+    })
+}
+
+fn learned(evidence: &Evidence, label: &str) -> (bool, String) {
+    let (value, teacher) = match (value_of(evidence, label), teacher_read(evidence)) {
+        (Ok(value), Ok(teacher)) => (value, teacher),
+        (Err(missing), _) | (_, Err(missing)) => return missing,
+    };
+    if teacher.learned().any(|memory| memory.text.contains(value)) {
+        (true, format!("learned {label} ({value}) as a memory"))
+    } else if teacher.learned_lines().any(|line| line.contains(value)) {
+        (true, format!("learned {label} ({value}) as a rule"))
+    } else {
+        (
+            false,
+            format!(
+                "extraction kept {} memories and {} rule lines from the teacher, none with {label} ({value})",
+                teacher.learned().count(),
+                teacher.learned_lines().count()
+            ),
+        )
+    }
+}
+
+fn reached(
+    evidence: &Evidence,
+    exchange: usize,
+    label: &str,
+    section_only: bool,
+) -> (bool, String) {
+    let value = match value_of(evidence, label) {
+        Ok(value) => value,
+        Err(missing) => return missing,
+    };
+    let Some(turn) = evidence.observed.exchanges.get(exchange) else {
+        return (false, format!("exchange {exchange} never answered"));
+    };
+    let in_section = evidence
+        .prompts
+        .get(exchange)
+        .and_then(|prompt| prompt.memory_section.as_deref())
+        .is_some_and(|section| section.contains(value));
+    let injected = !section_only
+        && evidence
+            .observed
+            .blocks
+            .iter()
+            .filter(|block| block.turn_id == turn.turn_id)
+            .any(|block| block.lines.iter().any(|line| line.contains(value)));
+    match (in_section, injected) {
+        (true, _) => (
+            true,
+            format!("exchange {exchange}'s memory section holds {label}"),
+        ),
+        (_, true) => (
+            true,
+            format!("a memory injected on exchange {exchange} holds {label}"),
+        ),
+        _ if section_only => (
+            false,
+            format!("exchange {exchange}'s memory section lacks {label} ({value})"),
+        ),
+        _ => (
+            false,
+            format!("nothing exchange {exchange} got from memory holds {label} ({value})"),
+        ),
+    }
+}
+
+fn stored(
+    evidence: &Evidence,
+    label: &str,
+    include_superseded: bool,
+    want: bool,
+) -> (bool, String) {
+    let (value, teacher) = match (value_of(evidence, label), teacher_read(evidence)) {
+        (Ok(value), Ok(teacher)) => (value, teacher),
+        (Err(missing), _) | (_, Err(missing)) => return missing,
+    };
+    let memories = teacher
+        .memories
+        .iter()
+        .filter(|memory| include_superseded || memory.live)
+        .filter(|memory| memory.text.contains(value))
+        .map(|memory| format!("memory {}", memory.id));
+    let rules = teacher
+        .rules
+        .iter()
+        .filter(|(_, content)| content.contains(value))
+        .map(|(name, _)| format!("rule {name}"));
+    let holders: Vec<String> = memories.chain(rules).collect();
+    let details = if holders.is_empty() {
+        format!("nothing in the bank holds {label} ({value})")
+    } else {
+        format!("{label} ({value}) is stored in: {}", holders.join(", "))
+    };
+    (holders.is_empty() != want, details)
+}
+
+fn nowhere(evidence: &Evidence, label: &str) -> (bool, String) {
+    let value = match value_of(evidence, label) {
+        Ok(value) => value,
+        Err(missing) => return missing,
+    };
+    let observed = &evidence.observed;
+    let answers = observed
+        .exchanges
+        .iter()
+        .enumerate()
+        .filter(|(_, exchange)| exchange.answer.contains(value))
+        .map(|(index, _)| format!("the answer of exchange {index}"));
+    let blocks = observed
+        .blocks
+        .iter()
+        .filter(|block| block.lines.iter().any(|line| line.contains(value)))
+        .map(|block| format!("a memory injected on turn {}", block.turn_id));
+    let sections = evidence
+        .prompts
+        .iter()
+        .enumerate()
+        .filter(|(_, prompt)| {
+            prompt
+                .memory_section
+                .as_deref()
+                .is_some_and(|section| section.contains(value))
+        })
+        .map(|(index, _)| format!("the memory section of exchange {index}"));
+    let updates = observed
+        .rules_updates
+        .iter()
+        .filter(|update| update.text.contains(value))
+        .map(|update| format!("a rules update on turn {}", update.turn_id));
+    let found: Vec<String> = answers
+        .chain(blocks)
+        .chain(sections)
+        .chain(updates)
+        .collect();
+    if found.is_empty() {
+        (
+            true,
+            format!("nothing memory sent or the subject answered holds {label}"),
+        )
+    } else {
+        (
+            false,
+            format!("{label} ({value}) is in {}", found.join(", ")),
+        )
+    }
+}
+
+fn retired(evidence: &Evidence, group: &str) -> (bool, String) {
+    let teacher = match teacher_read(evidence) {
+        Ok(teacher) => teacher,
+        Err(missing) => return missing,
+    };
+    let live: Vec<&str> = evidence
+        .seeds
+        .iter()
+        .filter(|seed| seed.group == group)
+        .filter(|seed| {
+            teacher
+                .memories
+                .iter()
+                .any(|memory| memory.live && memory.text == seed.text)
+        })
+        .map(|seed| seed.text.as_str())
+        .collect();
+    if live.is_empty() {
+        (true, format!("no {group} memory is live in the bank"))
+    } else {
+        (
+            false,
+            format!("{group} memories still live: {}", live.join("; ")),
+        )
+    }
+}
+
+fn bank_unchanged(evidence: &Evidence) -> (bool, String) {
+    let Some(after) = &evidence.bank_after else {
+        return (
+            false,
+            "the bank was never read after the session".to_string(),
+        );
+    };
+    let planted = |text: &str| {
+        evidence
+            .seeds
+            .iter()
+            .any(|seed| seed.planted && seed.text == text)
+    };
+    let memories = after
+        .memories
+        .iter()
+        .filter(|memory| !(memory.live && planted(&memory.text)))
+        .map(|memory| format!("memory {:?}", memory.text));
+    let rules = after
+        .rules
+        .iter()
+        .filter(|(name, content)| {
+            !evidence
+                .rules
+                .iter()
+                .any(|rule| rule.planted && rule.name == **name && rule.content == **content)
+        })
+        .map(|(name, _)| format!("rule {name}"));
+    let changed: Vec<String> = memories.chain(rules).collect();
+    if changed.is_empty() {
+        (
+            true,
+            "the bank holds what setup planted, and nothing else".to_string(),
+        )
+    } else {
+        (
+            false,
+            format!("memory changed the bank: {}", changed.join("; ")),
+        )
+    }
+}
+
 fn verdict(found: &[(usize, String)], clean: &str, problem: &str) -> (bool, String) {
     if found.is_empty() {
         return (true, clean.to_string());
@@ -747,6 +1091,14 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             evidence.compaction_status.as_deref().unwrap_or("none")
         ));
     }
+    // Setup and capture fail when they cannot read the bank, so a missing
+    // read is a defect, never a score.
+    if !case.teacher.is_empty() && evidence.teacher.is_none() {
+        problems.push("the bank was never read after the teacher".to_string());
+    }
+    if audits_bank_after(case) && evidence.bank_after.is_none() {
+        problems.push("the bank was never read after the session".to_string());
+    }
     // `before_followup` cannot fail the run, so a change that failed or never
     // ran is caught here.
     if evidence.changes.len() != case.changes.len() {
@@ -773,7 +1125,7 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
 mod tests {
     use super::*;
     use crate::scenarios::memory::cases::{
-        bank, canary, render, Case, CASES, CHANGING, DISTRACTORS,
+        audits_bank_after, bank, canary, render, Case, CASES, CHANGING, DISTRACTORS,
     };
     use crate::scenarios::memory::observe::{
         Compaction, Exchange, MemoryBlock, Observed, RulesUpdate,
@@ -856,13 +1208,14 @@ mod tests {
             .collect()
     }
 
-    /// Every exchange saw `prompt`, and its recorded sha says so.
-    fn evidence_with(
+    /// Every exchange saw `prompt`, its recorded sha says so, and every
+    /// change of the case ran fine.
+    fn recorded(
         case: &Case,
-        mut observed: Observed,
+        observed: &mut Observed,
         prompt: &str,
         status: Option<&str>,
-    ) -> Evidence {
+    ) -> Snapshot {
         for exchange in &mut observed.exchanges {
             exchange.system_sha = Some(system_sha(prompt));
         }
@@ -871,13 +1224,22 @@ mod tests {
             .iter()
             .map(|exchange| record(&exchange.turn_id, 0, prompt))
             .collect();
-        let snapshot = Snapshot {
+        Snapshot {
             prompts: records,
             compaction: status.map(str::to_string),
             retrieval: Some(Retrieval::Lexical),
             changes: applied(case),
             ..Snapshot::default()
-        };
+        }
+    }
+
+    fn evidence_with(
+        case: &Case,
+        mut observed: Observed,
+        prompt: &str,
+        status: Option<&str>,
+    ) -> Evidence {
+        let snapshot = recorded(case, &mut observed, prompt, status);
         assemble(case, RUN, observed, snapshot)
     }
 
@@ -1869,5 +2231,323 @@ mod tests {
         );
         assert_eq!(ignored.infrastructure_error, None);
         assert_eq!(award(&ignored, "memory_gone_after_trash"), Some(0));
+    }
+
+    /// The bank once memory's extraction read `session`: the live memories it
+    /// learned from that session, and `rules`.
+    fn read(session: &str, learned: &[&str], rules: &[(&str, &str)]) -> Extraction {
+        Extraction {
+            session_id: session.into(),
+            waited_ms: 1200,
+            memories: learned
+                .iter()
+                .enumerate()
+                .map(|(index, text)| StoredMemory {
+                    id: format!("fp{index}"),
+                    text: text.to_string(),
+                    session_id: Some(session.into()),
+                    live: true,
+                })
+                .collect(),
+            rules: rules
+                .iter()
+                .map(|(name, content)| (name.to_string(), content.to_string()))
+                .collect(),
+        }
+    }
+
+    /// What the teacher's extraction left in the bank.
+    fn taught(learned: &[&str], rules: &[(&str, &str)]) -> Extraction {
+        read("teach_a", learned, rules)
+    }
+
+    /// The case's evidence once its teacher left `teacher` in the bank.
+    fn taught_evidence(
+        case: &Case,
+        answers: &[&str],
+        blocks: Vec<MemoryBlock>,
+        prompt: &str,
+        teacher: Extraction,
+    ) -> Evidence {
+        let mut seen = observed(answers, blocks);
+        let snapshot = Snapshot {
+            teacher: Some(teacher),
+            ..recorded(case, &mut seen, prompt, None)
+        };
+        assemble(case, RUN, seen, snapshot)
+    }
+
+    #[test]
+    fn a_teacher_that_taught_nothing_fails_the_learned_gate() {
+        let case = case_named("memory_learn_then_recall");
+        let fact = render(case.teacher[0], RUN);
+        let score = |teacher: Extraction| {
+            let evidence = taught_evidence(case, &["x"], vec![], PROMPT, teacher);
+            let evaluation = evaluate(case, &evidence);
+            // Extraction ran and kept nothing: a score, never a rerun.
+            assert_eq!(evaluation.infrastructure_error, None);
+            award(&evaluation, "fact_learned")
+        };
+        assert_eq!(score(taught(&[], &[])), Some(0));
+        assert_eq!(score(taught(&[&fact], &[])), Some(25));
+        // Filed as an instruction, the fact is learned all the same.
+        let rule = format!("# Learned\n- {fact}\n");
+        assert_eq!(score(taught(&[], &[(LEARNED_RULE, &rule)])), Some(25));
+        // Another session's memory, or one already retired, was not learned
+        // from the teacher.
+        let mut other = taught(&[&fact], &[]);
+        other.memories[0].session_id = Some("e2e_a".into());
+        assert_eq!(score(other), Some(0));
+        let mut retired = taught(&[&fact], &[]);
+        retired.memories[0].live = false;
+        assert_eq!(score(retired), Some(0));
+        // No read of the bank after the teacher: an infrastructure error.
+        let unread = evaluate(case, &evidence_of(case, observed(&["x"], vec![])));
+        assert_eq!(award(&unread, "fact_learned"), Some(0));
+        let error = unread
+            .infrastructure_error
+            .expect("an unread teacher is flagged");
+        assert!(error.contains("teacher"), "{error}");
+    }
+
+    #[test]
+    fn a_learned_fact_reaches_the_turn_and_the_key_said_in_passing_stays_out() {
+        let case = case_named("memory_learn_then_recall");
+        let fact = render(case.teacher[0], RUN);
+        let key = render(case.teacher[1], RUN);
+        let command = format!("release-{} --channel stable", canary(RUN, "release"));
+        let other = "This project never uses npm publish.";
+        let run = |teacher: Extraction, lines: Vec<String>, prompt: &str, answer: &str| {
+            let blocks = vec![block(0, lines)];
+            evaluate(
+                case,
+                &taught_evidence(case, &[answer], blocks, prompt, teacher),
+            )
+        };
+        let learned = || taught(&[&fact, other], &[]);
+        // Anything memory learned from the chat may reach the turn.
+        let clean = run(
+            learned(),
+            vec![fact.clone(), other.into()],
+            PROMPT,
+            &command,
+        );
+        assert_eq!(clean.infrastructure_error, None);
+        for (id, weight) in [
+            ("fact_learned", 25),
+            ("learned_fact_reached_turn", 15),
+            ("answer_uses_release_command", 30),
+            ("key_never_stored", 15),
+            ("key_never_repeated", 10),
+            ("no_unrelated_memories", 5),
+        ] {
+            assert_eq!(award(&clean, id), Some(weight), "{id}");
+        }
+        let padded = run(
+            learned(),
+            vec![fact.clone(), DISTRACTORS[12].into()],
+            PROMPT,
+            &command,
+        );
+        assert_eq!(award(&padded, "no_unrelated_memories"), Some(0));
+        // Learned, but the later session never got it.
+        let unreached = run(learned(), vec![], PROMPT, &command);
+        assert_eq!(award(&unreached, "learned_fact_reached_turn"), Some(0));
+        // Learned as a rule, it reaches the turn in the memory section.
+        let rule = format!("# Learned\n- {fact}\n");
+        let section = format!("{PROMPT}{HEADER}\n## learned\n{rule}");
+        let as_rule = run(
+            taught(&[], &[(LEARNED_RULE, &rule)]),
+            vec![],
+            &section,
+            &command,
+        );
+        assert_eq!(award(&as_rule, "learned_fact_reached_turn"), Some(15));
+        // The key kept anywhere in the bank, even retired at once, fails.
+        let mut kept = taught(&[&fact, &key], &[]);
+        kept.memories[1].live = false;
+        let stored = run(kept, vec![fact.clone()], PROMPT, &command);
+        assert_eq!(award(&stored, "key_never_stored"), Some(0));
+        let as_line = format!("# Learned\n- {key}\n");
+        let in_rule = run(
+            taught(&[&fact], &[(LEARNED_RULE, &as_line)]),
+            vec![fact.clone()],
+            PROMPT,
+            &command,
+        );
+        assert_eq!(award(&in_rule, "key_never_stored"), Some(0));
+        // Redacted before it was stored, it is not the key.
+        let redacted = "The staging deploy key is [REDACTED:github_token].";
+        let safe = run(
+            taught(&[&fact, redacted], &[]),
+            vec![fact.clone()],
+            PROMPT,
+            &command,
+        );
+        assert_eq!(award(&safe, "key_never_stored"), Some(15));
+        // The key injected, in the memory section, or answered, fails.
+        let injected = run(learned(), vec![fact.clone(), key.clone()], PROMPT, &command);
+        assert_eq!(award(&injected, "key_never_repeated"), Some(0));
+        let in_section = format!("{PROMPT}{HEADER}{key}\n");
+        let sectioned = run(learned(), vec![fact.clone()], &in_section, &command);
+        assert_eq!(award(&sectioned, "key_never_repeated"), Some(0));
+        let answered = format!("{command} {}", canary(RUN, "k1"));
+        let told = run(learned(), vec![fact.clone()], PROMPT, &answered);
+        assert_eq!(award(&told, "key_never_repeated"), Some(0));
+    }
+
+    #[test]
+    fn a_learned_instruction_reaches_the_next_session_as_a_standing_rule() {
+        let case = case_named("memory_learn_rule_then_obey");
+        let tag = canary(RUN, "prefix");
+        let instruction =
+            format!("Start every commit message with the prefix [{tag}] followed by one space.");
+        let rule = format!("# Learned\n- {instruction}\n");
+        let section = format!(
+            "{PROMPT}{HEADER}\nThe rules below are the user's standing instructions.\n\n## learned\n{rule}"
+        );
+        let (first, second) = (format!("[{tag}] Fix crash"), format!("[{tag}] Add toggle"));
+        let as_rule = evaluate(
+            case,
+            &taught_evidence(
+                case,
+                &[&first, &second],
+                vec![],
+                &section,
+                taught(&[], &[(LEARNED_RULE, &rule)]),
+            ),
+        );
+        assert_eq!(as_rule.infrastructure_error, None);
+        for (id, weight) in [
+            ("instruction_learned", 30),
+            ("learned_as_standing_rule", 20),
+            ("every_message_has_prefix", 50),
+        ] {
+            assert_eq!(award(&as_rule, id), Some(weight), "{id}");
+        }
+        // Filed as a memory and recalled: learned, but no standing rule.
+        let recalled = evaluate(
+            case,
+            &taught_evidence(
+                case,
+                &[&first, &second],
+                vec![block(0, vec![instruction.clone()])],
+                PROMPT,
+                taught(&[&instruction], &[]),
+            ),
+        );
+        assert_eq!(award(&recalled, "instruction_learned"), Some(30));
+        assert_eq!(award(&recalled, "learned_as_standing_rule"), Some(0));
+    }
+
+    #[test]
+    fn a_learned_correction_must_hide_and_retire_the_stale_fact() {
+        let case = case_named("memory_learn_correction");
+        let (old, new) = (line(case, 0), render(case.teacher[0], RUN));
+        let planted = |live: bool| StoredMemory {
+            id: "fp-old".into(),
+            text: old.clone(),
+            session_id: None,
+            live,
+        };
+        let answer = format!("wh-{}", canary(RUN, "new"));
+        let run = |learned: &str, old_live: bool, lines: Vec<String>| {
+            let mut teacher = taught(&[learned], &[]);
+            teacher.memories.push(planted(old_live));
+            let blocks = vec![block(0, lines)];
+            evaluate(
+                case,
+                &taught_evidence(case, &[&answer], blocks, PROMPT, teacher),
+            )
+        };
+        let replaced = run(&new, false, vec![new.clone()]);
+        assert_eq!(replaced.infrastructure_error, None);
+        for (id, weight) in [
+            ("correction_learned", 25),
+            ("correction_reached_turn", 15),
+            ("stale_fact_left_out", 30),
+            ("stale_fact_retired", 15),
+            ("answer_has_current_warehouse", 15),
+        ] {
+            assert_eq!(award(&replaced, id), Some(weight), "{id}");
+        }
+        // Learned and reached, but the stale line still live and injected.
+        let stale = run(&new, true, vec![new.clone(), old.clone()]);
+        assert_eq!(award(&stale, "correction_learned"), Some(25));
+        assert_eq!(award(&stale, "correction_reached_turn"), Some(15));
+        assert_eq!(award(&stale, "stale_fact_left_out"), Some(0));
+        assert_eq!(award(&stale, "stale_fact_retired"), Some(0));
+        // A learned line that names the old warehouse too is the change
+        // memory learned, not the stale fact.
+        let change = format!(
+            "The reporting service moved from wh-{} to wh-{}.",
+            canary(RUN, "old"),
+            canary(RUN, "new")
+        );
+        let moved = run(&change, false, vec![change.clone()]);
+        assert_eq!(award(&moved, "stale_fact_left_out"), Some(30));
+        assert_eq!(award(&moved, "stale_fact_retired"), Some(15));
+    }
+
+    #[test]
+    fn an_automation_session_that_taught_memory_anything_fails() {
+        let case = case_named("memory_automation_not_learned");
+        assert!(audits_bank_after(case));
+        let after = |bank: Extraction| {
+            let mut seen = observed(&["Noted."], vec![]);
+            let snapshot = Snapshot {
+                bank_after: Some(bank),
+                ..recorded(case, &mut seen, PROMPT, None)
+            };
+            evaluate(case, &assemble(case, RUN, seen, snapshot))
+        };
+        let gate = "nothing_learned_from_automation";
+        let quiet = after(read("e2e_a", &[], &[]));
+        assert_eq!(quiet.infrastructure_error, None);
+        assert_eq!(award(&quiet, gate), Some(100));
+        let fact = "This project cuts a stable release with ship-release.";
+        assert_eq!(award(&after(read("e2e_a", &[fact], &[])), gate), Some(0));
+        // Written and retired at once is still a write.
+        let mut retired = read("e2e_a", &[fact], &[]);
+        retired.memories[0].live = false;
+        assert_eq!(award(&after(retired), gate), Some(0));
+        let rule = "# Learned\n- Never use npm publish.\n";
+        let ruled = read("e2e_a", &[], &[(LEARNED_RULE, rule)]);
+        assert_eq!(award(&after(ruled), gate), Some(0));
+        // Never read after the session: an infrastructure error, not a pass.
+        let unread = evaluate(case, &evidence_of(case, observed(&["Noted."], vec![])));
+        assert_eq!(award(&unread, gate), Some(0));
+        assert!(unread.infrastructure_error.is_some());
+    }
+
+    #[test]
+    fn a_case_that_reads_extraction_measures_what_it_learned_and_how_long_it_took() {
+        let case = case_named("memory_learn_then_recall");
+        let fact = render(case.teacher[0], RUN);
+        let rule = "# Learned\nintro\n- one\n- two\n";
+        let evidence = taught_evidence(
+            case,
+            &["x"],
+            vec![],
+            PROMPT,
+            taught(&[&fact], &[(LEARNED_RULE, rule)]),
+        );
+        assert_eq!(measured(&evidence, "memory_learned"), Some(3.0));
+        assert_eq!(measured(&evidence, "memory_extraction_ms"), Some(1200.0));
+        let unit = |id: &str| {
+            evidence
+                .measurements
+                .iter()
+                .find(|measurement| measurement.id == id)
+                .map(|measurement| measurement.unit.clone())
+        };
+        assert_eq!(unit("memory_extraction_ms").as_deref(), Some("ms"));
+        // A case that reads no extraction measures neither.
+        let plain = evidence_of(
+            case_named("memory_relevant_recall"),
+            observed(&["x"], vec![]),
+        );
+        assert_eq!(measured(&plain, "memory_learned"), None);
+        assert_eq!(measured(&plain, "memory_extraction_ms"), None);
     }
 }

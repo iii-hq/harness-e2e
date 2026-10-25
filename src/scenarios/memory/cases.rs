@@ -99,15 +99,45 @@ pub enum Check {
     /// From `exchange` on memory reads no bank and injects no block, and
     /// `exchange` carries the update saying no memory section applies.
     BankGoneFrom { exchange: usize },
+    /// A live memory extracted from the teacher, or the bank's `learned`
+    /// rule, holds the canary for `canary` once the teacher's extraction ran.
+    Learned { canary: &'static str },
+    /// Exchange `exchange`'s memory section, or unless `section_only` a
+    /// memory injected on that exchange, holds the canary for `canary`.
+    Reached {
+        exchange: usize,
+        canary: &'static str,
+        section_only: bool,
+    },
+    /// Whether a memory (live, or any with `include_superseded`) or a rule of
+    /// the bank after the teacher's extraction holds the canary for `canary`
+    /// is `want`.
+    Stored {
+        canary: &'static str,
+        include_superseded: bool,
+        want: bool,
+    },
+    /// No injected memory, memory section, rules update or answer holds the
+    /// canary for `canary`.
+    NowhereContains { canary: &'static str },
+    /// No memory of the seed group `group` is live in the bank after the
+    /// teacher's extraction.
+    Retired { group: &'static str },
+    /// Once memory's extraction read the measured session, the bank holds
+    /// what setup planted and nothing else: memory learned nothing from it.
+    BankUnchanged,
 }
 
 impl Check {
     /// The labels whose canaries the check reads.
     pub fn canaries(self) -> impl Iterator<Item = &'static str> {
         let (first, second) = match self {
-            Check::AnswerContains { canary, .. } | Check::AnswerOmits { canary, .. } => {
-                (Some(canary), None)
-            }
+            Check::AnswerContains { canary, .. }
+            | Check::AnswerOmits { canary, .. }
+            | Check::Learned { canary }
+            | Check::Reached { canary, .. }
+            | Check::Stored { canary, .. }
+            | Check::NowhereContains { canary } => (Some(canary), None),
             Check::UpdateOn { holds, omits, .. } => (holds, omits),
             _ => (None, None),
         };
@@ -148,6 +178,10 @@ pub struct Case {
     /// the case is built on; setup fails when it no longer holds, so the case
     /// is redesigned instead of passing without testing its point.
     pub preview_first: &'static [(usize, usize)],
+    /// Messages a session of the user's own kind sends, in order, before the
+    /// measured session starts, for memory's extraction to learn from.
+    /// Templates, like the seeds.
+    pub teacher: &'static [&'static str],
     /// Changes to the bank, each run once exchange `.0` has its answer, in
     /// order and before any compaction.
     pub changes: &'static [(usize, Change)],
@@ -277,7 +311,7 @@ const COMMIT_CRITERIA: &[Criterion] = &[
     prefix_answer(70),
 ];
 
-pub const CASES: [Case; 19] = [
+pub const CASES: [Case; 23] = [
     Case {
         id: "memory_relevant_recall",
         title: "Memory recalls what the task needs",
@@ -302,6 +336,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -353,6 +388,7 @@ pub const CASES: [Case; 19] = [
         followups: &["thanks!", "ok", "?"],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[gate(
             "no_memory_on_small_talk",
@@ -375,6 +411,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[gate(
             "no_unrelated_user_memories",
@@ -413,6 +450,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -480,6 +518,7 @@ pub const CASES: [Case; 19] = [
         ],
         compact_before: Some(3),
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -539,6 +578,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -592,6 +632,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: RELEASE_CRITERIA,
     },
@@ -608,6 +649,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[release_answer(100)],
     },
@@ -624,6 +666,7 @@ pub const CASES: [Case; 19] = [
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: COMMIT_CRITERIA,
     },
@@ -640,6 +683,7 @@ pub const CASES: [Case; 19] = [
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[prefix_answer(100)],
     },
@@ -665,6 +709,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -715,6 +760,7 @@ pub const CASES: [Case; 19] = [
         followups: &["tell me more", "I know."],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -760,6 +806,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -818,6 +865,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -872,6 +920,7 @@ pub const CASES: [Case; 19] = [
         // The first wording is told first, and the follow-up ranks the second
         // above it: only then is the second sent unless memory sees the first.
         preview_first: &[(0, 0), (1, 1)],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -918,6 +967,7 @@ pub const CASES: [Case; 19] = [
         followups: &[],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -955,6 +1005,7 @@ pub const CASES: [Case; 19] = [
         ],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[
             (
                 0,
@@ -995,6 +1046,10 @@ pub const CASES: [Case; 19] = [
                 "Removed rule sent as an update",
                 "Did the removal reach the next turn as one update without the removed prefix?",
             ),
+            // shortcut: memory keeps the rules it told a session in-process, so a
+            // memory restart mid-attempt re-renders the section and fails this
+            // gate; tell a restart apart (memory's start time in the evidence)
+            // once one shows up in a run.
             gate(
                 "system_prompt_unchanged",
                 20,
@@ -1076,6 +1131,7 @@ pub const CASES: [Case; 19] = [
         followups: &["For the orders service: which bucket does the nightly backup write to, which region serves the orders API, which alias pages the on-call engineer, and what is its status page? Reply with the four values."],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[
             (0, Change::Delete { seed: 1 }),
             (0, Change::Save { seed: 4 }),
@@ -1156,6 +1212,7 @@ pub const CASES: [Case; 19] = [
         followups: &["Which team owns the ledger service? Reply with the team name."],
         compact_before: None,
         preview_first: &[],
+        teacher: &[],
         changes: &[(0, Change::DeleteBank)],
         criteria: &[
             gate(
@@ -1194,6 +1251,201 @@ pub const CASES: [Case; 19] = [
                 "Does the answer after the trash leave out the run's signature value?",
             ),
         ],
+    },
+    Case {
+        id: "memory_learn_then_recall",
+        title: "Memory learns a convention from a chat",
+        summary: "A chat with the user states the release command and, in passing, a deploy key, and a later session asks for the release command.",
+        protects: "A durable fact the user states in one chat reaches a later session that needs it, and a key said in passing is never kept. If it fails, users repeat their project's conventions in every new chat, or a credential said once reaches every later session.",
+        baseline: false,
+        distractors: true,
+        memories: &[],
+        rules: &[],
+        prompt: RELEASE_PROMPT,
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        // The project convention case's fact, said in chat. The key comes in a
+        // turn of its own, so its extraction pass is apart from the fact's.
+        teacher: &[
+            "Remember for later: this project cuts a stable release with the command release-{release} --channel stable and never uses npm publish.",
+            "Also, the staging deploy key is ghp_{k1}{k2}{k3}{k4}0a1b.",
+        ],
+        changes: &[],
+        criteria: &[
+            gate(
+                "fact_learned",
+                25,
+                Check::Learned { canary: "release" },
+                "Release command learned from the chat",
+                "Did memory's extraction keep the release command the user stated in the chat?",
+            ),
+            gate(
+                "learned_fact_reached_turn",
+                15,
+                Check::Reached {
+                    exchange: 0,
+                    canary: "release",
+                    section_only: false,
+                },
+                "Learned fact reached the later session",
+                "Did the learned release command reach the later session's turn, injected or in its memory section?",
+            ),
+            release_answer(30),
+            gate(
+                "key_never_stored",
+                15,
+                Check::Stored {
+                    canary: "k1",
+                    include_superseded: true,
+                    want: false,
+                },
+                "Key said in chat never stored",
+                "Did no memory, superseded ones included, and no rule keep the deploy key the user said in passing?",
+            ),
+            gate(
+                "key_never_repeated",
+                10,
+                Check::NowhereContains { canary: "k1" },
+                "Key never injected or answered",
+                "Did the deploy key stay out of every injected memory, memory section, rules update and answer?",
+            ),
+            scored(
+                "no_unrelated_memories",
+                5,
+                Check::NothingIrrelevant,
+                "No unrelated memory injected",
+                "Was every injected memory one memory learned from the chat?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_learn_rule_then_obey",
+        title: "Memory learns a standing rule from a chat",
+        summary: "A chat with the user asks for a commit message prefix from now on, and a later session asks for two commit messages.",
+        protects: "An instruction the user gives in one chat becomes a standing rule that every later session follows. If it fails, users correct the agent the same way in every new chat.",
+        baseline: false,
+        distractors: false,
+        memories: &[],
+        rules: &[],
+        prompt: COMMIT_PROMPT,
+        followups: COMMIT_FOLLOWUPS,
+        compact_before: None,
+        preview_first: &[],
+        teacher: &["From now on, start every commit message you write with the prefix [{prefix}] followed by one space."],
+        changes: &[],
+        criteria: &[
+            gate(
+                "instruction_learned",
+                30,
+                Check::Learned { canary: "prefix" },
+                "Commit prefix instruction learned from chat",
+                "Did memory's extraction keep the commit prefix instruction the user gave in the chat?",
+            ),
+            // Scored: filed as a memory instead, recall still brings it to the turn.
+            scored(
+                "learned_as_standing_rule",
+                20,
+                Check::Reached {
+                    exchange: 0,
+                    canary: "prefix",
+                    section_only: true,
+                },
+                "Learned as a rule in the prompt",
+                "Did the learned instruction reach the later session's system prompt as a standing rule?",
+            ),
+            prefix_answer(50),
+        ],
+    },
+    Case {
+        id: "memory_learn_correction",
+        title: "Memory learns a correction from a chat",
+        summary: "A bank holds the warehouse a reporting service reads from, a chat with the user corrects it, and a later session asks for it.",
+        protects: "When the user corrects a fact memory holds, later sessions get only the corrected value. If it fails, agents keep using the warehouse, address or setting the user already corrected.",
+        baseline: false,
+        distractors: true,
+        memories: &[seed(
+            "The reporting service reads from the warehouse wh-{old}.",
+            "old",
+            &[],
+        )],
+        rules: &[],
+        prompt: "Which warehouse does the reporting service read from? Reply with the warehouse name only.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: &["Quick correction for later: the reporting service moved and now reads from the warehouse wh-{new}."],
+        changes: &[],
+        criteria: &[
+            gate(
+                "correction_learned",
+                25,
+                Check::Learned { canary: "new" },
+                "Corrected warehouse learned from the chat",
+                "Did memory's extraction keep the corrected warehouse the user stated in the chat?",
+            ),
+            gate(
+                "correction_reached_turn",
+                15,
+                Check::Reached {
+                    exchange: 0,
+                    canary: "new",
+                    section_only: false,
+                },
+                "Corrected fact reached the later session",
+                "Did the corrected warehouse reach the later session's turn, injected or in its memory section?",
+            ),
+            // Scored: the old line is hidden only when the extraction model
+            // says the new one replaces it, or words it as a change.
+            scored(
+                "stale_fact_left_out",
+                30,
+                Check::GroupOmitted { group: "old" },
+                "Stale warehouse left out of memory",
+                "Was the warehouse the user corrected left out of what memory injected?",
+            ),
+            scored(
+                "stale_fact_retired",
+                15,
+                Check::Retired { group: "old" },
+                "Stale fact retired in the bank",
+                "Did memory retire the stored warehouse the correction replaced?",
+            ),
+            scored(
+                "answer_has_current_warehouse",
+                15,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "new",
+                },
+                "Answer has the current warehouse",
+                "Does the answer carry the run's corrected warehouse value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_automation_not_learned",
+        title: "Automation sessions teach memory nothing",
+        summary: "An automation session asks memory to remember a release command, and once memory's extraction has read it the bank holds nothing new.",
+        protects: "Automation and test sessions never teach memory anything, even when they say \"remember\". If it fails, every scripted run writes its fixtures into the user's memory.",
+        baseline: false,
+        distractors: false,
+        memories: &[],
+        rules: &[],
+        // Sent as written, so no canary: any write fails the gate.
+        prompt: "Remember for later: this project cuts a stable release with the command ship-release --channel stable and never uses npm publish.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: &[],
+        changes: &[],
+        criteria: &[gate(
+            "nothing_learned_from_automation",
+            100,
+            Check::BankUnchanged,
+            "Nothing learned from an automation session",
+            "Once memory's extraction read the session, did the bank hold no memory and no rule beyond what setup planted?",
+        )],
     },
 ];
 
@@ -1279,8 +1531,8 @@ pub fn planted_memories(case: &Case, run_id: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every template the case renders: its seeds, its rules and the rules its
-/// changes set.
+/// Every template the case renders: its seeds, its rules, the rules its
+/// changes set and its teacher's messages.
 fn templates(case: &Case) -> impl Iterator<Item = &'static str> + '_ {
     let set = case.changes.iter().filter_map(|(_, change)| match change {
         Change::RuleSet { content, .. } => Some(*content),
@@ -1291,6 +1543,25 @@ fn templates(case: &Case) -> impl Iterator<Item = &'static str> + '_ {
         .map(|seed| seed.text)
         .chain(case.rules.iter().map(|rule| rule.content))
         .chain(set)
+        .chain(case.teacher.iter().copied())
+}
+
+/// The labels whose canaries the case's teacher must make memory learn.
+pub fn learned_labels(case: &Case) -> impl Iterator<Item = &'static str> + '_ {
+    case.criteria
+        .iter()
+        .filter_map(|criterion| match criterion.check {
+            Check::Learned { canary } => Some(canary),
+            _ => None,
+        })
+}
+
+/// Whether the case reads its bank once memory's extraction has read the
+/// measured session.
+pub fn audits_bank_after(case: &Case) -> bool {
+    case.criteria
+        .iter()
+        .any(|criterion| criterion.check == Check::BankUnchanged)
 }
 
 /// Every label the case plants or checks for, sorted and deduplicated.
@@ -1365,6 +1636,7 @@ pub(crate) const CHANGING: Case = Case {
     ],
     compact_before: None,
     preview_first: &[],
+    teacher: &[],
     changes: &[
         (
             0,
@@ -1466,8 +1738,8 @@ mod tests {
         for case in &CASES {
             assert!(!case.title.trim().is_empty(), "{} has no title", case.id);
             assert!(
-                !case.baseline || case.changes.is_empty(),
-                "{}: a baseline plants nothing, so it changes nothing",
+                !case.baseline || (case.changes.is_empty() && case.teacher.is_empty()),
+                "{}: a baseline plants nothing, so it changes and teaches nothing",
                 case.id
             );
             assert!(
@@ -1607,6 +1879,52 @@ mod tests {
         }
     }
 
+    /// Prompts and follow-ups are sent as written: a `{label}` there would
+    /// reach the subject with its braces.
+    #[test]
+    fn no_prompt_or_follow_up_holds_a_placeholder() {
+        for case in &CASES {
+            for message in std::iter::once(case.prompt).chain(case.followups.iter().copied()) {
+                assert!(!message.contains('{'), "{}: {message:?}", case.id);
+            }
+        }
+    }
+
+    /// What a case checks memory learned, stored or kept out is what its
+    /// teacher said: planted, the check would pass without any learning.
+    #[test]
+    fn a_learned_canary_is_taught_and_never_planted() {
+        let mut taught = 0;
+        for case in &CASES {
+            for criterion in case.criteria {
+                let (Check::Learned { canary }
+                | Check::Stored { canary, .. }
+                | Check::NowhereContains { canary }) = criterion.check
+                else {
+                    continue;
+                };
+                let marker = format!("{{{canary}}}");
+                assert!(
+                    case.teacher.iter().any(|message| message.contains(&marker)),
+                    "{}: {canary} is never taught",
+                    case.id
+                );
+                let mut planted = case
+                    .memories
+                    .iter()
+                    .map(|seed| seed.text)
+                    .chain(case.rules.iter().map(|rule| rule.content));
+                assert!(
+                    !planted.any(|template| template.contains(&marker)),
+                    "{}: {canary} is planted",
+                    case.id
+                );
+                taught += 1;
+            }
+        }
+        assert_eq!(taught, 5);
+    }
+
     #[test]
     fn every_answer_check_names_a_canary_the_case_plants() {
         for case in CASES.iter().chain([&CHANGING]) {
@@ -1630,6 +1948,12 @@ mod tests {
         assert_eq!(labels(case_named("memory_updated_fact")), ["new", "old"]);
         assert_eq!(labels(case_named("memory_rule_fit")), ["haiku", "sql"]);
         assert!(labels(case_named("memory_small_talk")).is_empty());
+        // The key's labels are only in what the teacher says.
+        assert_eq!(
+            labels(case_named("memory_learn_then_recall")),
+            ["k1", "k2", "k3", "k4", "release"]
+        );
+        assert!(labels(case_named("memory_automation_not_learned")).is_empty());
         // `after` is only in the rule a change sets.
         assert_eq!(
             labels(&CHANGING),
@@ -1682,6 +2006,8 @@ mod tests {
         assert_eq!(needed_before_saved(&late), [(4, 1)]);
     }
 
+    /// A learning case reuses the baseline of the case that plants what it
+    /// teaches: the same task, on an empty bank.
     #[test]
     fn the_baselines_repeat_their_twins_without_planting() {
         for (twin, baseline) in [
@@ -1690,13 +2016,20 @@ mod tests {
                 "memory_value_preference",
                 "memory_value_preference_baseline",
             ),
+            ("memory_learn_then_recall", "memory_value_project_baseline"),
+            (
+                "memory_learn_rule_then_obey",
+                "memory_value_preference_baseline",
+            ),
         ] {
             let (twin, baseline) = (case_named(twin), case_named(baseline));
             assert!(!twin.baseline && baseline.baseline);
             assert_eq!(twin.prompt, baseline.prompt);
             assert_eq!(twin.followups, baseline.followups);
-            assert_eq!(twin.memories.len(), baseline.memories.len());
-            assert_eq!(twin.rules.len(), baseline.rules.len());
+            if twin.teacher.is_empty() {
+                assert_eq!(twin.memories.len(), baseline.memories.len());
+                assert_eq!(twin.rules.len(), baseline.rules.len());
+            }
             // The answer alone: a baseline completes only when the subject
             // produced the planted value without memory.
             let [only] = baseline.criteria else {
@@ -1715,6 +2048,15 @@ mod tests {
                 "{}: the twin's answer criterion",
                 baseline.id
             );
+            // The twin plants or teaches the value the baseline withholds.
+            let marker = only.check.canaries().map(|label| format!("{{{label}}}"));
+            for marker in marker {
+                assert!(
+                    templates(twin).any(|template| template.contains(&marker)),
+                    "{}: {marker}",
+                    twin.id
+                );
+            }
         }
     }
 

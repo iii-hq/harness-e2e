@@ -201,6 +201,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
 | Memory quality | `memory` | What the memory worker injects into a live session, nineteen cases three times each, on the `memory` stack. |
+| Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from automation, four cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -331,6 +332,39 @@ bank is withheld whole. A fresh bank per attempt makes every case safe to
 rerun, and `memory::bank::delete` moves the attempt's bank to memory's
 `.trash` afterwards; the user's own banks are never touched.
 
+The `memory-learning` suite runs the learning cycle: four cases, three rounds,
+one technical retry, on the same stack. Before the measured session, setup
+sends the case's teacher messages in a session of the user's own kind
+(`teach_<attempt>`), pinned to the attempt's bank and with nothing to call,
+waits until memory's extraction cursor names the teacher's last user or
+assistant message (up to four minutes), and reads the bank, retired memories
+included. The measured session then runs as in `memory`:
+
+- `memory_learn_then_recall`: a release command said in chat is learned,
+  reaches the later session and is used; a deploy key said in passing, in a
+  turn of its own, is never stored, injected or answered.
+- `memory_learn_rule_then_obey`: an instruction given in chat becomes a
+  standing rule the next session's two commit messages follow.
+- `memory_learn_correction`: a correction of a planted fact is learned; the
+  stale fact left out and retired are scored, since they rest on the
+  extraction model's wording.
+- `memory_automation_not_learned`: an automation session asking memory to
+  remember a release command leaves the bank as setup planted it, once
+  extraction has read the session.
+
+Extraction calls a model, so these gates move with it: memory pins it with
+`extraction_model` (`deepseek::deepseek-flash` on the `memory` stack), and the
+teacher always talks to `deepseek-flash`. Extraction that ran and kept nothing
+fails the learned gate; a teacher turn that never finished, a cursor that
+never arrived, or a teacher turn memory read on another bank is an
+infrastructure error. The two value cases share the `memory` suite's
+baselines, whose task is the same. The teacher and extraction run outside the
+subject's session and its cost cap, so each run records `memory_learned`
+(memories and learned rule lines extraction kept) and `memory_extraction_ms`.
+Cleanup deletes the teacher session before it trashes the bank, and when
+memory read another bank on a teacher turn, it retires there what the
+teacher's extraction wrote.
+
 Run it on the `memory` stack, the default stack plus the `memory` worker.
 Memory ranks recalls with the local MiniLM embedder where iii-directory has
 one, and lexical-only (BM25 and entities) where it has none, as on the Linux
@@ -366,6 +400,7 @@ containers:
     worker: package://memory
     version: latest
     start_after: [state, queue, session-manager, llm-router]
+    config_override: {extraction_model: "deepseek::deepseek-flash"}
   fp:                {worker: package://fp,                version: latest}
   provider-deepseek: {worker: package://provider-deepseek, version: latest, start_after: [llm-router, state]}
 YAML

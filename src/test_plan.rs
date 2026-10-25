@@ -189,6 +189,10 @@ const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::MemoryRuleChangedMidSession,
     ScenarioId::MemoryBankEditsMidSession,
     ScenarioId::MemoryBankTrashedMidSession,
+    ScenarioId::MemoryLearnThenRecall,
+    ScenarioId::MemoryLearnRuleThenObey,
+    ScenarioId::MemoryLearnCorrection,
+    ScenarioId::MemoryAutomationNotLearned,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -734,7 +738,7 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 10);
+        assert_eq!(plan.suites.len(), 11);
         for (id, cases, runs) in [
             ("regression", 9, 27),
             ("null-canary", 9, 9),
@@ -746,6 +750,7 @@ mod tests {
             ("pr", 4, 4),
             ("after-release", 5, 5),
             ("memory", 19, 57),
+            ("memory-learning", 4, 12),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -930,7 +935,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:825d5c7952da66eb597b359fbff0d9a4d11de800765f6f1484f0d698e55b979e"
+            "sha256:b883c4bc95fb2d4801c70be6917c437a5e6db0fbd34303fe38a3bc07a7d96048"
         );
     }
 
@@ -1000,6 +1005,7 @@ mod tests {
             "software-engineering-x3",
             "linkly",
             "memory",
+            "memory-learning",
         ] {
             for id in plan.materialize(suite).unwrap().scenario_ids {
                 let scenario = id.parse::<ScenarioId>().unwrap();
@@ -1069,21 +1075,39 @@ mod tests {
     }
 
     /// Every memory case is its own group, so a retry reruns one case and a
-    /// case never shares a stack with its baseline.
+    /// case never shares a stack with its baseline. The learning cases run in
+    /// a suite of their own, after the deterministic ones; their baselines
+    /// stay in `memory`.
     #[test]
     fn memory_runs_each_case_alone_three_times_with_one_retry() {
-        let snapshot = embedded().unwrap().materialize("memory").unwrap();
-        assert_eq!(snapshot.scenario_ids, crate::scenarios::memory::IDS);
-        assert_eq!(snapshot.campaigns.len(), 3);
-        for campaign in &snapshot.campaigns {
-            let groups = campaign["groups"].as_array().unwrap();
-            assert_eq!(groups.len(), crate::scenarios::memory::IDS.len());
-            for (group, id) in groups.iter().zip(crate::scenarios::memory::IDS) {
-                assert_eq!(group["scenarios"], json!([id]));
-                assert_eq!(group["execution_kind"], "harness_turn");
-                assert_eq!(group["technical_retries"], 1);
+        let plan = embedded().unwrap();
+        let mut every_case = Vec::new();
+        for suite in ["memory", "memory-learning"] {
+            let snapshot = plan.materialize(suite).unwrap();
+            assert_eq!(snapshot.campaigns.len(), 3);
+            for campaign in &snapshot.campaigns {
+                let groups = campaign["groups"].as_array().unwrap();
+                assert_eq!(groups.len(), snapshot.scenario_ids.len());
+                for (group, id) in groups.iter().zip(&snapshot.scenario_ids) {
+                    assert_eq!(group["scenarios"], json!([id]));
+                    assert_eq!(group["execution_kind"], "harness_turn");
+                    assert_eq!(group["technical_retries"], 1);
+                }
             }
+            every_case.extend(snapshot.scenario_ids);
         }
+        assert_eq!(every_case, crate::scenarios::memory::IDS);
+        // Exactly the cases whose outcome rests on memory's extraction.
+        use crate::scenarios::memory::cases::{audits_bank_after, CASES};
+        let learning: Vec<&str> = CASES
+            .iter()
+            .filter(|case| !case.teacher.is_empty() || audits_bank_after(case))
+            .map(|case| case.id)
+            .collect();
+        assert_eq!(
+            plan.materialize("memory-learning").unwrap().scenario_ids,
+            learning
+        );
     }
 
     /// The memory cases need the memory stack, so a selection by tag leaves

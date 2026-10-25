@@ -46,8 +46,9 @@ impl Memory {
 }
 
 /// What `setup` plants and what the case changes later, rendered for
-/// `run_id`. `entities` and `changes` are written only when the case has
-/// them, so a case without them keeps its digest.
+/// `run_id`, and what its teacher says. `entities`, `changes` and `teacher`
+/// are written only when the case has them, so a case without them keeps its
+/// digest.
 fn planted_state(case: &Case, run_id: &str) -> Value {
     if case.baseline {
         return json!({"memories": [], "rules": []});
@@ -84,6 +85,11 @@ fn planted_state(case: &Case, run_id: &str) -> Value {
             described
         });
         state["changes"] = changes.collect();
+    }
+    // Templates: rendered, a token-shaped value said in passing would sit in
+    // every definition.
+    if !case.teacher.is_empty() {
+        state["teacher"] = json!(case.teacher);
     }
     state
 }
@@ -194,16 +200,16 @@ impl Scenario for Memory {
 
     async fn capture(
         &self,
-        _context: &E2eContext,
+        context: &E2eContext,
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<Vec<CapturedDeliverable>> {
-        let evidence = score::evidence(
-            self.item(),
-            run_id,
-            &observation.transcript,
-            runtime::snapshot(run_id),
-        );
+        let mut snapshot = runtime::snapshot(run_id);
+        if cases::audits_bank_after(self.item()) {
+            snapshot.bank_after =
+                Some(runtime::bank_after(context, run_id, &observation.transcript).await?);
+        }
+        let evidence = score::evidence(self.item(), run_id, &observation.transcript, snapshot);
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: DELIVERABLE_KIND.to_string(),
@@ -237,7 +243,7 @@ impl Scenario for Memory {
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
-        runtime::cleanup(context, run_id).await
+        runtime::cleanup(context, self.item(), run_id).await
     }
 }
 
@@ -287,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn planted_state_names_changes_and_entities_only_for_a_case_with_them() {
+    fn planted_state_names_changes_entities_and_a_teacher_only_for_a_case_with_them() {
         for case in &CASES {
             let state = planted_state(case, "contract");
             let changes = state.get("changes").and_then(Value::as_array);
@@ -298,7 +304,19 @@ mod tests {
                 case.id
             );
             assert!(state.get("entities").is_none(), "{}", case.id);
+            // The teacher's messages as written: the key said in passing
+            // stays a template, never a token-shaped value.
+            match state.get("teacher") {
+                Some(teacher) => assert_eq!(*teacher, json!(case.teacher), "{}", case.id),
+                None => assert!(case.teacher.is_empty(), "{}", case.id),
+            }
         }
+        let learning = CASES
+            .iter()
+            .find(|case| case.id == "memory_learn_then_recall")
+            .unwrap();
+        let teacher = &planted_state(learning, "contract")["teacher"];
+        assert!(teacher[1].as_str().unwrap().contains("{k1}"), "{teacher}");
         let case = &cases::CHANGING;
         let text = |index: usize| render(case.memories[index].text, "a");
         let state = planted_state(case, "a");

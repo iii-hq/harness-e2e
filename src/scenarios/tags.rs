@@ -262,7 +262,11 @@ impl ScenarioId {
                 | Self::MemorySiblingFacts
                 | Self::MemoryRuleChangedMidSession
                 | Self::MemoryBankEditsMidSession
-                | Self::MemoryBankTrashedMidSession => (&[W::Memory], A::Memory, &[]),
+                | Self::MemoryBankTrashedMidSession
+                | Self::MemoryLearnThenRecall
+                | Self::MemoryLearnRuleThenObey
+                | Self::MemoryLearnCorrection
+                | Self::MemoryAutomationNotLearned => (&[W::Memory], A::Memory, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {

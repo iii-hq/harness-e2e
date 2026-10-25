@@ -1,11 +1,12 @@
 //! Plants, observes and removes what one memory attempt needs from the stack:
-//! an isolated bank with the case's rules and memories, an observer on every
-//! prompt Harness is about to send, the case's changes between exchanges, a
-//! forced compaction, and the cleanup of all of it. Every `memory::*` call
-//! names the attempt's bank: left out, memory would act on the user's own
-//! `main`.
+//! an isolated bank with the case's rules and memories, a teacher session
+//! memory learns from, an observer on every prompt Harness is about to send,
+//! the case's changes between exchanges, a forced compaction, the bank once
+//! memory's extraction read a session, and the cleanup of all of it. Every
+//! `memory::*` call names the attempt's bank: left out, memory would act on
+//! the user's own `main`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -17,10 +18,16 @@ use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use super::cases::{bank, planted, render, Case, Change};
-use super::score::{ChangeOutcome, PromptRecord, Retrieval, Snapshot};
+use super::cases::{bank, canary, labels, planted, render, Case, Change};
+use super::observe::observe;
+use super::score::{
+    ChangeOutcome, Extraction, PromptRecord, Retrieval, Snapshot, StoredMemory, LEARNED_RULE,
+};
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
+use crate::wire::{
+    FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
+};
 
 const PRE_GENERATE: &str = "harness::hook::pre-generate";
 const EMBEDDER: &str = "all-MiniLM-L6-v2";
@@ -29,6 +36,17 @@ const EMBEDDER_WAIT: Duration = Duration::from_secs(300);
 const VECTOR_WAIT: Duration = Duration::from_secs(180);
 /// How long lexical-only must hold before it is believed.
 const LEXICAL_SETTLE: Duration = Duration::from_secs(15);
+/// No progress for this long fails a teacher turn.
+const TEACHER_WAIT: Duration = Duration::from_secs(300);
+/// Memory's extraction call times out at 60 s and the queue retries it.
+const EXTRACTION_WAIT: Duration = Duration::from_secs(240);
+/// Where memory keeps each session's extraction cursor.
+const CURSOR_SCOPE: &str = "memory_cursor";
+// shortcut: `setup` has no subject, so the teacher always talks to the
+// memory stack's own DeepSeek; pass the subject into setup once this suite
+// runs on a stack without it.
+const TEACHER_PROVIDER: &str = "deepseek";
+const TEACHER_MODEL: &str = "deepseek-flash";
 
 /// What one attempt holds between `setup` and `cleanup`.
 struct Run {
@@ -40,6 +58,13 @@ struct Run {
     /// Each case seed's memory once saved, parallel to the case's memories.
     seeds: Vec<Option<Saved>>,
     changes: Vec<ChangeOutcome>,
+    /// The teacher session, from before it exists until cleanup deletes it.
+    teacher: Option<String>,
+    /// Banks other than the attempt's that memory read on a teacher turn:
+    /// extraction wrote what it learned there.
+    strays: Vec<String>,
+    /// The bank once extraction read the teacher session.
+    taught: Option<Extraction>,
 }
 
 /// A memory as memory stored it.
@@ -226,10 +251,10 @@ async fn wait_for_vector(context: &E2eContext, bank: &str, id: &str, text: &str)
     }
 }
 
-/// Plants the case in its own bank and starts observing the attempt's prompts.
-pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()> {
+/// Registers the attempt with nothing done yet, and returns the sink its
+/// observer records prompts into.
+fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
     let prompts = Arc::new(Mutex::new(Vec::new()));
-    // Registered first, so `cleanup` undoes whatever a failed setup left.
     lock_unpoisoned(runs()).insert(
         run_id.to_string(),
         Run {
@@ -240,8 +265,18 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
             trigger: None,
             seeds: vec![None; case.memories.len()],
             changes: Vec::new(),
+            teacher: None,
+            strays: Vec::new(),
+            taught: None,
         },
     );
+    prompts
+}
+
+/// Plants the case in its own bank and starts observing the attempt's prompts.
+pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()> {
+    // Registered first, so `cleanup` undoes whatever a failed setup left.
+    let prompts = register(case, run_id);
 
     let retrieval = wait_for_embedder(context).await?;
     lock_unpoisoned(runs())
@@ -295,6 +330,9 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
                 .context("a previewed seed was never planted")?;
             preview_leads(&reply, &wanted)?;
         }
+        if !case.teacher.is_empty() {
+            teach(context, case, run_id, retrieval).await?;
+        }
     }
 
     let function_id = format!("e2e::memory::observe::{run_id}");
@@ -326,6 +364,259 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         .expect("registered above")
         .trigger = Some(trigger);
     Ok(())
+}
+
+/// The session the case's teacher speaks in.
+pub fn teacher(run_id: &str) -> String {
+    format!("teach_{run_id}")
+}
+
+/// Records the teacher in the attempt before it exists, so `cleanup` deletes
+/// it whatever fails after; returns its session id.
+fn enroll_teacher(run_id: &str) -> String {
+    let session = teacher(run_id);
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        run.teacher = Some(session.clone());
+    }
+    session
+}
+
+/// The send of teacher message `index`: a session of the user's own kind,
+/// which memory extracts, pinned to the attempt's bank in its metadata and
+/// in the turn's, and with nothing to call, so whatever memory keeps comes
+/// from its extraction alone.
+fn teacher_send(run_id: &str, index: usize, message: String) -> SendRequest {
+    let bank = bank(run_id);
+    SendRequest {
+        session_id: Some(teacher(run_id)),
+        message: MessageInput::Text(message),
+        model: Some(TEACHER_MODEL.into()),
+        provider: Some(TEACHER_PROVIDER.into()),
+        idempotency_key: Some(format!("e2e:{run_id}:teacher:send:{index}")),
+        session: (index == 0).then(|| SessionInit {
+            kind: Some("user".into()),
+            title: Some("Harness E2E memory teacher".into()),
+            metadata: Some(
+                json!({"memory_bank": bank, "e2e_run_id": run_id, "e2e_role": "teacher"}),
+            ),
+        }),
+        options: Some(SendOptions {
+            max_turns: Some(1),
+            functions: Some(FunctionPolicy {
+                allow: Vec::new(),
+                deny: vec!["memory::*".into()],
+                ..FunctionPolicy::default()
+            }),
+            metadata: Some(json!({"memory_bank": bank})),
+            ..SendOptions::default()
+        }),
+    }
+}
+
+/// Sends the case's teacher messages, waits until memory's extraction has
+/// read them, and keeps the bank as it then stands.
+async fn teach(
+    context: &E2eContext,
+    case: &Case,
+    run_id: &str,
+    retrieval: Retrieval,
+) -> Result<()> {
+    let session = enroll_teacher(run_id);
+    let bank = bank(run_id);
+    for (index, template) in case.teacher.iter().enumerate() {
+        let response: SendResponse = context
+            .trigger(
+                "harness::send",
+                teacher_send(run_id, index, render(template, run_id)),
+            )
+            .await
+            .context("harness::send to the teacher")?;
+        if !response.accepted
+            || response.session_id != session
+            || response.merged == Some(true)
+            || response.queued == Some(true)
+        {
+            bail!("harness::send to the teacher returned an unexpected response: {response:?}");
+        }
+        context
+            .wait_for_turn(
+                case.id,
+                &session,
+                &response.turn_id,
+                TEACHER_WAIT,
+                false,
+                None,
+            )
+            .await
+            .with_context(|| format!("teacher turn {index}"))?;
+    }
+    let transcript = context
+        .transcript(&session)
+        .await
+        .context("the teacher's transcript")?;
+    let read: Vec<Option<String>> = observe(&transcript)
+        .exchanges
+        .into_iter()
+        .map(|exchange| exchange.memory_bank)
+        .collect();
+    let strays: Vec<String> = read
+        .iter()
+        .flatten()
+        .filter(|read| **read != bank)
+        .cloned()
+        .collect();
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        run.strays = strays;
+    }
+    // Waited for even when memory read another bank: cleanup then retires
+    // what extraction wrote there once it is all in.
+    let taught = extraction(context, &session, &bank, &transcript).await?;
+    if read.len() != case.teacher.len() || read.iter().any(|read| read.as_deref() != Some(&bank)) {
+        bail!("memory did not read the attempt's bank on every teacher turn: {read:?}");
+    }
+    // Lexical-only stores no vector to wait for.
+    if retrieval == Retrieval::Minilm {
+        for memory in taught.learned() {
+            wait_for_vector(context, &bank, &memory.id, &memory.text).await?;
+        }
+    }
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        run.taught = Some(taught);
+    }
+    Ok(())
+}
+
+/// The entry a `state::get` of the cursor names: memory stores
+/// `{last_entry_id}`, and older engines return it under `value`.
+pub fn cursor_entry(reply: &Value) -> Option<&str> {
+    reply
+        .pointer("/last_entry_id")
+        .or_else(|| reply.pointer("/value/last_entry_id"))
+        .and_then(Value::as_str)
+}
+
+/// The entry memory's extraction cursor stops at once it read the session:
+/// its newest user or assistant message. Custom entries (notices, memory's
+/// own blocks) and function results never are.
+pub fn cursor_target(transcript: &Value) -> Option<&str> {
+    transcript["messages"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|entry| {
+            matches!(
+                entry.pointer("/message/role").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+        })?["entry_id"]
+        .as_str()
+}
+
+/// Waits until memory's extraction has read `session` through `entry`, and
+/// says how long that took. The cursor moves once a pass is done, whatever
+/// it kept, and never when a pass failed, so it is the completion signal.
+async fn wait_cursor(context: &E2eContext, session: &str, entry: &str) -> Result<Duration> {
+    let started = Instant::now();
+    loop {
+        let reply = context
+            .trigger_value("state::get", json!({"scope": CURSOR_SCOPE, "key": session}))
+            .await;
+        if reply.as_ref().ok().and_then(cursor_entry) == Some(entry) {
+            return Ok(started.elapsed());
+        }
+        if started.elapsed() >= EXTRACTION_WAIT {
+            // A diagnostic only: memory's doctor reports the last pass of any session.
+            let passes = context
+                .trigger_value("memory::doctor", json!({}))
+                .await
+                .ok()
+                .and_then(|doctor| {
+                    doctor["checks"]
+                        .as_array()?
+                        .iter()
+                        .find(|check| check["name"] == "extraction-passes")
+                        .map(|check| check["detail"].to_string())
+                });
+            bail!(
+                "memory's extraction never read {session} through {entry} in {}s (cursor: {}; doctor extraction-passes: {})",
+                EXTRACTION_WAIT.as_secs(),
+                reply.map_or_else(|error| format!("{error:#}"), |reply| reply.to_string()),
+                passes.unwrap_or_else(|| "unknown".into())
+            );
+        }
+        sleep(POLL).await;
+    }
+}
+
+/// The memories a `memory::list` reply holds.
+pub fn memories_of(list: &Value) -> Vec<StoredMemory> {
+    let text = |memory: &Value, field: &str| memory[field].as_str().unwrap_or_default().to_string();
+    list["memories"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|memory| StoredMemory {
+            id: text(memory, "id"),
+            text: text(memory, "text"),
+            session_id: memory["source"]["session_id"].as_str().map(str::to_string),
+            live: memory["invalid_at"].is_null(),
+        })
+        .collect()
+}
+
+/// Rule name -> content, from a `memory::rule::list` reply.
+pub fn rules_of(reply: &Value) -> BTreeMap<String, String> {
+    reply["rules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|rule| {
+            Some((
+                rule["name"].as_str()?.to_string(),
+                rule["content"].as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// Waits until memory's extraction has read `session`'s `transcript`, then
+/// reads `bank`, superseded memories included.
+async fn extraction(
+    context: &E2eContext,
+    session: &str,
+    bank: &str,
+    transcript: &Value,
+) -> Result<Extraction> {
+    let entry = cursor_target(transcript)
+        .with_context(|| format!("{session} holds no message for memory to read"))?;
+    let waited = wait_cursor(context, session, entry).await?;
+    let list = context
+        .trigger_value(
+            "memory::list",
+            json!({"bank": bank, "include_superseded": true, "limit": 500}),
+        )
+        .await
+        .context("memory::list")?;
+    let rules = context
+        .trigger_value("memory::rule::list", json!({"bank": bank}))
+        .await
+        .context("memory::rule::list")?;
+    Ok(Extraction {
+        session_id: session.to_string(),
+        waited_ms: u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
+        memories: memories_of(&list),
+        rules: rules_of(&rules),
+    })
+}
+
+/// The bank once memory's extraction has read the measured session, whose
+/// transcript `capture` holds.
+pub async fn bank_after(
+    context: &E2eContext,
+    run_id: &str,
+    transcript: &Value,
+) -> Result<Extraction> {
+    extraction(context, &format!("e2e_{run_id}"), &bank(run_id), transcript).await
 }
 
 /// Keeps seed `index`'s memory for the changes and the evidence.
@@ -473,12 +764,94 @@ pub fn snapshot(run_id: &str) -> Snapshot {
                 .map(|seed| seed.as_ref().map(|seed| seed.text.clone()))
                 .collect(),
             changes: run.changes.clone(),
+            teacher: run.taught.clone(),
+            bank_after: None,
         })
 }
 
-/// Unbinds the observer and trashes the attempt's bank.
-pub async fn cleanup(context: &E2eContext, run_id: &str) -> Result<()> {
+/// One thing `cleanup` undoes.
+#[derive(Debug, PartialEq)]
+enum Undo {
+    /// The teacher session, which the Console lists with the user's own.
+    DeleteTeacher(String),
+    /// What the teacher's extraction wrote into a bank memory read instead
+    /// of the attempt's.
+    Purge {
+        bank: String,
+        session: String,
+    },
+    DeleteBank(String),
+}
+
+/// What `cleanup` undoes for an attempt, in order: the teacher before the
+/// bank, whatever setup got to.
+fn undo(run: Option<&Run>, run_id: &str) -> Vec<Undo> {
+    let teacher = run.and_then(|run| run.teacher.clone());
+    let strays = run.map_or(&[][..], |run| run.strays.as_slice());
+    let purges = teacher.iter().flat_map(|session| {
+        strays.iter().map(|bank| Undo::Purge {
+            bank: bank.clone(),
+            session: session.clone(),
+        })
+    });
+    teacher
+        .clone()
+        .map(Undo::DeleteTeacher)
+        .into_iter()
+        .chain(purges)
+        .chain([Undo::DeleteBank(bank(run_id))])
+        .collect()
+}
+
+/// `content` without the lines holding any of `canaries`, when it had one.
+fn without_lines(content: &str, canaries: &[String]) -> Option<String> {
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|line| !canaries.iter().any(|canary| line.contains(canary.as_str())))
+        .collect();
+    (kept.len() != content.lines().count()).then(|| kept.join("\n"))
+}
+
+/// Retires what `session`'s extraction wrote into `bank`: its memories, and
+/// the learned lines holding the run's canaries. Read first-page only: memory
+/// lists the newest first, and the writes are minutes old.
+async fn purge(context: &E2eContext, bank: &str, session: &str, canaries: &[String]) -> Result<()> {
+    let list = context
+        .trigger_value("memory::list", json!({"bank": bank, "limit": 500}))
+        .await
+        .context("memory::list")?;
+    let written = memories_of(&list)
+        .into_iter()
+        .filter(|memory| memory.session_id.as_deref() == Some(session));
+    for memory in written {
+        context
+            .trigger_value("memory::delete", json!({"bank": bank, "id": memory.id}))
+            .await
+            .context("memory::delete")?;
+    }
+    let rules = context
+        .trigger_value("memory::rule::list", json!({"bank": bank}))
+        .await
+        .context("memory::rule::list")?;
+    let learned = rules_of(&rules).remove(LEARNED_RULE);
+    if let Some(content) = learned.and_then(|content| without_lines(&content, canaries)) {
+        context
+            .trigger_value(
+                "memory::rule::set",
+                json!({"bank": bank, "name": LEARNED_RULE, "content": content}),
+            )
+            .await
+            .context("memory::rule::set")?;
+    }
+    Ok(())
+}
+
+/// Unbinds the observer, deletes the teacher, retires what its extraction
+/// wrote into another bank, and trashes the attempt's bank. Every step runs;
+/// the first error is returned.
+pub async fn cleanup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()> {
     let run = lock_unpoisoned(runs()).remove(run_id);
+    let steps = undo(run.as_ref(), run_id);
     if let Some(run) = run {
         if let Some(trigger) = run.trigger {
             trigger.unregister();
@@ -487,21 +860,44 @@ pub async fn cleanup(context: &E2eContext, run_id: &str) -> Result<()> {
             function.unregister();
         }
     }
-    match context
-        .trigger_value("memory::bank::delete", json!({"name": bank(run_id)}))
-        .await
-    {
-        Err(error) if !bank_already_gone(&format!("{error:#}")) => {
-            Err(error).context("memory::bank::delete")
+    let canaries: Vec<String> = labels(case)
+        .into_iter()
+        .map(|label| canary(run_id, label))
+        .collect();
+    let mut outcome = Ok(());
+    for step in steps {
+        let done = match step {
+            Undo::DeleteTeacher(session) => {
+                // A turn a failed setup left running; stopping an idle one is a no-op.
+                let _ = context.stop_session(&session, None).await;
+                context
+                    .trigger_value("session::delete", json!({"session_id": session}))
+                    .await
+                    .context("session::delete")
+                    .map(drop)
+            }
+            Undo::Purge { bank, session } => purge(context, &bank, &session, &canaries).await,
+            Undo::DeleteBank(name) => match context
+                .trigger_value("memory::bank::delete", json!({"name": name}))
+                .await
+            {
+                Err(error) if !bank_already_gone(&format!("{error:#}")) => {
+                    Err(error).context("memory::bank::delete")
+                }
+                _ => Ok(()),
+            },
+        };
+        if outcome.is_ok() {
+            outcome = done;
         }
-        _ => Ok(()),
     }
+    outcome
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenarios::memory::cases::CHANGING;
+    use crate::scenarios::memory::cases::{CASES, CHANGING};
     use serde_json::json;
 
     fn input(session: &str, step: u64, prompt: &str) -> Value {
@@ -701,5 +1097,136 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn the_cursor_wait_matches_the_stored_shape() {
+        // Memory stores `{last_entry_id}`; older engines return it under `value`.
+        let entry = "e_t_b_0_assistant";
+        assert_eq!(cursor_entry(&json!({"last_entry_id": entry})), Some(entry));
+        assert_eq!(
+            cursor_entry(&json!({"value": {"last_entry_id": entry}})),
+            Some(entry)
+        );
+        // The id alone, or nothing stored yet, is no cursor.
+        for reply in [
+            json!(entry),
+            json!(null),
+            json!({}),
+            json!({"value": entry}),
+        ] {
+            assert_eq!(cursor_entry(&reply), None, "{reply}");
+        }
+        // The cursor stops at the newest user or assistant message, never at
+        // the notices, memory's blocks or function results after it.
+        let transcript = json!({"messages": [
+            {"entry_id": "e_t_a_user", "message": {"role": "user", "content": []}},
+            {"entry_id": "e_t_a_0_assistant", "message": {"role": "assistant", "content": []}},
+            {"entry_id": "e_t_b_user", "message": {"role": "user", "content": []}},
+            {"entry_id": "e_t_b_0_notice_0", "custom": {"custom_type": "model_notice",
+             "data": {"kind": "hook", "text": "<memory bank=\"e2e-a\">\n</memory>"}}},
+            {"entry_id": entry, "message": {"role": "assistant", "content": []},
+             "origin": {"turn_id": "t_b"}},
+            {"entry_id": "e_t_b_0_result", "message": {"role": "function_result", "content": []}},
+            {"entry_id": "e_t_b_notice", "message": {"role": "custom", "custom_type": "notice", "content": []}},
+        ]});
+        assert_eq!(cursor_target(&transcript), Some(entry));
+        assert_eq!(cursor_target(&json!({"messages": []})), None);
+    }
+
+    #[test]
+    fn the_teacher_session_is_deleted_even_when_setup_fails_after_it() {
+        let case = CASES.iter().find(|case| !case.teacher.is_empty()).unwrap();
+        let run_id = "teacher-cleanup";
+        // Setup's first step, then the teacher's, before any send.
+        register(case, run_id);
+        let session = enroll_teacher(run_id);
+        assert_eq!(session, teacher(run_id));
+        // The observer records `e2e_<attempt>` only, never the teacher.
+        assert_ne!(session, format!("e2e_{run_id}"));
+        // The send, the turn or the extraction wait fails: nothing else ran.
+        let mut run = lock_unpoisoned(runs()).remove(run_id).unwrap();
+        assert_eq!(
+            undo(Some(&run), run_id),
+            [
+                Undo::DeleteTeacher(session.clone()),
+                Undo::DeleteBank(bank(run_id))
+            ]
+        );
+        // Memory read another bank on a teacher turn: what extraction wrote
+        // there goes too, before the attempt's bank.
+        run.strays = vec!["main".into()];
+        assert_eq!(
+            undo(Some(&run), run_id),
+            [
+                Undo::DeleteTeacher(session.clone()),
+                Undo::Purge {
+                    bank: "main".into(),
+                    session
+                },
+                Undo::DeleteBank(bank(run_id))
+            ]
+        );
+        // No teacher, or no setup at all: the bank alone.
+        run.teacher = None;
+        run.strays.clear();
+        assert_eq!(undo(Some(&run), run_id), [Undo::DeleteBank(bank(run_id))]);
+        assert_eq!(undo(None, run_id), [Undo::DeleteBank(bank(run_id))]);
+    }
+
+    #[test]
+    fn the_teacher_is_a_user_session_pinned_to_the_bank_with_nothing_to_call() {
+        let first = serde_json::to_value(teacher_send("a", 0, "Remember this.".into())).unwrap();
+        assert_eq!(first["session_id"], "teach_a");
+        assert_eq!(first["message"], "Remember this.");
+        assert_eq!(first["session"]["kind"], "user");
+        assert_eq!(first["session"]["metadata"]["memory_bank"], "e2e-a");
+        assert_eq!(
+            first["options"]["metadata"],
+            json!({"memory_bank": "e2e-a"})
+        );
+        assert_eq!(first["options"]["functions"]["allow"], json!([]));
+        let second = serde_json::to_value(teacher_send("a", 1, "And this.".into())).unwrap();
+        assert!(second.get("session").is_none());
+        assert_ne!(first["idempotency_key"], second["idempotency_key"]);
+    }
+
+    #[test]
+    fn a_bank_is_read_with_its_retired_memories_and_its_rules() {
+        let list = json!({"total": 2, "memories": [
+            {"id": "fp1", "text": "Learned.", "source": {"session_id": "teach_a", "entry_id": "e"},
+             "created_at": 1, "updated_at": 1},
+            {"id": "fp2", "text": "Saved.", "invalid_at": 5, "created_at": 1, "updated_at": 5},
+        ]});
+        assert_eq!(
+            memories_of(&list),
+            [
+                StoredMemory {
+                    id: "fp1".into(),
+                    text: "Learned.".into(),
+                    session_id: Some("teach_a".into()),
+                    live: true,
+                },
+                StoredMemory {
+                    id: "fp2".into(),
+                    text: "Saved.".into(),
+                    session_id: None,
+                    live: false,
+                },
+            ]
+        );
+        let rules =
+            json!({"bank": "e2e-a", "rules": [{"name": "learned", "content": "# Learned\n- x\n"}]});
+        assert_eq!(
+            rules_of(&rules),
+            BTreeMap::from([("learned".to_string(), "# Learned\n- x\n".to_string())])
+        );
+        // A purge drops only the learned lines holding the run's canaries.
+        let canaries = ["0a1b2c3d".to_string()];
+        assert_eq!(
+            without_lines("# Learned\n- keep\n- drop 0a1b2c3d\n", &canaries),
+            Some("# Learned\n- keep".into())
+        );
+        assert_eq!(without_lines("# Learned\n- keep\n", &canaries), None);
     }
 }

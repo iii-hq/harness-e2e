@@ -22,10 +22,14 @@ containers:
     worker: package://harness
     version: latest
 
-  # The worker under test.
+  # The worker under test. Its extraction model is pinned: left empty, memory
+  # takes the first model the router lists, in no set order. The router reads
+  # `provider::model` as that provider's model.
   memory:
     worker: package://memory
     version: latest
+    config_override:
+      extraction_model: deepseek::deepseek-flash
 
   # The runner that executes the scenarios inside that stack.
   harness-e2e:

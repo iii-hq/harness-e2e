@@ -623,6 +623,10 @@ scenarios! {
     MemoryRuleChangedMidSession = "memory_rule_changed_mid_session" => memory::Memory(16),
     MemoryBankEditsMidSession = "memory_bank_edits_mid_session" => memory::Memory(17),
     MemoryBankTrashedMidSession = "memory_bank_trashed_mid_session" => memory::Memory(18),
+    MemoryLearnThenRecall = "memory_learn_then_recall" => memory::Memory(19),
+    MemoryLearnRuleThenObey = "memory_learn_rule_then_obey" => memory::Memory(20),
+    MemoryLearnCorrection = "memory_learn_correction" => memory::Memory(21),
+    MemoryAutomationNotLearned = "memory_automation_not_learned" => memory::Memory(22),
 }
 
 impl ScenarioId {
@@ -886,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_seventy_nine_unique_valid_scenarios() {
+    fn registry_contains_eighty_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -895,7 +899,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 79);
+        assert_eq!(ids.len(), 83);
     }
 
     #[test]
@@ -1240,14 +1244,26 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
             let planted = &definition["planted_state"];
             let memories = planted["memories"].as_array().unwrap();
             let rules = planted["rules"].as_array().unwrap();
-            // A case with changes may plant nothing up front and save later.
-            if case.changes.is_empty() {
+            // A case with changes may plant nothing up front and save later;
+            // one may plant nothing for its teacher to fill, or to show memory
+            // learns nothing from the session.
+            let fills_later = !case.changes.is_empty()
+                || !case.teacher.is_empty()
+                || memory::cases::audits_bank_after(case);
+            if !fills_later {
                 assert_eq!(
                     memories.is_empty() && rules.is_empty(),
                     case.baseline,
                     "{id}"
                 );
             }
+            assert_eq!(
+                planted.get("teacher"),
+                (!case.teacher.is_empty())
+                    .then(|| serde_json::json!(case.teacher))
+                    .as_ref(),
+                "{id}"
+            );
             let changes = planted.get("changes").and_then(Value::as_array);
             assert_eq!(changes.map_or(0, Vec::len), case.changes.len(), "{id}");
             if !case.baseline {
