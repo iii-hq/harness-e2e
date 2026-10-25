@@ -11,7 +11,6 @@ use super::cases::{
     bank, canary, labels, render, trashed_after, Case, Change, Check, Criterion, DISTRACTORS,
 };
 use super::observe::{observe, visible_at, MemoryBlock, Observed, RulesUpdate};
-use super::runtime::Snapshot;
 use crate::report::EvaluationDimension;
 use crate::scenarios::assessment::{self, AssessmentSpec};
 use crate::scenarios::{CriterionSpec, ObjectiveEvaluation};
@@ -77,6 +76,17 @@ pub struct ChangeOutcome {
     pub function: String,
     /// "ok", or "error: " and why.
     pub status: String,
+}
+
+/// What `capture` reads of an attempt.
+#[derive(Debug, Default)]
+pub struct Snapshot {
+    pub prompts: Vec<PromptRecord>,
+    pub compaction: Option<String>,
+    pub retrieval: Option<Retrieval>,
+    /// Memory's stored text of each case seed, `None` until saved.
+    pub stored: Vec<Option<String>>,
+    pub changes: Vec<ChangeOutcome>,
 }
 
 /// How memory ranked recalls during the attempt.
@@ -687,6 +697,9 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
         // reached memory: it read `main` or a directory bank instead. Once the
         // case trashed its bank, no bank or another one is what its gate
         // scores: a fallback to `main` is a product failure, not a rerun.
+        // shortcut: a hook that never ran after the trash fails `BankGoneFrom`
+        // instead of rerunning; tell it from one that ran by the exchange's
+        // recorded memory section once a flaky hook shows up after a trash.
         match exchange.memory_bank.as_deref() {
             _ if trashed.is_some_and(|after| index > after) => {}
             None => problems.push(format!("exchange {index} ran without the memory hook")),
@@ -1679,5 +1692,182 @@ mod tests {
         assert!(!kept.contains("The user's own rule."), "{kept}");
         assert!(evidence.observed.rules_updates[0].text.contains("own rule"));
         assert_eq!(evidence.observed.rules_updates.len(), 2);
+    }
+
+    /// The case's awards for `blocks`, with one answer per exchange.
+    fn awards(case: &Case, blocks: Vec<MemoryBlock>) -> ObjectiveEvaluation {
+        let answers = vec!["x"; 1 + case.followups.len()];
+        evaluate(case, &evidence_of(case, observed(&answers, blocks)))
+    }
+
+    #[test]
+    fn chatter_that_brings_user_facts_fails_its_gate() {
+        let case = case_named("memory_chatter_after_answer");
+        let deploy = block(0, vec![line(case, 0)]);
+        let quiet = awards(case, vec![deploy.clone()]);
+        assert_eq!(award(&quiet, "deploy_fact_injected"), Some(25));
+        assert_eq!(award(&quiet, "no_memory_on_chatter"), Some(60));
+        // "tell me more" read as a question about the user: six user facts.
+        let user_facts = DISTRACTORS[..6]
+            .iter()
+            .map(|text| text.to_string())
+            .collect();
+        let noisy = awards(case, vec![deploy, block(1, user_facts)]);
+        assert_eq!(award(&noisy, "no_memory_on_chatter"), Some(0));
+        assert_eq!(noisy.infrastructure_error, None);
+        // Nothing at all fails the positive control.
+        assert_eq!(
+            award(&awards(case, vec![]), "deploy_fact_injected"),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn the_user_fact_a_task_needs_must_reach_it_alone() {
+        let case = case_named("memory_user_fact_needed");
+        let closing = line(case, 0);
+        let found = awards(case, vec![block(0, vec![closing.clone()])]);
+        assert_eq!(award(&found, "user_fact_injected"), Some(40));
+        assert_eq!(award(&found, "no_unrelated_memories"), Some(30));
+        assert_eq!(award(&awards(case, vec![]), "user_fact_injected"), Some(0));
+        let padded = awards(case, vec![block(0, vec![closing, DISTRACTORS[0].into()])]);
+        assert_eq!(award(&padded, "no_unrelated_memories"), Some(0));
+    }
+
+    #[test]
+    fn about_me_wants_every_user_fact_and_no_workplace_fact() {
+        let case = case_named("memory_about_me");
+        let user: Vec<String> = (0..case.memories.len())
+            .filter(|&index| case.memories[index].group != "workplace")
+            .map(|index| line(case, index))
+            .collect();
+        let workplace = (0..case.memories.len())
+            .find(|&index| case.memories[index].group == "workplace")
+            .map(|index| line(case, index))
+            .unwrap();
+        // With six or fewer, memory's six-line cap never picks among them.
+        assert!(user.len() <= 6, "{user:?}");
+        let all = awards(case, vec![block(0, user.clone())]);
+        assert_eq!(award(&all, "user_facts_injected"), Some(40));
+        assert_eq!(award(&all, "no_workplace_memories"), Some(30));
+        let short = awards(case, vec![block(0, user[1..].to_vec())]);
+        assert_eq!(award(&short, "user_facts_injected"), Some(0));
+        let padded = awards(case, vec![block(0, [user, vec![workplace]].concat())]);
+        assert_eq!(award(&padded, "no_workplace_memories"), Some(0));
+    }
+
+    #[test]
+    fn a_rewording_sent_while_its_twin_is_visible_is_a_duplicate() {
+        let case = case_named("memory_reworded_across_turns");
+        let (first, rewording) = (line(case, 0), line(case, 1));
+        // Exchange 1 still shows the first wording: nothing more to send.
+        let quiet = awards(case, vec![block(0, vec![first.clone()])]);
+        assert_eq!(award(&quiet, "migration_fact_present"), Some(30));
+        assert_eq!(award(&quiet, "no_rewording_while_visible"), Some(50));
+        let reworded = awards(case, vec![block(0, vec![first]), block(1, vec![rewording])]);
+        assert_eq!(award(&reworded, "no_rewording_while_visible"), Some(0));
+        assert_eq!(award(&reworded, "migration_fact_present"), Some(30));
+    }
+
+    #[test]
+    fn one_sibling_told_for_both_fails_the_gate() {
+        let case = case_named("memory_sibling_facts");
+        let (billing, ledger) = (line(case, 0), line(case, 1));
+        let both = awards(case, vec![block(0, vec![billing.clone(), ledger])]);
+        assert_eq!(award(&both, "both_siblings_injected"), Some(70));
+        assert_eq!(award(&both, "no_unrelated_memories"), Some(30));
+        let collapsed = awards(case, vec![block(0, vec![billing])]);
+        assert_eq!(award(&collapsed, "both_siblings_injected"), Some(0));
+    }
+
+    #[test]
+    fn a_rule_edit_and_its_removal_each_arrive_as_one_update() {
+        let case = case_named("memory_rule_changed_mid_session");
+        let edited = format!(
+            "{HEADER}\n## commit-messages\nPrefix [{}].\n",
+            canary(RUN, "after")
+        );
+        let run = |updates: Vec<RulesUpdate>, answers: &[&str]| {
+            let mut seen = observed(answers, vec![]);
+            seen.rules_updates = updates;
+            evaluate(case, &evidence_with(case, seen, &rules_prompt(case), None))
+        };
+        let (before, after) = (
+            format!("[{}] Fix crash", canary(RUN, "before")),
+            format!("[{}] Add toggle", canary(RUN, "after")),
+        );
+        let delivered = run(
+            vec![update(1, &edited), update(2, HEADER)],
+            &[&before, &after, "Bump lodash"],
+        );
+        assert_eq!(delivered.infrastructure_error, None);
+        for (id, weight) in [
+            ("edit_sent_as_update", 30),
+            ("removal_sent_as_update", 20),
+            ("system_prompt_unchanged", 20),
+            ("edited_rule_obeyed", 20),
+            ("removed_rule_not_applied", 10),
+        ] {
+            assert_eq!(award(&delivered, id), Some(weight), "{id}");
+        }
+        // The removal never arrived: the edit is still the last word.
+        let stale = run(
+            vec![update(1, &edited), update(2, &edited)],
+            &[&before, &after, &after],
+        );
+        assert_eq!(award(&stale, "removal_sent_as_update"), Some(0));
+        assert_eq!(award(&stale, "removed_rule_not_applied"), Some(0));
+        let silent = run(vec![], &[&before, &after, "Bump lodash"]);
+        assert_eq!(award(&silent, "edit_sent_as_update"), Some(0));
+        assert_eq!(award(&silent, "removal_sent_as_update"), Some(0));
+    }
+
+    #[test]
+    fn bank_edits_reach_the_next_turn_as_they_now_stand() {
+        let case = case_named("memory_bank_edits_mid_session");
+        let deploy = block(0, vec![line(case, 0)]);
+        let current = vec![line(case, 4), line(case, 5), line(case, 6)];
+        let fresh = awards(case, vec![deploy.clone(), block(1, current.clone())]);
+        assert_eq!(fresh.infrastructure_error, None);
+        assert_eq!(award(&fresh, "retired_memories_left_out"), Some(35));
+        assert_eq!(award(&fresh, "current_memories_injected"), Some(35));
+        assert_eq!(award(&fresh, "no_unrelated_memories"), Some(10));
+        // Each retired text, deleted, superseded or rewritten, fails the gate.
+        for retired in 1..=3 {
+            let stale = [current.clone(), vec![line(case, retired)]].concat();
+            let evaluation = awards(case, vec![deploy.clone(), block(1, stale)]);
+            assert_eq!(
+                award(&evaluation, "retired_memories_left_out"),
+                Some(0),
+                "{retired}"
+            );
+        }
+        // The memory saved a moment ago is missing.
+        let missed = awards(case, vec![deploy, block(1, current[..2].to_vec())]);
+        assert_eq!(award(&missed, "current_memories_injected"), Some(0));
+    }
+
+    #[test]
+    fn a_trashed_bank_case_passes_only_on_no_memory_after_the_trash() {
+        let case = case_named("memory_bank_trashed_mid_session");
+        let channel = block(0, vec![line(case, 0)]);
+        let gone = |blocks: Vec<MemoryBlock>, bank: Option<String>| {
+            let mut seen = observed(&["a", "b"], blocks);
+            seen.exchanges[1].memory_bank = bank;
+            seen.rules_updates
+                .push(update(1, "\nNo memory section applies now.\n"));
+            evaluate(case, &evidence_of(case, seen))
+        };
+        let clean = gone(vec![channel.clone()], None);
+        assert_eq!(clean.infrastructure_error, None);
+        assert_eq!(award(&clean, "memory_gone_after_trash"), Some(50));
+        assert_eq!(award(&clean, "channel_fact_injected"), Some(30));
+        // The owner line on the next turn: the trash was ignored.
+        let ignored = gone(
+            vec![channel, block(1, vec![line(case, 1)])],
+            Some(bank(RUN)),
+        );
+        assert_eq!(ignored.infrastructure_error, None);
+        assert_eq!(award(&ignored, "memory_gone_after_trash"), Some(0));
     }
 }

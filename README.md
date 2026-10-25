@@ -200,7 +200,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
-| Memory quality | `memory` | What the memory worker injects into a live session, eleven cases three times each, on the `memory` stack. |
+| Memory quality | `memory` | What the memory worker injects into a live session, nineteen cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -273,26 +273,63 @@ tour, the run loses the `tour.current` criterion and nothing else. When the
 tour changes on purpose, regenerate the fixture from the worker's
 `src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
 
-The `memory` suite runs eleven cases, three independent rounds, one technical
-retry. Each case plants its own bank (`e2e-<attempt>`) with the rules,
-memories and unrelated distractor facts it calls for, waits until memory has
-indexed all of them (with MiniLM; lexical-only stores nothing to wait for),
-sends its prompt and follow-ups, and audits what memory
-injected into each turn against what that turn needed: the right facts, no
-duplicates, nothing unrelated, rules intact in the system prompt. The subject
+The `memory` suite runs nineteen cases, three independent rounds, one
+technical retry. Each case plants its own bank (`e2e-<attempt>`) with the
+rules, memories and unrelated distractor facts it calls for, waits until
+memory has indexed all of them (with MiniLM; lexical-only stores nothing to
+wait for), sends its prompt and follow-ups, and audits what memory injected
+into each turn against what that turn needed: the right facts, no duplicates,
+nothing unrelated, rules intact in the system prompt. A case may also change
+its bank between turns (a rule set or removed, memories deleted, superseded,
+rewritten or saved, the bank trashed) and judge what the next turn gets: a
+rules change must arrive as one appended `<memory update="rules">` notice
+while the system prompt keeps the section the first turn froze. The subject
 may call no function (`memory::*` is denied), so a planted value reaches the
 answer only through memory's injection. Two cases are baselines: the same task
 with nothing planted, expected to fail, since a baseline that passes means its
-value case proves nothing. Scoring is deterministic, never a model. Each run
-also records seven `memory_` measurements: expected, irrelevant and duplicate
-injections, the injected, rules and reminder tokens, and the turns where the
-memory hook did not run. An attempt that cannot show memory ran on its own
-bank (no hook, another bank, a recall count its parsed lines do not match, an
-unobserved prompt, a failed compaction) is an infrastructure error: reported
-unscored and not retried automatically, so rerun the case. A fresh bank per
-attempt makes every case safe to rerun, and `memory::bank::delete` moves the
-attempt's bank to memory's `.trash` afterwards; the user's own banks are never
-touched.
+value case proves nothing. Scoring is deterministic, never a model.
+
+Beside recall, small talk, first person, paraphrases, repeats, stale facts,
+rule fit and the two value cases with their baselines, eight cases cover:
+
+- `memory_chatter_after_answer`: "tell me more" and "I know." after an answer
+  inject nothing. Their words match nothing the case plants, since in
+  lexical-only mode one shared word can still inject a memory.
+- `memory_user_fact_needed`: a task that asks for the user's own preference
+  gets that fact about the user, and no other.
+- `memory_about_me`: "What do you remember about me?" brings back the six
+  facts about the user and none of the eight workplace facts.
+- `memory_reworded_across_turns`: a fact still in context is not sent again in
+  other words. Setup checks with `memory::preview` that memory still ranks the
+  two wordings as the case needs; when it does not, the attempt is an
+  infrastructure error, so the case is redesigned instead of passing without
+  testing its point.
+- `memory_sibling_facts`: two services on Postgres 16 both reach the turn that
+  asks which services use it.
+- `memory_rule_changed_mid_session`: a rule edited, then removed, arrives as
+  one update each time, and the system prompt never changes.
+- `memory_bank_edits_mid_session`: a memory deleted, one superseded, one
+  rewritten and one saved between turns reach the next turn as they now stand.
+- `memory_bank_trashed_mid_session`: once the bank is trashed, the next turn
+  reads no bank, gets no memory, and is told that no memory section applies.
+
+Each run also records `memory_` measurements: expected, irrelevant and
+duplicate injections, the injected, rules and reminder tokens, the turns where
+the memory hook did not run (a turn after the case trashed its bank is not
+one), and, for a case that changes its rules or trashes its bank, the rules
+updates memory sent (`memory_rules_updates`). An attempt that cannot show
+memory ran on its own bank is an infrastructure error, reported unscored and
+not retried automatically, so rerun the case: no hook, another bank, a recall
+count its parsed lines do not match, a rules update memory announced that did
+not parse, an unobserved prompt, a failed compaction, or a change between
+turns that failed or never ran. The one exception is a turn after the case
+trashed its bank: no bank or another bank there is what that case's gate
+scores, so a fallback to `main` fails the case instead of being rerun. The
+evidence never keeps another bank's text: such a block keeps its line count
+with every line withheld, and a rules update or memory section naming another
+bank is withheld whole. A fresh bank per attempt makes every case safe to
+rerun, and `memory::bank::delete` moves the attempt's bank to memory's
+`.trash` afterwards; the user's own banks are never touched.
 
 Run it on the `memory` stack, the default stack plus the `memory` worker.
 Memory ranks recalls with the local MiniLM embedder where iii-directory has

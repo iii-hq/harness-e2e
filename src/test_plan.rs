@@ -181,6 +181,14 @@ const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::MemoryValuePreference,
     ScenarioId::MemoryValuePreferenceBaseline,
     ScenarioId::MemoryRuleFit,
+    ScenarioId::MemoryChatterAfterAnswer,
+    ScenarioId::MemoryUserFactNeeded,
+    ScenarioId::MemoryAboutMe,
+    ScenarioId::MemoryRewordedAcrossTurns,
+    ScenarioId::MemorySiblingFacts,
+    ScenarioId::MemoryRuleChangedMidSession,
+    ScenarioId::MemoryBankEditsMidSession,
+    ScenarioId::MemoryBankTrashedMidSession,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -737,7 +745,7 @@ mod tests {
             ("onboarding", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
-            ("memory", 11, 33),
+            ("memory", 19, 57),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -922,7 +930,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:b5d209ad9fcb9a2c22c668d8690a90bd14abde50fb0a81bce746ec892ef6c512"
+            "sha256:825d5c7952da66eb597b359fbff0d9a4d11de800765f6f1484f0d698e55b979e"
         );
     }
 

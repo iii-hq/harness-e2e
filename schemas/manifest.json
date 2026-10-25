@@ -447,7 +447,15 @@
         "memory_value_project_baseline",
         "memory_value_preference",
         "memory_value_preference_baseline",
-        "memory_rule_fit"
+        "memory_rule_fit",
+        "memory_chatter_after_answer",
+        "memory_user_fact_needed",
+        "memory_about_me",
+        "memory_reworded_across_turns",
+        "memory_sibling_facts",
+        "memory_rule_changed_mid_session",
+        "memory_bank_edits_mid_session",
+        "memory_bank_trashed_mid_session"
       ]
     },
     "StackIdentity": {

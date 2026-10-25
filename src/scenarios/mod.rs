@@ -615,6 +615,14 @@ scenarios! {
     MemoryValuePreference = "memory_value_preference" => memory::Memory(8),
     MemoryValuePreferenceBaseline = "memory_value_preference_baseline" => memory::Memory(9),
     MemoryRuleFit = "memory_rule_fit" => memory::Memory(10),
+    MemoryChatterAfterAnswer = "memory_chatter_after_answer" => memory::Memory(11),
+    MemoryUserFactNeeded = "memory_user_fact_needed" => memory::Memory(12),
+    MemoryAboutMe = "memory_about_me" => memory::Memory(13),
+    MemoryRewordedAcrossTurns = "memory_reworded_across_turns" => memory::Memory(14),
+    MemorySiblingFacts = "memory_sibling_facts" => memory::Memory(15),
+    MemoryRuleChangedMidSession = "memory_rule_changed_mid_session" => memory::Memory(16),
+    MemoryBankEditsMidSession = "memory_bank_edits_mid_session" => memory::Memory(17),
+    MemoryBankTrashedMidSession = "memory_bank_trashed_mid_session" => memory::Memory(18),
 }
 
 impl ScenarioId {
@@ -878,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_seventy_one_unique_valid_scenarios() {
+    fn registry_contains_seventy_nine_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -887,7 +895,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 71);
+        assert_eq!(ids.len(), 79);
     }
 
     #[test]

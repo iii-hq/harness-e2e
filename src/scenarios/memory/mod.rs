@@ -290,7 +290,13 @@ mod tests {
     fn planted_state_names_changes_and_entities_only_for_a_case_with_them() {
         for case in &CASES {
             let state = planted_state(case, "contract");
-            assert!(state.get("changes").is_none(), "{}", case.id);
+            let changes = state.get("changes").and_then(Value::as_array);
+            assert_eq!(
+                changes.map_or(0, Vec::len),
+                case.changes.len(),
+                "{}",
+                case.id
+            );
             assert!(state.get("entities").is_none(), "{}", case.id);
         }
         let case = &cases::CHANGING;

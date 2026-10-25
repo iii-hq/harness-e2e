@@ -254,7 +254,15 @@ impl ScenarioId {
                 | Self::MemoryValueProjectBaseline
                 | Self::MemoryValuePreference
                 | Self::MemoryValuePreferenceBaseline
-                | Self::MemoryRuleFit => (&[W::Memory], A::Memory, &[]),
+                | Self::MemoryRuleFit
+                | Self::MemoryChatterAfterAnswer
+                | Self::MemoryUserFactNeeded
+                | Self::MemoryAboutMe
+                | Self::MemoryRewordedAcrossTurns
+                | Self::MemorySiblingFacts
+                | Self::MemoryRuleChangedMidSession
+                | Self::MemoryBankEditsMidSession
+                | Self::MemoryBankTrashedMidSession => (&[W::Memory], A::Memory, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {

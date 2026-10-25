@@ -143,6 +143,11 @@ pub struct Case {
     pub followups: &'static [&'static str],
     /// `harness::compact` runs before this exchange's send.
     pub compact_before: Option<usize>,
+    /// `(exchange, seed)`: once setup planted the bank, `memory::preview` of
+    /// that exchange's message injects that seed's memory first. A ranking
+    /// the case is built on; setup fails when it no longer holds, so the case
+    /// is redesigned instead of passing without testing its point.
+    pub preview_first: &'static [(usize, usize)],
     /// Changes to the bank, each run once exchange `.0` has its answer, in
     /// order and before any compaction.
     pub changes: &'static [(usize, Change)],
@@ -272,7 +277,7 @@ const COMMIT_CRITERIA: &[Criterion] = &[
     prefix_answer(70),
 ];
 
-pub const CASES: [Case; 11] = [
+pub const CASES: [Case; 19] = [
     Case {
         id: "memory_relevant_recall",
         title: "Memory recalls what the task needs",
@@ -296,6 +301,7 @@ pub const CASES: [Case; 11] = [
         prompt: "I need to deploy the billing-sync service and tell the team where to watch its logs. Reply with the exact deploy command and the name of the log channel.",
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -346,6 +352,7 @@ pub const CASES: [Case; 11] = [
         prompt: "hi",
         followups: &["thanks!", "ok", "?"],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[gate(
             "no_memory_on_small_talk",
@@ -367,6 +374,7 @@ pub const CASES: [Case; 11] = [
         prompt: "Can you help me fix my failing test? add(2, 2) returns 5 instead of 4 in my calculator module.",
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[gate(
             "no_unrelated_user_memories",
@@ -404,6 +412,7 @@ pub const CASES: [Case; 11] = [
         prompt: "How do I run the ledger database migrations? Reply with the exact command.",
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -470,6 +479,7 @@ pub const CASES: [Case; 11] = [
             "Remind me: which file sets the payments API rate limit?",
         ],
         compact_before: Some(3),
+        preview_first: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -528,6 +538,7 @@ pub const CASES: [Case; 11] = [
         prompt: "When does the analytics export run, and which bucket does it write to?",
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -580,6 +591,7 @@ pub const CASES: [Case; 11] = [
         prompt: RELEASE_PROMPT,
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: RELEASE_CRITERIA,
     },
@@ -595,6 +607,7 @@ pub const CASES: [Case; 11] = [
         prompt: RELEASE_PROMPT,
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[release_answer(100)],
     },
@@ -610,6 +623,7 @@ pub const CASES: [Case; 11] = [
         prompt: COMMIT_PROMPT,
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: COMMIT_CRITERIA,
     },
@@ -625,6 +639,7 @@ pub const CASES: [Case; 11] = [
         prompt: COMMIT_PROMPT,
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[prefix_answer(100)],
     },
@@ -649,6 +664,7 @@ pub const CASES: [Case; 11] = [
         prompt: "Write a SQL query that counts the orders placed in the last 7 days from a table named orders. Reply with the query only.",
         followups: &[],
         compact_before: None,
+        preview_first: &[],
         changes: &[],
         criteria: &[
             gate(
@@ -677,6 +693,505 @@ pub const CASES: [Case; 11] = [
                 },
                 "Unrelated rule left out of the answer",
                 "Does the answer leave out the run's haiku signature value, a rule that does not apply?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_chatter_after_answer",
+        title: "No memory on chatter after an answer",
+        summary: "A bank holds a deploy command among 20 unrelated user facts, and the task is followed by two chatter turns, \"tell me more\" and \"I know\".",
+        protects: "Short replies such as \"tell me more\" or \"I know.\" after an answer bring no stored facts about the user. If it fails, every bit of chatter pays for up to six unrelated user facts in the context.",
+        baseline: false,
+        distractors: true,
+        memories: &[seed(
+            "Deploy the billing-sync service with the command deploy-{deploy}.",
+            "deploy",
+            &[0],
+        )],
+        rules: &[],
+        prompt: "Which command deploys the billing-sync service? Reply with the command only.",
+        // Each phrase once read as a question about the user; whichever comes
+        // first would inject, and the next finds the same facts still visible.
+        followups: &["tell me more", "I know."],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[],
+        criteria: &[
+            gate(
+                "deploy_fact_injected",
+                25,
+                Check::NeededInjected { exchange: None },
+                "Deploy fact injected on the task",
+                "Was the stored deploy command injected on the task turn that needs it?",
+            ),
+            gate(
+                "no_memory_on_chatter",
+                60,
+                Check::NothingIrrelevant,
+                "No memory injected on chatter turns",
+                "Did no stored fact reach the context on the chatter turns, and no unrelated one on the task turn?",
+            ),
+            scored(
+                "answer_has_deploy_command",
+                15,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "deploy",
+                },
+                "Answer has the deploy command",
+                "Does the answer carry the run's deploy command value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_user_fact_needed",
+        title: "A task gets the user fact it needs",
+        summary: "A bank holds the user's email closing among 20 unrelated user facts, and the task asks for an email that ends with it.",
+        protects: "A task that asks for the user's own preference gets that stored fact about the user and no other. If it fails, a filter that keeps personal facts out of task turns also drops the preferences a task asks for.",
+        baseline: false,
+        distractors: true,
+        memories: &[seed(
+            "The user signs every email with the closing sign-{sign}.",
+            "sign",
+            &[0],
+        )],
+        rules: &[],
+        prompt: "Write a two-line email saying the deploy is done, and end it with my usual email closing. Reply with the email only.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[],
+        criteria: &[
+            gate(
+                "user_fact_injected",
+                40,
+                Check::NeededInjected { exchange: None },
+                "Needed user fact injected on the task",
+                "Was the stored email closing injected on the turn that asks for it?",
+            ),
+            gate(
+                "no_unrelated_memories",
+                30,
+                Check::NothingIrrelevant,
+                "No unrelated memory injected",
+                "Was every injected memory the one the task needs, with no other user fact beside it?",
+            ),
+            scored(
+                "answer_has_closing",
+                30,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "sign",
+                },
+                "Answer ends with the stored closing",
+                "Does the answer carry the run's email closing value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_about_me",
+        title: "What memory holds about the user",
+        summary: "A bank holds six facts about the user and eight workplace facts, and the user asks what memory remembers about them.",
+        protects: "Asking what memory holds about the user brings back the facts about the user and no workplace facts. If it fails, the usual way someone checks their memory comes back empty or padded with facts about their workplace.",
+        baseline: false,
+        // Its own list: six user facts, so memory's six-line cap never picks
+        // among them, beside the eight workplace distractors.
+        distractors: false,
+        memories: &[
+            seed("The user's team nickname is nick-{nick}.", "nick", &[0]),
+            seed("The user's cat is named Pixel.", "cat", &[0]),
+            seed("The user grew up in Porto.", "porto", &[0]),
+            seed("The user plays the cello in a quartet.", "cello", &[0]),
+            seed("The user's favorite author is Ursula Le Guin.", "author", &[0]),
+            seed("The user is vegetarian.", "vegetarian", &[0]),
+            seed(DISTRACTORS[6], "workplace", &[]),
+            seed(DISTRACTORS[7], "workplace", &[]),
+            seed(DISTRACTORS[8], "workplace", &[]),
+            seed(DISTRACTORS[9], "workplace", &[]),
+            seed(DISTRACTORS[12], "workplace", &[]),
+            seed(DISTRACTORS[14], "workplace", &[]),
+            seed(DISTRACTORS[16], "workplace", &[]),
+            seed(DISTRACTORS[17], "workplace", &[]),
+        ],
+        rules: &[],
+        prompt: "What do you remember about me?",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[],
+        criteria: &[
+            gate(
+                "user_facts_injected",
+                40,
+                Check::NeededInjected { exchange: None },
+                "Every user fact injected",
+                "Was every stored fact about the user injected on the turn that asks for them?",
+            ),
+            gate(
+                "no_workplace_memories",
+                30,
+                Check::NothingIrrelevant,
+                "No workplace memory injected",
+                "Was no stored workplace fact injected on a turn about the user?",
+            ),
+            scored(
+                "answer_has_nickname",
+                30,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "nick",
+                },
+                "Answer names the stored nickname",
+                "Does the answer carry the run's team nickname value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_reworded_across_turns",
+        title: "A visible fact is not sent reworded",
+        summary: "A bank holds one migration command in two wordings, and a second turn asks for it again while the first wording is still in context.",
+        protects: "A fact the context already shows is not sent again in other words on a later turn. If it fails, long sessions carry the same fact twice under two wordings and pay for both.",
+        baseline: false,
+        distractors: true,
+        memories: &[
+            seed(
+                "Ledger database migrations are run with the migrate-{migrate} command.",
+                "migrate",
+                &[0, 1],
+            ),
+            seed(
+                "To migrate the ledger database, run migrate-{migrate}.",
+                "migrate",
+                &[0, 1],
+            ),
+        ],
+        rules: &[],
+        prompt: "How do I run the ledger database migrations? Reply with the exact command.",
+        followups: &["Remind me how to migrate the ledger database."],
+        compact_before: None,
+        // The first wording is told first, and the follow-up ranks the second
+        // above it: only then is the second sent unless memory sees the first.
+        preview_first: &[(0, 0), (1, 1)],
+        changes: &[],
+        criteria: &[
+            gate(
+                "migration_fact_present",
+                30,
+                Check::NeededInjected { exchange: None },
+                "Migration fact present on both turns",
+                "Was the migration fact injected or still in the context on each turn?",
+            ),
+            gate(
+                "no_rewording_while_visible",
+                50,
+                Check::NoDuplicates,
+                "No rewording sent while still visible",
+                "Was the migration fact never sent again in other words while its first wording was in the context?",
+            ),
+            scored(
+                "answer_has_migrate_command",
+                20,
+                Check::AnswerContains {
+                    exchange: None,
+                    canary: "migrate",
+                },
+                "Every answer has the migrate command",
+                "Does every answer carry the run's migrate command value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_sibling_facts",
+        title: "Sibling facts both reach the turn",
+        summary: "A bank holds two services on the same Postgres version among 20 unrelated user facts, and the task asks which services use it.",
+        protects: "Two facts that share a value but name different subjects both reach a turn that asks about that value. If it fails, an upgrade plan for every service on Postgres 16 silently leaves one of them out.",
+        baseline: false,
+        distractors: true,
+        // No canary: two hex values are never one fact, which would hide the
+        // collapse; the checks read injection only, so nothing is guessable.
+        memories: &[
+            seed("The billing service uses Postgres 16.", "pg-billing", &[0]),
+            seed("The ledger service uses Postgres 16.", "pg-ledger", &[0]),
+        ],
+        rules: &[],
+        prompt: "Which of our services use Postgres 16? Reply with the service names.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[],
+        criteria: &[
+            gate(
+                "both_siblings_injected",
+                70,
+                Check::NeededInjected { exchange: None },
+                "Both sibling facts injected",
+                "Were both services on Postgres 16 injected, each as its own line?",
+            ),
+            scored(
+                "no_unrelated_memories",
+                30,
+                Check::NothingIrrelevant,
+                "No unrelated memory injected",
+                "Was every injected memory one the turn needs?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_rule_changed_mid_session",
+        title: "A rule changed mid-session arrives as an update",
+        summary: "A commit prefix rule is edited after the first commit message and removed after the second, and the session asks for three commit messages.",
+        protects: "A rule edited or removed during a chat reaches the next turn as one appended update, and the system prompt stays as it was. If it fails, the agent keeps applying a rule the user changed, or every change rewrites the prompt and throws away its cache.",
+        baseline: false,
+        distractors: false,
+        memories: &[],
+        rules: &[RuleSeed {
+            name: "commit-messages",
+            content: "Start every commit message you write with the prefix [{before}] followed by one space.",
+        }],
+        prompt: COMMIT_PROMPT,
+        followups: &[
+            COMMIT_FOLLOWUPS[0],
+            "Now write a commit message for a change that bumps the lodash dependency to 4.17.21. Reply with the commit message only.",
+        ],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[
+            (
+                0,
+                Change::RuleSet {
+                    name: "commit-messages",
+                    content: "Start every commit message you write with the prefix [{after}] followed by one space.",
+                },
+            ),
+            // Empty content removes the rule.
+            (
+                1,
+                Change::RuleSet {
+                    name: "commit-messages",
+                    content: "",
+                },
+            ),
+        ],
+        criteria: &[
+            gate(
+                "edit_sent_as_update",
+                30,
+                Check::UpdateOn {
+                    exchange: 1,
+                    holds: Some("after"),
+                    omits: Some("before"),
+                },
+                "Edited rule sent as one update",
+                "Did the edited rule reach the next turn as one update holding the new prefix and not the old one?",
+            ),
+            gate(
+                "removal_sent_as_update",
+                20,
+                Check::UpdateOn {
+                    exchange: 2,
+                    holds: None,
+                    omits: Some("after"),
+                },
+                "Removed rule sent as an update",
+                "Did the removal reach the next turn as one update without the removed prefix?",
+            ),
+            gate(
+                "system_prompt_unchanged",
+                20,
+                Check::SectionFrozen,
+                "System prompt section never rewritten",
+                "Did every turn keep the memory section the first turn's system prompt froze?",
+            ),
+            // Scored: the frozen prompt still says the old prefix beside the update.
+            scored(
+                "edited_rule_obeyed",
+                20,
+                Check::AnswerContains {
+                    exchange: Some(1),
+                    canary: "after",
+                },
+                "Edited rule obeyed on the next turn",
+                "Does the answer after the edit carry the run's new prefix value?",
+            ),
+            scored(
+                "removed_rule_not_applied",
+                10,
+                Check::AnswerOmits {
+                    exchange: Some(2),
+                    canary: "after",
+                },
+                "Removed rule no longer applied",
+                "Does the answer after the removal leave out the removed prefix value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_bank_edits_mid_session",
+        title: "Bank edits mid-session reach the next turn",
+        summary: "After the first turn a memory is deleted, one replaced, one rewritten and one added, and the next turn asks about all four.",
+        protects: "Memories deleted, replaced, edited or added while a chat runs reach the next turn as they now stand. If it fails, the agent acts on a fact the user removed or corrected, or misses one saved a moment ago.",
+        baseline: false,
+        distractors: true,
+        // The first turn matches none of the retired texts, so none is still
+        // visible on the next turn to pass for retired.
+        memories: &[
+            seed(
+                "Deploy the billing-sync service with the command deploy-{deploy}.",
+                "deploy",
+                &[0],
+            ),
+            seed(
+                "The orders service nightly backup writes to the bucket backup-{gone}.",
+                "retired",
+                &[],
+            ),
+            seed(
+                "The orders API serves from the region region-{oldregion}.",
+                "retired",
+                &[],
+            ),
+            seed(
+                "The orders service pages the on-call alias page-{oldalias}.",
+                "retired",
+                &[],
+            ),
+            seed(
+                "The orders API serves from the region region-{newregion}.",
+                "region",
+                &[1],
+            ),
+            seed(
+                "The orders service pages the on-call alias page-{newalias}.",
+                "alias",
+                &[1],
+            ),
+            seed(
+                "The orders service status page is status-{added}.",
+                "status",
+                &[1],
+            ),
+        ],
+        rules: &[],
+        prompt: "Which command deploys billing-sync? Reply with the command only.",
+        followups: &["For the orders service: which bucket does the nightly backup write to, which region serves the orders API, which alias pages the on-call engineer, and what is its status page? Reply with the four values."],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[
+            (0, Change::Delete { seed: 1 }),
+            (0, Change::Save { seed: 4 }),
+            // No change word in the new text: only the tombstone retires the old.
+            (0, Change::Supersede { old: 2, new: 4 }),
+            (0, Change::Update { seed: 3, to: 5 }),
+            (0, Change::Save { seed: 6 }),
+        ],
+        criteria: &[
+            gate(
+                "retired_memories_left_out",
+                35,
+                Check::GroupOmitted { group: "retired" },
+                "Deleted, replaced and old text left out",
+                "Were the deleted memory, the superseded one and the text an update replaced all left out?",
+            ),
+            gate(
+                "current_memories_injected",
+                35,
+                Check::NeededInjected { exchange: None },
+                "Current memories injected where needed",
+                "Were the replacement, the rewritten text and the newly saved memory injected on the turn that asks for them?",
+            ),
+            scored(
+                "no_unrelated_memories",
+                10,
+                Check::NothingIrrelevant,
+                "No unrelated memory injected",
+                "Was every injected memory one its turn needs?",
+            ),
+            scored(
+                "answer_has_new_region",
+                10,
+                Check::AnswerContains {
+                    exchange: Some(1),
+                    canary: "newregion",
+                },
+                "Answer has the replacement region",
+                "Does the answer carry the run's replacement region value?",
+            ),
+            scored(
+                "answer_has_status_page",
+                10,
+                Check::AnswerContains {
+                    exchange: Some(1),
+                    canary: "added",
+                },
+                "Answer has the newly saved page",
+                "Does the answer carry the run's status page value, saved after the first turn?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_bank_trashed_mid_session",
+        title: "A trashed bank gives the chat no memory",
+        summary: "The attempt's bank is trashed after the first turn, and the next turn asks about a fact it held.",
+        protects: "A bank trashed while a chat runs gives that chat no memory from the next turn on, never another bank's. If it fails, deleted facts and rules keep reaching the agent, or the chat falls back to the user's own main bank.",
+        baseline: false,
+        distractors: true,
+        memories: &[
+            seed(
+                "Billing-sync logs are posted to the chat channel ops-{channel}.",
+                "channel",
+                &[0],
+            ),
+            // The line the next turn would get if the trash were ignored.
+            seed(
+                "The ledger service is owned by the team named owner-{owner}.",
+                "owner",
+                &[],
+            ),
+        ],
+        rules: &[RuleSeed {
+            name: "signature",
+            content: "End every reply with a final line that reads sig-{sig}.",
+        }],
+        prompt: "Where are the billing-sync logs posted? Reply with the channel name.",
+        followups: &["Which team owns the ledger service? Reply with the team name."],
+        compact_before: None,
+        preview_first: &[],
+        changes: &[(0, Change::DeleteBank)],
+        criteria: &[
+            gate(
+                "memory_gone_after_trash",
+                50,
+                Check::BankGoneFrom { exchange: 1 },
+                "No memory after the bank is trashed",
+                "Did the turn after the trash read no bank, get no memory, and get the note that no memory section applies?",
+            ),
+            gate(
+                "channel_fact_injected",
+                30,
+                Check::NeededInjected { exchange: None },
+                "Channel fact injected before the trash",
+                "Was the stored log channel injected on the turn before the trash?",
+            ),
+            scored(
+                "rule_applied_before_trash",
+                10,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "sig",
+                },
+                "Signature rule applied before the trash",
+                "Does the answer before the trash carry the run's signature value?",
+            ),
+            // Low weight: the frozen system prompt still holds the rule.
+            scored(
+                "rule_dropped_after_trash",
+                10,
+                Check::AnswerOmits {
+                    exchange: Some(1),
+                    canary: "sig",
+                },
+                "Signature rule dropped after the trash",
+                "Does the answer after the trash leave out the run's signature value?",
             ),
         ],
     },
@@ -849,6 +1364,7 @@ pub(crate) const CHANGING: Case = Case {
         "Anything else?",
     ],
     compact_before: None,
+    preview_first: &[],
     changes: &[
         (
             0,
@@ -919,6 +1435,7 @@ pub(crate) const CHANGING: Case = Case {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn case_named(id: &str) -> &'static Case {
         CASES
@@ -972,6 +1489,121 @@ mod tests {
                     criterion.id
                 );
             }
+        }
+    }
+
+    /// Each index a case uses that its shape cannot honor.
+    fn index_problems(case: &Case) -> Vec<String> {
+        let mut problems = Vec::new();
+        for &(after, _) in case.changes {
+            // `before_followup` runs only before a follow-up.
+            if after >= case.followups.len() {
+                problems.push(format!("a change after exchange {after} never runs"));
+            }
+        }
+        for criterion in case.criteria {
+            match criterion.check {
+                // Nothing needed there: the check would pass by construction.
+                Check::NeededInjected { exchange: Some(k) }
+                    if !case.memories.iter().any(|seed| seed.needed_on.contains(&k)) =>
+                {
+                    problems.push(format!("{}: nothing is needed on {k}", criterion.id));
+                }
+                Check::BankGoneFrom { exchange }
+                    if trashed_after(case).map(|after| after + 1) != Some(exchange) =>
+                {
+                    problems.push(format!(
+                        "{}: the bank is not trashed before {exchange}",
+                        criterion.id
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for &(exchange, seed) in case.preview_first {
+            if exchange > case.followups.len()
+                || seed >= case.memories.len()
+                || saved_after(case, seed).is_some()
+            {
+                problems.push(format!(
+                    "preview of seed {seed} on {exchange}: not planted there"
+                ));
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn every_change_check_and_preview_fits_the_cases_exchanges() {
+        for case in CASES.iter().chain([&CHANGING]) {
+            assert_eq!(index_problems(case), Vec::<String>::new(), "{}", case.id);
+        }
+        // Each rule can fail.
+        let never_runs = Case {
+            changes: &[(2, Change::Delete { seed: 1 }), (1, Change::DeleteBank)],
+            ..CHANGING
+        };
+        const NOTHING_NEEDED: &[Criterion] = &[gate(
+            "x",
+            100,
+            Check::NeededInjected { exchange: Some(2) },
+            "a b c",
+            "d",
+        )];
+        const NOT_TRASHED: &[Criterion] = &[gate(
+            "x",
+            100,
+            Check::BankGoneFrom { exchange: 1 },
+            "a b c",
+            "d",
+        )];
+        let nothing_needed = Case {
+            criteria: NOTHING_NEEDED,
+            ..CHANGING
+        };
+        let not_trashed = Case {
+            criteria: NOT_TRASHED,
+            ..CHANGING
+        };
+        let saved_later = Case {
+            preview_first: &[(1, 4)],
+            ..CHANGING
+        };
+        for case in [never_runs, nothing_needed, not_trashed, saved_later] {
+            assert_eq!(
+                index_problems(&case).len(),
+                1,
+                "{:?}",
+                index_problems(&case)
+            );
+        }
+    }
+
+    /// Lowercase alphanumeric runs, as memory splits a message into words.
+    fn words(text: &str) -> BTreeSet<String> {
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    }
+
+    /// In lexical mode a follow-up sharing one word with a memory may still
+    /// inject it, a limit memory documents; the chatter case tests the
+    /// follow-up with no subject, so its words match nothing planted.
+    #[test]
+    fn the_chatter_follow_ups_share_no_word_with_anything_planted() {
+        let case = case_named("memory_chatter_after_answer");
+        assert!(case.distractors);
+        let planted: BTreeSet<String> = DISTRACTORS
+            .iter()
+            .copied()
+            .chain(case.memories.iter().map(|seed| seed.text))
+            .flat_map(words)
+            .collect();
+        assert!(!case.followups.is_empty());
+        for followup in case.followups {
+            let shared: Vec<String> = words(followup).intersection(&planted).cloned().collect();
+            assert!(shared.is_empty(), "{followup:?} shares {shared:?}");
         }
     }
 

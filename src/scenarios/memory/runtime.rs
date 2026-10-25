@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use super::cases::{bank, planted, render, Case, Change};
-use super::score::{ChangeOutcome, PromptRecord, Retrieval};
+use super::score::{ChangeOutcome, PromptRecord, Retrieval, Snapshot};
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
 
@@ -47,17 +47,6 @@ struct Run {
 struct Saved {
     id: String,
     text: String,
-}
-
-/// What `capture` reads of an attempt.
-#[derive(Debug, Default)]
-pub struct Snapshot {
-    pub prompts: Vec<PromptRecord>,
-    pub compaction: Option<String>,
-    pub retrieval: Option<Retrieval>,
-    /// Memory's stored text of each case seed, `None` until saved.
-    pub stored: Vec<Option<String>>,
-    pub changes: Vec<ChangeOutcome>,
 }
 
 fn runs() -> &'static Mutex<HashMap<String, Run>> {
@@ -196,6 +185,19 @@ fn created(reply: &Value) -> Result<Saved> {
     stored(reply)
 }
 
+/// Fails unless the preview injects `wanted` first.
+fn preview_leads(reply: &Value, wanted: &Saved) -> Result<()> {
+    let first = reply["memories"][0]["memory"]["id"].as_str();
+    if first != Some(wanted.id.as_str()) {
+        bail!(
+            "case precondition no longer holds: memory::preview injects {} first, not {:?}",
+            first.unwrap_or("nothing"),
+            wanted.text
+        );
+    }
+    Ok(())
+}
+
 /// Waits until a semantic recall of the memory's own text returns it, which
 /// means its vector is stored and a recall by meaning can find it.
 async fn wait_for_vector(context: &E2eContext, bank: &str, id: &str, text: &str) -> Result<()> {
@@ -277,6 +279,21 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
             for memory in &saved {
                 wait_for_vector(context, &bank, &memory.id, &memory.text).await?;
             }
+        }
+        for &(exchange, seed) in case.preview_first {
+            let query = match exchange {
+                0 => case.prompt,
+                later => case.followups[later - 1],
+            };
+            let reply = context
+                .trigger_value("memory::preview", json!({"bank": bank, "query": query}))
+                .await
+                .context("memory::preview")?;
+            let wanted = lock_unpoisoned(runs())
+                .get(run_id)
+                .and_then(|run| run.seeds[seed].clone())
+                .context("a previewed seed was never planted")?;
+            preview_leads(&reply, &wanted)?;
         }
     }
 
@@ -610,6 +627,31 @@ mod tests {
         // A seed no save reached has no memory to act on.
         let error = change_payload(case, Change::Delete { seed: 1 }, "a", &[]).unwrap_err();
         assert!(format!("{error:#}").contains("seed 1"), "{error:#}");
+    }
+
+    #[test]
+    fn a_preview_must_inject_the_planned_seed_first() {
+        let wanted = Saved {
+            id: "fp-b".into(),
+            text: "To migrate the ledger database, run migrate-x.".into(),
+        };
+        let preview = |ids: &[&str]| {
+            let memories: Vec<Value> = ids
+                .iter()
+                .map(|id| json!({"memory": {"id": id, "text": "t"}, "score": 1.0}))
+                .collect();
+            json!({"bank": "e2e-a", "memories": memories, "retrieval": "bm25-entity"})
+        };
+        preview_leads(&preview(&["fp-b"]), &wanted).unwrap();
+        preview_leads(&preview(&["fp-b", "fp-a"]), &wanted).unwrap();
+        for reply in [preview(&["fp-a"]), preview(&["fp-a", "fp-b"]), preview(&[])] {
+            let error = preview_leads(&reply, &wanted).unwrap_err().to_string();
+            assert!(
+                error.starts_with("case precondition no longer holds")
+                    && error.contains(&wanted.text),
+                "{error}"
+            );
+        }
     }
 
     #[test]
