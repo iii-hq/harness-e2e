@@ -13,6 +13,8 @@ export type QualityState =
 export type CostState =
   | 'equivalent'
   | 'cheaper'
+  /** Below +equivalence, but neither within −equivalence nor cheaper. */
+  | 'below_bound'
   | 'more_expensive'
   | 'inconclusive'
 export type Sides<T> = { a: T; b: T }
@@ -43,6 +45,7 @@ export type VerdictCost = {
   /** Summed over the tests, each test's mean subject cost, in US$. */
   a: number
   b: number
+  /** B / A − 1, shown; the tests read B − A. */
   relative: number
   tests: number
   /** Each against α / 2. */
@@ -56,10 +59,14 @@ export type VerdictRepetitions = {
   /** The fewest counted runs a compared test has on each side. */
   have: Sides<number>
   sigma: number | null
+  /** Runs per test on each side, those made kept, that would settle what
+   *  is undecided with a predicted 80%. */
   needed: number | null
   missing: number | null
   /** The cap, when more than it would be needed. */
   more_than: number | null
+  /** What `needed` or `more_than` settles. */
+  settles: Array<'quality' | 'cost'>
   note: string | null
 }
 
@@ -67,14 +74,14 @@ export type VerdictRepetitions = {
 export type VerdictSummary = {
   /** Null when there is no calibrated verdict; `unavailable` says why. */
   verdict: VerdictState | null
-  qualifier: 'quality_fell' | 'trade_off' | null
+  qualifier: 'test_inferior' | 'quality_fell' | 'trade_off' | null
   unavailable: string | null
   reasons: string[]
   rule: VerdictRule
   quality: VerdictQuality | null
   cost: VerdictCost | null
   repetitions: VerdictRepetitions
-  /** A test that fell more than the margin among them. */
+  /** A test that fell beyond the margin on its own among them. */
   warnings: string[]
 }
 
@@ -83,6 +90,8 @@ export type CriterionChange = {
   behavior: string | null
   criteria: string[]
   failing: Sides<number>
+  /** Runs that did not evaluate them. */
+  not_evaluated: Sides<number>
   runs: Sides<number>
   points: Sides<number>
   delta: number
@@ -92,6 +101,10 @@ export type CriteriaConfiguration = {
   side: 'a' | 'b'
   scenario: string
   behavior: string | null
+  /** `provider/model`; null when its results do not record it. */
+  model: string | null
+  /** Each worker's resolved version, `iii` and `lock`; empty when not recorded. */
+  stack: Record<string, string>
   runs: {
     evaluated: number
     zeroed: number
@@ -134,6 +147,9 @@ export type ExecutionVerdict = VerdictSummary & {
     b: number
     delta: number
     p_fell: number
+    /** Its own fall beyond the margin, and that Holm-adjusted. */
+    p_inferior: number
+    p_inferior_adjusted: number
     warning: boolean
   }>
   dropped: Array<{ scenario: string; behavior: string | null; reason: string }>
@@ -146,6 +162,8 @@ export type ExecutionVerdict = VerdictSummary & {
     min_runs: number
     configurations: CriteriaConfiguration[]
     changes: CriterionChange[]
+    /** A side whose runs do not record their model or stack. */
+    warnings: string[]
   }
 }
 
@@ -162,6 +180,7 @@ const LABEL: Record<VerdictState, string> = {
 }
 
 const QUALIFIER = {
+  test_inferior: 'a test fell beyond the margin on its own',
   quality_fell: 'quality fell, by an amount the runs cannot bound',
   trade_off:
     'quality improved and the cost rose, a trade-off the rule does not weigh',
@@ -179,24 +198,36 @@ export function verdictTone(
   summary: VerdictSummary,
 ): 'positive' | 'negative' | 'neutral' {
   if (summary.verdict === 'better') return 'positive'
-  if (summary.verdict === 'worse' || summary.qualifier === 'quality_fell')
+  if (
+    summary.verdict === 'worse' ||
+    summary.qualifier === 'quality_fell' ||
+    summary.qualifier === 'test_inferior'
+  )
     return 'negative'
   return 'neutral'
 }
 
 /** How many runs per test each side has, and what more would settle it. */
 export function repetitionsText(summary: VerdictSummary): string {
-  const { have, sigma, needed, missing, more_than, note } = summary.repetitions
+  const { have, sigma, needed, missing, more_than, settles, note } =
+    summary.repetitions
   const parts = [
     `At least ${have.a} runs per test on A, ${have.b} on B`,
     sigma === null ? null : `σ ${sigma.toFixed(1)} points per run`,
   ].filter(Boolean)
-  const margin = summary.rule.margin
+  const what =
+    settles
+      .map((item) =>
+        item === 'quality'
+          ? `the ${summary.rule.margin}-point margin`
+          : 'the cost',
+      )
+      .join(' and ') || 'it'
   const more =
     needed !== null && missing !== null
-      ? `about ${needed} runs per test on each side would settle the ${margin}-point margin: ${missing} more`
+      ? `about ${needed} runs per test on each side, those made kept, would settle ${what} with a predicted 80%: ${missing} more`
       : more_than !== null
-        ? `more than ${more_than} runs per test on each side would be needed to settle the ${margin}-point margin`
+        ? `more than ${more_than} runs per test on each side would be needed to settle ${what}`
         : null
   return `${parts.join(' · ')}${more ? `; ${more}.` : '.'}${note ? ` ${note}` : ''}`
 }
@@ -209,5 +240,5 @@ export function ruleText({
   permutations,
   seed,
 }: VerdictRule): string {
-  return `Quality within ${margin} points, cost within ±${Math.round(equivalence * 100)}%: permutation tests within each test, one-sided α ${alpha} (cheaper or more expensive at α / 2), ${permutations.toLocaleString('en-US')} permutations, seed ${seed}.`
+  return `Quality within ${margin} points, cost within ±${Math.round(equivalence * 100)}%: permutation tests within each test, one-sided α ${alpha} (improved, fell, cheaper and more expensive at α / 2; each test's fall beyond the margin Holm-adjusted), ${permutations.toLocaleString('en-US')} permutations, seed ${seed}.`
 }

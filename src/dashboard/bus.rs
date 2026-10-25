@@ -1145,21 +1145,30 @@ pub(super) async fn execution_verdict(
     controller: &Controller,
     request: ExecutionVerdictRequest,
 ) -> Result<crate::verdict::Comparison> {
-    let mut sides = Vec::new();
-    for execution_id in [request.a, request.b] {
+    let (mut sides, mut doubts) = (Vec::new(), Vec::new());
+    for (side, execution_id) in [("A", request.a), ("B", request.b)] {
         let bundle = execution_bundle(controller, ExecutionGetRequest { execution_id }).await?;
-        sides.push(verdict_runs(&bundle.detail));
+        let (runs, warnings) = verdict_runs(&bundle.detail);
+        sides.push(runs);
+        doubts.extend(
+            warnings
+                .into_iter()
+                .map(|warning| format!("{side}: {warning}")),
+        );
     }
     // Tens of thousands of permutations: off the async workers.
-    tokio::task::spawn_blocking(move || {
+    let mut comparison = tokio::task::spawn_blocking(move || {
         crate::verdict::compare(&sides[0], &sides[1], &crate::verdict::Rule::default())
     })
     .await
-    .context("compare two executions")
+    .context("compare two executions")?;
+    comparison.warnings.extend(doubts);
+    Ok(comparison)
 }
 
-/// The runs of an execution detail's available reports.
-fn verdict_runs(detail: &Value) -> Vec<crate::verdict::Run> {
+/// The runs of an execution detail's available reports, and a warning for
+/// each run left out or kept with a doubt.
+fn verdict_runs(detail: &Value) -> (Vec<crate::verdict::Run>, Vec<String>) {
     crate::verdict::runs_of(
         detail["reports"]
             .as_array()
@@ -1502,9 +1511,10 @@ mod response_contract_tests {
                 {"available": false, "scenario_id": "u", "subject_id": "flash"},
             ]})
         };
-        let a = verdict_runs(&detail(vec![run("a1", 90), run("a2", 92)]));
-        let b = verdict_runs(&detail(vec![run("b1", 91), run("b2", 93)]));
-        assert_eq!(a.len(), 2);
+        let (a, doubts) = verdict_runs(&detail(vec![run("a1", 90), run("a2", 92)]));
+        let (b, _) = verdict_runs(&detail(vec![run("b1", 91), run("b2", 93)]));
+        // The slot reported twice is the same run, read once and not doubted.
+        assert_eq!((a.len(), doubts.len()), (2, 0));
         let answer = serde_json::to_value(crate::verdict::compare(
             &a,
             &b,
@@ -1525,12 +1535,19 @@ mod response_contract_tests {
         );
         assert_eq!(
             keys(&answer["repetitions"]),
-            "have,missing,more_than,needed,note,sigma"
+            "have,missing,more_than,needed,note,settles,sigma"
         );
-        assert_eq!(keys(&answer["criteria"]), "changes,configurations,min_runs");
+        assert_eq!(
+            keys(&answer["tests"][0]),
+            "a,b,behavior,delta,p_fell,p_inferior,p_inferior_adjusted,runs,scenario,warning"
+        );
+        assert_eq!(
+            keys(&answer["criteria"]),
+            "changes,configurations,min_runs,warnings"
+        );
         assert_eq!(
             keys(&answer["criteria"]["configurations"][0]),
-            "behavior,criteria,groups,not_evaluated,runs,scenario,side,sufficient"
+            "behavior,criteria,groups,model,not_evaluated,runs,scenario,side,stack,sufficient"
         );
         assert_eq!(
             keys(&answer["criteria"]["configurations"][0]["criteria"][0]),
@@ -1538,7 +1555,7 @@ mod response_contract_tests {
         );
         assert_eq!(
             keys(&answer["criteria"]["changes"][0]),
-            "behavior,criteria,delta,failing,points,runs,scenario"
+            "behavior,criteria,delta,failing,not_evaluated,points,runs,scenario"
         );
         assert_eq!(
             keys(&answer["runs"]["a"]),

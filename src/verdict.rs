@@ -3,65 +3,109 @@
 //! comparison and the Trends overview read it from here; Release Control
 //! reproduces it from this description and `tests/fixtures/verdict/`.
 //!
-//! Inputs. Counted runs only: those whose `cause` counts (a run without a
-//! cause falls back to `technical == "valid"`, with a warning). A test is a
-//! (`scenario_id`, `behavior_sha256`) both arms ran; any other is dropped and
-//! listed, one entry per definition. Within a test the runs are ordered by
-//! `attempt_id` (byte order); tests by `scenario_id`, then `behavior_sha256`
-//! (none first). A figure reads the tests with a value on both sides, and
-//! there is a verdict only when some test has two runs or more on each. An
-//! arm that mixes models or stacks, sides that differ in more than the
-//! Harness, and a results.json that does not parse are warnings.
+//! Reading. Every `scenarios[].runs[]` of the results documents, in order. A
+//! run is keyed by (`scenario_id`, `attempt_id`, else `run_id`): a key read
+//! again with the same content is skipped (a root bundle carries its groups'
+//! results too), with other content it is skipped with a warning, the first
+//! read kept; an attempt id under several scenarios is kept under each, with
+//! a warning. A run without an id is never skipped.
+//!
+//! Inputs. Counted runs only: those whose `cause` counts; a run without a
+//! cause, or with one this version does not know, falls back to
+//! `technical == "valid"`, with a warning. A test is a (`scenario_id`,
+//! `behavior_sha256`) both arms ran; any other is dropped and listed, one
+//! entry per definition. Within a test the runs are ordered by `attempt_id`
+//! (byte order); tests by `scenario_id`, then `behavior_sha256` (none first).
+//! A score is a number (`score`); a cost is a finite `cost.subject_usd`
+//! above 0. A counted run of a compared test without one leaves that figure,
+//! with a warning that counts and names them. A figure reads the tests with a
+//! value on both sides (cost over fewer tests than quality is a warning), and
+//! there is a verdict only when some test has two scores or more on each
+//! side. An arm that mixes models or stacks, sides that differ in more than
+//! the Harness, and a results.json that does not parse are warnings.
 //!
 //! Figures. Quality is the official run score: the suite figure is the mean
 //! over tests of each test's mean, Δ = (Σ mean_B − Σ mean_A) / K. Cost is
 //! `cost.subject_usd`: the suite figure is the sum over tests of each test's
-//! mean, the change Σ mean_B / Σ mean_A − 1. Every sum adds left to right
-//! from 0.0; a mean divides that sum by the count. Completion is shown, and
-//! time, processed prompt, context per turn and its peak are supporting
-//! figures: none of them decides.
+//! mean, shown as the change Σ mean_B / Σ mean_A − 1 and tested as the
+//! difference Σ mean_B − Σ mean_A over the observed Σ mean_A. Every sum adds
+//! left to right from 0.0; a mean divides that sum by the count. Completion
+//! is shown, and time, processed prompt, context per turn and its peak are
+//! supporting figures: none of them decides.
 //!
 //! Permutation test (labels exchanged within each test). Each test below
 //! draws from its own SplitMix64 seeded with `seed`. In each of
 //! `permutations` rounds, for each test in order, the pool is A's values then
 //! B's transformed values, in run order; Fisher–Yates runs i from the last
 //! index down to 1 and swaps i with `next() % (i + 1)`; the first |A| values
-//! are A's. A round whose statistic t ≤ observed + 1e-12 counts low, one
-//! with t ≥ observed − 1e-12 counts high; p = (count + 1) / (rounds + 1).
+//! are A's. The statistic is Δ over the pools for quality; for cost, Σ mean_B
+//! − Σ mean_A over the pools divided by the observed Σ mean_A (the same
+//! number in every round). A round whose statistic t ≤ observed + 1e-12
+//! counts low, one with t ≥ observed − 1e-12 counts high;
+//! p = (count + 1) / (rounds + 1). When the observed statistic or any
+//! round's is not finite, both p are 1, with a warning.
 //!
 //! Tests, each one-sided, α = 0.025. Quality as is: `p_fell` is low,
 //! `p_improved` high. Quality with B + margin: `p_non_inferior` is high,
 //! `p_inferior` low. Cost as is: `p_cheaper` low, `p_more_expensive` high.
 //! Cost with B / (1 − equivalence): `p_within_low` is high; with
-//! B / (1 + equivalence): `p_within_high` is low.
+//! B / (1 + equivalence): `p_within_high` is low. Each compared test alone:
+//! `p_fell` as is, and `p_inferior` with B + margin, Holm-adjusted over the K
+//! tests (ascending, ties in test order; adjusted p_(i) = the largest over
+//! j ≤ i of min(1, (K − j + 1) p_(j))).
 //!
-//! States. Quality: improved when `p_improved` < α, else non-inferior when
-//! `p_non_inferior` < α, else inferior when `p_inferior` < α, else fell when
-//! `p_fell` < α, else inconclusive. Cost: equivalent when both `p_within_*`
-//! < α, else cheaper when `p_cheaper` < α / 2, else more expensive when
-//! `p_more_expensive` < α / 2, else inconclusive. Verdict: worse = inferior,
-//! or more expensive unless improved; better = improved or non-inferior, and
-//! cheaper; no difference = improved or non-inferior, and equivalent;
-//! anything else cannot tell, qualified `trade_off` when quality improved
-//! and cost rose, `quality_fell` when quality fell by an amount the runs
-//! cannot bound. A version against itself reads better, worse or a qualifier
-//! at most about 2α = 5% of the time: quality falls at α (inferior needs a
-//! fall beyond the margin too), cheaper or more expensive at α / 2 each. The
-//! table is monotone: a quality state further up (inferior, fell,
-//! inconclusive, non-inferior, improved) or a cost no longer more expensive
-//! never reads worse.
+//! States. Quality: improved when `p_improved` < α / 2, else non-inferior
+//! when `p_non_inferior` < α, else inferior when `p_inferior` < α, else fell
+//! when `p_fell` < α / 2, else inconclusive. Cost: equivalent when both
+//! `p_within_*` < α, else cheaper when `p_cheaper` < α / 2, else below the
+//! bound when `p_within_high` < α, else more expensive when
+//! `p_more_expensive` < α / 2, else inconclusive; no cost reads as
+//! inconclusive. A test is inferior when its adjusted `p_inferior` < α and
+//! its Δ < −margin, a warning that names it. Verdict: worse = quality
+//! inferior, or cost more expensive unless quality improved; better = quality
+//! improved and cost equivalent, below the bound or cheaper, or quality
+//! non-inferior and cost cheaper; no difference = quality non-inferior and
+//! cost equivalent or below the bound; anything else cannot tell. An inferior
+//! test turns better or no difference into cannot tell. Cannot tell is
+//! qualified `test_inferior` when a test is inferior, else `quality_fell`
+//! when quality fell, else `trade_off` when quality improved and cost is more
+//! expensive.
 //!
-//! Repetitions. When the runs cannot tell and quality is neither improved
-//! nor non-inferior, the runs per arm that settle the margin at the observed
-//! Δ (non-inferior when M + Δ > 0, inferior below):
-//! n = Σ_k 2s_k² / (K² (|M + Δ| / 2.8)²), s_k² the sample variance of test
-//! k's pool as the margin tests exchange it (A's values and B's plus M). n is
-//! then at least the fewest runs per arm whose smallest p, 1 / Π C(2n, n)
-//! over the tests whose pool is not constant, is below α, and at least one
-//! more than the fewest runs a test has; no number when M + Δ = 0, and "more
-//! than 30" above 30.
+//! Calibration and order. A version against itself reads better, worse or a
+//! qualifier at most about 2α = 5% of the time: quality moves either way at
+//! α / 2 (inferior needs a fall beyond the margin too), cost either way at
+//! α / 2, and a test is inferior at α over all of them together. The table is
+//! monotone, worst first: quality inferior, fell, inconclusive, non-inferior,
+//! improved; cost more expensive, inconclusive, equivalent, below the bound,
+//! cheaper; verdict worse, cannot tell, no difference, better. Raising a B
+//! score or lowering a B cost moves each of its side's statistics against
+//! the observed one the same way in every round, so no p, state or verdict
+//! gets worse (cheaper implies below the bound: B divided by 1 + equivalence
+//! is B lowered).
+//!
+//! Repetitions. When the runs cannot tell, the runs per arm N that would
+//! settle what is undecided, the runs already made kept: quality when it is
+//! neither improved nor non-inferior (non-inferior when M + Δ > 0, inferior
+//! below); and, unless quality points to inferior, an inconclusive cost
+//! (below the bound when its change is under `equivalence`, else more
+//! expensive, unless quality improved). For each, with d the observed
+//! distance (|M + Δ|; Σ mean_A − Σ mean_B / (1 + equivalence); Σ mean_B − Σ
+//! mean_A), s² = Σ_k 2 s_k² (over K² for quality), s_k² the sample variance
+//! of test k's pool as that test exchanges it (A's values, then B + M, B /
+//! (1 + equivalence) or B), n₀ the fewest scores a compared test has on a
+//! side, and z = 1.959964 at α or 2.241403 at α / 2: N is the fewest from
+//! the larger of n₀ + 1 and f up to 30 with
+//! d − 0.841621 s √(1/n₀ − 1/N) ≥ z s / √N, the estimate over N runs then
+//! clearing its test's threshold with a predicted 80%, the true difference as
+//! uncertain as the runs measured it (normal); f is the fewest runs per arm
+//! whose smallest p, 1 / Π C(2n, n) over the tests whose pool is not
+//! constant, is below the test's level. `needed` is the largest N, "more
+//! than 30" when one has none. No number while a test is inferior, when
+//! quality improved and the cost is or may be more expensive, or without a
+//! cost.
 mod criteria;
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
@@ -76,8 +120,11 @@ use crate::report::RunCause;
 /// Above it the repetitions needed read "more than".
 pub const REPETITIONS_CAP: usize = 30;
 const TIE: f64 = 1e-12;
-/// z for a one-sided α of 0.025 plus z for a power of 80%.
-const POWER_Z: f64 = 2.8;
+/// One-sided normal quantiles of the default α = 0.025, of α / 2, and of a
+/// predicted 80%.
+const Z_ALPHA: f64 = 1.959_964;
+const Z_HALF_ALPHA: f64 = 2.241_403;
+const Z_POWER: f64 = 0.841_621;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Rule {
@@ -140,10 +187,14 @@ pub struct Points {
 }
 
 /// The runs of results documents (`results.json`, or a report the Console
-/// projects from one): every `scenarios[].runs[]`, a run seen twice counted
-/// once (a root bundle carries its groups' results too).
-pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> Vec<Run> {
-    let mut seen = BTreeSet::new();
+/// projects from one): every `scenarios[].runs[]`, a run of a test seen
+/// twice counted once (a root bundle carries its groups' results too), with
+/// a warning for a repeat whose content differs and for an attempt id that
+/// more than one test uses.
+pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> (Vec<Run>, Vec<String>) {
+    let mut seen = BTreeMap::<(&str, &str), &Value>::new();
+    let mut tests_of = BTreeMap::<&str, BTreeSet<&str>>::new();
+    let mut conflicts = Vec::new();
     let mut runs = Vec::new();
     for document in documents {
         let subject = &document["subject"];
@@ -175,8 +226,19 @@ pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> Vec<Run> {
                     .as_str()
                     .or(run["run_id"].as_str())
                     .unwrap_or_default();
-                if !attempt.is_empty() && !seen.insert(attempt.to_owned()) {
-                    continue;
+                if !attempt.is_empty() {
+                    match seen.entry((id, attempt)) {
+                        Entry::Occupied(first) => {
+                            if *first.get() != run {
+                                conflicts.push(format!("{id} {attempt}"));
+                            }
+                            continue;
+                        }
+                        Entry::Vacant(slot) => {
+                            slot.insert(run);
+                        }
+                    }
+                    tests_of.entry(attempt).or_default().insert(id);
                 }
                 runs.push(Run {
                     model: model.clone(),
@@ -186,11 +248,47 @@ pub fn runs_of<'a>(documents: impl IntoIterator<Item = &'a Value>) -> Vec<Run> {
             }
         }
     }
-    runs
+    let mut warnings = Vec::new();
+    if !conflicts.is_empty() {
+        warnings.push(format!(
+            "{} runs repeat an attempt already read for the same test, with other content; the \
+             first read is kept: {}.",
+            conflicts.len(),
+            listed(&conflicts)
+        ));
+    }
+    let shared = tests_of
+        .iter()
+        .filter(|(_, tests)| tests.len() > 1)
+        .map(|(attempt, tests)| {
+            format!(
+                "{attempt} ({})",
+                tests.iter().copied().collect::<Vec<_>>().join(", ")
+            )
+        })
+        .collect::<Vec<_>>();
+    if !shared.is_empty() {
+        warnings.push(format!(
+            "{} attempt ids appear under more than one test, kept under each: {}.",
+            shared.len(),
+            listed(&shared)
+        ));
+    }
+    (runs, warnings)
+}
+
+/// The first five, then how many more.
+fn listed(items: &[String]) -> String {
+    let mut text = items.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    if items.len() > 5 {
+        text += &format!(" and {} more", items.len() - 5);
+    }
+    text
 }
 
 /// One arm's runs: a results.json, or every results.json below a directory,
-/// and a warning for each file that could not be read or parsed (skipped).
+/// and a warning for each file that could not be read or parsed (skipped)
+/// and each run left out or kept with a doubt.
 pub fn read_arm(path: &std::path::Path) -> anyhow::Result<(Vec<Run>, Vec<String>)> {
     fn files(path: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
         if path.is_file() {
@@ -222,7 +320,8 @@ pub fn read_arm(path: &std::path::Path) -> anyhow::Result<(Vec<Run>, Vec<String>
             Err(error) => skipped.push(format!("Skipped {}: {error}.", file.display())),
         }
     }
-    let runs = runs_of(&documents);
+    let (runs, warnings) = runs_of(&documents);
+    skipped.extend(warnings);
     if runs.is_empty() {
         anyhow::bail!(
             "no run in any readable results.json at {} ({} skipped)",
@@ -298,6 +397,8 @@ pub enum Verdict {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Qualifier {
+    /// A test fell beyond the margin on its own, whatever the mean says.
+    TestInferior,
     /// Quality fell, by an amount the runs cannot bound.
     QualityFell,
     /// Quality improved and the cost rose: the rule does not weigh one
@@ -325,6 +426,8 @@ pub enum CostState {
     /// Within ±`equivalence`.
     Equivalent,
     Cheaper,
+    /// Below +`equivalence`, but neither within −`equivalence` nor cheaper.
+    BelowBound,
     MoreExpensive,
     Inconclusive,
 }
@@ -350,14 +453,14 @@ pub struct Cost {
     /// Sum over the tests of each test's mean subject cost, in US$.
     pub a: f64,
     pub b: f64,
-    /// B / A − 1.
+    /// B / A − 1, shown; the tests read B − A.
     pub relative: f64,
     pub tests: usize,
     /// Each against α / 2.
     pub p_cheaper: f64,
     pub p_more_expensive: f64,
     /// Against B costing `equivalence` less or more; both under α is
-    /// equivalent.
+    /// equivalent, the high one alone below the bound.
     pub p_within_low: f64,
     pub p_within_high: f64,
 }
@@ -381,16 +484,19 @@ pub struct Repetitions {
     /// The fewest counted runs a compared test has on each side.
     pub have: Sides<usize>,
     /// Pooled within-test standard deviation of the score, per run: the
-    /// noise, shown; `needed` reads the spread the margin tests exchange.
+    /// noise, shown; `needed` reads the spread each test exchanges.
     pub sigma: Option<f64>,
-    /// Per arm, to settle the margin at the observed Δ (non-inferior, or
-    /// inferior when Δ is below −margin); only when the runs cannot tell and
-    /// a number exists.
+    /// Runs per arm, those made kept, that would settle what is undecided
+    /// with a predicted 80%; only when the runs cannot tell and a number
+    /// exists.
     pub needed: Option<usize>,
     /// `needed` less the fewest of `have`, at least 1.
     pub missing: Option<usize>,
     /// Set to the cap when more than it would be needed.
     pub more_than: Option<usize>,
+    /// What `needed` or `more_than` settles: `quality` (the margin) and
+    /// `cost` (below the bound, or more expensive).
+    pub settles: Vec<String>,
     /// Why there is no number, when there is none.
     pub note: Option<String>,
 }
@@ -405,7 +511,12 @@ pub struct TestDelta {
     pub delta: f64,
     /// This test's own permutation test of a drop.
     pub p_fell: f64,
-    /// It fell more than the margin: a warning, never deciding.
+    /// This test's own permutation test of a drop beyond the margin, and it
+    /// Holm-adjusted over the tests compared.
+    pub p_inferior: f64,
+    pub p_inferior_adjusted: f64,
+    /// It fell beyond the margin on its own (adjusted p under α): a warning,
+    /// and the verdict cannot read better or no difference.
     pub warning: bool,
 }
 
@@ -464,8 +575,8 @@ pub struct Summary {
     pub quality: Option<Quality>,
     pub cost: Option<Cost>,
     pub repetitions: Repetitions,
-    /// The comparison's warnings, a test that fell more than the margin
-    /// among them.
+    /// The comparison's warnings, a test that fell beyond the margin among
+    /// them.
     pub warnings: Vec<String>,
 }
 
@@ -498,15 +609,20 @@ struct Cell<'a> {
 enum Statistic {
     /// (Σ mean_B − Σ mean_A) / K.
     MeanDifference,
-    /// Σ mean_B / Σ mean_A − 1.
-    RelativeSum,
+    /// (Σ mean_B − Σ mean_A) / A, A the observed Σ mean_A: one number in
+    /// every round and none of B's, so lowering a B value lowers the
+    /// statistic against the observed one in every round, which a ratio of
+    /// the permuted sums does not, and the tie tolerance is relative.
+    RelativeDifference,
 }
 
-/// The observed statistic and its one-sided p-values.
+/// The observed statistic and its one-sided p-values, both 1 when a
+/// statistic was not finite.
 struct Tails {
     observed: f64,
     low: f64,
     high: f64,
+    finite: bool,
 }
 
 /// SplitMix64 (Steele, Lea and Flood): the whole state is the seed.
@@ -534,17 +650,15 @@ fn mean(values: &[f64]) -> f64 {
     values.iter().fold(0.0, |total, value| total + value) / values.len() as f64
 }
 
-/// The statistic over pools whose first `split` values are A's.
-fn statistic(how: Statistic, pools: &[(usize, Vec<f64>)]) -> f64 {
+/// Σ mean_B − Σ mean_A over pools whose first `split` values are A's,
+/// divided by `per`.
+fn statistic(pools: &[(usize, Vec<f64>)], per: f64) -> f64 {
     let (mut a, mut b) = (0.0, 0.0);
     for (split, pool) in pools {
         a += mean(&pool[..*split]);
         b += mean(&pool[*split..]);
     }
-    match how {
-        Statistic::MeanDifference => (b - a) / pools.len() as f64,
-        Statistic::RelativeSum => b / a - 1.0,
-    }
+    (b - a) / per
 }
 
 fn permutation(
@@ -564,25 +678,51 @@ fn permutation(
             (cell.a.len(), pool.collect::<Vec<_>>())
         })
         .collect::<Vec<_>>();
-    let observed = statistic(how, &pools);
+    let per = match how {
+        Statistic::MeanDifference => cells.len() as f64,
+        Statistic::RelativeDifference => cells.iter().map(|cell| mean(&cell.a)).sum::<f64>(),
+    };
+    let observed = statistic(&pools, per);
+    let mut finite = observed.is_finite();
     let mut rng = SplitMix64(rule.seed);
     let mut work = pools.clone();
     let (mut low, mut high) = (0usize, 0usize);
     for _ in 0..rule.permutations {
+        if !finite {
+            break;
+        }
         for ((_, pool), (_, original)) in work.iter_mut().zip(&pools) {
             pool.copy_from_slice(original);
             rng.shuffle(pool);
         }
-        let t = statistic(how, &work);
+        let t = statistic(&work, per);
+        finite = t.is_finite();
         low += usize::from(t <= observed + TIE);
         high += usize::from(t >= observed - TIE);
     }
-    let p = |count: usize| (count + 1) as f64 / (rule.permutations + 1) as f64;
+    let p = |count: usize| {
+        if finite {
+            (count + 1) as f64 / (rule.permutations + 1) as f64
+        } else {
+            1.0
+        }
+    };
     Tails {
         observed,
         low: p(low),
         high: p(high),
+        finite,
     }
+}
+
+/// A score the verdict reads.
+fn score_of(run: &Run) -> Option<f64> {
+    run.score.filter(|score| score.is_finite())
+}
+
+/// A cost the verdict reads: finite and above 0.
+fn cost_of(run: &Run) -> Option<f64> {
+    run.cost_usd.filter(|cost| cost.is_finite() && *cost > 0.0)
 }
 
 /// Each side's counted runs by test, ordered by attempt.
@@ -633,8 +773,8 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
         .filter(|key| cells_b.contains_key(*key))
         .cloned()
         .collect::<Vec<_>>();
-    let scores = values(&shared, &cells_a, &cells_b, |run| run.score);
-    let costs = values(&shared, &cells_a, &cells_b, |run| run.cost_usd);
+    let scores = values(&shared, &cells_a, &cells_b, score_of);
+    let costs = values(&shared, &cells_a, &cells_b, cost_of);
     let unavailable = if scores.is_empty() {
         Some("No test ran on both sides under the same definition.".to_owned())
     } else if !scores
@@ -645,8 +785,10 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
     } else {
         None
     };
+    let (alpha, half) = (rule.alpha, rule.alpha / 2.0);
+    let mut not_finite = Vec::new();
 
-    let quality = (unavailable.is_none()).then(|| {
+    let quality = if unavailable.is_none() {
         let fell = permutation(&scores, Statistic::MeanDifference, |v| v, rule);
         let shifted = permutation(
             &scores,
@@ -654,17 +796,20 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
             |v| v + rule.margin,
             rule,
         );
+        if !(fell.finite && shifted.finite) {
+            not_finite.push("quality");
+        }
         let k = scores.len() as f64;
         let (p_improved, p_non_inferior, p_inferior, p_fell) =
             (fell.high, shifted.high, shifted.low, fell.low);
-        Quality {
-            state: if p_improved < rule.alpha {
+        Some(Quality {
+            state: if p_improved < half {
                 QualityState::Improved
-            } else if p_non_inferior < rule.alpha {
+            } else if p_non_inferior < alpha {
                 QualityState::NonInferior
-            } else if p_inferior < rule.alpha {
+            } else if p_inferior < alpha {
                 QualityState::Inferior
-            } else if p_fell < rule.alpha {
+            } else if p_fell < half {
                 QualityState::Fell
             } else {
                 QualityState::Inconclusive
@@ -677,49 +822,65 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
             p_non_inferior,
             p_inferior,
             p_fell,
-        }
-    });
-    let cost_a = costs.iter().map(|cell| mean(&cell.a)).sum::<f64>();
-    let cost = (unavailable.is_none() && cost_a > 0.0).then(|| {
-        let plain = permutation(&costs, Statistic::RelativeSum, |v| v, rule);
+        })
+    } else {
+        None
+    };
+    let cost = if unavailable.is_none() && !costs.is_empty() {
+        let plain = permutation(&costs, Statistic::RelativeDifference, |v| v, rule);
         let low = permutation(
             &costs,
-            Statistic::RelativeSum,
+            Statistic::RelativeDifference,
             |v| v / (1.0 - rule.equivalence),
             rule,
         );
         let high = permutation(
             &costs,
-            Statistic::RelativeSum,
+            Statistic::RelativeDifference,
             |v| v / (1.0 + rule.equivalence),
             rule,
         );
+        if !(plain.finite && low.finite && high.finite) {
+            not_finite.push("cost");
+        }
         let (p_within_low, p_within_high) = (low.high, high.low);
-        Cost {
-            state: if p_within_low < rule.alpha && p_within_high < rule.alpha {
+        let (cost_a, cost_b) = (
+            costs.iter().map(|cell| mean(&cell.a)).sum::<f64>(),
+            costs.iter().map(|cell| mean(&cell.b)).sum::<f64>(),
+        );
+        Some(Cost {
+            state: if p_within_low < alpha && p_within_high < alpha {
                 CostState::Equivalent
-            } else if plain.low < rule.alpha / 2.0 {
+            } else if plain.low < half {
                 CostState::Cheaper
-            } else if plain.high < rule.alpha / 2.0 {
+            } else if p_within_high < alpha {
+                CostState::BelowBound
+            } else if plain.high < half {
                 CostState::MoreExpensive
             } else {
                 CostState::Inconclusive
             },
             a: cost_a,
-            b: costs.iter().map(|cell| mean(&cell.b)).sum(),
-            relative: plain.observed,
+            b: cost_b,
+            relative: cost_b / cost_a - 1.0,
             tests: costs.len(),
             p_cheaper: plain.low,
             p_more_expensive: plain.high,
             p_within_low,
             p_within_high,
-        }
-    });
+        })
+    } else {
+        None
+    };
+
+    let tests = tests(&scores, rule);
+    let blocked = tests.iter().any(|test| test.warning);
     let states = quality
         .as_ref()
         .map(|quality| (quality.state, cost.as_ref().map(|cost| cost.state)));
-    let verdict = states.map(|states| verdict_of(states.0, states.1));
+    let verdict = states.map(|states| verdict_of(states.0, states.1, blocked));
     let qualifier = match (verdict, states) {
+        (Some(Verdict::CannotTell), _) if blocked => Some(Qualifier::TestInferior),
         (Some(Verdict::CannotTell), Some((QualityState::Fell, _))) => Some(Qualifier::QualityFell),
         (
             Some(Verdict::CannotTell),
@@ -727,32 +888,15 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
         ) => Some(Qualifier::TradeOff),
         _ => None,
     };
-
-    let tests = scores
-        .iter()
-        .map(|cell| {
-            let own = permutation(
-                std::slice::from_ref(cell),
-                Statistic::MeanDifference,
-                |v| v,
-                rule,
-            );
-            TestDelta {
-                scenario: cell.key.0.clone(),
-                behavior: cell.key.1.clone(),
-                runs: Sides {
-                    a: cell.a.len(),
-                    b: cell.b.len(),
-                },
-                a: mean(&cell.a),
-                b: mean(&cell.b),
-                delta: own.observed,
-                p_fell: own.low,
-                warning: own.observed < -rule.margin,
-            }
-        })
-        .collect::<Vec<_>>();
-    let repetitions = repetitions(&scores, quality.as_ref(), verdict, rule);
+    let repetitions = repetitions(
+        &scores,
+        &costs,
+        quality.as_ref(),
+        cost.as_ref(),
+        verdict,
+        blocked,
+        rule,
+    );
     let figures = figures(&shared, &cells_a, &cells_b);
     let earlier = a.iter().chain(b).filter(|run| run.cause.is_none()).count();
     let mut warnings = Vec::new();
@@ -763,11 +907,37 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
              left the mean, and a failure of the evaluator itself could count as a valid zero."
         ));
     }
+    warnings.extend(input_warnings(a, b, &shared));
+    if quality.is_some() && cost.is_some() && costs.len() < scores.len() {
+        let priced = costs.iter().map(|cell| cell.key).collect::<BTreeSet<_>>();
+        let unpriced = scores
+            .iter()
+            .filter(|cell| !priced.contains(cell.key))
+            .map(|cell| cell.key.0.clone())
+            .collect::<Vec<_>>();
+        warnings.push(format!(
+            "The cost is read over {} of the {} tests, without {}: no subject cost above 0 on a \
+             side.",
+            costs.len(),
+            scores.len(),
+            listed(&unpriced)
+        ));
+    }
+    for figure in not_finite {
+        warnings.push(format!(
+            "The {figure} does not add up to a finite number: each of its tests reads p = 1."
+        ));
+    }
     warnings.extend(configuration_warnings(a, b));
     warnings.extend(tests.iter().filter(|test| test.warning).map(|test| {
         format!(
-            "{} fell {:.1} points, more than the {}-point margin (its own p = {:.3}).",
-            test.scenario, -test.delta, rule.margin, test.p_fell
+            "{} fell {:.1} points, beyond the {}-point margin on its own ({} Holm-adjusted over \
+             {} tests): the verdict cannot read better or no difference.",
+            test.scenario,
+            -test.delta,
+            rule.margin,
+            p(test.p_inferior_adjusted),
+            tests.len()
         )
     }));
     Comparison {
@@ -791,35 +961,207 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
     }
 }
 
-/// The verdict table; no cost reads like an inconclusive one.
-fn verdict_of(quality: QualityState, cost: Option<CostState>) -> Verdict {
-    let holds = matches!(quality, QualityState::Improved | QualityState::NonInferior);
-    match (quality, cost) {
-        (QualityState::Inferior, _) => Verdict::Worse,
-        (QualityState::Improved, Some(CostState::MoreExpensive)) => Verdict::CannotTell,
-        (_, Some(CostState::MoreExpensive)) => Verdict::Worse,
-        (_, Some(CostState::Cheaper)) if holds => Verdict::Better,
-        (_, Some(CostState::Equivalent)) if holds => Verdict::NoDifference,
+/// Each compared test on its own: its fall, and its fall beyond the margin
+/// Holm-adjusted over the tests.
+fn tests(scores: &[Cell], rule: &Rule) -> Vec<TestDelta> {
+    let mut tests = scores
+        .iter()
+        .map(|cell| {
+            let own = |transform: fn(f64, f64) -> f64| {
+                permutation(
+                    std::slice::from_ref(cell),
+                    Statistic::MeanDifference,
+                    |v| transform(v, rule.margin),
+                    rule,
+                )
+            };
+            let (fell, shifted) = (own(|v, _| v), own(|v, margin| v + margin));
+            TestDelta {
+                scenario: cell.key.0.clone(),
+                behavior: cell.key.1.clone(),
+                runs: Sides {
+                    a: cell.a.len(),
+                    b: cell.b.len(),
+                },
+                a: mean(&cell.a),
+                b: mean(&cell.b),
+                delta: fell.observed,
+                p_fell: fell.low,
+                p_inferior: shifted.low,
+                p_inferior_adjusted: 1.0,
+                warning: false,
+            }
+        })
+        .collect::<Vec<_>>();
+    let adjusted = holm(&tests.iter().map(|test| test.p_inferior).collect::<Vec<_>>());
+    for (test, adjusted) in tests.iter_mut().zip(adjusted) {
+        test.p_inferior_adjusted = adjusted;
+        test.warning = adjusted < rule.alpha && test.delta < -rule.margin;
+    }
+    tests
+}
+
+/// Holm's step-down adjustment: ascending, ties in input order, each the
+/// largest over those before it of min(1, (K − j + 1) p_(j)).
+fn holm(p: &[f64]) -> Vec<f64> {
+    let mut order = (0..p.len()).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| p[left].total_cmp(&p[right]));
+    let mut adjusted = vec![1.0; p.len()];
+    let mut running = 0.0_f64;
+    for (rank, &index) in order.iter().enumerate() {
+        running = running.max(((p.len() - rank) as f64 * p[index]).min(1.0));
+        adjusted[index] = running;
+    }
+    adjusted
+}
+
+/// "t0 ×3, t2 ×1": how many of `runs` each test has, and their number.
+fn tally<'a>(runs: impl IntoIterator<Item = &'a Run>) -> (usize, String) {
+    let mut by = BTreeMap::<&str, usize>::new();
+    for run in runs {
+        *by.entry(run.scenario.as_str()).or_default() += 1;
+    }
+    let names = by
+        .iter()
+        .map(|(scenario, n)| format!("{scenario} ×{n}"))
+        .collect::<Vec<_>>();
+    (by.values().sum(), listed(&names))
+}
+
+/// Each run of a compared test a figure leaves out, and each run whose
+/// cause this version does not know.
+fn input_warnings(a: &[Run], b: &[Run], shared: &[Key]) -> Vec<String> {
+    let shared = shared.iter().collect::<BTreeSet<_>>();
+    let mut warnings = Vec::new();
+    for (side, runs) in [("A", a), ("B", b)] {
+        let compared = || {
+            runs.iter().filter(|run| {
+                run.counted && shared.contains(&(run.scenario.clone(), run.behavior.clone()))
+            })
+        };
+        type Leaves = fn(&Run) -> bool;
+        let rows: [(&str, &str, Leaves); 3] = [
+            ("no numeric score", "quality", |run| score_of(run).is_none()),
+            ("no subject cost", "cost", |run| run.cost_usd.is_none()),
+            ("a subject cost at or below 0", "cost", |run| {
+                run.cost_usd.is_some() && cost_of(run).is_none()
+            }),
+        ];
+        for (what, figure, leaves) in rows {
+            let (n, names) = tally(compared().filter(|run| leaves(run)));
+            if n > 0 {
+                warnings.push(format!(
+                    "{side}: {n} counted runs have {what} and leave the {figure}: {names}."
+                ));
+            }
+        }
+        let unknown = runs
+            .iter()
+            .filter(|run| {
+                run.cause.as_deref().is_some_and(|cause| {
+                    serde_json::from_value::<RunCause>(Value::from(cause)).is_err()
+                })
+            })
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            let causes = unknown
+                .iter()
+                .filter_map(|run| run.cause.as_deref())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let (n, names) = tally(unknown);
+            warnings.push(format!(
+                "{side}: {n} runs carry a cause this version does not know ({causes}) and were \
+                 classified by `technical`: {names}."
+            ));
+        }
+    }
+    warnings
+}
+
+/// The verdict table; no cost reads like an inconclusive one, and an
+/// inferior test holds back better and no difference.
+fn verdict_of(quality: QualityState, cost: Option<CostState>, blocked: bool) -> Verdict {
+    use CostState::{BelowBound, Cheaper, Equivalent, MoreExpensive};
+    use QualityState::{Improved, Inferior, NonInferior};
+    let verdict = match (quality, cost) {
+        (Inferior, _) => Verdict::Worse,
+        (Improved, Some(MoreExpensive)) => Verdict::CannotTell,
+        (_, Some(MoreExpensive)) => Verdict::Worse,
+        (Improved, Some(Equivalent | BelowBound | Cheaper)) => Verdict::Better,
+        (NonInferior, Some(Cheaper)) => Verdict::Better,
+        (NonInferior, Some(Equivalent | BelowBound)) => Verdict::NoDifference,
         _ => Verdict::CannotTell,
+    };
+    match verdict {
+        Verdict::Better | Verdict::NoDifference if blocked => Verdict::CannotTell,
+        verdict => verdict,
     }
 }
 
 /// The fewest runs per arm, up to one above the cap, whose smallest
-/// permutation p over `tests` tests that vary, 1 / Π C(2n, n), is below α.
-fn fewest_runs(tests: usize, alpha: f64) -> Option<usize> {
+/// permutation p over `tests` tests that vary, 1 / Π C(2n, n), is below
+/// `level`.
+fn fewest_runs(tests: usize, level: f64) -> Option<usize> {
     // ln C(2n, n).
     let ln_ways = |n: usize| {
         (1..=n)
             .map(|i| ((n + i) as f64 / i as f64).ln())
             .sum::<f64>()
     };
-    (1..=REPETITIONS_CAP + 1).find(|n| tests as f64 * ln_ways(*n) > (1.0 / alpha).ln())
+    (1..=REPETITIONS_CAP + 1).find(|n| tests as f64 * ln_ways(*n) > (1.0 / level).ln())
+}
+
+/// Each test's pool as a test exchanges it: A's values, then B's transformed.
+fn pools(cells: &[Cell], transform: impl Fn(f64) -> f64) -> Vec<Vec<f64>> {
+    cells
+        .iter()
+        .map(|cell| {
+            let pool = cell.a.iter().copied();
+            pool.chain(cell.b.iter().map(|v| transform(*v))).collect()
+        })
+        .collect()
+}
+
+/// The fewest runs per arm N, from `n0` + 1 to the cap, the runs made kept,
+/// at which a test at `distance` from its threshold would settle with a
+/// predicted 80%: d − 0.841621 s √(1/n₀ − 1/N) ≥ z s / √N, s² the pools'
+/// Σ 2 s_k² over `scale`²; at least the fewest runs whose permutation p can
+/// reach `level`. None above the cap.
+fn plan(
+    distance: f64,
+    pools: &[Vec<f64>],
+    scale: f64,
+    n0: usize,
+    z: f64,
+    level: f64,
+) -> Option<usize> {
+    let spread = pools
+        .iter()
+        .map(|pool| 2.0 * variance(pool).unwrap_or(0.0))
+        .sum::<f64>();
+    let s = spread.sqrt() / scale;
+    let varying = pools
+        .iter()
+        .filter(|pool| pool.iter().any(|v| *v != pool[0]))
+        .count();
+    let floor = fewest_runs(varying, level)?;
+    let n0 = n0 as f64;
+    (floor.max(n0 as usize + 1)..=REPETITIONS_CAP).find(|n| {
+        let n = *n as f64;
+        distance - Z_POWER * s * (1.0 / n0 - 1.0 / n).sqrt() >= z * s / n.sqrt()
+    })
 }
 
 fn repetitions(
     scores: &[Cell],
+    costs: &[Cell],
     quality: Option<&Quality>,
+    cost: Option<&Cost>,
     verdict: Option<Verdict>,
+    blocked: bool,
     rule: &Rule,
 ) -> Repetitions {
     let have = |pick: fn(&Cell) -> usize| scores.iter().map(pick).min().unwrap_or(0);
@@ -842,59 +1184,90 @@ fn repetitions(
         needed: None,
         missing: None,
         more_than: None,
+        settles: Vec::new(),
         note: None,
     };
     let (Some(quality), Some(Verdict::CannotTell)) = (quality, verdict) else {
         return repetitions;
     };
-    match quality.state {
-        QualityState::NonInferior => {
-            repetitions.note =
-                Some("Quality is already non-inferior: the cost is undecided.".into());
-            return repetitions;
-        }
-        QualityState::Improved => {
-            repetitions.note = Some(
-                "Quality improved and the cost rose: more runs do not settle a trade-off.".into(),
-            );
-            return repetitions;
-        }
-        _ => {}
+    let mut note = |text: &str| {
+        repetitions.note = Some(text.to_owned());
+    };
+    if blocked {
+        note("A test fell beyond the margin on its own: more runs do not lift a clear fall.");
+        return repetitions;
     }
-    // The margin tests exchange A's values with B's plus the margin: their
-    // spread, the arms' difference included, is what the runs must beat.
-    let pools = scores
-        .iter()
-        .map(|cell| {
-            let pool = cell.a.iter().copied();
-            pool.chain(cell.b.iter().map(|v| v + rule.margin))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let room = (rule.margin + quality.delta).abs();
-    let k = scores.len() as f64;
-    let spread = pools
-        .iter()
-        .map(|pool| 2.0 * variance(pool).unwrap_or(0.0))
-        .sum::<f64>();
-    let varying = pools
-        .iter()
-        .filter(|pool| pool.iter().any(|v| *v != pool[0]))
-        .count();
-    let floor = fewest_runs(varying, rule.alpha).unwrap_or(usize::MAX);
-    let n = spread / (k * k * (room / POWER_Z).powi(2));
-    // `as` saturates: a number too large to hold reads "more than".
-    let needed = (n.ceil() as usize).max(floor).max(have.a.min(have.b) + 1);
-    if room <= TIE {
-        repetitions.note = Some(format!(
-            "No number: the observed drop is the {}-point margin itself.",
-            rule.margin
+    let n0 = have.a.min(have.b);
+    let mut plans = Vec::<(&str, Option<usize>)>::new();
+    let improved = quality.state == QualityState::Improved;
+    let mut inferior = false;
+    if matches!(
+        quality.state,
+        QualityState::Fell | QualityState::Inconclusive
+    ) {
+        let distance = rule.margin + quality.delta;
+        inferior = distance < 0.0;
+        let pools = pools(scores, |v| v + rule.margin);
+        let k = scores.len() as f64;
+        plans.push((
+            "quality",
+            plan(distance.abs(), &pools, k, n0, Z_ALPHA, rule.alpha),
         ));
-    } else if needed > REPETITIONS_CAP {
-        repetitions.more_than = Some(REPETITIONS_CAP);
-    } else {
-        repetitions.needed = Some(needed);
-        repetitions.missing = Some(needed - have.a.min(have.b));
+    }
+    // Quality pointing to inferior reads worse whatever the cost.
+    if !inferior {
+        let Some(cost) = cost else {
+            note("No subject cost on both sides: the cost cannot settle the verdict.");
+            return repetitions;
+        };
+        let trade_off = "Quality improved and the cost rose or may rise: more runs do not settle \
+                         a trade-off.";
+        match cost.state {
+            CostState::MoreExpensive if improved => {
+                note(trade_off);
+                return repetitions;
+            }
+            CostState::Inconclusive if cost.relative < rule.equivalence => {
+                let scale = 1.0 + rule.equivalence;
+                plans.push((
+                    "cost",
+                    plan(
+                        cost.a - cost.b / scale,
+                        &pools(costs, |v| v / scale),
+                        1.0,
+                        n0,
+                        Z_ALPHA,
+                        rule.alpha,
+                    ),
+                ));
+            }
+            CostState::Inconclusive if improved => {
+                note(trade_off);
+                return repetitions;
+            }
+            CostState::Inconclusive => plans.push((
+                "cost",
+                plan(
+                    cost.b - cost.a,
+                    &pools(costs, |v| v),
+                    1.0,
+                    n0,
+                    Z_HALF_ALPHA,
+                    rule.alpha / 2.0,
+                ),
+            )),
+            _ => {}
+        }
+    }
+    repetitions.settles = plans.iter().map(|(what, _)| (*what).to_owned()).collect();
+    match plans.iter().map(|(_, n)| *n).collect::<Option<Vec<_>>>() {
+        Some(needed) => {
+            if let Some(needed) = needed.into_iter().max() {
+                repetitions.needed = Some(needed);
+                repetitions.missing = Some(needed - n0);
+            }
+        }
+        None => repetitions.more_than = Some(REPETITIONS_CAP),
     }
     repetitions
 }
@@ -1164,6 +1537,13 @@ fn reasons(quality: Option<&Quality>, cost: Option<&Cost>, rule: &Rule) -> Vec<S
                 p(c.p_within_high)
             ),
             CostState::Cheaper => format!("Cost {change:+.1}%: cheaper ({}).", p(c.p_cheaper)),
+            CostState::BelowBound => format!(
+                "Cost {change:+.1}%: below the +{within}% bound ({}), but neither within \
+                 −{within}% ({}) nor cheaper ({}).",
+                p(c.p_within_high),
+                p(c.p_within_low),
+                p(c.p_cheaper)
+            ),
             CostState::MoreExpensive => format!(
                 "Cost {change:+.1}%: more expensive ({}).",
                 p(c.p_more_expensive)
@@ -1176,9 +1556,25 @@ fn reasons(quality: Option<&Quality>, cost: Option<&Cost>, rule: &Rule) -> Vec<S
             ),
         });
     } else if quality.is_some() {
-        reasons.push("Cost: no subject cost recorded on side A.".into());
+        reasons.push("Cost: no test has a subject cost above 0 on both sides.".into());
     }
     reasons
+}
+
+/// "the quality at the 5-point margin and the cost at the +5% bound".
+fn settles_text(settles: &[String], rule: &Rule) -> String {
+    let parts = settles
+        .iter()
+        .map(|what| match what.as_str() {
+            "quality" => format!("the quality at the {}-point margin", rule.margin),
+            _ => "the cost".to_owned(),
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        "it".to_owned()
+    } else {
+        parts.join(" and ")
+    }
 }
 
 impl Verdict {
@@ -1205,6 +1601,7 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
             "Verdict, {label_b} against {label_a}: {}{}",
             verdict.label(),
             match comparison.qualifier {
+                Some(Qualifier::TestInferior) => " (a test fell beyond the margin on its own)",
                 Some(Qualifier::QualityFell) =>
                     " (quality fell, by an amount the runs cannot bound)",
                 Some(Qualifier::TradeOff) => {
@@ -1264,15 +1661,16 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
     if let Some(sigma) = r.sigma {
         repetitions += &format!("; σ per run {sigma:.1} points");
     }
+    let settles = settles_text(&r.settles, rule);
     match (r.needed, r.missing, r.more_than, &r.note) {
         (Some(needed), Some(missing), _, _) => {
             repetitions += &format!(
-                "; about {needed} per arm would settle the {}-point margin at the observed Δ: {missing} more",
-                rule.margin
+                "; about {needed} per arm, those made kept, would settle {settles} with a \
+                 predicted 80%: {missing} more"
             )
         }
         (_, _, Some(cap), _) => {
-            repetitions += &format!("; more than {cap} per arm would be needed at the observed Δ")
+            repetitions += &format!("; more than {cap} per arm would be needed to settle {settles}")
         }
         (_, _, _, Some(note)) => repetitions += &format!(". {note}"),
         _ => {}
@@ -1288,7 +1686,7 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
             test.b,
             test.delta,
             if test.warning {
-                "  fell more than the margin"
+                "  fell beyond the margin on its own"
             } else {
                 ""
             }
@@ -1326,8 +1724,9 @@ pub fn text(comparison: &Comparison, label_a: &str, label_b: &str) -> String {
     }
     out.push_str(&criteria::text(&comparison.criteria, label_a, label_b));
     out.push_str(&format!(
-        "Rule: permutation tests within each test, one-sided α {} each (cheaper or more \
-         expensive at α / 2), margin {} points, cost within ±{}%, {} permutations, seed {}.\n",
+        "Rule: permutation tests within each test, one-sided α {} each (improved, fell, cheaper \
+         and more expensive at α / 2; each test's fall beyond the margin Holm-adjusted), margin \
+         {} points, cost within ±{}%, {} permutations, seed {}.\n",
         rule.alpha,
         rule.margin,
         rule.equivalence * 100.0,
@@ -1348,7 +1747,7 @@ mod tests_support {
             .join("tests/fixtures/verdict")
             .join(name);
         let document = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        runs_of([&document])
+        runs_of([&document]).0
     }
 }
 
@@ -1359,6 +1758,51 @@ mod tests {
 
     fn expected() -> Value {
         serde_json::from_str(include_str!("../tests/fixtures/verdict/expected.json")).unwrap()
+    }
+
+    /// A counted, evaluated run of `scenario` (its own definition).
+    fn run(attempt: &str, scenario: &str, score: f64, cost: f64) -> Run {
+        Run {
+            attempt_id: attempt.into(),
+            scenario: scenario.into(),
+            behavior: Some(format!("sha256:{scenario}")),
+            cause: Some("evaluated".into()),
+            counted: true,
+            score: Some(score),
+            completed: true,
+            cost_usd: Some(cost),
+            ..Run::default()
+        }
+    }
+
+    // Worst first, as the header orders them.
+    fn verdict_rank(comparison: &Comparison) -> u8 {
+        match comparison.verdict.unwrap() {
+            Verdict::Worse => 0,
+            Verdict::CannotTell => 1,
+            Verdict::NoDifference => 2,
+            Verdict::Better => 3,
+        }
+    }
+
+    fn quality_rank(comparison: &Comparison) -> u8 {
+        match comparison.quality.as_ref().unwrap().state {
+            QualityState::Inferior => 0,
+            QualityState::Fell => 1,
+            QualityState::Inconclusive => 2,
+            QualityState::NonInferior => 3,
+            QualityState::Improved => 4,
+        }
+    }
+
+    fn cost_rank(comparison: &Comparison) -> u8 {
+        match comparison.cost.as_ref().unwrap().state {
+            CostState::MoreExpensive => 0,
+            CostState::Inconclusive => 1,
+            CostState::Equivalent => 2,
+            CostState::BelowBound => 3,
+            CostState::Cheaper => 4,
+        }
     }
 
     #[test]
@@ -1407,18 +1851,18 @@ mod tests {
                 expected["qualifier"],
                 "{suite}"
             );
-            // One model, one stack per arm, and only the Harness differs.
+            // One model, one stack per arm, only the Harness differs, and no
+            // run is left out or doubted.
             assert!(
-                comparison.warnings.iter().all(|w| !w.contains("no cause")
-                    && !w.contains("mixes")
-                    && !w.contains("differ")),
+                comparison.warnings.is_empty(),
                 "{suite}: {:?}",
                 comparison.warnings
             );
             // How many more repetitions, never none while it cannot tell.
             let r = &comparison.repetitions;
             assert_eq!(
-                serde_json::json!({"needed": r.needed, "missing": r.missing, "more_than": r.more_than}),
+                serde_json::json!({"needed": r.needed, "missing": r.missing,
+                    "more_than": r.more_than, "settles": r.settles}),
                 expected["repetitions"],
                 "{suite}"
             );
@@ -1431,10 +1875,15 @@ mod tests {
         let quality = se.quality.as_ref().unwrap();
         assert!((quality.delta + 6.99).abs() < 0.01, "{}", quality.delta);
         assert!(se.cost.as_ref().unwrap().relative < -0.05);
-        assert!(se
+        // The Kanban board fell 16 points, more than the margin, but five runs
+        // a side do not show it beyond the margin once the tests are many.
+        let board = se
             .tests
             .iter()
-            .any(|test| test.scenario == "kanban_c3_board" && test.warning));
+            .find(|test| test.scenario == "kanban_c3_board")
+            .unwrap();
+        assert!(board.delta < -rule.margin && !board.warning);
+        assert!(board.p_inferior_adjusted >= board.p_inferior);
     }
 
     /// Both arms drawn with replacement from one arm's counted runs, test by
@@ -1455,11 +1904,9 @@ mod tests {
         })
     }
 
-    #[test]
-    fn a_version_against_itself_gives_a_false_signal_in_fewer_than_one_comparison_in_twenty() {
-        let calibration = &expected()["calibration"];
-        let number = |key: &str| calibration[key].as_u64().unwrap() as usize;
-        let arms = [
+    /// Each arm of the pair's counted runs, by test.
+    fn arms_by_test() -> [Vec<Vec<Run>>; 4] {
+        [
             "se-1.8.44.json",
             "se-1.8.50.json",
             "regression-1.8.44.json",
@@ -1471,7 +1918,14 @@ mod tests {
                 by.entry(run.scenario.clone()).or_default().push(run);
             }
             by.into_values().collect::<Vec<_>>()
-        });
+        })
+    }
+
+    #[test]
+    fn a_version_against_itself_gives_a_false_signal_in_fewer_than_one_comparison_in_twenty() {
+        let calibration = &expected()["calibration"];
+        let number = |key: &str| calibration[key].as_u64().unwrap() as usize;
+        let arms = arms_by_test();
         let mut rng = SplitMix64(number("seed") as u64);
         let ceiling = calibration["max_false_signal_rate"].as_f64().unwrap();
         for n in calibration["runs_per_arm"].as_array().unwrap() {
@@ -1497,6 +1951,68 @@ mod tests {
                 "{n} runs per arm: {false_signals} of {trials} gave a false signal"
             );
         }
+    }
+
+    #[test]
+    fn a_test_warns_only_when_its_own_fall_beyond_the_margin_survives_holm() {
+        assert_eq!(holm(&[0.01, 0.04, 0.03, 0.005]), [0.03, 0.06, 0.06, 0.02]);
+        // Ties keep their order and the adjustment never passes 1.
+        assert_eq!(holm(&[0.6, 0.6, 0.125]), [1.0, 1.0, 0.375]);
+        // The same version at nine runs: the observed fall of some test
+        // passes the margin in most comparisons, its own test almost never.
+        let arms = arms_by_test();
+        let mut rng = SplitMix64(9);
+        let rule = Rule {
+            permutations: 2_000,
+            ..Rule::default()
+        };
+        let (mut beyond, mut warned) = (0, 0);
+        for trial in 0..24 {
+            let [a, b] = same_version(&arms[trial % arms.len()], 9, &mut rng);
+            let comparison = compare(&a, &b, &rule);
+            beyond += usize::from(
+                comparison
+                    .tests
+                    .iter()
+                    .any(|test| test.delta < -rule.margin),
+            );
+            warned += usize::from(comparison.tests.iter().any(|test| test.warning));
+        }
+        assert!(beyond >= 8, "{beyond}");
+        assert!(warned <= 1, "{warned}");
+        // A clear fall of one test among many does warn, by name.
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for test in 0..14 {
+            for i in 0..9 {
+                let score = 80.0 + (i % 3) as f64;
+                let fallen = if test == 3 { score - 30.0 } else { score };
+                a.push(run(
+                    &format!("a{test}-{i}"),
+                    &format!("t{test:02}"),
+                    score,
+                    1.0,
+                ));
+                b.push(run(
+                    &format!("b{test}-{i}"),
+                    &format!("t{test:02}"),
+                    fallen,
+                    1.0,
+                ));
+            }
+        }
+        let comparison = compare(&a, &b, &rule);
+        let warned = comparison
+            .tests
+            .iter()
+            .filter(|test| test.warning)
+            .map(|test| test.scenario.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(warned, ["t03"]);
+        assert!(comparison
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("t03 fell 30.0 points, beyond the 5-point margin on its own")));
     }
 
     #[test]
@@ -1553,8 +2069,10 @@ mod tests {
         );
         assert_eq!(comparison.runs.b.excluded, 1);
         assert_eq!(comparison.tests[0].delta, -20.0);
+        // One run cannot show a test beyond the margin.
+        assert!(!comparison.tests[0].warning);
         // Reports older than causes fall back to `technical`, and say so.
-        let older = runs_of([
+        let (older, _) = runs_of([
             &serde_json::json!({"scenarios": [{"scenario_id": "t1", "runs": [
                 {"attempt_id": "x", "technical": "valid", "score": 50},
                 {"attempt_id": "y", "technical": "technical_invalid", "score": 0},
@@ -1607,11 +2125,19 @@ mod tests {
             verdict(arm("b", [60.0, 61.0, 62.0, 60.0, 61.0], 0.5)),
             Some(Verdict::Worse)
         );
-        // Five points down, every run: it fell, by about the margin itself.
+        // Clearly higher quality at the same cost is better.
+        let higher = compare(&base, &arm("b", [96.0, 97.0, 98.0, 96.0, 97.0], 1.0), &rule);
+        assert_eq!(
+            (higher.quality.as_ref().unwrap().state, higher.verdict),
+            (QualityState::Improved, Some(Verdict::Better))
+        );
+        // Five points down, every run: it fell, by about the margin itself,
+        // which more runs cannot settle.
         let fell = compare(&base, &arm("b", [85.0, 86.0, 87.0, 85.0, 86.0], 0.5), &rule);
         assert_eq!(fell.verdict, Some(Verdict::CannotTell));
         assert_eq!(fell.qualifier, Some(Qualifier::QualityFell));
-        assert!(fell.repetitions.note.is_some());
+        assert_eq!(fell.repetitions.more_than, Some(REPETITIONS_CAP));
+        assert_eq!(fell.repetitions.settles, ["quality"]);
         // Fallen, or undecided, and more expensive is worse.
         let fell = compare(&base, &arm("b", [85.0, 86.0, 87.0, 85.0, 86.0], 2.0), &rule);
         assert_eq!(fell.quality.unwrap().state, QualityState::Fell);
@@ -1639,74 +2165,134 @@ mod tests {
     }
 
     #[test]
-    fn raising_b_scores_or_lowering_its_cost_never_reads_worse() {
-        // worse < cannot tell = no difference < better.
-        let rank = |verdict: Option<Verdict>| match verdict.unwrap() {
-            Verdict::Worse => 0,
-            Verdict::CannotTell | Verdict::NoDifference => 1,
-            Verdict::Better => 2,
-        };
-        let quality_rank =
-            |comparison: &Comparison| match comparison.quality.as_ref().unwrap().state {
-                QualityState::Inferior => 0,
-                QualityState::Fell => 1,
-                QualityState::Inconclusive => 2,
-                QualityState::NonInferior => 3,
-                QualityState::Improved => 4,
-            };
-        let mut rng = SplitMix64(11);
+    fn a_test_beyond_the_margin_holds_back_better_however_many_steady_tests_dilute_it() {
+        // One test 22 points down and 29% cheaper is worse; ten tests at 100
+        // on both sides bring the mean within the margin, not to better.
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for i in 0..9 {
+            let wobble = (i % 3) as f64;
+            a.push(run(
+                &format!("a{i}"),
+                "core",
+                94.0 + wobble,
+                1.0 + wobble / 100.0,
+            ));
+            b.push(run(
+                &format!("b{i}"),
+                "core",
+                72.0 + wobble,
+                0.71 + wobble / 100.0,
+            ));
+        }
+        let rule = Rule::default();
+        let alone = compare(&a, &b, &rule);
+        assert_eq!(alone.verdict, Some(Verdict::Worse));
+        for test in 0..10 {
+            for i in 0..9 {
+                let scenario = format!("steady{test:02}");
+                a.push(run(&format!("a{test}-{i}"), &scenario, 100.0, 0.1));
+                b.push(run(&format!("b{test}-{i}"), &scenario, 100.0, 0.1));
+            }
+        }
+        let diluted = compare(&a, &b, &rule);
+        let quality = diluted.quality.as_ref().unwrap();
+        assert_eq!(
+            quality.state,
+            QualityState::NonInferior,
+            "{}",
+            quality.delta
+        );
+        assert_eq!(diluted.cost.as_ref().unwrap().state, CostState::Cheaper);
+        assert_eq!(
+            (diluted.verdict, diluted.qualifier),
+            (Some(Verdict::CannotTell), Some(Qualifier::TestInferior))
+        );
+        assert!(diluted.repetitions.note.is_some());
+        assert!(diluted
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("core fell 22.0 points, beyond the 5-point margin")));
+    }
+
+    /// Up to four tests with uneven runs per side, scores and costs drawn.
+    fn uneven(rng: &mut SplitMix64, dearer: f64) -> (Vec<Run>, Vec<Run>) {
         let mut draw = |low: u64, span: u64| (low + rng.next_u64() % span) as f64;
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for test in 0..1 + draw(0, 4) as usize {
+            let scenario = format!("t{test}");
+            let base = draw(5, 95) / 100.0;
+            for (side, runs, shift, price) in [("a", &mut a, 0.0, 1.0), ("b", &mut b, 4.0, dearer)]
+            {
+                for i in 0..draw(3, 8) as usize {
+                    let cost = base * price * draw(40, 120) / 100.0;
+                    runs.push(run(
+                        &format!("{side}{test}{i}"),
+                        &scenario,
+                        draw(78, 15) - shift,
+                        cost,
+                    ));
+                }
+            }
+        }
+        (a, b)
+    }
+
+    #[test]
+    fn raising_a_b_score_or_lowering_a_b_cost_never_makes_a_p_a_state_or_the_verdict_worse() {
         let rule = Rule {
             permutations: 300,
             ..Rule::default()
         };
+        let mut rng = SplitMix64(11);
         let mut moved = 0;
-        for case in 0..24 {
-            // B a few points behind; half the cases start with B 30% dearer,
-            // so the more expensive row is read.
-            let dearer = if case % 2 == 0 { 30 } else { 0 };
-            let mut runs = |prefix: &str, low: u64, dearer: u64| {
-                (0..3)
-                    .flat_map(|test| (0..5).map(move |i| (test, i)))
-                    .map(|(test, i)| Run {
-                        attempt_id: format!("{prefix}{test}{i}"),
-                        scenario: format!("t{test}"),
-                        cause: Some("evaluated".into()),
-                        counted: true,
-                        score: Some(draw(low, 11)),
-                        cost_usd: Some(draw(95 + dearer, 11) / 100.0),
-                        ..Run::default()
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let (a, mut b) = (runs("a", 85, 0), runs("b", 80, dearer));
+        for case in 0..40 {
+            let dearer = [1.0, 1.3, 1.6][case % 3];
+            let (a, mut b) = uneven(&mut rng, dearer);
             let mut before = compare(&a, &b, &rule);
-            for step in 0..12 {
-                // One test's runs at a time: its scores up, or its cost down.
-                let test = format!("t{}", draw(0, 3));
+            for step in 0..16 {
+                let at = (rng.next_u64() % b.len() as u64) as usize;
                 let raise = step % 2 == 0;
-                let (up, cut) = (draw(1, 4), draw(80, 20) / 100.0);
-                for run in b.iter_mut().filter(|run| run.scenario == test) {
-                    if raise {
-                        *run.score.as_mut().unwrap() += up;
-                    } else {
-                        *run.cost_usd.as_mut().unwrap() *= cut;
-                    }
+                if raise {
+                    *b[at].score.as_mut().unwrap() += (1 + rng.next_u64() % 12) as f64;
+                } else {
+                    *b[at].cost_usd.as_mut().unwrap() *= [0.95, 0.7, 0.4][step % 3];
                 }
                 let after = compare(&a, &b, &rule);
-                assert!(
-                    rank(after.verdict) >= rank(before.verdict),
+                let what = format!(
                     "case {case} step {step}: {:?} then {:?}",
-                    before.reasons,
-                    after.reasons
+                    before.reasons, after.reasons
                 );
-                moved += usize::from(after.verdict != before.verdict);
+                assert!(verdict_rank(&after) >= verdict_rank(&before), "{what}");
+                let (q0, q1) = (
+                    before.quality.as_ref().unwrap(),
+                    after.quality.as_ref().unwrap(),
+                );
+                let (c0, c1) = (before.cost.as_ref().unwrap(), after.cost.as_ref().unwrap());
                 if raise {
+                    assert!(quality_rank(&after) >= quality_rank(&before), "{what}");
                     assert!(
-                        quality_rank(&after) >= quality_rank(&before),
-                        "case {case} step {step}"
+                        q1.p_improved <= q0.p_improved && q1.p_non_inferior <= q0.p_non_inferior
                     );
+                    assert!(q1.p_inferior >= q0.p_inferior && q1.p_fell >= q0.p_fell);
+                    assert_eq!(
+                        (c0.p_cheaper, c0.p_more_expensive),
+                        (c1.p_cheaper, c1.p_more_expensive)
+                    );
+                } else {
+                    assert!(cost_rank(&after) >= cost_rank(&before), "{what}");
+                    assert!(
+                        c1.p_cheaper <= c0.p_cheaper && c1.p_within_high <= c0.p_within_high,
+                        "{what}"
+                    );
+                    assert!(
+                        c1.p_more_expensive >= c0.p_more_expensive
+                            && c1.p_within_low >= c0.p_within_low,
+                        "{what}"
+                    );
+                    assert_eq!(q0, q1);
                 }
+                moved += usize::from(after.verdict != before.verdict);
                 before = after;
             }
         }
@@ -1715,21 +2301,209 @@ mod tests {
     }
 
     #[test]
-    fn the_repetitions_read_the_spread_the_margin_tests_exchange_and_are_never_zero() {
+    fn the_cost_reads_the_same_in_any_unit() {
+        let mut rng = SplitMix64(5);
+        let rule = Rule {
+            permutations: 500,
+            ..Rule::default()
+        };
+        for _ in 0..6 {
+            let (a, b) = uneven(&mut rng, 1.05);
+            let base = compare(&a, &b, &rule).cost.unwrap();
+            for unit in [1e-9, 3.7, 1e9] {
+                let scaled = |runs: &[Run]| {
+                    runs.iter()
+                        .map(|run| Run {
+                            cost_usd: run.cost_usd.map(|cost| cost * unit),
+                            ..run.clone()
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let cost = compare(&scaled(&a), &scaled(&b), &rule).cost.unwrap();
+                assert_eq!(
+                    (cost.state, cost.p_cheaper, cost.p_more_expensive),
+                    (base.state, base.p_cheaper, base.p_more_expensive),
+                    "×{unit}"
+                );
+                assert_eq!(
+                    (cost.p_within_low, cost.p_within_high),
+                    (base.p_within_low, base.p_within_high),
+                    "×{unit}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_cost_state_and_the_verdict_move_one_way_as_every_b_cost_falls() {
+        // Ten tests, nine runs a side, the same scores and a cost noise of
+        // about 15%: B's costs scaled from 30% dearer to 30% cheaper.
+        let mut rng = SplitMix64(3);
+        let mut noise = || 0.85 + (rng.next_u64() % 300) as f64 / 1_000.0;
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for test in 0..10 {
+            let scenario = format!("t{test}");
+            for i in 0..9 {
+                let score = 80.0 + (i % 4) as f64;
+                a.push(run(&format!("a{test}{i}"), &scenario, score, 0.1 * noise()));
+                b.push(run(&format!("b{test}{i}"), &scenario, score, 0.1 * noise()));
+            }
+        }
+        let rule = Rule {
+            permutations: 400,
+            ..Rule::default()
+        };
+        let mut seen = BTreeSet::new();
+        let mut last = (0, 0);
+        for step in 0..=60 {
+            let scale = 1.3 - step as f64 * 0.01;
+            let scaled = b
+                .iter()
+                .map(|run| Run {
+                    cost_usd: run.cost_usd.map(|cost| cost * scale),
+                    ..run.clone()
+                })
+                .collect::<Vec<_>>();
+            let comparison = compare(&a, &scaled, &rule);
+            let now = (cost_rank(&comparison), verdict_rank(&comparison));
+            assert!(
+                now.0 >= last.0 && now.1 >= last.1,
+                "at ×{scale:.2}: {:?}",
+                comparison.reasons
+            );
+            seen.insert(now.0);
+            last = now;
+        }
+        // From more expensive to cheaper, through equivalent and the bound.
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn each_run_left_out_or_doubted_is_counted_and_named() {
+        let document = |runs: Value, extra: Value| {
+            serde_json::json!({"subject": {"provider": "deepseek", "model": "flash"},
+                "system_under_test": {"stack": {"stack_versions": {"harness": "1.8.50"}}},
+                "scenarios": [{"scenario_id": "t0", "behavior_sha256": "sha256:t0", "runs": runs},
+                              {"scenario_id": "t1", "behavior_sha256": "sha256:t1", "runs": extra}]})
+        };
+        let runs = |side: &str, scores: [Value; 4], costs: [Value; 4]| {
+            Value::Array(
+                scores
+                    .into_iter()
+                    .zip(costs)
+                    .enumerate()
+                    .map(|(i, (score, cost))| {
+                        serde_json::json!({"attempt_id": format!("{side}{i}"), "cause": "evaluated",
+                            "score": score, "cost": {"subject_usd": cost}})
+                    })
+                    .collect(),
+            )
+        };
+        let a = document(
+            runs(
+                "a",
+                [80.into(), 82.into(), 81.into(), 83.into()],
+                [0.10.into(), 0.11.into(), 0.12.into(), 0.10.into()],
+            ),
+            // t1 reuses t0's attempt ids: both tests stay.
+            runs(
+                "a",
+                [70.into(), 71.into(), 72.into(), 70.into()],
+                [0.2.into(), 0.21.into(), 0.2.into(), 0.22.into()],
+            ),
+        );
+        let mut conflict = a.clone();
+        conflict["scenarios"][0]["runs"][0]["score"] = 0.into();
+        let (a, doubts) = runs_of([&a, &conflict]);
+        assert_eq!(a.len(), 8);
+        assert_eq!(a[0].score, Some(80.0));
+        assert_eq!(
+            doubts,
+            [
+                "1 runs repeat an attempt already read for the same test, with other content; \
+                 the first read is kept: t0 a0.",
+                "4 attempt ids appear under more than one test, kept under each: a0 (t0, t1), \
+                 a1 (t0, t1), a2 (t0, t1), a3 (t0, t1)."
+            ]
+        );
+        let (mut b, doubts) = runs_of([&document(
+            runs(
+                "b",
+                [Value::Null, "81".into(), 80.into(), 82.into()],
+                [0.1.into(), Value::Null, (-0.5).into(), 0.0.into()],
+            ),
+            runs(
+                "c",
+                [70.into(), 72.into(), 71.into(), 70.into()],
+                [Value::Null, Value::Null, Value::Null, Value::Null],
+            ),
+        )]);
+        assert!(doubts.is_empty());
+        b[4].cause = Some("subject_crashed_new_kind".into());
+        let comparison = compare(
+            &a,
+            &b,
+            &Rule {
+                permutations: 200,
+                ..Rule::default()
+            },
+        );
+        for warning in [
+            "B: 2 counted runs have no numeric score and leave the quality: t0 ×2.",
+            "B: 5 counted runs have no subject cost and leave the cost: t0 ×1, t1 ×4.",
+            "B: 2 counted runs have a subject cost at or below 0 and leave the cost: t0 ×2.",
+            "B: 1 runs carry a cause this version does not know (subject_crashed_new_kind) and \
+             were classified by `technical`: t1 ×1.",
+            "The cost is read over 1 of the 2 tests, without t1: no subject cost above 0 on a side.",
+        ] {
+            assert!(comparison.warnings.contains(&warning.to_owned()), "{warning}\n{:#?}", comparison.warnings);
+        }
+        // The cost reads t0's one run left with a cost above 0.
+        let cost = comparison.cost.as_ref().unwrap();
+        assert_eq!((cost.tests, cost.b), (1, 0.1));
+        // Sums too large to add read p = 1, never equivalent.
+        let huge = |prefix: &str| {
+            (0..4)
+                .map(|i| run(&format!("{prefix}{i}"), "t", 80.0 + i as f64, 1.5e308))
+                .collect::<Vec<_>>()
+        };
+        let comparison = compare(
+            &huge("a"),
+            &huge("b"),
+            &Rule {
+                permutations: 200,
+                ..Rule::default()
+            },
+        );
+        let cost = comparison.cost.as_ref().unwrap();
+        assert_eq!(cost.state, CostState::Inconclusive);
+        assert_eq!(
+            (cost.p_within_low, cost.p_within_high, cost.p_cheaper),
+            (1.0, 1.0, 1.0)
+        );
+        assert!(comparison.warnings.contains(
+            &"The cost does not add up to a finite number: each of its tests reads p = 1."
+                .to_owned()
+        ));
+    }
+
+    #[test]
+    fn the_repetitions_settle_what_is_undecided_with_a_predicted_80_percent() {
         // Nine tests at 100 on both sides and one that falls 100 → 60, cost
-        // −20%: no noise within an arm, yet the permutation test cannot tell
-        // until about 40 runs per arm.
+        // −20%: no noise within an arm. At five runs its own test cannot show
+        // the fall beyond the margin over ten tests, and the mean cannot tell
+        // within 30 runs; from ten, the test is clearly inferior.
         let ten = |prefix: &str, n: usize, fallen: f64, cost: f64| {
             (0..10)
                 .flat_map(|test| (0..n).map(move |i| (test, i)))
-                .map(|(test, i)| Run {
-                    attempt_id: format!("{prefix}{test}{i:02}"),
-                    scenario: format!("t{test}"),
-                    cause: Some("evaluated".into()),
-                    counted: true,
-                    score: Some(if test == 9 { fallen } else { 100.0 }),
-                    cost_usd: Some(cost * (1.0 + i as f64 * 0.001)),
-                    ..Run::default()
+                .map(|(test, i)| {
+                    let score = if test == 9 { fallen } else { 100.0 };
+                    run(
+                        &format!("{prefix}{test}{i:02}"),
+                        &format!("t{test}"),
+                        score,
+                        cost * (1.0 + i as f64 * 0.001),
+                    )
                 })
                 .collect::<Vec<_>>()
         };
@@ -1737,15 +2511,14 @@ mod tests {
             permutations: 2_000,
             ..Rule::default()
         };
-        for n in [5, 10, 20] {
+        let five = compare(&ten("a", 5, 100.0, 1.0), &ten("b", 5, 60.0, 0.8), &rule);
+        assert_eq!(five.verdict, Some(Verdict::CannotTell));
+        let r = &five.repetitions;
+        assert_eq!((r.needed, r.missing, r.more_than), (None, None, Some(30)));
+        for n in [10, 20] {
             let comparison = compare(&ten("a", n, 100.0, 1.0), &ten("b", n, 60.0, 0.8), &rule);
-            assert_eq!(comparison.verdict, Some(Verdict::CannotTell), "{n}");
-            let r = &comparison.repetitions;
-            assert_eq!(
-                (r.needed, r.missing, r.more_than),
-                (None, None, Some(30)),
-                "{n}"
-            );
+            assert_eq!(comparison.qualifier, Some(Qualifier::TestInferior), "{n}");
+            assert!(comparison.repetitions.note.is_some(), "{n}");
         }
         // Beyond the margin, the runs that would show it inferior.
         let a = [85.0, 95.0, 90.0, 82.0, 98.0];
@@ -1760,6 +2533,50 @@ mod tests {
         let r = &below.repetitions;
         assert!(r.note.is_none(), "{:?}", r.note);
         assert!(r.missing.is_some_and(|missing| missing > 0) || r.more_than.is_some());
+        // Quality within the margin and a cost that could be 10% dearer: the
+        // runs that would show it below the +5% bound.
+        let wobble = |prefix: &str, price: f64| {
+            (0..3)
+                .flat_map(|test| (0..9).map(move |i| (test, i)))
+                .map(|(test, i)| {
+                    let cost = price * [0.85, 1.0, 1.15][i % 3];
+                    run(
+                        &format!("{prefix}{test}{i}"),
+                        &format!("t{test}"),
+                        90.0 + (i % 2) as f64,
+                        cost,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let undecided = compare(&wobble("a", 1.0), &wobble("b", 0.98), &Rule::default());
+        assert_eq!(
+            (
+                undecided.quality.as_ref().unwrap().state,
+                undecided.cost.as_ref().unwrap().state
+            ),
+            (QualityState::NonInferior, CostState::Inconclusive)
+        );
+        let r = &undecided.repetitions;
+        assert_eq!(r.settles, ["cost"]);
+        let needed = r.needed.unwrap();
+        assert!(needed > 9 && needed <= REPETITIONS_CAP && r.missing == Some(needed - 9));
+        // The plan at that many runs: the bound is shown.
+        let settled = compare(
+            &(0..needed.div_ceil(9))
+                .flat_map(|copy| wobble(&format!("a{copy}-"), 1.0))
+                .collect::<Vec<_>>(),
+            &(0..needed.div_ceil(9))
+                .flat_map(|copy| wobble(&format!("b{copy}-"), 0.98))
+                .collect::<Vec<_>>(),
+            &Rule::default(),
+        );
+        assert_ne!(
+            settled.verdict,
+            Some(Verdict::CannotTell),
+            "{:?}",
+            settled.reasons
+        );
         // No permutation p reaches α = 0.025 below 4 runs per arm with one
         // test, 3 with two, 2 with three.
         assert_eq!(
@@ -1781,8 +2598,8 @@ mod tests {
                      "score": 90, "cost": {"subject_usd": 1.0}}]}]
             })
         };
-        let a = runs_of([&document("flash", "1.8.44", "1.4.36")]);
-        let b = runs_of([&document("flash", "1.8.50", "1.4.36")]);
+        let a = runs_of([&document("flash", "1.8.44", "1.4.36")]).0;
+        let b = runs_of([&document("flash", "1.8.50", "1.4.36")]).0;
         assert_eq!(a[0].model.as_deref(), Some("deepseek/flash"));
         assert_eq!(a[0].stack["iii"], "0.24.6");
         // Only the Harness differs: nothing to say.
@@ -1790,7 +2607,8 @@ mod tests {
         let mixed = runs_of([
             &document("flash", "1.8.50", "1.4.36"),
             &document("pro", "1.8.50", "1.4.37"),
-        ]);
+        ])
+        .0;
         assert_eq!(
             compare(&a, &mixed, &Rule::default()).warnings,
             [
@@ -1799,7 +2617,7 @@ mod tests {
                  sha256:1.8.501.4.37."
             ]
         );
-        let other = runs_of([&document("pro", "1.8.50", "1.4.37")]);
+        let other = runs_of([&document("pro", "1.8.50", "1.4.37")]).0;
         assert_eq!(
             compare(&a, &other, &Rule::default()).warnings,
             [

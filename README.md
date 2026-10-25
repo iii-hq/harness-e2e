@@ -426,10 +426,12 @@ A/A, to check the calibration: dispatch the same stack of
 `stacks/harness-ab/` twice as both arms, the same suite and model, and compare
 them as below. "Cannot tell" or "no difference" is the expected result. By
 design a version against itself reads better, worse or a qualifier at most
-about 2α = 5% of the time. Drawing both arms with replacement from one arm of
-the pair below, 3,000 comparisons each at the default rule, it did in 4.4%,
-4.0% and 3.5% of them at 5, 9 and 11 runs per test (better or worse alone,
-2.7%, 2.6% and 2.2%).
+about 2α = 5% of the time: quality moves either way at α/2, the cost either
+way at α/2, and a test falls beyond the margin on its own at α over all the
+tests together. Drawing both arms with replacement from one arm of the pair
+below, 3,000 comparisons each at the default rule, it did in 3.4%, 3.4% and
+3.0% of them at 5, 9 and 11 runs per test (better or worse alone, 2.6%,
+3.0% and 2.5%).
 
 A/B: dispatch the suite once with each stack (for example
 `1.8.44.yaml` and `1.8.50.yaml`), pass the YAML as `stack`:
@@ -446,33 +448,45 @@ harness-e2e compare A_DIR B_DIR --label-a 1.8.44 --label-b 1.8.50
 ```
 
 Each argument is a `results.json` or a directory read for every
-`results.json` below it, a run seen twice counted once and a file that does
-not parse skipped with a warning. `--margin` (5 points, above 0),
-`--equivalence` (0.05, between 0 and 1), `--permutations` (10,000) and
-`--seed` (0) change the rule; `--json` prints the comparison whole. The
-Console's comparison of two executions shows the same verdict, read by the
-worker (`e2e::dashboard::execution-verdict`) once both have finished, and the
-Trends overview shows it, with its warnings, for each combination of the
-latest release against the previous one, or says there is none when a side
-ran one run per test. `python3 scripts/harness_ab.py A_DIR B_DIR` keeps its
-tables per metric and per scenario, whose intervals only describe the spread,
-and ends with this verdict.
+`results.json` below it. A run is its test and attempt: read twice with the
+same content it counts once (a root bundle carries its groups' results),
+with other content the first read stays and a warning says so, and an
+attempt id under two tests stays under both, with a warning; a file that does
+not parse is skipped with a warning. `--margin` (5 points, a finite number
+above 0), `--equivalence` (0.05, between 0 and 1), `--permutations` (10,000,
+at least 1) and `--seed` (0) change the rule; `--json` prints the comparison
+whole. The Console's comparison of two executions shows the same verdict,
+read by the worker (`e2e::dashboard::execution-verdict`) once both have
+finished, and the Trends overview shows it, with its warnings, for each
+combination of the latest release against the previous one, or says there is
+none when a side ran one run per test. `python3 scripts/harness_ab.py A_DIR
+B_DIR` keeps its tables per metric and per scenario, whose intervals only
+describe the spread, and ends with this verdict.
 
 Only counted runs enter, those whose cause is the subject's (a run without a
-cause falls back to `technical`, with a warning), and a test only where both
-arms ran the same definition (`behavior_sha256`); each definition left out is
-listed with why. An arm that mixes models or stacks, sides whose stacks
-differ in more than the Harness, and unreadable results are warnings. Quality
-is the official score, the mean over tests of each test's mean, with a margin
-of 5 points. Cost is the efficiency that decides, set before looking:
-`cost.subject_usd`, the sum over tests of each test's mean, read as a relative
-change. Completion, time, the processed prompt, the context per turn and its
-peak are shown beside it and decide nothing. Each question is a permutation
-test that exchanges the A and B labels within each test, one-sided: quality
-improved (B ahead), non-inferior (B shifted up by the margin, B ahead),
-inferior beyond the margin (shifted, B behind) and fell (B behind) at
-α = 0.025; cost within ±5% (B divided by 0.95, B ahead, and by 1.05, B behind)
-at α, cheaper and more expensive at α/2 each. The algorithm, down to the
+cause, or with a cause this version does not know, falls back to
+`technical`, with a warning), and a test only where both arms ran the same
+definition (`behavior_sha256`); each definition left out is listed with why.
+A counted run without a numeric score leaves the quality, and one without a
+cost above 0 (missing, zero or negative) leaves the cost, each with a warning
+that counts the runs and names their tests, as does a cost read over fewer
+tests than the quality. A sum too large to be a finite number makes its tests
+read p = 1, with a warning, never "within ±5%". An arm that mixes models or
+stacks, sides whose stacks differ in more than the Harness, and unreadable
+results are warnings. Quality is the official score, the mean over tests of
+each test's mean, with a margin of 5 points. Cost is the efficiency that
+decides, set before looking: `cost.subject_usd`, the sum over tests of each
+test's mean, shown as a relative change and tested as the difference of the
+sums (a ratio of the sums let one run made 5% cheaper turn "cannot tell" into
+"worse" when the arms had uneven runs). Completion, time, the processed
+prompt, the context per turn and its peak are shown beside it and decide
+nothing. Each question is a permutation test that exchanges the A and B
+labels within each test, one-sided: quality improved (B ahead) and fell (B
+behind) at α/2 = 0.0125, non-inferior (B shifted up by the margin, B ahead)
+and inferior beyond the margin (shifted, B behind) at α = 0.025; cost within
+±5% (B divided by 0.95, B ahead, and by 1.05, B behind) at α, cheaper and
+more expensive at α/2. Each test also has its own test of a fall beyond the
+margin, Holm-adjusted over the tests compared. The algorithm, down to the
 generator (SplitMix64) and the shuffle (Fisher–Yates), is written at the top
 of [src/verdict.rs](src/verdict.rs), for Release Control to reproduce on
 [tests/fixtures/verdict/](tests/fixtures/verdict/expected.json), the pair
@@ -480,48 +494,109 @@ below.
 
 | Verdict | When |
 |---|---|
-| better | quality improved or non-inferior, and cost cheaper |
-| no difference | quality improved or non-inferior, and cost within ±5% |
+| better | quality improved, and cost within ±5%, below +5% or cheaper; or quality non-inferior and cost cheaper |
+| no difference | quality non-inferior, and cost within ±5% or below +5% |
 | worse | quality inferior beyond the margin, or cost more expensive unless quality improved |
-| cannot tell | anything else |
+| cannot tell | anything else; and better or no difference while a test fell beyond the margin on its own |
 
-"Cannot tell" adds "quality fell" when quality fell by an amount the runs
-cannot bound, and "trade-off" when quality improved and the cost rose.
-Raising B's scores or lowering its cost never makes the verdict worse (a
-property test checks it). When quality is undecided
-it says how many runs per test each arm would need to settle the margin at
-the observed Δ, non-inferior or, below −5 points, inferior:
-n = Σₖ 2sₖ² / (K² (|M + Δ| / 2.8)²), sₖ² the spread the margin tests exchange
-(A's runs and B's plus the margin, together, the difference between the arms
-included), at least the fewest runs whose permutation p can reach α, and at
-least one more than the fewest a test has; above 30 it reads "more than 30".
-A test that fell more than the margin on its own is a warning with its own
-p-value, and decides nothing.
+"Below +5%" is a cost shown under A + 5% that is neither shown within −5% nor
+cheaper: lower than A, by an amount the runs cannot place. It ranks between
+"within ±5%" and "cheaper", so that as B's cost falls the cost reads more
+expensive, inconclusive, within ±5%, below +5% and cheaper, in that order and
+never back; with "within ±5%" alone in between, B 2% cheaper read no
+difference, 3% cheaper cannot tell and 3.5% cheaper better.
+
+"Cannot tell" adds "a test fell beyond the margin" when one test's own fall
+beyond the margin holds after Holm's adjustment (so steady tests added to
+both sides cannot dilute a test that lost 22 points into "better"), "quality
+fell" when quality fell by an amount the runs cannot bound, and "trade-off"
+when quality improved and the cost rose. A test whose observed fall merely
+passes the margin is no warning: at nine runs a version against itself shows
+one in nearly every comparison. Raising a B score or lowering a B cost never
+makes a p-value, a state or the verdict worse; property tests check it with
+uneven runs per test and with a sweep of B's cost.
+
+When the runs cannot tell, it says how many runs per test each arm would
+need, the runs made kept, to settle what is undecided: quality at the margin
+(non-inferior or, below −5 points, inferior), and the cost (below +5%, or more
+expensive) unless quality points to inferior. For each question N is the
+fewest runs at which its estimate would clear its test's threshold with a
+predicted 80%, the true difference taken as uncertain as the runs measured
+it: d − 0.84 s √(1/n₀ − 1/N) ≥ z s / √N, d the observed distance to the
+threshold, s the per-run spread its test exchanges, n₀ the fewest runs a test
+has and z 1.96 (2.24 for more expensive); "needed" is the largest, and above
+30 it reads "more than 30". Planned at the observed Δ alone, as before, the
+number was too low near the margin: with a true fall of 2 or 3 points (63 to
+65 runs truly needed) it gave one under 30 in 27% of the comparisons, and a
+fresh run at that number settled the quality in 31% of them. Planned this way
+it gives one in 7% to 10% of them there and says "more than 30" otherwise;
+adding the missing runs settles the quality in 46% to 65% of those that got a
+number near the margin and in 65% to 97% away from it, and, the cost planned
+too, the verdict itself in 30% to 95% away from the margin with a fresh run
+at that number (50% to 95% adding the missing runs), against 6% to 83%
+before (200 simulated comparisons per case, 6 to 14 tests, five runs, a
+score spread of 12 to 15 points).
 
 On the 1.8.44 → 1.8.50 pair, five runs per arm, both suites cannot tell.
 Software engineering is 19.5% cheaper (p < 0.001), but its quality, −7.0
 points, is neither within the margin (p = 0.62) nor below it, and its fall is
-not shown at α (p = 0.03). It counts the Registry implementation run that
-scored 0 because the subject's own Compose stack still held the evaluation
-port: the subject's doing, recorded as the runner measured it. The
-regression's quality, −4.2 points, and its cost, +5.1%, are both undecided.
-Either would take more than 30 runs per test to settle.
+not shown at α/2 (p = 0.03); no test's own fall passes the margin after
+Holm's adjustment (the Kanban board's −16.0 points among them). It counts the
+Registry implementation run that scored 0 because the subject's own Compose
+stack still held the evaluation port: the subject's doing, recorded as the
+runner measured it. The regression's quality, −4.2 points, and its cost,
++5.1%, are both undecided. Either suite would take more than 30 runs per
+test to settle: the quality in software engineering, the quality and the
+cost in the regression.
+
+What the decided repetitions can see, and an open decision for the owner:
+the width of the cost equivalence, which nothing here changes. Simulated with
+14 software-engineering tests at nine runs and 9 regression tests at eleven,
+a per-run score spread of 15 and 12 points and a per-run cost spread of about
+18%, 200 comparisons each:
+
+| | `software-engineering-x9` | `regression-x11` |
+|---|---|---|
+| same version: cannot tell | 62% | 60% |
+| same version: no difference | 35.5% | 36.5% |
+| same version: cost within ±5% | 6% | 0% |
+| same version: better or worse | 2.5% | 3.5% |
+| 3 points lower: no difference | 6.5% | 7.5% |
+| 8 points lower: fell or inferior (worse) | 97.5% (26%) | 99.5% (40%) |
+| 12 points lower: worse | 95.5% | 99.5% |
+| cost 20% higher: worse | 99% | 98.5% |
+| cost 20% lower: better | 79.5% | 86% |
+
+At that cost spread the runs almost never show the cost within ±5%: a
+version against itself reads "no difference" mostly because the cost is
+shown below +5%, and before that state existed the same comparisons read "cannot
+tell" in 92.5% and 96.5% of them. With ±10% instead, a version against
+itself would read the cost within ±10% in 91.5% and 84% and "no difference"
+in 70.5% and 75.5% of them. Falls of 8 points or more and cost changes of 20%
+are seen either way. Keeping ±5%, widening it, or running more repetitions
+is the owner's call.
 
 Below the verdict comes each criterion's health per configuration: one arm's
-test, with its definition, stack and model. Runs are read first, as
-evaluated, zeroed, prerequisite failed or infrastructure, by their cause.
-Then the criteria of the counted runs that fall short in exactly the same
-runs make one group: the four Kanban board criteria (empty, retry, settings,
-total) that fell together in two runs of 1.8.50 are one case, not four, and
-the Registry implementation run that scored 0 is one case, not 22. A
-criterion a run left unevaluated is "not evaluated" there, not failed: the
-Registry verification's recall falls short in every run, and its precision
-is evaluated in none. Each criterion has its rate of full points, n and a
-Wilson 95% interval, and from 9 counted runs (the repetitions of
+runs of a test under one definition, one model and one stack (each worker's
+resolved version, the engine and the lock); runs whose results record no
+model or no stack are a configuration of their own, with a warning. Runs are
+read first, as evaluated, zeroed, prerequisite failed or infrastructure, by
+their cause. Then the criteria of the counted runs that fall short in
+exactly the same runs make one group: the four Kanban board criteria (empty,
+retry, settings, total) that fell together in two runs of 1.8.50 are one
+case, not four, and the Registry implementation run that scored 0 is one
+case, not 22. A criterion a run left unevaluated (no points, or not listed)
+is "not evaluated" there, not failed: the Registry verification's recall
+falls short in every run, and its precision is evaluated in none. Each
+criterion has its rate of full points, n and a Wilson 95% interval, and from
+9 counted runs that evaluated it (the repetitions of
 `software-engineering-x9`) is saturated, never full or oscillating; below 9 it
-is insufficient data. The comparison lists the groups whose points moved,
-largest first, over the scored runs the test's Δ reads, so they add up to it.
-All of it warns; nothing is hidden or held back.
+is insufficient data, however many runs its configuration has. The
+comparison lists the groups whose points moved, largest first, over the
+scored runs the test's Δ reads, grouping criteria by the runs they fall short
+in and the runs that did not evaluate them, so the points a criterion left
+unevaluated cost are a change of their own and the changes add up to the
+test's Δ. All of it warns; nothing is hidden or held back.
 
 ## Release Control
 

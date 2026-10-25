@@ -180,13 +180,13 @@ struct CompareArgs {
     a: PathBuf,
     /// Arm B, compared with A.
     b: PathBuf,
-    /// Points of quality B may lose and still be non-inferior, above 0 (default 5).
+    /// Points of quality B may lose and still be non-inferior, a finite number above 0 (default 5).
     #[arg(long)]
     margin: Option<f64>,
     /// Relative cost change that counts as no change, between 0 and 1 (default 0.05).
     #[arg(long)]
     equivalence: Option<f64>,
-    /// Permutations of each test (default 10000).
+    /// Permutations of each test, at least 1 (default 10000).
     #[arg(long)]
     permutations: Option<usize>,
     /// Seed of the permutations (default 0).
@@ -264,11 +264,15 @@ fn compare(args: CompareArgs) -> Result<()> {
         seed: args.seed.unwrap_or(default.seed),
         ..default
     };
-    anyhow::ensure!(rule.margin > 0.0, "--margin must be above 0");
+    anyhow::ensure!(
+        rule.margin.is_finite() && rule.margin > 0.0,
+        "--margin must be a finite number above 0"
+    );
     anyhow::ensure!(
         rule.equivalence > 0.0 && rule.equivalence < 1.0,
         "--equivalence must be between 0 and 1"
     );
+    anyhow::ensure!(rule.permutations >= 1, "--permutations must be at least 1");
     let (a, skipped_a) = verdict::read_arm(&args.a)?;
     let (b, skipped_b) = verdict::read_arm(&args.b)?;
     let mut comparison = verdict::compare(&a, &b, &rule);
@@ -529,20 +533,29 @@ mod tests {
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].starts_with("Skipped ") && skipped[0].contains("cut/results.json"));
         assert!(verdict::read_arm(&fixtures.join("missing")).is_err());
-        let args = |margin: Option<f64>, equivalence: Option<f64>| CompareArgs {
+        let args = |margin: Option<f64>, equivalence: Option<f64>, permutations| CompareArgs {
             a: fixtures.join("se-1.8.44.json"),
             b: arm.path().to_owned(),
             margin,
             equivalence,
-            permutations: Some(100),
+            permutations: Some(permutations),
             seed: None,
             label_a: "A".into(),
             label_b: "B".into(),
             json: true,
         };
-        compare(args(None, None)).unwrap();
-        for (margin, equivalence) in [(Some(0.0), None), (None, Some(1.0)), (None, Some(0.0))] {
-            assert!(compare(args(margin, equivalence)).is_err());
+        compare(args(None, None, 100)).unwrap();
+        // Out of range, not finite, or no permutation.
+        for (margin, equivalence, permutations) in [
+            (Some(0.0), None, 100),
+            (Some(f64::INFINITY), None, 100),
+            (Some(f64::NAN), None, 100),
+            (None, Some(1.0), 100),
+            (None, Some(0.0), 100),
+            (None, Some(f64::NAN), 100),
+            (None, None, 0),
+        ] {
+            assert!(compare(args(margin, equivalence, permutations)).is_err());
         }
     }
 

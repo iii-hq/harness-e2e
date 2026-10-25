@@ -1,15 +1,19 @@
 //! Criterion health within one configuration, the run read first. A
-//! configuration is one side's test: its definition, and the stack and model
-//! that side ran. Each run is classified by its cause before any criterion is
-//! read; the criteria of the counted runs that fail in exactly the same runs
-//! are one group, so a run that went wrong as a whole is one case, not one
-//! per criterion. A criterion the evaluator left unevaluated in a run (no
-//! points awarded, not zero) is not counted against it there: it is "not
-//! evaluated". Below `MIN_RUNS` counted runs a configuration's rates are
-//! insufficient data. Warnings only: nothing here changes a score, the
-//! verdict or what is shown.
+//! configuration is one side's runs of a test under one definition, one model
+//! and one stack (each worker's resolved version, the engine and the lock); a
+//! run whose results record no model or no stack is its own configuration,
+//! with a warning. Each run is classified by its cause before any criterion
+//! is read; the criteria of the counted runs that fail in exactly the same
+//! runs are one group, so a run that went wrong as a whole is one case, not
+//! one per criterion. A criterion the evaluator left unevaluated in a run (no
+//! points awarded, null or not listed, not zero) is not counted against it
+//! there: it is "not evaluated". A criterion evaluated in fewer than
+//! `MIN_RUNS` counted runs is insufficient data. The changes of a compared
+//! test group its criteria by the runs they fall short in and the runs that
+//! did not evaluate them, so their deltas add up to the test's. Warnings
+//! only: nothing here changes a score, the verdict or what is shown.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -71,7 +75,7 @@ pub enum Class {
     /// Full in none.
     NeverFull,
     Oscillating,
-    /// Fewer than `MIN_RUNS` counted runs.
+    /// Evaluated in fewer than `MIN_RUNS` counted runs.
     InsufficientData,
 }
 
@@ -82,7 +86,7 @@ pub struct Criterion {
     pub full: usize,
     /// Counted runs that evaluated it.
     pub n: usize,
-    /// Counted runs that did not.
+    /// Counted runs that did not (null, or not listed).
     pub not_evaluated: usize,
     pub rate: f64,
     /// Wilson 95% interval of `rate`.
@@ -106,6 +110,11 @@ pub struct Configuration {
     pub side: Side,
     pub scenario: String,
     pub behavior: Option<String>,
+    /// `provider/model`, none when its results do not record it.
+    pub model: Option<String>,
+    /// Each worker's resolved version, `iii` the engine and `lock` the stack
+    /// lock digest; empty when its results do not record it.
+    pub stack: BTreeMap<String, String>,
     pub runs: RunClasses,
     /// At least `MIN_RUNS` counted runs.
     pub sufficient: bool,
@@ -117,7 +126,8 @@ pub struct Configuration {
 }
 
 /// A group of a compared test whose points moved, the groups formed over
-/// both sides' counted runs; their deltas add up to the test's.
+/// both sides' counted runs by the runs they fall short in and the runs that
+/// did not evaluate them; their deltas add up to the test's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Change {
     pub scenario: String,
@@ -125,6 +135,8 @@ pub struct Change {
     pub criteria: Vec<String>,
     /// The runs they fall short in, of `runs`.
     pub failing: Sides<usize>,
+    /// The runs that did not evaluate them (no points), of `runs`.
+    pub not_evaluated: Sides<usize>,
     pub runs: Sides<usize>,
     /// Their points per run.
     pub points: Sides<f64>,
@@ -138,6 +150,8 @@ pub struct Health {
     pub configurations: Vec<Configuration>,
     /// The groups that explain the score changes, the largest first.
     pub changes: Vec<Change>,
+    /// A side whose runs do not record their model or stack.
+    pub warnings: Vec<String>,
 }
 
 /// One criterion over a configuration's runs.
@@ -147,51 +161,72 @@ struct Shortfall {
     failing: Vec<usize>,
     /// The runs that evaluated it.
     n: usize,
-    /// The runs that did not.
-    not_evaluated: usize,
+    /// The runs (indices) that did not: no points, or not listed.
+    unevaluated: Vec<usize>,
 }
 
 /// Each criterion, in the order the runs list them.
 fn shortfalls(runs: &[&Run]) -> Vec<Shortfall> {
-    let mut criteria = Vec::<Shortfall>::new();
-    let mut at = BTreeMap::<&str, usize>::new();
-    for (index, run) in runs.iter().enumerate() {
-        for points in &run.criteria {
-            let slot = *at.entry(&points.id).or_insert_with(|| {
-                criteria.push(Shortfall {
-                    id: points.id.clone(),
-                    failing: Vec::new(),
-                    n: 0,
-                    not_evaluated: 0,
-                });
-                criteria.len() - 1
-            });
-            let criterion = &mut criteria[slot];
-            match points.awarded {
-                None => criterion.not_evaluated += 1,
-                Some(awarded) => {
-                    criterion.n += 1;
-                    if awarded < points.possible {
-                        criterion.failing.push(index);
+    let mut known = BTreeSet::new();
+    let ids = runs
+        .iter()
+        .flat_map(|run| &run.criteria)
+        .map(|points| points.id.as_str())
+        .filter(|id| known.insert(*id))
+        .collect::<Vec<_>>();
+    ids.into_iter()
+        .map(|id| {
+            let mut criterion = Shortfall {
+                id: id.to_owned(),
+                failing: Vec::new(),
+                n: 0,
+                unevaluated: Vec::new(),
+            };
+            for (index, run) in runs.iter().enumerate() {
+                let points = run.criteria.iter().find(|points| points.id == id);
+                match points.and_then(|points| Some((points.awarded?, points.possible))) {
+                    None => criterion.unevaluated.push(index),
+                    Some((awarded, possible)) => {
+                        criterion.n += 1;
+                        if awarded < possible {
+                            criterion.failing.push(index);
+                        }
                     }
                 }
             }
-        }
-    }
-    criteria
+            criterion
+        })
+        .collect()
 }
 
-/// Criteria by the runs they fall short in, in first-seen order; criteria
-/// that never do are in none.
-fn groups(shortfalls: &[Shortfall]) -> Vec<(Vec<usize>, Vec<String>)> {
-    let mut groups = Vec::<(Vec<usize>, Vec<String>)>::new();
-    for criterion in shortfalls.iter().filter(|c| !c.failing.is_empty()) {
+/// A group: the runs its criteria fall short in, those that did not evaluate
+/// them (kept apart only when `unevaluated`), and the criteria.
+type Grouped = (Vec<usize>, Vec<usize>, Vec<String>);
+
+/// Criteria by the runs they fall short in, and with `unevaluated` by the
+/// runs that did not evaluate them too, in first-seen order; criteria that
+/// never fall short (nor, with it, go unevaluated) are in none.
+fn groups(shortfalls: &[Shortfall], unevaluated: bool) -> Vec<Grouped> {
+    let mut groups = Vec::<Grouped>::new();
+    for criterion in shortfalls {
+        let missing = if unevaluated {
+            criterion.unevaluated.clone()
+        } else {
+            Vec::new()
+        };
+        if criterion.failing.is_empty() && missing.is_empty() {
+            continue;
+        }
         match groups
             .iter_mut()
-            .find(|(runs, _)| *runs == criterion.failing)
+            .find(|(failing, without, _)| *failing == criterion.failing && *without == missing)
         {
-            Some((_, ids)) => ids.push(criterion.id.clone()),
-            None => groups.push((criterion.failing.clone(), vec![criterion.id.clone()])),
+            Some((_, _, ids)) => ids.push(criterion.id.clone()),
+            None => groups.push((
+                criterion.failing.clone(),
+                missing,
+                vec![criterion.id.clone()],
+            )),
         }
     }
     groups
@@ -207,6 +242,7 @@ fn wilson(full: usize, n: usize) -> (f64, f64) {
 }
 
 fn configuration(side: Side, key: &Key, runs: &[&Run]) -> Configuration {
+    let identity = runs.first();
     let mut classes = RunClasses::default();
     for run in runs {
         classes.add(class_of(run));
@@ -225,12 +261,12 @@ fn configuration(side: Side, key: &Key, runs: &[&Run]) -> Configuration {
                 id: criterion.id.clone(),
                 full,
                 n,
-                not_evaluated: criterion.not_evaluated,
+                not_evaluated: criterion.unevaluated.len(),
                 rate: full as f64 / n as f64,
                 low,
                 high,
                 class: match full {
-                    _ if !sufficient => Class::InsufficientData,
+                    _ if n < MIN_RUNS => Class::InsufficientData,
                     full if full == n => Class::Saturated,
                     0 => Class::NeverFull,
                     _ => Class::Oscillating,
@@ -242,6 +278,8 @@ fn configuration(side: Side, key: &Key, runs: &[&Run]) -> Configuration {
         side,
         scenario: key.0.clone(),
         behavior: key.1.clone(),
+        model: identity.and_then(|run| run.model.clone()),
+        stack: identity.map(|run| run.stack.clone()).unwrap_or_default(),
         runs: classes,
         sufficient,
         criteria,
@@ -250,9 +288,9 @@ fn configuration(side: Side, key: &Key, runs: &[&Run]) -> Configuration {
             .filter(|criterion| criterion.n == 0)
             .map(|criterion| criterion.id.clone())
             .collect(),
-        groups: groups(&shortfalls)
+        groups: groups(&shortfalls, false)
             .into_iter()
-            .map(|(failing, criteria)| Group {
+            .map(|(failing, _, criteria)| Group {
                 criteria,
                 failing: failing.len(),
                 of: counted.len(),
@@ -285,9 +323,13 @@ fn changes(key: &Key, a: &[&Run], b: &[&Run]) -> Vec<Change> {
             .sum::<f64>();
         total / runs.len() as f64
     };
-    groups(&shortfalls(&both))
+    let split = |runs: &[usize]| Sides {
+        a: runs.iter().filter(|index| **index < a.len()).count(),
+        b: runs.iter().filter(|index| **index >= a.len()).count(),
+    };
+    groups(&shortfalls(&both), true)
         .into_iter()
-        .map(|(failing, criteria)| {
+        .map(|(failing, unevaluated, criteria)| {
             let points = Sides {
                 a: points(a, &criteria),
                 b: points(b, &criteria),
@@ -295,10 +337,8 @@ fn changes(key: &Key, a: &[&Run], b: &[&Run]) -> Vec<Change> {
             Change {
                 scenario: key.0.clone(),
                 behavior: key.1.clone(),
-                failing: Sides {
-                    a: failing.iter().filter(|index| **index < a.len()).count(),
-                    b: failing.iter().filter(|index| **index >= a.len()).count(),
-                },
+                failing: split(&failing),
+                not_evaluated: split(&unevaluated),
                 runs: Sides {
                     a: a.len(),
                     b: b.len(),
@@ -333,16 +373,60 @@ fn by_test(runs: &[Run]) -> BTreeMap<Key, Vec<&Run>> {
     by
 }
 
+/// A test's runs by the model and stack that ran them.
+type Identity<'a> = (Option<&'a str>, &'a BTreeMap<String, String>);
+
+fn by_configuration(runs: &[Run]) -> BTreeMap<(Key, Identity<'_>), Vec<&Run>> {
+    let mut by = BTreeMap::<(Key, Identity), Vec<&Run>>::new();
+    for run in runs {
+        let key = (run.scenario.clone(), run.behavior.clone());
+        by.entry((key, (run.model.as_deref(), &run.stack)))
+            .or_default()
+            .push(run);
+    }
+    by
+}
+
+/// A side whose runs do not record what ran them.
+fn identity_warnings(a: &[Run], b: &[Run]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (side, runs) in [("A", a), ("B", b)] {
+        for (what, lacks) in [
+            (
+                "model",
+                runs.iter().filter(|run| run.model.is_none()).count(),
+            ),
+            (
+                "stack",
+                runs.iter().filter(|run| run.stack.is_empty()).count(),
+            ),
+        ] {
+            if lacks > 0 {
+                warnings.push(format!(
+                    "{side}: {lacks} of {} runs have no {what} in their results: criterion health \
+                     cannot tell their configuration apart, nor the comparison whether the side \
+                     mixes them.",
+                    runs.len()
+                ));
+            }
+        }
+    }
+    warnings
+}
+
 pub(super) fn health(a: &[Run], b: &[Run], shared: &[Key]) -> Health {
     let (tests_a, tests_b) = (by_test(a), by_test(b));
-    let configurations = [(Side::A, &tests_a), (Side::B, &tests_b)]
-        .into_iter()
-        .flat_map(|(side, tests)| {
-            tests
-                .iter()
-                .map(move |(key, runs)| configuration(side, key, runs))
-        })
-        .collect();
+    let configurations = [
+        (Side::A, by_configuration(a)),
+        (Side::B, by_configuration(b)),
+    ]
+    .into_iter()
+    .flat_map(|(side, configurations)| {
+        configurations
+            .into_iter()
+            .map(move |((key, _), runs)| configuration(side, &key, &runs))
+    })
+    .collect();
     let mut changes = shared
         .iter()
         .flat_map(|key| changes(key, &counted(&tests_a[key]), &counted(&tests_b[key])))
@@ -352,6 +436,7 @@ pub(super) fn health(a: &[Run], b: &[Run], shared: &[Key]) -> Health {
         min_runs: MIN_RUNS,
         configurations,
         changes,
+        warnings: identity_warnings(a, b),
     }
 }
 
@@ -361,8 +446,17 @@ pub(super) fn text(health: &Health, label_a: &str, label_b: &str) -> String {
         out.push_str("Criteria that moved the score, grouped by the runs they fail in together:\n");
     }
     for change in &health.changes {
+        let unevaluated = if change.not_evaluated.a + change.not_evaluated.b > 0 {
+            format!(
+                ", not evaluated in {} on {label_a} and {} on {label_b}",
+                change.not_evaluated.a, change.not_evaluated.b
+            )
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "  {}: {} — short in {} of {} runs on {label_a}, {} of {} on {label_b}: {:+.1} points\n",
+            "  {}: {} — short in {} of {} runs on {label_a}, {} of {} on {label_b}{unevaluated}: \
+             {:+.1} points\n",
             change.scenario,
             change.criteria.join(", "),
             change.failing.a,
@@ -404,6 +498,9 @@ pub(super) fn text(health: &Health, label_a: &str, label_b: &str) -> String {
                 configuration.not_evaluated.join(", ")
             ));
         }
+    }
+    for warning in &health.warnings {
+        out.push_str(&format!("Warning: {warning}\n"));
     }
     out
 }
@@ -600,6 +697,148 @@ mod tests {
                 .count()
         };
         assert_eq!((oscillating(&se), oscillating(&regression)), (16, 14));
+    }
+
+    /// A counted run of `t` whose criteria award these points out of 10.
+    fn scored(attempt: &str, awards: &[(&str, Option<f64>)]) -> Run {
+        Run {
+            attempt_id: attempt.into(),
+            scenario: "t".into(),
+            behavior: Some("sha256:t".into()),
+            cause: Some("evaluated".into()),
+            counted: true,
+            score: Some(awards.iter().filter_map(|(_, awarded)| *awarded).sum()),
+            cost_usd: Some(1.0),
+            model: Some("deepseek/flash".into()),
+            stack: [("harness".to_owned(), "1.8.50".to_owned())].into(),
+            criteria: awards
+                .iter()
+                .map(|(id, awarded)| super::super::Points {
+                    id: (*id).into(),
+                    awarded: *awarded,
+                    possible: 10.0,
+                })
+                .collect(),
+            ..Run::default()
+        }
+    }
+
+    #[test]
+    fn a_configuration_is_one_definition_model_and_stack_and_a_class_needs_nine_runs_of_its_own() {
+        let rule = super::super::Rule {
+            permutations: 100,
+            ..Default::default()
+        };
+        // Nine counted runs; `rare` is evaluated in two of them only.
+        let runs = (0..9)
+            .map(|i| {
+                let rare = (i < 2).then_some(10.0);
+                scored(&format!("a{i}"), &[("solid", Some(10.0)), ("rare", rare)])
+            })
+            .collect::<Vec<_>>();
+        let health = super::super::compare(&runs, &runs, &rule).criteria;
+        let configuration = &health.configurations[0];
+        assert!(configuration.sufficient);
+        assert_eq!(
+            configuration
+                .criteria
+                .iter()
+                .map(|c| (c.id.as_str(), c.n, c.not_evaluated, c.class))
+                .collect::<Vec<_>>(),
+            [
+                ("solid", 9, 0, Class::Saturated),
+                ("rare", 2, 7, Class::InsufficientData)
+            ]
+        );
+        assert_eq!(
+            (
+                configuration.model.as_deref(),
+                configuration.stack["harness"].as_str()
+            ),
+            (Some("deepseek/flash"), "1.8.50")
+        );
+        assert!(health.warnings.is_empty());
+        // Another model, or another stack, on the same side is another
+        // configuration: ten runs of two models are not ten runs of one.
+        let mut mixed = runs[..5].to_vec();
+        for (i, run) in runs[5..].iter().enumerate() {
+            let mut run = run.clone();
+            run.attempt_id = format!("m{i}");
+            if i % 2 == 0 {
+                run.model = Some("openai/gpt-5".into());
+            } else {
+                run.stack.insert("harness".into(), "1.8.51".into());
+            }
+            mixed.push(run);
+        }
+        let health = super::super::compare(&mixed, &runs, &rule).criteria;
+        let on_a = health
+            .configurations
+            .iter()
+            .filter(|c| c.side == Side::A)
+            .map(|c| c.runs.evaluated)
+            .collect::<Vec<_>>();
+        assert_eq!(on_a, [5, 2, 2]);
+        // Runs that record no model or no stack: a warning, per side.
+        let mut unknown = runs.clone();
+        for run in &mut unknown[..3] {
+            run.model = None;
+        }
+        unknown[3].stack.clear();
+        assert_eq!(
+            super::super::compare(&runs, &unknown, &rule)
+                .criteria
+                .warnings,
+            [
+                "B: 3 of 9 runs have no model in their results: criterion health cannot tell \
+                 their configuration apart, nor the comparison whether the side mixes them.",
+                "B: 1 of 9 runs have no stack in their results: criterion health cannot tell \
+                 their configuration apart, nor the comparison whether the side mixes them."
+            ]
+        );
+    }
+
+    #[test]
+    fn points_a_criterion_was_not_evaluated_for_are_one_change_and_the_changes_add_up() {
+        // `extra` earns its 10 points whenever it is evaluated, but B leaves
+        // it unevaluated (null, or not listed) in half the runs.
+        let a = (0..4)
+            .map(|i| {
+                scored(
+                    &format!("a{i}"),
+                    &[("core", Some(10.0)), ("extra", Some(10.0))],
+                )
+            })
+            .collect::<Vec<_>>();
+        let b = (0..4)
+            .map(|i| {
+                let core = Some(if i == 0 { 0.0 } else { 10.0 });
+                match i % 2 {
+                    0 => scored(&format!("b{i}"), &[("core", core), ("extra", Some(10.0))]),
+                    _ if i == 1 => scored(&format!("b{i}"), &[("core", core), ("extra", None)]),
+                    _ => scored(&format!("b{i}"), &[("core", core)]),
+                }
+            })
+            .collect::<Vec<_>>();
+        let comparison = super::super::compare(&a, &b, &super::super::Rule::default());
+        let changes = &comparison.criteria.changes;
+        let extra = changes
+            .iter()
+            .find(|change| change.criteria == ["extra"])
+            .unwrap();
+        assert_eq!(
+            (
+                extra.failing.b,
+                extra.not_evaluated.a,
+                extra.not_evaluated.b,
+                extra.delta
+            ),
+            (0, 0, 2, -5.0)
+        );
+        let total = changes.iter().map(|change| change.delta).sum::<f64>();
+        assert!((total - comparison.tests[0].delta).abs() < 1e-9, "{total}");
+        assert!(text(&comparison.criteria, "A", "B")
+            .contains("t: extra — short in 0 of 4 runs on A, 0 of 4 on B, not evaluated in 0 on A and 2 on B: -5.0 points"));
     }
 
     #[test]

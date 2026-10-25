@@ -63,11 +63,10 @@ export const cannotTell: VerdictSummary = {
     needed: null,
     missing: null,
     more_than: 30,
+    settles: ['quality'],
     note: null,
   },
-  warnings: [
-    'kanban_c3_board fell 16.0 points, more than the 5-point margin (its own p = 0.220).',
-    'registry_implementation fell 16.8 points, more than the 5-point margin (its own p = 0.484).',
-    'trending_topics_build fell 8.0 points, more than the 5-point margin (its own p = 0.357).',
-  ],
+  // Neither the Kanban board (−16) nor the Registry implementation (−16.8)
+  // shows its own fall beyond the margin at five runs: no warning.
+  warnings: [],
 }
