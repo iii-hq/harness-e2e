@@ -328,7 +328,9 @@ trashed its bank: no bank or another bank there is what that case's gate
 scores, so a fallback to `main` fails the case instead of being rerun. The
 evidence never keeps another bank's text: such a block keeps its line count
 with every line withheld, and a rules update or memory section naming another
-bank is withheld whole. A fresh bank per attempt makes every case safe to
+bank is withheld whole. The run's raw transcript (`transcript.json`) is not
+filtered: when memory falls back to another bank, that bank's text stays
+there. A fresh bank per attempt makes every case safe to
 rerun, and `memory::bank::delete` moves the attempt's bank to memory's
 `.trash` afterwards; the user's own banks are never touched.
 
