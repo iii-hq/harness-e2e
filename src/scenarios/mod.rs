@@ -623,10 +623,16 @@ scenarios! {
     MemoryRuleChangedMidSession = "memory_rule_changed_mid_session" => memory::Memory(16),
     MemoryBankEditsMidSession = "memory_bank_edits_mid_session" => memory::Memory(17),
     MemoryBankTrashedMidSession = "memory_bank_trashed_mid_session" => memory::Memory(18),
-    MemoryLearnThenRecall = "memory_learn_then_recall" => memory::Memory(19),
-    MemoryLearnRuleThenObey = "memory_learn_rule_then_obey" => memory::Memory(20),
-    MemoryLearnCorrection = "memory_learn_correction" => memory::Memory(21),
-    MemoryAutomationNotLearned = "memory_automation_not_learned" => memory::Memory(22),
+    MemoryManySiblings = "memory_many_siblings" => memory::Memory(19),
+    MemoryAboutMeOverflow = "memory_about_me_overflow" => memory::Memory(20),
+    MemoryLinkedUpdate = "memory_linked_update" => memory::Memory(21),
+    MemoryLearnThenRecall = "memory_learn_then_recall" => memory::Memory(22),
+    MemoryLearnRuleThenObey = "memory_learn_rule_then_obey" => memory::Memory(23),
+    MemoryLearnCorrection = "memory_learn_correction" => memory::Memory(24),
+    MemoryAutomationNotLearned = "memory_automation_not_learned" => memory::Memory(25),
+    MemoryLearnFromLongMessage = "memory_learn_from_long_message" => memory::Memory(26),
+    MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
+    MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
 }
 
 impl ScenarioId {
@@ -890,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_eighty_three_unique_valid_scenarios() {
+    fn registry_contains_eighty_nine_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -899,7 +905,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 83);
+        assert_eq!(ids.len(), 89);
     }
 
     #[test]

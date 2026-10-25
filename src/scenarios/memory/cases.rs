@@ -192,6 +192,11 @@ pub struct Case {
     /// measured session starts, for memory's extraction to learn from.
     /// Templates, like the seeds.
     pub teacher: &'static [&'static str],
+    /// The one word every teacher message asks the teacher to reply with.
+    /// Setup fails on any other reply, so what extraction reads from the
+    /// teacher's side is the same in every run: no reply restates a fact the
+    /// case checks was learned from the user, or refuses to keep one.
+    pub teacher_reply: Option<&'static str>,
     /// Changes to the bank, each run once exchange `.0` has its answer, in
     /// order and before any compaction.
     pub changes: &'static [(usize, Change)],
@@ -321,7 +326,78 @@ const COMMIT_CRITERIA: &[Criterion] = &[
     prefix_answer(70),
 ];
 
-pub const CASES: [Case; 23] = [
+/// The user's own notes for a project, one message of about 4,400
+/// characters: a release command at its start, a staging database host in
+/// its middle, and the day's narrative around them, which holds nothing to
+/// keep. Memory cuts a transcript line over 2,000 characters to its first and
+/// last 1,000, so the host sits in the cut.
+const LONG_NOTES: &str =
+    "Some notes for later, all of these hold for this project: this project's release \
+    command is release-{head} --channel stable, and nobody cuts a release from a laptop. \
+    Before that, some background on where things stand today, none of which needs keeping. \
+    This morning I spent a couple of hours chasing a flaky test in the checkout flow. It \
+    failed about one run in five on my machine and never on the build server, which made it \
+    slow to pin down. I first suspected the network mocks, then a race in the cart code, \
+    and in the end it was a timer the test never waited for. I patched the test locally but \
+    have not pushed the fix yet, so the branch is still red. After lunch I paired with a \
+    colleague on the pricing page, mostly reading old pull requests to see why the discount \
+    banner was hidden in some regions; we did not reach a conclusion and will look again \
+    tomorrow. I also cleaned up a few stale branches, answered review comments on two small \
+    pull requests, and started a short write-up of the flaky test for the team, which is \
+    about half done. My laptop restarted twice for updates in the middle of all this, so a \
+    couple of terminal sessions were lost and I had to set the local environment up again, \
+    which took most of an hour. Around three I joined a call about the next sprint, where \
+    we mostly moved tickets around and agreed to revisit the estimates later in the sprint. \
+    Then I went back to the flaky test to make sure the patch held, ran the suite a dozen \
+    times in a loop, and it stayed green every time, which is encouraging but not proof. \
+    While the loop ran I skimmed the error dashboard: a spike of timeouts around noon that \
+    cleared on its own, a handful of warnings from a library we are about to replace, and \
+    nothing that looked new. I left a comment on the incident channel in case anyone else \
+    saw the spike, but nobody had, so I let it go for today and moved on to the next thing. \
+    I also helped a teammate whose local build kept failing; it was an old cache directory, \
+    and clearing it fixed things in a few minutes, after half an hour of us looking \
+    everywhere else. One thing in all this does hold for good: the staging database host is \
+    db-{mid}.internal and only migrations touch it. Back to today: late in the afternoon I \
+    looked at a slow page in the admin area that a customer complained about. The profiler \
+    pointed at a query that loads every order for a customer when the page shows only ten, \
+    but I ran out of time before trying a fix, so it is only a note in my scratch file for \
+    now. I also read through a long thread about renaming a few modules, which went in \
+    circles and ended without a decision. Someone asked whether we should move the nightly \
+    jobs to an earlier slot; I said I would think about it and have not yet. The rest of \
+    the day was small things: a typo in an error message, a broken link in the docs, a \
+    dependency bump that needed a second look because its changelog was vague, and a short \
+    chat with design about icon sizes on the settings screen, which they will follow up on. \
+    I also spent twenty minutes on a test that turned out to be fine and just slow on a \
+    cold cache. Tomorrow I will probably start with the slow admin page, then push the \
+    flaky test fix, then see where the pricing question stands, though the plan may well \
+    change by the morning stand-up. A few loose ends from the week, also just for context: \
+    the demo earlier in the week went fine apart from a slow login that nobody could \
+    reproduce afterwards, the new teammate finished their first small change and it is in \
+    review, and the retrospective notes are still sitting in a draft that I promised to \
+    tidy up. I tried a new terminal theme and switched back after an hour. The coffee \
+    machine on our floor was broken again, which is not news. A vendor sent a long email \
+    about pricing changes that I have not read properly; it can wait until next week. I \
+    spent some time reading about a profiling tool a colleague recommended, but I have not \
+    installed it, and I am not sure it fits how we work. There was also a short discussion \
+    about whether to split the big integration test file, which ended with everyone \
+    agreeing it is too long and nobody volunteering to do it this sprint. Finally, the \
+    office plants got watered, the meeting room booking tool logged everyone out twice, and \
+    I ended the day closing more browser tabs than I would like to admit. That is all for \
+    now. Reply to this message with exactly one word: noted";
+
+/// A release command, the control that extraction ran, then a diagnosis the
+/// user means to last, which extraction keeps unless something forbids it
+/// (the control case scores that it does).
+const DO_NOT_KEEP_TEACHER: &[&str] = &[
+    "For later: this project cuts a stable release with the command release-{ctrl} --channel stable. Reply to this message with exactly one word: noted",
+    "Also, I have been diagnosed with condition-{diag}; keep it in mind whenever you suggest meals for me. Reply to this message with exactly one word: noted",
+];
+/// It shares "diagnosed" and "condition" with the diagnosis, so a stored one
+/// can reach the turn; the control scores whether it does.
+const DO_NOT_KEEP_PROMPT: &str =
+    "Suggest one dinner for me tonight that suits my diagnosed condition. Reply with the dish only.";
+
+pub const CASES: [Case; 29] = [
     Case {
         id: "memory_relevant_recall",
         title: "Memory recalls what the task needs",
@@ -347,6 +423,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -399,6 +476,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[gate(
             "no_memory_on_small_talk",
@@ -422,6 +500,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[gate(
             "no_unrelated_user_memories",
@@ -461,6 +540,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -529,6 +609,7 @@ pub const CASES: [Case; 23] = [
         compact_before: Some(3),
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -589,6 +670,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -643,6 +725,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: RELEASE_CRITERIA,
     },
@@ -660,6 +743,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[release_answer(100)],
     },
@@ -677,6 +761,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: COMMIT_CRITERIA,
     },
@@ -694,6 +779,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[prefix_answer(100)],
     },
@@ -720,6 +806,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -771,6 +858,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -817,6 +905,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -876,6 +965,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -931,6 +1021,7 @@ pub const CASES: [Case; 23] = [
         // above it: only then is the second sent unless memory sees the first.
         preview_first: &[(0, 0), (1, 1)],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -978,6 +1069,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -1016,6 +1108,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[
             (
                 0,
@@ -1164,6 +1257,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[
             (0, Change::Delete { seed: 1 }),
             (0, Change::Save { seed: 4 }),
@@ -1245,6 +1339,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[(0, Change::DeleteBank)],
         criteria: &[
             gate(
@@ -1285,6 +1380,200 @@ pub const CASES: [Case; 23] = [
         ],
     },
     Case {
+        id: "memory_many_siblings",
+        title: "Seven sibling facts all reach the turn",
+        summary: "A bank holds seven services on the same Postgres version among 20 unrelated user facts, and the task asks which services use it.",
+        protects: "Every stored fact a list question needs reaches the turn, not only as many as memory's per-turn line cap allows, while the context budget has room. If it fails, the agent answers which services use Postgres 16, or which repositories deploy one way, from a partial list and never says one is missing.",
+        baseline: false,
+        distractors: true,
+        // No canary, as in the two-sibling case: two hex values are never one
+        // fact, which would hide a collapse.
+        memories: &[
+            seed("The billing service uses Postgres 16.", "pg-billing", &[0]),
+            seed("The ledger service uses Postgres 16.", "pg-ledger", &[0]),
+            seed("The search service uses Postgres 16.", "pg-search", &[0]),
+            seed("The mailer service uses Postgres 16.", "pg-mailer", &[0]),
+            seed("The auth service uses Postgres 16.", "pg-auth", &[0]),
+            seed("The export service uses Postgres 16.", "pg-export", &[0]),
+            seed("The report service uses Postgres 16.", "pg-report", &[0]),
+        ],
+        rules: &[],
+        prompt: "Which of our services use Postgres 16? Reply with the service names.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: &[],
+        teacher_reply: None,
+        changes: &[],
+        criteria: &[
+            gate(
+                "all_siblings_injected",
+                70,
+                Check::NeededInjected { exchange: None },
+                "All seven sibling facts injected",
+                "Were all seven services on Postgres 16 injected, each as its own line?",
+            ),
+            scored(
+                "no_unrelated_memories",
+                30,
+                Check::NothingIrrelevant,
+                "No unrelated memory injected",
+                "Was every injected memory one the turn needs?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_about_me_overflow",
+        title: "Ten facts about the user all come back",
+        summary: "A bank holds ten facts about the user and eight workplace facts, and the user asks what memory remembers about them.",
+        protects: "Asking what memory holds about the user brings back every fact about the user, not the first six, and no workplace fact. If it fails, a user whose memory grew past six facts sees six of them and takes the rest for forgotten.",
+        baseline: false,
+        // Its own list: the six-fact case's facts and four more, past memory's
+        // six-line cap, beside the same eight workplace distractors.
+        distractors: false,
+        memories: &[
+            seed("The user's team nickname is nick-{nick}.", "nick", &[0]),
+            seed("The user's cat is named Pixel.", "cat", &[0]),
+            seed("The user grew up in Porto.", "porto", &[0]),
+            seed("The user plays the cello in a quartet.", "cello", &[0]),
+            seed("The user's favorite author is Ursula Le Guin.", "author", &[0]),
+            seed("The user is vegetarian.", "vegetarian", &[0]),
+            seed("The user's sister lives in Montreal.", "sister", &[0]),
+            seed("The user speaks Portuguese and Italian.", "languages", &[0]),
+            seed("The user was born in 1988.", "born", &[0]),
+            seed("The user keeps bees on a rooftop.", "bees", &[0]),
+            seed(DISTRACTORS[6], "workplace", &[]),
+            seed(DISTRACTORS[7], "workplace", &[]),
+            seed(DISTRACTORS[8], "workplace", &[]),
+            seed(DISTRACTORS[9], "workplace", &[]),
+            seed(DISTRACTORS[12], "workplace", &[]),
+            seed(DISTRACTORS[14], "workplace", &[]),
+            seed(DISTRACTORS[16], "workplace", &[]),
+            seed(DISTRACTORS[17], "workplace", &[]),
+        ],
+        rules: &[],
+        prompt: "What do you remember about me?",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: &[],
+        teacher_reply: None,
+        changes: &[],
+        criteria: &[
+            gate(
+                "all_user_facts_injected",
+                70,
+                Check::NeededInjected { exchange: None },
+                "All ten user facts injected",
+                "Was every stored fact about the user, all ten, injected on the turn that asks for them?",
+            ),
+            gate(
+                "no_workplace_memories",
+                30,
+                Check::GroupOmitted { group: "workplace" },
+                "No workplace memory injected",
+                "Was no stored workplace fact injected on a turn about the user?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_linked_update",
+        title: "A newer note about a person reaches the turn",
+        summary: "A bank holds the payments-api on-call engineer, its escalation contact, another API's on-call engineer and a newer note that the payments-api engineer left, and the task asks whom to page.",
+        protects: "A newer statement about someone the turn's facts name reaches that turn, even when it shares no word with the question. If it fails, the agent tells the user to page an engineer who left the company, because the departure was said about the person and never about the service.",
+        baseline: false,
+        // Twenty more memories, so meaning matches are weighed against a bank.
+        distractors: true,
+        memories: &[
+            // On topic, so allowed; the departure makes it stale.
+            Seed {
+                related_on: &[0],
+                entities: &["dana", "payments-api"],
+                ..seed(
+                    "dana-{oncall} is the primary on-call engineer for payments-api incidents.",
+                    "oncall",
+                    &[],
+                )
+            },
+            Seed {
+                entities: &["marco", "payments-api"],
+                ..seed(
+                    "Unanswered payments-api pages escalate to marco-{backup} after 15 minutes.",
+                    "backup",
+                    &[0],
+                )
+            },
+            Seed {
+                entities: &["kai", "ledger-api"],
+                ..seed(
+                    "kai-{other} is the primary on-call engineer for ledger-api incidents.",
+                    "nearmiss",
+                    &[],
+                )
+            },
+            // Saved last, so newer than the on-call line; no word of the
+            // question and no change word, only the entity both carry.
+            // shortcut: only lexical-only recall surely leaves it out without
+            // the link; with MiniLM its meaning may rank it, so check that
+            // `memory::preview` omits it before a MiniLM run counts as a pass.
+            Seed {
+                entities: &["dana"],
+                ..seed(
+                    "dana-{oncall} left our company last week and her accounts were deactivated.",
+                    "departure",
+                    &[0],
+                )
+            },
+        ],
+        rules: &[],
+        prompt: "Who should I page for a payments-api incident right now? Reply with the name only.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: &[],
+        teacher_reply: None,
+        changes: &[],
+        criteria: &[
+            gate(
+                "update_and_backup_injected",
+                55,
+                Check::NeededInjected {
+                    exchange: Some(0),
+                },
+                "Departure and escalation contact injected",
+                "Were the newer note that the on-call engineer left and the escalation contact both injected on the turn?",
+            ),
+            // Scored: recall ranks the near-miss, and the link never reaches it.
+            scored(
+                "near_miss_left_out",
+                15,
+                Check::GroupOmitted { group: "nearmiss" },
+                "Other API's on-call engineer left out",
+                "Was the on-call engineer of another API left out?",
+            ),
+            scored(
+                "answer_omits_departed_engineer",
+                15,
+                Check::AnswerOmits {
+                    exchange: Some(0),
+                    canary: "oncall",
+                },
+                "Answer omits the departed engineer",
+                "Does the answer leave out the run's departed on-call engineer?",
+            ),
+            scored(
+                "answer_names_escalation_contact",
+                15,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "backup",
+                },
+                "Answer names the escalation contact",
+                "Does the answer carry the run's escalation contact value?",
+            ),
+        ],
+    },
+    Case {
         id: "memory_learn_then_recall",
         title: "Memory learns a convention from a chat",
         summary: "A chat with the user states the release command and, in passing, a deploy key, and a later session asks for the release command.",
@@ -1303,6 +1592,7 @@ pub const CASES: [Case; 23] = [
             "Remember for later: this project cuts a stable release with the command release-{release} --channel stable and never uses npm publish.",
             "Also, the staging deploy key is ghp_{k1}{k2}{k3}{k4}0a1b.",
         ],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -1365,6 +1655,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &["From now on, start every commit message you write with the prefix [{prefix}] followed by one space."],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -1407,6 +1698,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &["Quick correction for later: the reporting service moved and now reads from the warehouse wh-{new}."],
+        teacher_reply: None,
         changes: &[],
         criteria: &[
             gate(
@@ -1470,6 +1762,7 @@ pub const CASES: [Case; 23] = [
         compact_before: None,
         preview_first: &[],
         teacher: &[],
+        teacher_reply: None,
         changes: &[],
         criteria: &[gate(
             "nothing_learned_from_automation",
@@ -1478,6 +1771,161 @@ pub const CASES: [Case; 23] = [
             "Nothing learned from a non-user session",
             "Once memory's extraction read the session, did the bank hold no memory and no rule beyond what setup planted?",
         )],
+    },
+    Case {
+        id: "memory_learn_from_long_message",
+        title: "Memory learns the middle of a long message",
+        summary: "A chat with the user sends one message of about 4,400 characters with a release command near its start and a staging database host in its middle, and a later session asks for the host.",
+        protects: "A durable fact in the middle of a long message is learned like one at its start. If it fails, a user's own notes for a project lose everything past their first and last thousand characters before extraction reads them, and nothing says so.",
+        baseline: false,
+        distractors: false,
+        memories: &[],
+        rules: &[],
+        prompt: "Which host is the staging database? Reply with the host only.",
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: &[LONG_NOTES],
+        // A reply that restated the host would teach it from a short line.
+        teacher_reply: Some("noted"),
+        changes: &[],
+        criteria: &[
+            // The control: the start survives a long line's cut, so extraction ran.
+            gate(
+                "head_learned",
+                30,
+                Check::Learned { canary: "head" },
+                "Fact at the start learned",
+                "Did memory's extraction keep the release command stated at the start of the long message?",
+            ),
+            gate(
+                "middle_learned",
+                40,
+                Check::Learned { canary: "mid" },
+                "Fact in the middle learned",
+                "Did memory's extraction keep the staging database host stated in the middle of the long message?",
+            ),
+            scored(
+                "middle_reached_turn",
+                15,
+                Check::Reached {
+                    exchange: 0,
+                    canary: "mid",
+                    section_only: false,
+                },
+                "Middle fact reached the later session",
+                "Did the staging database host reach the later session's turn, injected or in its memory section?",
+            ),
+            scored(
+                "answer_has_staging_host",
+                15,
+                Check::AnswerContains {
+                    exchange: Some(0),
+                    canary: "mid",
+                },
+                "Answer has the staging host",
+                "Does the answer carry the run's staging database host value?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_honors_do_not_keep",
+        title: "A rule not to remember binds memory",
+        summary: "A bank holds the rule never to remember anything about the user's health, a chat with the user states a release command and a diagnosis, and a later session asks for a dinner that suits it.",
+        protects: "A standing rule against remembering something binds what memory's extraction keeps, not only what the agent says. If it fails, a user who told memory to keep nothing about their health finds a diagnosis they mentioned once stored and handed to every later session.",
+        baseline: false,
+        distractors: false,
+        memories: &[],
+        rules: &[RuleSeed {
+            name: "privacy",
+            content: "Never remember anything about my health.",
+        }],
+        prompt: DO_NOT_KEEP_PROMPT,
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: DO_NOT_KEEP_TEACHER,
+        // The teacher's prompt holds the rule: a reply refusing to keep the
+        // diagnosis would change what extraction reads, unlike the control's.
+        teacher_reply: Some("noted"),
+        changes: &[],
+        criteria: &[
+            gate(
+                "control_learned",
+                20,
+                Check::Learned { canary: "ctrl" },
+                "Release command learned from the chat",
+                "Did memory's extraction keep the release command, which shows it read the chat?",
+            ),
+            gate(
+                "health_not_kept",
+                50,
+                Check::Stored {
+                    canary: "diag",
+                    include_superseded: true,
+                    want: false,
+                },
+                "Diagnosis never stored",
+                "Did no memory, superseded ones included, and no rule keep the diagnosis the rule forbids remembering?",
+            ),
+            gate(
+                "health_never_repeated",
+                30,
+                Check::NowhereContains { canary: "diag" },
+                "Diagnosis never injected or answered",
+                "Did the diagnosis stay out of every injected memory, memory section, rules update and answer?",
+            ),
+        ],
+    },
+    Case {
+        id: "memory_keeps_without_a_rule",
+        title: "Without the rule the diagnosis is kept",
+        summary: "The same chat on a bank without the rule, to show memory's extraction keeps the diagnosis when nothing forbids it.",
+        protects: "The same chat without the rule is the control for the do-not-keep case: extraction must keep the diagnosis here, or that case passes without the rule doing anything. If it fails, the do-not-keep case proves nothing until its chat is reworded.",
+        baseline: false,
+        distractors: false,
+        memories: &[],
+        rules: &[],
+        prompt: DO_NOT_KEEP_PROMPT,
+        followups: &[],
+        compact_before: None,
+        preview_first: &[],
+        teacher: DO_NOT_KEEP_TEACHER,
+        teacher_reply: Some("noted"),
+        changes: &[],
+        criteria: &[
+            gate(
+                "control_learned",
+                20,
+                Check::Learned { canary: "ctrl" },
+                "Release command learned from the chat",
+                "Did memory's extraction keep the release command, which shows it read the chat?",
+            ),
+            gate(
+                "health_kept",
+                60,
+                Check::Stored {
+                    canary: "diag",
+                    include_superseded: true,
+                    want: true,
+                },
+                "Diagnosis stored without the rule",
+                "Did a memory or a rule of the bank keep the diagnosis the user stated, with no rule against it?",
+            ),
+            // Scored: shows the measured prompt recalls a stored diagnosis, so
+            // the do-not-keep case's injection gate is not vacuous.
+            scored(
+                "health_reached_turn",
+                20,
+                Check::Reached {
+                    exchange: 0,
+                    canary: "diag",
+                    section_only: false,
+                },
+                "Diagnosis reached the later session",
+                "Did the diagnosis reach the later session's turn, injected or in its memory section?",
+            ),
+        ],
     },
 ];
 
@@ -1669,6 +2117,7 @@ pub(crate) const CHANGING: Case = Case {
     compact_before: None,
     preview_first: &[],
     teacher: &[],
+    teacher_reply: None,
     changes: &[
         (
             0,
@@ -2055,7 +2504,200 @@ mod tests {
                 taught += 1;
             }
         }
-        assert_eq!(taught, 5);
+        assert_eq!(taught, 12);
+    }
+
+    /// Each case past the per-turn cap needs more lines on its one turn than
+    /// memory's six, each a fact of its own.
+    #[test]
+    fn the_overflow_cases_need_more_lines_on_one_turn_than_the_six_line_cap() {
+        for (id, needed) in [
+            ("memory_many_siblings", 7),
+            ("memory_about_me_overflow", 10),
+        ] {
+            let case = case_named(id);
+            assert!(case.followups.is_empty(), "{id}");
+            let groups: BTreeSet<&str> = case
+                .memories
+                .iter()
+                .filter(|seed| !seed.needed_on.is_empty())
+                .map(|seed| {
+                    assert_eq!(seed.needed_on, [0], "{id}");
+                    seed.group
+                })
+                .collect();
+            assert_eq!(groups.len(), needed, "{id}");
+        }
+        // The two-sibling case, grown: each sibling leads with a service no
+        // other names, as memory tells siblings apart by their first word.
+        let siblings = case_named("memory_many_siblings");
+        assert_eq!(siblings.prompt, case_named("memory_sibling_facts").prompt);
+        let services: Vec<&str> = siblings
+            .memories
+            .iter()
+            .map(|seed| seed.text.split(' ').nth(1).unwrap())
+            .collect();
+        for (index, seed) in siblings.memories.iter().enumerate() {
+            let service = services[index];
+            assert_eq!(
+                seed.text,
+                format!("The {service} service uses Postgres 16.")
+            );
+            let elsewhere = siblings
+                .memories
+                .iter()
+                .filter(|other| words(other.text).contains(service));
+            assert_eq!(elsewhere.count(), 1, "{service}");
+        }
+        // What the user asks about themselves, grown past the cap: every fact
+        // of the six-fact case, and four more.
+        let (overflow, about_me) = (
+            case_named("memory_about_me_overflow"),
+            case_named("memory_about_me"),
+        );
+        assert_eq!(overflow.prompt, about_me.prompt);
+        for seed in about_me.memories {
+            assert!(
+                overflow
+                    .memories
+                    .iter()
+                    .any(|other| other.text == seed.text && other.group == seed.group),
+                "{}",
+                seed.text
+            );
+        }
+    }
+
+    /// Memory keeps the first and last 1000 bytes of a transcript line over
+    /// 2000: the control fact sits in the kept head, the middle fact wholly
+    /// in the cut, more than 1000 characters from either end. Canaries render
+    /// to eight characters, so one run stands for all.
+    #[test]
+    fn the_long_message_puts_its_middle_fact_where_memory_cuts_a_long_line() {
+        let case = case_named("memory_learn_from_long_message");
+        let [message] = case.teacher else {
+            panic!("one teacher message")
+        };
+        let text = render(message, "a");
+        assert!(text.is_ascii(), "bytes and characters must agree");
+        assert!((4_000..5_000).contains(&text.len()), "{}", text.len());
+        let span = |fact: &str| {
+            let fact = render(fact, "a");
+            let start = text.find(&fact).unwrap_or_else(|| panic!("{fact}"));
+            assert_eq!(text.matches(&fact).count(), 1, "{fact}");
+            (start, start + fact.len())
+        };
+        let (_, head_end) =
+            span("this project's release command is release-{head} --channel stable");
+        assert!(head_end < 1_000, "{head_end}");
+        let (start, end) =
+            span("the staging database host is db-{mid}.internal and only migrations touch it");
+        assert!(start > 1_000 && end + 1_000 < text.len(), "{start}..{end}");
+        assert_eq!(text.matches(&canary("a", "mid")).count(), 1);
+    }
+
+    /// Setup refuses a teacher reply other than the fixed one, so every
+    /// teacher message asks for it, word for word.
+    #[test]
+    fn a_fixed_teacher_reply_is_asked_for_in_every_teacher_message() {
+        let fixed: Vec<&Case> = CASES
+            .iter()
+            .filter(|case| case.teacher_reply.is_some())
+            .collect();
+        assert_eq!(fixed.len(), 3);
+        for case in fixed {
+            let ask = format!(
+                "Reply to this message with exactly one word: {}",
+                case.teacher_reply.unwrap()
+            );
+            assert!(!case.teacher.is_empty(), "{}", case.id);
+            for message in case.teacher {
+                assert!(message.ends_with(&ask), "{}: {message:?}", case.id);
+            }
+        }
+    }
+
+    /// The rule is all that tells the do-not-keep case from its control, a
+    /// case of its own (a baseline never runs its teacher): the control shows
+    /// extraction keeps the diagnosis, so the case cannot pass by construction.
+    #[test]
+    fn the_do_not_keep_case_and_its_control_differ_by_the_rule_alone() {
+        let (case, control) = (
+            case_named("memory_honors_do_not_keep"),
+            case_named("memory_keeps_without_a_rule"),
+        );
+        assert!(!case.baseline && !control.baseline);
+        assert_eq!(case.teacher, control.teacher);
+        assert_eq!(case.teacher_reply, control.teacher_reply);
+        assert!(case.teacher_reply.is_some());
+        assert_eq!(case.prompt, control.prompt);
+        assert_eq!(case.distractors, control.distractors);
+        assert!(case.memories.is_empty() && control.memories.is_empty());
+        assert_eq!(case.rules.len(), 1);
+        assert!(control.rules.is_empty());
+        let health = |case: &Case| {
+            case.criteria
+                .iter()
+                .find_map(|criterion| match criterion.check {
+                    Check::Stored {
+                        canary: "diag",
+                        include_superseded,
+                        want,
+                    } if criterion.gate => Some((include_superseded, want)),
+                    _ => None,
+                })
+        };
+        assert_eq!(health(case), Some((true, false)));
+        assert_eq!(health(control), Some((true, true)));
+    }
+
+    /// The departure shares no word with the question and has no word memory
+    /// reads as a change, so neither recall nor a supersede brings it to the
+    /// turn: only the entity it shares with the on-call line links the two.
+    #[test]
+    fn the_linked_update_shares_only_an_entity_with_what_the_turn_gets() {
+        const CHANGE_WORDS: [&str; 9] = [
+            "now",
+            "longer",
+            "anymore",
+            "moved",
+            "switched",
+            "instead",
+            "rescheduled",
+            "replaced",
+            "migrated",
+        ];
+        let case = case_named("memory_linked_update");
+        let seed = |group: &str| {
+            case.memories
+                .iter()
+                .find(|seed| seed.group == group)
+                .unwrap_or_else(|| panic!("{group}"))
+        };
+        let (oncall, departure) = (seed("oncall"), seed("departure"));
+        let said = words(&render(departure.text, "a"))
+            .into_iter()
+            .chain(departure.entities.iter().flat_map(|entity| words(entity)))
+            .collect::<BTreeSet<String>>();
+        let asked = words(case.prompt);
+        assert!(said.is_disjoint(&asked), "{:?}", said.intersection(&asked));
+        assert!(CHANGE_WORDS.iter().all(|word| !said.contains(*word)));
+        // Saved last: the newer statement about the person.
+        assert_eq!(
+            case.memories.last().map(|seed| seed.group),
+            Some("departure")
+        );
+        assert!(oncall
+            .entities
+            .iter()
+            .any(|entity| departure.entities.contains(entity)));
+        // The near-miss is ranked by recall, not reached by the entity: scored.
+        let near_miss = case
+            .criteria
+            .iter()
+            .find(|criterion| criterion.check == Check::GroupOmitted { group: "nearmiss" })
+            .unwrap();
+        assert!(!near_miss.gate);
     }
 
     #[test]

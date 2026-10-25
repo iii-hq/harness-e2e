@@ -200,8 +200,8 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
-| Memory quality | `memory` | What the memory worker injects into a live session, nineteen cases three times each, on the `memory` stack. |
-| Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, four cases three times each, on the `memory` stack. |
+| Memory quality | `memory` | What the memory worker injects into a live session, twenty-two cases three times each, on the `memory` stack. |
+| Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -274,7 +274,7 @@ tour, the run loses the `tour.current` criterion and nothing else. When the
 tour changes on purpose, regenerate the fixture from the worker's
 `src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
 
-The `memory` suite runs nineteen cases, three independent rounds, one
+The `memory` suite runs twenty-two cases, three independent rounds, one
 technical retry. Each case plants its own bank (`e2e-<attempt>`) with the
 rules, memories and unrelated distractor facts it calls for, waits until
 memory has indexed all of them (with MiniLM; lexical-only stores nothing to
@@ -315,6 +315,25 @@ rule fit and the two value cases with their baselines, eight cases cover:
 - `memory_bank_trashed_mid_session`: once the bank is trashed, the next turn
   reads no bank, gets no memory, and is told that no memory section applies.
 
+Three more cases were written to fail before memory changes, to prove a gap
+exists:
+
+- `memory_many_siblings`: seven services on Postgres 16 all reach the turn that
+  asks which use it. A memory that cuts a turn to six lines by count, before
+  its token budget, always leaves one out.
+- `memory_about_me_overflow`: "What do you remember about me?" over ten facts
+  about the user brings back all ten and none of the eight workplace facts.
+  The same six-line cut returns six.
+- `memory_linked_update`: a newer note that the payments-api on-call engineer
+  left reaches the turn that asks whom to page, beside the escalation
+  contact. The note shares no word with the question and has no word memory
+  reads as a change; only the entity it shares with the on-call line links
+  the two. It is built for lexical-only retrieval, as on the Linux builds CI
+  and the local recipe below use: with MiniLM, the note's meaning could rank
+  it on its own.
+  The other API's on-call engineer left out is scored, since recall ranks it
+  and the link never reaches it.
+
 Each run also records `memory_` measurements: expected, irrelevant and
 duplicate injections, the injected, rules and reminder tokens, the turns where
 the memory hook did not run (a turn after the case trashed its bank is not
@@ -335,7 +354,7 @@ there. A fresh bank per attempt makes every case safe to
 rerun, and `memory::bank::delete` moves the attempt's bank to memory's
 `.trash` afterwards; the user's own banks are never touched.
 
-The `memory-learning` suite runs the learning cycle: four cases, three rounds,
+The `memory-learning` suite runs the learning cycle: seven cases, three rounds,
 one technical retry, on the same stack. Before the measured session, setup
 sends the case's teacher messages in a session of the user's own kind
 (`teach_<attempt>`), pinned to the attempt's bank and with nothing to call,
@@ -355,6 +374,25 @@ included. The measured session then runs as in `memory`:
   remember a release command leaves the bank as setup planted it, once
   extraction has read the session. It runs as the runner's own `e2e` kind,
   which memory treats like `automation` and every other non-user kind.
+- `memory_learn_from_long_message`: one user message of about 4,400
+  characters states a release command near its start and a staging database
+  host in its middle, and both must be learned. A memory that cuts a
+  transcript line over 2,000 characters to its first and last 1,000 before
+  extraction reads it loses the host; the release command is the control that
+  extraction ran.
+- `memory_honors_do_not_keep` and its control `memory_keeps_without_a_rule`:
+  the same chat states a release command and a diagnosis. With a rule never
+  to remember the user's health, the diagnosis must not be stored, injected
+  or answered; without it, it must be stored, or the first case would pass
+  with the rule doing nothing. The control is a case of its own, not a
+  baseline, which never runs its teacher. A memory whose extraction reads no
+  hand-set rule keeps the diagnosis either way.
+
+These three were written to fail before memory changes. Their teacher is
+asked to reply with one word, `noted`, and setup fails as an infrastructure
+error on any other reply: a reply restating the host would teach it from a
+short line, and one refusing to keep the diagnosis would change what
+extraction reads in one twin only.
 
 Extraction calls a model, so these gates move with it: memory pins it with
 `extraction_model` (`deepseek::deepseek-flash` on the `memory` stack), and the

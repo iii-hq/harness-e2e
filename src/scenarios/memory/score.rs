@@ -2653,6 +2653,172 @@ mod tests {
         assert!(unread.infrastructure_error.is_some());
     }
 
+    /// Six lines of seven or of ten, the cap memory cuts at, fail the gate.
+    #[test]
+    fn a_fact_past_the_per_turn_cap_fails_the_overflow_gates() {
+        let siblings = case_named("memory_many_siblings");
+        let every = |case: &Case| -> Vec<String> {
+            (0..case.memories.len())
+                .filter(|&index| !case.memories[index].needed_on.is_empty())
+                .map(|index| line(case, index))
+                .collect()
+        };
+        let all = every(siblings);
+        let told = awards(siblings, vec![block(0, all.clone())]);
+        assert_eq!(award(&told, "all_siblings_injected"), Some(70));
+        assert_eq!(award(&told, "no_unrelated_memories"), Some(30));
+        let capped = awards(siblings, vec![block(0, all[..6].to_vec())]);
+        assert_eq!(award(&capped, "all_siblings_injected"), Some(0));
+        assert_eq!(capped.infrastructure_error, None);
+
+        let overflow = case_named("memory_about_me_overflow");
+        let user = every(overflow);
+        let workplace = (0..overflow.memories.len())
+            .find(|&index| overflow.memories[index].group == "workplace")
+            .map(|index| line(overflow, index))
+            .unwrap();
+        let told = awards(overflow, vec![block(0, user.clone())]);
+        assert_eq!(award(&told, "all_user_facts_injected"), Some(70));
+        assert_eq!(award(&told, "no_workplace_memories"), Some(30));
+        let capped = awards(overflow, vec![block(0, user[..6].to_vec())]);
+        assert_eq!(award(&capped, "all_user_facts_injected"), Some(0));
+        let padded = awards(overflow, vec![block(0, [user, vec![workplace]].concat())]);
+        assert_eq!(award(&padded, "no_workplace_memories"), Some(0));
+        assert_eq!(award(&padded, "all_user_facts_injected"), Some(70));
+    }
+
+    /// The on-call line and the escalation contact without the departure is
+    /// what today's recall gives: the gate fails. The near-miss costs only
+    /// its scored criterion.
+    #[test]
+    fn a_turn_without_the_departure_fails_the_linked_update_gate() {
+        let case = case_named("memory_linked_update");
+        let group = |name: &str| {
+            let index = case.memories.iter().position(|seed| seed.group == name);
+            line(case, index.unwrap())
+        };
+        let (oncall, backup, near_miss, departure) = (
+            group("oncall"),
+            group("backup"),
+            group("nearmiss"),
+            group("departure"),
+        );
+        let gate = "update_and_backup_injected";
+        let today = awards(case, vec![block(0, vec![oncall.clone(), backup.clone()])]);
+        assert_eq!(award(&today, gate), Some(0));
+        assert_eq!(today.infrastructure_error, None);
+        let linked = awards(
+            case,
+            vec![block(
+                0,
+                vec![oncall.clone(), departure.clone(), backup.clone()],
+            )],
+        );
+        assert_eq!(award(&linked, gate), Some(55));
+        assert_eq!(award(&linked, "near_miss_left_out"), Some(15));
+        let noisy = awards(
+            case,
+            vec![block(0, vec![oncall, departure, backup, near_miss])],
+        );
+        assert_eq!(award(&noisy, gate), Some(55));
+        assert_eq!(award(&noisy, "near_miss_left_out"), Some(0));
+        // The departed engineer named in the answer costs the trap criterion.
+        let named = format!("dana-{}", canary(RUN, "oncall"));
+        let evidence = evidence_of(case, observed(&[&named], vec![]));
+        let answered = evaluate(case, &evidence);
+        assert_eq!(award(&answered, "answer_omits_departed_engineer"), Some(0));
+    }
+
+    /// Extraction that kept the start of the long message and lost its middle
+    /// is the failure the case exists for: a score, never a rerun.
+    #[test]
+    fn a_long_message_learned_without_its_middle_fails_the_middle_gate() {
+        let case = case_named("memory_learn_from_long_message");
+        let head = format!(
+            "This project cuts a stable release with release-{} --channel stable.",
+            canary(RUN, "head")
+        );
+        let middle = format!(
+            "The staging database host is db-{}.internal.",
+            canary(RUN, "mid")
+        );
+        let run = |learned: &[&str], lines: Vec<String>| {
+            let evidence = taught_evidence(
+                case,
+                &["x"],
+                vec![block(0, lines)],
+                PROMPT,
+                taught(learned, &[]),
+            );
+            evaluate(case, &evidence)
+        };
+        let cut = run(&[&head], vec![]);
+        assert_eq!(cut.infrastructure_error, None);
+        assert_eq!(award(&cut, "head_learned"), Some(30));
+        assert_eq!(award(&cut, "middle_learned"), Some(0));
+        assert_eq!(award(&cut, "middle_reached_turn"), Some(0));
+        let whole = run(&[&head, &middle], vec![middle.clone()]);
+        assert_eq!(award(&whole, "middle_learned"), Some(40));
+        assert_eq!(award(&whole, "middle_reached_turn"), Some(15));
+        // Nothing learned at all: the control fails too, so extraction never ran.
+        assert_eq!(award(&run(&[], vec![]), "head_learned"), Some(0));
+    }
+
+    /// With the rule, the diagnosis stored anywhere fails the gate; without
+    /// it, the control passes only when extraction kept the diagnosis.
+    #[test]
+    fn the_do_not_keep_case_fails_on_a_stored_diagnosis_and_its_control_needs_one() {
+        let (case, control) = (
+            case_named("memory_honors_do_not_keep"),
+            case_named("memory_keeps_without_a_rule"),
+        );
+        let release = format!("The project releases with release-{}.", canary(RUN, "ctrl"));
+        let diagnosis = format!(
+            "The user has been diagnosed with condition-{}.",
+            canary(RUN, "diag")
+        );
+        let run = |case: &Case, learned: &[&str], lines: Vec<String>| {
+            let evidence = taught_evidence(
+                case,
+                &["x"],
+                vec![block(0, lines)],
+                PROMPT,
+                taught(learned, &[]),
+            );
+            evaluate(case, &evidence)
+        };
+        let kept = run(case, &[&release, &diagnosis], vec![diagnosis.clone()]);
+        assert_eq!(kept.infrastructure_error, None);
+        assert_eq!(award(&kept, "control_learned"), Some(20));
+        assert_eq!(award(&kept, "health_not_kept"), Some(0));
+        assert_eq!(award(&kept, "health_never_repeated"), Some(0));
+        let honored = run(case, &[&release], vec![]);
+        assert_eq!(award(&honored, "health_not_kept"), Some(50));
+        assert_eq!(award(&honored, "health_never_repeated"), Some(30));
+        // Kept as a learned instruction is kept all the same.
+        let rule = format!(
+            "# Learned\n- Suggest meals that suit condition-{}.\n",
+            canary(RUN, "diag")
+        );
+        let evidence = taught_evidence(
+            case,
+            &["x"],
+            vec![],
+            PROMPT,
+            taught(&[&release], &[(LEARNED_RULE, &rule)]),
+        );
+        assert_eq!(
+            award(&evaluate(case, &evidence), "health_not_kept"),
+            Some(0)
+        );
+
+        let stored = run(control, &[&release, &diagnosis], vec![diagnosis.clone()]);
+        assert_eq!(award(&stored, "health_kept"), Some(60));
+        assert_eq!(award(&stored, "health_reached_turn"), Some(20));
+        let dropped = run(control, &[&release], vec![]);
+        assert_eq!(award(&dropped, "health_kept"), Some(0));
+    }
+
     #[test]
     fn a_case_that_reads_extraction_measures_what_it_learned_and_how_long_it_took() {
         let case = case_named("memory_learn_then_recall");

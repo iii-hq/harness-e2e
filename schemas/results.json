@@ -2563,10 +2563,16 @@
         "memory_rule_changed_mid_session",
         "memory_bank_edits_mid_session",
         "memory_bank_trashed_mid_session",
+        "memory_many_siblings",
+        "memory_about_me_overflow",
+        "memory_linked_update",
         "memory_learn_then_recall",
         "memory_learn_rule_then_obey",
         "memory_learn_correction",
-        "memory_automation_not_learned"
+        "memory_automation_not_learned",
+        "memory_learn_from_long_message",
+        "memory_honors_do_not_keep",
+        "memory_keeps_without_a_rule"
       ]
     },
     "ScenarioMeasurement": {

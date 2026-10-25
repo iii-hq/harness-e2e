@@ -266,7 +266,13 @@ impl ScenarioId {
                 | Self::MemoryLearnThenRecall
                 | Self::MemoryLearnRuleThenObey
                 | Self::MemoryLearnCorrection
-                | Self::MemoryAutomationNotLearned => (&[W::Memory], A::Memory, &[]),
+                | Self::MemoryAutomationNotLearned
+                | Self::MemoryManySiblings
+                | Self::MemoryAboutMeOverflow
+                | Self::MemoryLinkedUpdate
+                | Self::MemoryLearnFromLongMessage
+                | Self::MemoryHonorsDoNotKeep
+                | Self::MemoryKeepsWithoutARule => (&[W::Memory], A::Memory, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {

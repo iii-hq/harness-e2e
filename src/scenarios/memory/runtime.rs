@@ -491,6 +491,12 @@ async fn teach(
     if read.len() != case.teacher.len() || read.iter().any(|read| read.as_deref() != Some(&bank)) {
         bail!("memory did not read the attempt's bank on every teacher turn: {read:?}");
     }
+    if let Some(other) = case
+        .teacher_reply
+        .and_then(|reply| unexpected_reply(&transcript, reply))
+    {
+        bail!("case precondition no longer holds: the teacher replied {other:?}");
+    }
     // Lexical-only stores no vector to wait for.
     if retrieval == Retrieval::Minilm {
         for memory in taught.learned() {
@@ -501,6 +507,31 @@ async fn teach(
         run.taught = Some(taught);
     }
     Ok(())
+}
+
+/// The first teacher reply in `transcript` other than `reply`, ignoring case
+/// and the punctuation around the word. Only text is a reply: thinking never
+/// reaches extraction.
+fn unexpected_reply(transcript: &Value, reply: &str) -> Option<String> {
+    transcript["messages"]
+        .as_array()?
+        .iter()
+        .filter(|entry| entry.pointer("/message/role").and_then(Value::as_str) == Some("assistant"))
+        .map(|entry| {
+            entry["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty())
+        .find(|text| {
+            !text
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .eq_ignore_ascii_case(reply)
+        })
 }
 
 /// The entry a `state::get` of the cursor names: memory stores
@@ -1242,6 +1273,47 @@ mod tests {
         let second = serde_json::to_value(teacher_send("a", 1, "And this.".into())).unwrap();
         assert!(second.get("session").is_none());
         assert_ne!(first["idempotency_key"], second["idempotency_key"]);
+    }
+
+    #[test]
+    fn a_teacher_reply_other_than_the_fixed_one_is_reported() {
+        let reply = |text: &str| {
+            json!({"entry_id": "e_t_0_assistant", "origin": {"turn_id": "t"},
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+        };
+        let user = json!({"entry_id": "e_t_user",
+                          "message": {"role": "user", "content": [{"type": "text", "text": "db-0a1b2c3d"}]}});
+        let transcript = |replies: &[&str]| {
+            let mut messages = vec![user.clone()];
+            messages.extend(replies.iter().map(|text| reply(text)));
+            json!({ "messages": messages })
+        };
+        // Case and the punctuation around the word do not count.
+        let fixed: [&[&str]; 4] = [&["noted"], &["Noted.", "**noted**"], &["noted", "   "], &[]];
+        for fixed in fixed {
+            assert_eq!(
+                unexpected_reply(&transcript(fixed), "noted"),
+                None,
+                "{fixed:?}"
+            );
+        }
+        // A reply that restates what the user said, or refuses to keep it.
+        for other in [
+            "Noted: the staging host is db-0a1b2c3d.",
+            "I won't remember that.",
+        ] {
+            assert_eq!(
+                unexpected_reply(&transcript(&["noted", other]), "noted").as_deref(),
+                Some(other)
+            );
+        }
+        // Thinking is not a reply.
+        let mut thought = transcript(&["noted"]);
+        thought["messages"][1]["message"]["content"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type": "thinking", "thinking": "the host is db-0a1b2c3d"}));
+        assert_eq!(unexpected_reply(&thought, "noted"), None);
     }
 
     #[test]

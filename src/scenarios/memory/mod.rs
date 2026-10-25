@@ -46,9 +46,9 @@ impl Memory {
 }
 
 /// What `setup` plants and what the case changes later, rendered for
-/// `run_id`, and what its teacher says. `entities`, `changes` and `teacher`
-/// are written only when the case has them, so a case without them keeps its
-/// digest.
+/// `run_id`, and what its teacher says. `entities`, `changes`, `teacher` and
+/// `teacher_reply` are written only when the case has them, so a case
+/// without them keeps its digest.
 fn planted_state(case: &Case, run_id: &str) -> Value {
     if case.baseline {
         return json!({"memories": [], "rules": []});
@@ -90,6 +90,9 @@ fn planted_state(case: &Case, run_id: &str) -> Value {
     // every definition.
     if !case.teacher.is_empty() {
         state["teacher"] = json!(case.teacher);
+    }
+    if let Some(reply) = case.teacher_reply {
+        state["teacher_reply"] = reply.into();
     }
     state
 }
@@ -303,13 +306,24 @@ mod tests {
                 "{}",
                 case.id
             );
-            assert!(state.get("entities").is_none(), "{}", case.id);
+            assert_eq!(
+                state.get("entities").is_some(),
+                case.memories.iter().any(|seed| !seed.entities.is_empty()),
+                "{}",
+                case.id
+            );
             // The teacher's messages as written: the key said in passing
             // stays a template, never a token-shaped value.
             match state.get("teacher") {
                 Some(teacher) => assert_eq!(*teacher, json!(case.teacher), "{}", case.id),
                 None => assert!(case.teacher.is_empty(), "{}", case.id),
             }
+            assert_eq!(
+                state.get("teacher_reply"),
+                case.teacher_reply.map(Value::from).as_ref(),
+                "{}",
+                case.id
+            );
         }
         let learning = CASES
             .iter()

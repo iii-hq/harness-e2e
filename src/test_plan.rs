@@ -193,6 +193,12 @@ const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::MemoryLearnRuleThenObey,
     ScenarioId::MemoryLearnCorrection,
     ScenarioId::MemoryAutomationNotLearned,
+    ScenarioId::MemoryManySiblings,
+    ScenarioId::MemoryAboutMeOverflow,
+    ScenarioId::MemoryLinkedUpdate,
+    ScenarioId::MemoryLearnFromLongMessage,
+    ScenarioId::MemoryHonorsDoNotKeep,
+    ScenarioId::MemoryKeepsWithoutARule,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -749,8 +755,8 @@ mod tests {
             ("onboarding", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
-            ("memory", 19, 57),
-            ("memory-learning", 4, 12),
+            ("memory", 22, 66),
+            ("memory-learning", 7, 21),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -935,7 +941,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:24b257c0863d3f544a56fce435f8c05fa5f1fdd892e17b225b9148dab350e770"
+            "sha256:056a1a42f0e66ddcaa070bfcaa2a485f020132be387efc99be0c2b5e7a48e6eb"
         );
     }
 

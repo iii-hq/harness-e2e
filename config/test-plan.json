@@ -133,7 +133,10 @@
         "memory_sibling_facts",
         "memory_rule_changed_mid_session",
         "memory_bank_edits_mid_session",
-        "memory_bank_trashed_mid_session"
+        "memory_bank_trashed_mid_session",
+        "memory_many_siblings",
+        "memory_about_me_overflow",
+        "memory_linked_update"
       ]
     },
     {
@@ -143,7 +146,10 @@
         "memory_learn_then_recall",
         "memory_learn_rule_then_obey",
         "memory_learn_correction",
-        "memory_automation_not_learned"
+        "memory_automation_not_learned",
+        "memory_learn_from_long_message",
+        "memory_honors_do_not_keep",
+        "memory_keeps_without_a_rule"
       ]
     }
   ],
@@ -457,7 +463,7 @@
     {
       "id": "memory-learning",
       "label": "Memory learning",
-      "purpose": "Does memory learn what the user says in a chat, and only from the user? Before the measured session, a teacher session of the user's own kind states a fact, an instruction or a correction; memory's extraction must keep it, and the later session must get it and use it. A deploy key said in passing must never be stored, injected or answered, and a non-user (test or automation) session asking memory to remember must teach it nothing. Extraction calls a model, so these gates move with that model, unlike the memory suite's; the fact and instruction cases compare with the memory suite's baselines. Not covered: what a sub-agent teaches, and learning into a bank other than the session's.",
+      "purpose": "Does memory learn what the user says in a chat, and only from the user? Before the measured session, a teacher session of the user's own kind states a fact, an instruction or a correction; memory's extraction must keep it, and the later session must get it and use it. A deploy key said in passing must never be stored, injected or answered, and a non-user (test or automation) session asking memory to remember must teach it nothing. A fact in the middle of a long message must be learned like one at its start, and a standing rule against remembering the user's health must keep a diagnosis out of the bank, beside a control without the rule that shows extraction would keep it. Extraction calls a model, so these gates move with that model, unlike the memory suite's; the fact and instruction cases compare with the memory suite's baselines. Not covered: what a sub-agent teaches, and learning into a bank other than the session's.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
