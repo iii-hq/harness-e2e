@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use self::cases::{bank, render, Case, CASES};
+use self::cases::{bank, render, Case, Change, CASES};
 use self::score::Evidence;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, DeliverableContract,
@@ -43,6 +43,49 @@ impl Memory {
     fn item(&self) -> &'static Case {
         CASES.get(self.0).expect("a registered memory case")
     }
+}
+
+/// What `setup` plants and what the case changes later, rendered for
+/// `run_id`. `entities` and `changes` are written only when the case has
+/// them, so a case without them keeps its digest.
+fn planted_state(case: &Case, run_id: &str) -> Value {
+    if case.baseline {
+        return json!({"memories": [], "rules": []});
+    }
+    let rules: Vec<Value> = case
+        .rules
+        .iter()
+        .map(|rule| json!({"name": rule.name, "content": render(rule.content, run_id)}))
+        .collect();
+    let mut state = json!({"memories": cases::planted_memories(case, run_id), "rules": rules});
+    let text = |seed: usize| render(case.memories[seed].text, run_id);
+    let entities: serde_json::Map<String, Value> = case
+        .memories
+        .iter()
+        .filter(|seed| !seed.entities.is_empty())
+        .map(|seed| (render(seed.text, run_id), json!(seed.entities)))
+        .collect();
+    if !entities.is_empty() {
+        state["entities"] = Value::Object(entities);
+    }
+    if !case.changes.is_empty() {
+        let changes = case.changes.iter().map(|&(after, change)| {
+            let mut described = match change {
+                Change::RuleSet { name, content } => {
+                    json!({"name": name, "content": render(content, run_id)})
+                }
+                Change::Save { seed } | Change::Delete { seed } => json!({"text": text(seed)}),
+                Change::Supersede { old, new } => json!({"old": text(old), "new": text(new)}),
+                Change::Update { seed, to } => json!({"old": text(seed), "text": text(to)}),
+                Change::DeleteBank => json!({}),
+            };
+            described["after"] = after.into();
+            described["function"] = change.function().into();
+            described
+        });
+        state["changes"] = changes.collect();
+    }
+    state
 }
 
 /// Whether `harness::compact` runs once exchange `finished` has its answer:
@@ -128,16 +171,7 @@ impl Scenario for Memory {
     }
 
     fn planted_state(&self, run_id: &str) -> Option<Value> {
-        let item = self.item();
-        let rules: Vec<Value> = if item.baseline {
-            Vec::new()
-        } else {
-            item.rules
-                .iter()
-                .map(|rule| json!({"name": rule.name, "content": render(rule.content, run_id)}))
-                .collect()
-        };
-        Some(json!({"memories": cases::planted_memories(item, run_id), "rules": rules}))
+        Some(planted_state(self.item(), run_id))
     }
 
     async fn before_followup(
@@ -147,6 +181,8 @@ impl Scenario for Memory {
         session_id: &str,
         exchange: usize,
     ) {
+        // Bank changes before the compaction, as `Case.changes` states.
+        runtime::apply_changes(context, self.item(), run_id, exchange).await;
         if compacts_after(self.item(), exchange) {
             runtime::compact(context, run_id, session_id).await;
         }
@@ -162,14 +198,11 @@ impl Scenario for Memory {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<Vec<CapturedDeliverable>> {
-        let (prompts, compaction, retrieval) = runtime::snapshot(run_id);
         let evidence = score::evidence(
             self.item(),
             run_id,
             &observation.transcript,
-            &prompts,
-            compaction,
-            retrieval,
+            runtime::snapshot(run_id),
         );
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
@@ -251,6 +284,55 @@ mod tests {
             assert_eq!(spec.criteria.len(), case.criteria.len());
             assert_eq!(module.dialogue_followups("run").len(), case.followups.len());
         }
+    }
+
+    #[test]
+    fn planted_state_names_changes_and_entities_only_for_a_case_with_them() {
+        for case in &CASES {
+            let state = planted_state(case, "contract");
+            assert!(state.get("changes").is_none(), "{}", case.id);
+            assert!(state.get("entities").is_none(), "{}", case.id);
+        }
+        let case = &cases::CHANGING;
+        let text = |index: usize| render(case.memories[index].text, "a");
+        let state = planted_state(case, "a");
+        // The seeds a change saves later are not planted up front.
+        assert_eq!(
+            state["memories"],
+            json!([text(0), text(1), text(2), text(3), text(6)])
+        );
+        let mut entities = serde_json::Map::new();
+        entities.insert(text(6), json!(["search"]));
+        assert_eq!(state["entities"], Value::Object(entities));
+        let changes = state["changes"].as_array().unwrap();
+        let functions: Vec<&str> = changes
+            .iter()
+            .map(|change| change["function"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            functions,
+            case.changes
+                .iter()
+                .map(|(_, change)| change.function())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(changes[0]["after"], 0);
+        assert!(changes[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains(&cases::canary("a", "after")));
+        assert_eq!(
+            changes[3],
+            json!({"after": 0, "function": "memory::supersede", "old": text(2), "new": text(4)})
+        );
+        assert_eq!(
+            changes[4],
+            json!({"after": 0, "function": "memory::update", "old": text(3), "text": text(5)})
+        );
+        assert_eq!(
+            changes[5],
+            json!({"after": 1, "function": "memory::bank::delete"})
+        );
     }
 
     #[test]

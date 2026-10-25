@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::cases::{bank, canary, labels, render, Case, Check, Criterion, DISTRACTORS};
-use super::observe::{observe, visible_at, MemoryBlock, Observed};
+use super::cases::{
+    bank, canary, labels, render, trashed_after, Case, Change, Check, Criterion, DISTRACTORS,
+};
+use super::observe::{observe, visible_at, MemoryBlock, Observed, RulesUpdate};
+use super::runtime::Snapshot;
 use crate::report::EvaluationDimension;
 use crate::scenarios::assessment::{self, AssessmentSpec};
 use crate::scenarios::{CriterionSpec, ObjectiveEvaluation};
@@ -19,6 +22,10 @@ const SECTION_START: &str = "\n\n# Memory — bank: ";
 const RULE_TRUNCATED: &str = "[rule truncated";
 /// Where the rules start in memory's section, after its fixed header.
 const RULES_START: &str = "\nThe rules below are the user's standing instructions.";
+/// What the rules update says once no memory section applies, as after a trash.
+const NO_SECTION: &str = "No memory section applies now.";
+/// Stands in for the text of another bank in the evidence.
+const WITHHELD: &str = "[withheld: another bank's text]";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeedEvidence {
@@ -62,6 +69,16 @@ pub struct Measurement {
     pub unit: String,
 }
 
+/// What one change between exchanges returned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChangeOutcome {
+    /// The exchange it ran after.
+    pub after: usize,
+    pub function: String,
+    /// "ok", or "error: " and why.
+    pub status: String,
+}
+
 /// How memory ranked recalls during the attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -87,6 +104,9 @@ pub struct Evidence {
     /// Parallel to `observed.exchanges`.
     pub prompts: Vec<ExchangePrompt>,
     pub compaction_status: Option<String>,
+    /// What each change between exchanges returned, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ChangeOutcome>,
     pub measurements: Vec<Measurement>,
 }
 
@@ -119,32 +139,30 @@ pub fn memory_section(prompt: &str) -> Option<&str> {
     prompt.find(SECTION_START).map(|start| &prompt[start..])
 }
 
-pub fn evidence(
-    case: &Case,
-    run_id: &str,
-    transcript: &Value,
-    prompts: &[PromptRecord],
-    compaction_status: Option<String>,
-    retrieval: Option<Retrieval>,
-) -> Evidence {
-    assemble(
-        case,
-        run_id,
-        observe(transcript),
-        prompts,
-        compaction_status,
-        retrieval,
-    )
+pub fn evidence(case: &Case, run_id: &str, transcript: &Value, snapshot: Snapshot) -> Evidence {
+    assemble(case, run_id, observe(transcript), snapshot)
 }
 
-fn assemble(
-    case: &Case,
-    run_id: &str,
-    observed: Observed,
-    records: &[PromptRecord],
-    compaction_status: Option<String>,
-    retrieval: Option<Retrieval>,
-) -> Evidence {
+/// The bank a memory section or rules update names, if it names one.
+fn named_bank(text: &str) -> Option<&str> {
+    let (_, rest) = text.split_once(SECTION_START)?;
+    Some(rest.split_once('\n').map_or(rest, |(bank, _)| bank))
+}
+
+fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapshot) -> Evidence {
+    let own = bank(run_id);
+    let foreign = |text: &str| named_bank(text).is_some_and(|named| named != own);
+    // The evidence is persisted: a fallback to the user's own bank must not
+    // copy their memories or rules into it. Blocks keep their line count.
+    for block in observed.blocks.iter_mut().filter(|block| block.bank != own) {
+        block.lines.fill(WITHHELD.to_string());
+    }
+    for update in observed.rules_updates.iter_mut() {
+        if foreign(&update.text) {
+            update.text = WITHHELD.to_string();
+        }
+    }
+    let records = &snapshot.prompts;
     let planted = !case.baseline;
     let distractors = DISTRACTORS.iter().map(|text| SeedEvidence {
         text: (*text).to_string(),
@@ -153,13 +171,23 @@ fn assemble(
         related_on: Vec::new(),
         planted: planted && case.distractors,
     });
-    let memories = case.memories.iter().map(|seed| SeedEvidence {
-        text: render(seed.text, run_id),
-        group: seed.group.to_string(),
-        needed_on: seed.needed_on.to_vec(),
-        related_on: seed.related_on.to_vec(),
-        planted,
-    });
+    let memories = case
+        .memories
+        .iter()
+        .enumerate()
+        .map(|(index, seed)| SeedEvidence {
+            // Lines are matched to seeds by text: memory's own, once it stored one.
+            text: snapshot
+                .stored
+                .get(index)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| render(seed.text, run_id)),
+            group: seed.group.to_string(),
+            needed_on: seed.needed_on.to_vec(),
+            related_on: seed.related_on.to_vec(),
+            planted,
+        });
     let prompts = observed
         .exchanges
         .iter()
@@ -177,14 +205,14 @@ fn assemble(
                 memory_section: matching
                     .or(seen.last())
                     .and_then(|record| memory_section(&record.system_prompt))
-                    .map(str::to_string),
+                    .map(|section| if foreign(section) { WITHHELD } else { section }.to_string()),
             }
         })
         .collect();
     let mut evidence = Evidence {
         schema: SCHEMA.to_string(),
-        bank: bank(run_id),
-        retrieval,
+        bank: own.clone(),
+        retrieval: snapshot.retrieval,
         canaries: labels(case)
             .into_iter()
             .map(|label| (label.to_string(), canary(run_id, label)))
@@ -201,15 +229,17 @@ fn assemble(
             .collect(),
         observed,
         prompts,
-        compaction_status,
+        compaction_status: snapshot.compaction,
+        changes: snapshot.changes,
         measurements: Vec::new(),
     };
-    evidence.measurements = measurements(&evidence);
+    evidence.measurements = measurements(case, &evidence);
     evidence
 }
 
 pub fn audit(evidence: &Evidence) -> Audit {
-    // Another bank's block comes with an infrastructure error, never a score.
+    // Another bank's block is never audited as the attempt's: before a trash
+    // it comes with an infrastructure error, after it `BankGoneFrom` fails.
     let own = Observed {
         blocks: evidence
             .observed
@@ -285,9 +315,10 @@ pub fn audit(evidence: &Evidence) -> Audit {
     audit
 }
 
-fn measurements(evidence: &Evidence) -> Vec<Measurement> {
+fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
     let audit = audit(evidence);
     let observed = &evidence.observed;
+    let trashed = trashed_after(case);
     let count = |id: &str, value: usize| Measurement {
         id: id.to_string(),
         value: value as f64,
@@ -298,7 +329,7 @@ fn measurements(evidence: &Evidence) -> Vec<Measurement> {
         unit: "tokens".to_string(),
         ..count(id, bytes.div_ceil(4))
     };
-    vec![
+    let mut measured = vec![
         count("memory_expected_injected", audit.relevant),
         count("memory_irrelevant_injected", audit.irrelevant.len()),
         count("memory_duplicate_injections", audit.duplicates.len()),
@@ -306,12 +337,16 @@ fn measurements(evidence: &Evidence) -> Vec<Measurement> {
             "memory_injected_tokens",
             observed.blocks.iter().map(|block| block.memory_bytes).sum(),
         ),
+        // A turn after the case trashed its bank has no bank by design.
         count(
             "memory_turns_without_hook",
             observed
                 .exchanges
                 .iter()
-                .filter(|exchange| exchange.memory_bank.is_none())
+                .enumerate()
+                .filter(|(index, exchange)| {
+                    exchange.memory_bank.is_none() && trashed.is_none_or(|after| *index <= after)
+                })
                 .count(),
         ),
         tokens(
@@ -328,7 +363,17 @@ fn measurements(evidence: &Evidence) -> Vec<Measurement> {
                 .map(|block| block.reminder_bytes)
                 .sum(),
         ),
-    ]
+    ];
+    // Only a case that moves the rules section measures its updates, so every
+    // other case's evidence stays as it was.
+    let moves_rules = case
+        .changes
+        .iter()
+        .any(|(_, change)| matches!(change, Change::RuleSet { .. } | Change::DeleteBank));
+    if moves_rules {
+        measured.push(count("memory_rules_updates", observed.rules_updates.len()));
+    }
+    measured
 }
 
 fn first_section(evidence: &Evidence) -> Option<&str> {
@@ -376,11 +421,19 @@ pub fn evaluate(case: &Case, evidence: &Evidence) -> ObjectiveEvaluation {
 
 fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool, String) {
     match check {
-        Check::NeededInjected => verdict(
-            &audit.missing,
-            "every needed memory reached its exchange",
-            "needed but not injected or visible",
-        ),
+        Check::NeededInjected { exchange } => {
+            let missing: Vec<(usize, String)> = audit
+                .missing
+                .iter()
+                .filter(|(index, _)| exchange.is_none_or(|wanted| *index == wanted))
+                .cloned()
+                .collect();
+            verdict(
+                &missing,
+                "every needed memory reached its exchange",
+                "needed but not injected or visible",
+            )
+        }
         Check::NothingIrrelevant => verdict(
             &audit.irrelevant,
             "every injected memory was needed",
@@ -447,12 +500,20 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                 )
             }
         }
-        Check::AnswerOmits { canary } => {
+        Check::UpdateOn {
+            exchange,
+            holds,
+            omits,
+        } => update_on(evidence, exchange, holds, omits),
+        Check::SectionFrozen => section_frozen(evidence),
+        Check::BankGoneFrom { exchange } => bank_gone_from(evidence, exchange),
+        Check::AnswerOmits { exchange, canary } => {
             let Some(value) = evidence.canaries.get(canary) else {
                 return (false, format!("no canary recorded for {canary}"));
             };
+            let wanted = exchange.map_or(0..=case.followups.len(), |index| index..=index);
             // An exchange that never answered cannot show the value was left out.
-            let leaking: Vec<usize> = (0..=case.followups.len())
+            let leaking: Vec<usize> = wanted
                 .filter(|&index| {
                     evidence
                         .observed
@@ -467,6 +528,124 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                 (false, format!("exchanges that answered with {canary} ({value}), or never answered: {leaking:?}"))
             }
         }
+    }
+}
+
+/// The rules updates memory appended on `exchange`'s turn; `None` when the
+/// exchange never answered.
+fn updates_on(evidence: &Evidence, exchange: usize) -> Option<Vec<&RulesUpdate>> {
+    let turn = &evidence.observed.exchanges.get(exchange)?.turn_id;
+    let updates = &evidence.observed.rules_updates;
+    Some(updates.iter().filter(|u| &u.turn_id == turn).collect())
+}
+
+fn update_on(
+    evidence: &Evidence,
+    exchange: usize,
+    holds: Option<&str>,
+    omits: Option<&str>,
+) -> (bool, String) {
+    let Some(updates) = updates_on(evidence, exchange) else {
+        return (false, format!("exchange {exchange} never answered"));
+    };
+    // None is a change that never arrived; two is one change sent twice.
+    let [update] = updates[..] else {
+        return (
+            false,
+            format!(
+                "exchange {exchange} carries {} rules updates, not one",
+                updates.len()
+            ),
+        );
+    };
+    let wanted = holds.map(|label| (label, true));
+    let unwanted = omits.map(|label| (label, false));
+    let mut problems = Vec::new();
+    for (label, held) in wanted.into_iter().chain(unwanted) {
+        match evidence.canaries.get(label) {
+            None => problems.push(format!("no canary recorded for {label}")),
+            Some(value) if update.text.contains(value.as_str()) != held => problems.push(format!(
+                "the update {} {label} ({value})",
+                if held { "lacks" } else { "carries" }
+            )),
+            Some(_) => {}
+        }
+    }
+    if problems.is_empty() {
+        (
+            true,
+            format!("exchange {exchange} carries one rules update, as planned"),
+        )
+    } else {
+        (false, problems.join("; "))
+    }
+}
+
+fn section_frozen(evidence: &Evidence) -> (bool, String) {
+    let Some(first) = first_section(evidence).filter(|section| !section.is_empty()) else {
+        return (false, "exchange 0 recorded no memory section".to_string());
+    };
+    let moved: Vec<usize> = evidence
+        .prompts
+        .iter()
+        .enumerate()
+        .filter(|(_, prompt)| prompt.memory_section.as_deref() != Some(first))
+        .map(|(index, _)| index)
+        .collect();
+    if moved.is_empty() {
+        (
+            true,
+            "every exchange kept exchange 0's memory section".to_string(),
+        )
+    } else {
+        (
+            false,
+            format!("exchanges whose memory section differs from exchange 0's: {moved:?}"),
+        )
+    }
+}
+
+fn bank_gone_from(evidence: &Evidence, exchange: usize) -> (bool, String) {
+    let Some(updates) = updates_on(evidence, exchange) else {
+        return (false, format!("exchange {exchange} never answered"));
+    };
+    let mut problems = Vec::new();
+    for (index, turn) in evidence
+        .observed
+        .exchanges
+        .iter()
+        .enumerate()
+        .skip(exchange)
+    {
+        if let Some(read) = &turn.memory_bank {
+            problems.push(format!("exchange {index}: memory read bank {read}"));
+        }
+        let blocks = evidence
+            .observed
+            .blocks
+            .iter()
+            .filter(|block| block.turn_id == turn.turn_id)
+            .count();
+        if blocks > 0 {
+            problems.push(format!("exchange {index}: {blocks} memory blocks injected"));
+        }
+    }
+    // The note is what shows memory ran and chose no memory.
+    if !updates
+        .iter()
+        .any(|update| update.text.contains(NO_SECTION))
+    {
+        problems.push(format!(
+            "exchange {exchange} carries no update saying {NO_SECTION:?}"
+        ));
+    }
+    if problems.is_empty() {
+        (
+            true,
+            format!("from exchange {exchange} on, memory read no bank and said so"),
+        )
+    } else {
+        (false, problems.join("; "))
     }
 }
 
@@ -502,10 +681,14 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             "observed {seen} exchanges, the case sends {expected}"
         ));
     }
+    let trashed = trashed_after(case);
     for (index, exchange) in evidence.observed.exchanges.iter().enumerate() {
         // A bank other than the attempt's means the turn-metadata pin never
-        // reached memory: it read `main` or a directory bank instead.
+        // reached memory: it read `main` or a directory bank instead. Once the
+        // case trashed its bank, no bank or another one is what its gate
+        // scores: a fallback to `main` is a product failure, not a rerun.
         match exchange.memory_bank.as_deref() {
+            _ if trashed.is_some_and(|after| index > after) => {}
             None => problems.push(format!("exchange {index} ran without the memory hook")),
             Some(read) if read != evidence.bank => problems.push(format!(
                 "exchange {index}: memory read bank {read}, not the attempt's {}",
@@ -527,6 +710,13 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
                 exchange.memory_recalled
             ));
         }
+        let updated = updates_on(evidence, index)
+            .is_some_and(|updates| updates.iter().any(|update| update.step == 0));
+        if exchange.rules_updated && !updated {
+            problems.push(format!(
+                "exchange {index}: memory says it sent a rules update, none parsed"
+            ));
+        }
         // shortcut: the published Harness stamps no `origin.req`, so an unstamped step
         // trusts its recorded prompt unchecked; once a Harness release stamps every
         // step, change `!= Some(false)` to `== Some(true)`.
@@ -544,14 +734,37 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             evidence.compaction_status.as_deref().unwrap_or("none")
         ));
     }
+    // `before_followup` cannot fail the run, so a change that failed or never
+    // ran is caught here.
+    if evidence.changes.len() != case.changes.len() {
+        problems.push(format!(
+            "{} of the case's {} changes ran",
+            evidence.changes.len(),
+            case.changes.len()
+        ));
+    }
+    for change in evidence
+        .changes
+        .iter()
+        .filter(|change| change.status != "ok")
+    {
+        problems.push(format!(
+            "the {} after exchange {} failed: {}",
+            change.function, change.after, change.status
+        ));
+    }
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenarios::memory::cases::{bank, canary, render, Case, CASES, DISTRACTORS};
-    use crate::scenarios::memory::observe::{Compaction, Exchange, MemoryBlock, Observed};
+    use crate::scenarios::memory::cases::{
+        bank, canary, render, Case, CASES, CHANGING, DISTRACTORS,
+    };
+    use crate::scenarios::memory::observe::{
+        Compaction, Exchange, MemoryBlock, Observed, RulesUpdate,
+    };
     use serde_json::json;
     use sha2::{Digest, Sha256};
 
@@ -581,6 +794,7 @@ mod tests {
             system_sha: None,
             memory_recalled: 0,
             answer: answer.into(),
+            rules_updated: false,
         }
     }
 
@@ -613,7 +827,20 @@ mod tests {
                 .collect(),
             blocks,
             compactions: Vec::new(),
+            rules_updates: Vec::new(),
         }
+    }
+
+    /// Every change of the case ran, and ran fine.
+    fn applied(case: &Case) -> Vec<ChangeOutcome> {
+        case.changes
+            .iter()
+            .map(|&(after, change)| ChangeOutcome {
+                after,
+                function: change.function().into(),
+                status: "ok".into(),
+            })
+            .collect()
     }
 
     /// Every exchange saw `prompt`, and its recorded sha says so.
@@ -631,14 +858,14 @@ mod tests {
             .iter()
             .map(|exchange| record(&exchange.turn_id, 0, prompt))
             .collect();
-        assemble(
-            case,
-            RUN,
-            observed,
-            &records,
-            status.map(str::to_string),
-            Some(Retrieval::Lexical),
-        )
+        let snapshot = Snapshot {
+            prompts: records,
+            compaction: status.map(str::to_string),
+            retrieval: Some(Retrieval::Lexical),
+            changes: applied(case),
+            ..Snapshot::default()
+        };
+        assemble(case, RUN, observed, snapshot)
     }
 
     fn evidence_of(case: &Case, observed: Observed) -> Evidence {
@@ -701,14 +928,11 @@ mod tests {
     #[test]
     fn evidence_carries_the_bank_the_canaries_and_the_planted_flags() {
         let empty = json!({"messages": []});
-        let recall = evidence(
-            case_named("memory_relevant_recall"),
-            RUN,
-            &empty,
-            &[],
-            None,
-            Some(Retrieval::Lexical),
-        );
+        let lexical = Snapshot {
+            retrieval: Some(Retrieval::Lexical),
+            ..Snapshot::default()
+        };
+        let recall = evidence(case_named("memory_relevant_recall"), RUN, &empty, lexical);
         assert_eq!(recall.schema, "memory-evaluation/1");
         assert_eq!(recall.bank, "e2e-a");
         assert_eq!(
@@ -734,9 +958,7 @@ mod tests {
             case_named("memory_value_preference"),
             RUN,
             &empty,
-            &[],
-            None,
-            None,
+            Snapshot::default(),
         );
         assert!(rules.rules.iter().all(|rule| rule.planted));
         assert!(rules.seeds.iter().all(|seed| !seed.planted));
@@ -744,9 +966,7 @@ mod tests {
             case_named("memory_value_preference_baseline"),
             RUN,
             &empty,
-            &[],
-            None,
-            None,
+            Snapshot::default(),
         );
         assert!(control.rules.iter().all(|rule| !rule.planted));
         assert!(control.rules[0].content.contains(&canary(RUN, "prefix")));
@@ -768,14 +988,11 @@ mod tests {
             record("t_a", 0, &sent),
             record("t_b", 1, &sent),
         ];
-        let found = evidence(
-            case_named("memory_small_talk"),
-            RUN,
-            &transcript,
-            &records,
-            None,
-            None,
-        );
+        let recorded = Snapshot {
+            prompts: records.to_vec(),
+            ..Snapshot::default()
+        };
+        let found = evidence(case_named("memory_small_talk"), RUN, &transcript, recorded);
         assert_eq!(found.prompts.len(), 2);
         assert_eq!(
             found.prompts[0],
@@ -810,14 +1027,12 @@ mod tests {
         ]});
         let sent = format!("{PROMPT}{HEADER}");
         let case = case_named("memory_first_person_off_topic");
-        let found = evidence(
-            case,
-            RUN,
-            &transcript,
-            &[record("t_a", 0, &sent)],
-            None,
-            Some(Retrieval::Lexical),
-        );
+        let recorded = Snapshot {
+            prompts: vec![record("t_a", 0, &sent)],
+            retrieval: Some(Retrieval::Lexical),
+            ..Snapshot::default()
+        };
+        let found = evidence(case, RUN, &transcript, recorded);
         assert_eq!(
             found.prompts,
             [ExchangePrompt {
@@ -1252,5 +1467,217 @@ mod tests {
     #[test]
     fn system_sha_hashes_the_json_string() {
         assert_eq!(system_sha("a"), format!("{:x}", Sha256::digest(b"\"a\"")));
+    }
+
+    /// The rules update memory appends on exchange `index`'s opening step.
+    fn update(index: usize, section: &str) -> RulesUpdate {
+        RulesUpdate {
+            turn_id: format!("t{index}"),
+            step: 0,
+            position: 10 * index,
+            text: format!(
+                "<memory update=\"rules\">\nThe memory rules changed. This block replaces the memory section of the system prompt and any earlier update:{section}</memory>"
+            ),
+        }
+    }
+
+    fn measured(evidence: &Evidence, id: &str) -> Option<f64> {
+        evidence
+            .measurements
+            .iter()
+            .find(|measurement| measurement.id == id)
+            .map(|measurement| measurement.value)
+    }
+
+    #[test]
+    fn a_fallback_after_the_bank_is_trashed_is_scored_not_rerun() {
+        let case = &CHANGING;
+        let private = "The user's own private fact.".to_string();
+        // Memory read the user's `main` on the turn after the trash.
+        let mut theirs = block(2, vec![private.clone()]);
+        theirs.bank = "main".into();
+        let mut seen = observed(&["a", "b", "c"], vec![theirs]);
+        seen.exchanges[2].memory_bank = Some("main".into());
+        let fallback = evidence_of(case, seen);
+        let evaluation = evaluate(case, &fallback);
+        assert_eq!(evaluation.infrastructure_error, None);
+        assert_eq!(award(&evaluation, "memory_gone_after_trash"), Some(0));
+        // The user's own memory never reaches the persisted evidence; its count does.
+        let kept = serde_json::to_string(&fallback).unwrap();
+        assert!(!kept.contains(&private), "{kept}");
+        assert_eq!(fallback.observed.blocks[0].lines.len(), 1);
+
+        // No bank and no note that none applies: scored too.
+        let mut silent = observed(&["a", "b", "c"], vec![]);
+        silent.exchanges[2].memory_bank = None;
+        let evaluation = evaluate(case, &evidence_of(case, silent));
+        assert_eq!(evaluation.infrastructure_error, None);
+        assert_eq!(award(&evaluation, "memory_gone_after_trash"), Some(0));
+
+        // Before the trash, another bank is still a pin that never reached memory.
+        let mut early = observed(&["a", "b", "c"], vec![]);
+        early.exchanges[1].memory_bank = Some("main".into());
+        early.exchanges[2].memory_bank = None;
+        let error = evaluate(case, &evidence_of(case, early))
+            .infrastructure_error
+            .expect("a foreign bank before the trash is flagged");
+        assert!(error.contains("exchange 1"), "{error}");
+    }
+
+    #[test]
+    fn a_trashed_bank_reads_no_bank_and_says_no_section_applies() {
+        let case = &CHANGING;
+        let mut seen = observed(&["a", "b", "c"], vec![]);
+        seen.exchanges[2].memory_bank = None;
+        seen.exchanges[2].rules_updated = true;
+        seen.rules_updates
+            .push(update(2, "\nNo memory section applies now.\n"));
+        let evidence = evidence_of(case, seen);
+        let evaluation = evaluate(case, &evidence);
+        assert_eq!(evaluation.infrastructure_error, None);
+        assert_eq!(award(&evaluation, "memory_gone_after_trash"), Some(30));
+        // The hook ran on a bank that is gone: not a turn without the hook.
+        assert_eq!(measured(&evidence, "memory_turns_without_hook"), Some(0.0));
+        assert_eq!(measured(&evidence, "memory_rules_updates"), Some(1.0));
+
+        // A block after the trash fails it, whichever bank it names.
+        let mut after = observed(&["a", "b", "c"], vec![block(2, vec![line(case, 0)])]);
+        after.exchanges[2].memory_bank = None;
+        after
+            .rules_updates
+            .push(update(2, "\nNo memory section applies now.\n"));
+        let evaluation = evaluate(case, &evidence_of(case, after));
+        assert_eq!(award(&evaluation, "memory_gone_after_trash"), Some(0));
+    }
+
+    #[test]
+    fn an_edited_rule_arrives_as_one_update_on_its_exchange() {
+        let case = &CHANGING;
+        let rule = |label: &str| {
+            format!(
+                "{HEADER}\n## commit-messages\nPrefix [{}].\n",
+                canary(RUN, label)
+            )
+        };
+        let score = |updates: Vec<RulesUpdate>| {
+            let mut seen = observed(&["a", "b", "c"], vec![]);
+            seen.rules_updates = updates;
+            award(
+                &evaluate(case, &evidence_of(case, seen)),
+                "edit_sent_as_update",
+            )
+        };
+        assert_eq!(score(vec![update(1, &rule("after"))]), Some(20));
+        assert_eq!(score(vec![]), Some(0));
+        assert_eq!(score(vec![update(1, &rule("before"))]), Some(0));
+        let both = format!("{}{}", rule("after"), rule("before"));
+        assert_eq!(score(vec![update(1, &both)]), Some(0));
+        let twice = vec![update(1, &rule("after")), update(1, &rule("after"))];
+        assert_eq!(score(twice), Some(0));
+        assert_eq!(score(vec![update(2, &rule("after"))]), Some(0));
+    }
+
+    #[test]
+    fn the_memory_section_stays_as_the_first_turn_saw_it() {
+        let case = &CHANGING;
+        let frozen = format!("{PROMPT}{HEADER}");
+        let seen = || observed(&["a", "b", "c"], vec![]);
+        let score = |evidence: Evidence| award(&evaluate(case, &evidence), "section_frozen");
+        assert_eq!(score(evidence_with(case, seen(), &frozen, None)), Some(10));
+        let mut rewritten = evidence_with(case, seen(), &frozen, None);
+        rewritten.prompts[1].memory_section = Some(format!("{HEADER}\n## commit-messages\nnew\n"));
+        assert_eq!(score(rewritten), Some(0));
+        // No section is nothing kept frozen.
+        assert_eq!(score(evidence_with(case, seen(), PROMPT, None)), Some(0));
+    }
+
+    #[test]
+    fn an_exchange_scoped_check_reads_that_exchange_only() {
+        let case = &CHANGING;
+        let current = vec![line(case, 4), line(case, 5)];
+        let evidence = evidence_of(case, observed(&["a", "b", "c"], vec![block(1, current)]));
+        // Exchange 0 lacks its fact, and only exchange 1 is judged.
+        assert_eq!(audit(&evidence).missing, [(0, "deploy".to_string())]);
+        let judged = |evidence: &Evidence| {
+            award(&evaluate(case, evidence), "current_injected_after_changes")
+        };
+        assert_eq!(judged(&evidence), Some(20));
+        let half = observed(&["a", "b", "c"], vec![block(1, vec![line(case, 4)])]);
+        assert_eq!(judged(&evidence_of(case, half)), Some(0));
+
+        // The old prefix belongs on exchange 0; only exchange 1 must leave it out.
+        let old = format!("[{}] Fix crash", canary(RUN, "before"));
+        let omits = |answers: &[&str]| {
+            let evidence = evidence_of(case, observed(answers, vec![]));
+            award(&evaluate(case, &evidence), "old_prefix_dropped")
+        };
+        assert_eq!(omits(&[&old, "b", "c"]), Some(10));
+        assert_eq!(omits(&["a", &old, "c"]), Some(0));
+        // An exchange that never answered cannot show the prefix was dropped.
+        assert_eq!(omits(&["a"]), Some(0));
+    }
+
+    #[test]
+    fn a_change_that_failed_or_never_ran_is_an_infrastructure_error() {
+        let case = &CHANGING;
+        let healthy = evidence_of(case, observed(&["a", "b", "c"], vec![]));
+        assert_eq!(evaluate(case, &healthy).infrastructure_error, None);
+
+        let mut failed = healthy.clone();
+        failed.changes[2].status = "error: memory::save: timed out".into();
+        let error = evaluate(case, &failed)
+            .infrastructure_error
+            .expect("a failed change is flagged");
+        assert!(error.contains("memory::save"), "{error}");
+
+        let mut missing = healthy;
+        missing.changes.pop();
+        assert!(evaluate(case, &missing).infrastructure_error.is_some());
+    }
+
+    #[test]
+    fn a_rules_update_memory_announced_must_parse() {
+        let case = &CHANGING;
+        let mut seen = observed(&["a", "b", "c"], vec![]);
+        seen.exchanges[1].rules_updated = true;
+        let error = evaluate(case, &evidence_of(case, seen.clone()))
+            .infrastructure_error
+            .expect("an unparsed update is flagged");
+        assert!(error.contains("exchange 1"), "{error}");
+        seen.rules_updates.push(update(1, HEADER));
+        assert_eq!(
+            evaluate(case, &evidence_of(case, seen)).infrastructure_error,
+            None
+        );
+    }
+
+    #[test]
+    fn a_seed_is_matched_by_the_text_memory_stored() {
+        let case = case_named("memory_relevant_recall");
+        let stored = format!("{} Stored.", line(case, 0));
+        let snapshot = Snapshot {
+            stored: vec![Some(stored.clone()), None],
+            ..Snapshot::default()
+        };
+        let seen = observed(&["x"], vec![block(0, vec![stored.clone(), line(case, 1)])]);
+        let evidence = assemble(case, RUN, seen, snapshot);
+        assert_eq!(evidence.seeds[DISTRACTORS.len()].text, stored);
+        assert_eq!(evidence.seeds[DISTRACTORS.len() + 1].text, line(case, 1));
+        let found = audit(&evidence);
+        assert!(found.irrelevant.is_empty(), "{:?}", found.irrelevant);
+        assert!(found.missing.is_empty(), "{:?}", found.missing);
+    }
+
+    #[test]
+    fn evidence_keeps_no_text_from_another_bank() {
+        let case = &CHANGING;
+        let theirs = "\n\n# Memory — bank: main\n## private\nThe user's own rule.\n";
+        let mut seen = observed(&["a", "b", "c"], vec![]);
+        seen.rules_updates = vec![update(1, &format!("{HEADER}own rule\n")), update(2, theirs)];
+        let evidence = evidence_with(case, seen, &format!("{PROMPT}{theirs}"), None);
+        let kept = serde_json::to_string(&evidence).unwrap();
+        assert!(!kept.contains("The user's own rule."), "{kept}");
+        assert!(evidence.observed.rules_updates[0].text.contains("own rule"));
+        assert_eq!(evidence.observed.rules_updates.len(), 2);
     }
 }

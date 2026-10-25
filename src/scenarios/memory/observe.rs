@@ -7,6 +7,7 @@ use serde_json::Value;
 const MEMORY_OPEN: &str = "<memory bank=";
 const MEMORY_CLOSE: &str = "</memory>";
 const REMINDER_OPEN: &str = "Standing instructions —";
+const RULES_UPDATE_OPEN: &str = "<memory update=\"rules\">";
 
 /// One recall block memory appended on a step, as the `model_notice` entry holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,6 +41,22 @@ pub struct Exchange {
     pub memory_recalled: usize,
     /// Text of the turn's last assistant entry that has any.
     pub answer: String,
+    /// `origin.memory_rules_updated` of that entry: memory says it appended a
+    /// rules update.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rules_updated: bool,
+}
+
+/// One rules update memory appended on a step: the rules section changed
+/// since the model last saw it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RulesUpdate {
+    pub turn_id: String,
+    pub step: u64,
+    /// Index in `transcript["messages"]`.
+    pub position: usize,
+    /// The whole notice: the current section, or the note that none applies.
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,6 +71,8 @@ pub struct Observed {
     pub exchanges: Vec<Exchange>,
     pub blocks: Vec<MemoryBlock>,
     pub compactions: Vec<Compaction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules_updates: Vec<RulesUpdate>,
 }
 
 pub fn observe(transcript: &Value) -> Observed {
@@ -65,10 +84,13 @@ pub fn observe(transcript: &Value) -> Observed {
         exchanges: Vec::new(),
         blocks: Vec::new(),
         compactions: Vec::new(),
+        rules_updates: Vec::new(),
     };
     for (position, entry) in entries.iter().enumerate() {
         if let Some(block) = memory_block(position, entry) {
             observed.blocks.push(block);
+        } else if let Some(update) = rules_update(position, entry) {
+            observed.rules_updates.push(update);
         } else if let Some(compaction) = compaction(position, entry, entries) {
             observed.compactions.push(compaction);
         } else if entry.pointer("/message/role").and_then(Value::as_str) == Some("assistant") {
@@ -99,22 +121,38 @@ fn text_at<'a>(entry: &'a Value, pointer: &str) -> Option<&'a str> {
     entry.pointer(pointer).and_then(Value::as_str)
 }
 
-fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
+/// A hook notice's text, turn id and step.
+fn hook_notice(entry: &Value) -> Option<(&str, &str, u64)> {
     if text_at(entry, "/custom/custom_type") != Some("model_notice")
         || text_at(entry, "/custom/data/kind") != Some("hook")
     {
         return None;
     }
     let text = text_at(entry, "/custom/data/text")?;
-    let (bank, _) = text
-        .strip_prefix(MEMORY_OPEN)?
-        .strip_prefix('"')?
-        .split_once('"')?;
     // `e_{turn_id}_{step}_notice_{k}`; turn ids hold `_` themselves.
     let (head, _) = text_at(entry, "/entry_id")?
         .strip_prefix("e_")?
         .rsplit_once("_notice_")?;
     let (turn_id, step) = head.rsplit_once('_')?;
+    Some((text, turn_id, step.parse().ok()?))
+}
+
+fn rules_update(position: usize, entry: &Value) -> Option<RulesUpdate> {
+    let (text, turn_id, step) = hook_notice(entry)?;
+    text.starts_with(RULES_UPDATE_OPEN).then(|| RulesUpdate {
+        turn_id: turn_id.to_string(),
+        step,
+        position,
+        text: text.to_string(),
+    })
+}
+
+fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
+    let (text, turn_id, step) = hook_notice(entry)?;
+    let (bank, _) = text
+        .strip_prefix(MEMORY_OPEN)?
+        .strip_prefix('"')?
+        .split_once('"')?;
 
     let mut lines = Vec::new();
     let mut memory_bytes = 0;
@@ -135,7 +173,7 @@ fn memory_block(position: usize, entry: &Value) -> Option<MemoryBlock> {
     Some(MemoryBlock {
         bank: bank.to_string(),
         turn_id: turn_id.to_string(),
-        step: step.parse().ok()?,
+        step,
         position,
         lines,
         memory_bytes,
@@ -205,6 +243,8 @@ fn note_assistant(exchanges: &mut Vec<Exchange>, position: usize, entry: &Value)
                 .and_then(Value::as_u64)
                 .unwrap_or_default() as usize,
             answer: text.unwrap_or_default(),
+            rules_updated: entry.pointer("/origin/memory_rules_updated")
+                == Some(&Value::Bool(true)),
         }),
     }
 }
@@ -302,7 +342,8 @@ mod tests {
                 "t_b",
                 0,
                 "thinking",
-                json!({"memory_bank": "e2e-x", "memory_recalled": 3, "req": {"system_sha": sha}}),
+                json!({"memory_bank": "e2e-x", "memory_recalled": 3, "memory_rules_updated": true,
+                       "req": {"system_sha": sha}}),
             ),
             assistant(
                 "t_b",
@@ -315,22 +356,36 @@ mod tests {
         assert_eq!(observed.exchanges.len(), 2);
         assert_eq!(observed.exchanges[0].memory_bank, None);
         assert_eq!(observed.exchanges[0].memory_recalled, 0);
+        assert!(!observed.exchanges[0].rules_updated);
         let second = &observed.exchanges[1];
         assert_eq!(second.turn_id, "t_b");
         assert_eq!(second.position, 3);
         assert_eq!(second.memory_bank.as_deref(), Some("e2e-x"));
         assert_eq!(second.system_sha.as_deref(), Some(sha.as_str()));
         assert_eq!(second.memory_recalled, 3);
+        assert!(second.rules_updated);
         assert_eq!(second.answer, "final answer");
     }
 
     #[test]
-    fn rules_updates_are_not_memory_blocks() {
-        let observed = observe(&transcript(vec![notice(
-            "e_t_a_1_notice_0",
-            "<memory update=\"rules\">\nThe memory rules changed.\n- a rule line\n</memory>",
-        )]));
-        assert!(observed.blocks.is_empty());
+    fn rules_updates_are_read_apart_from_memory_blocks() {
+        let update =
+            "<memory update=\"rules\">\nThe memory rules changed.\n- a rule line\n</memory>";
+        let observed = observe(&transcript(vec![
+            filler("u1"),
+            notice("e_t_a_1_notice_0", update),
+            block_notice("e_t_a_1_notice_1"),
+        ]));
+        assert_eq!(observed.blocks.len(), 1);
+        assert_eq!(
+            observed.rules_updates,
+            [RulesUpdate {
+                turn_id: "t_a".into(),
+                step: 1,
+                position: 1,
+                text: update.into(),
+            }]
+        );
     }
 
     #[test]

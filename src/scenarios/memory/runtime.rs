@@ -1,8 +1,9 @@
 //! Plants, observes and removes what one memory attempt needs from the stack:
 //! an isolated bank with the case's rules and memories, an observer on every
-//! prompt Harness is about to send, a forced compaction, and the cleanup of
-//! all three. Every `memory::*` call names the attempt's bank: left out, memory
-//! would act on the user's own `main`.
+//! prompt Harness is about to send, the case's changes between exchanges, a
+//! forced compaction, and the cleanup of all of it. Every `memory::*` call
+//! names the attempt's bank: left out, memory would act on the user's own
+//! `main`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -16,8 +17,8 @@ use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use super::cases::{bank, planted_memories, render, Case};
-use super::score::{PromptRecord, Retrieval};
+use super::cases::{bank, planted, render, Case, Change};
+use super::score::{ChangeOutcome, PromptRecord, Retrieval};
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
 
@@ -36,6 +37,27 @@ struct Run {
     compaction: Option<String>,
     function: Option<FunctionRef>,
     trigger: Option<Trigger>,
+    /// Each case seed's memory once saved, parallel to the case's memories.
+    seeds: Vec<Option<Saved>>,
+    changes: Vec<ChangeOutcome>,
+}
+
+/// A memory as memory stored it.
+#[derive(Debug, Clone, PartialEq)]
+struct Saved {
+    id: String,
+    text: String,
+}
+
+/// What `capture` reads of an attempt.
+#[derive(Debug, Default)]
+pub struct Snapshot {
+    pub prompts: Vec<PromptRecord>,
+    pub compaction: Option<String>,
+    pub retrieval: Option<Retrieval>,
+    /// Memory's stored text of each case seed, `None` until saved.
+    pub stored: Vec<Option<String>>,
+    pub changes: Vec<ChangeOutcome>,
 }
 
 fn runs() -> &'static Mutex<HashMap<String, Run>> {
@@ -138,16 +160,40 @@ async fn wait_for_embedder(context: &E2eContext) -> Result<Retrieval> {
     }
 }
 
-/// Saves `text` and returns the id memory gave it.
-async fn save(context: &E2eContext, bank: &str, text: &str) -> Result<String> {
-    let saved = context
-        .trigger_value("memory::save", json!({"bank": bank, "text": text}))
+fn save_request(bank: &str, text: &str, entities: &[&str]) -> Value {
+    json!({"bank": bank, "text": text, "entities": entities})
+}
+
+/// Saves `text` and returns the memory as memory stored it.
+async fn save(context: &E2eContext, bank: &str, text: &str, entities: &[&str]) -> Result<Saved> {
+    let reply = context
+        .trigger_value("memory::save", save_request(bank, text, entities))
         .await
         .context("memory::save")?;
-    match saved["memory"]["id"].as_str() {
-        Some(id) => Ok(id.to_string()),
-        None => bail!("memory::save returned no memory id: {saved}"),
+    created(&reply)
+}
+
+/// The memory a reply carries, as memory stored it.
+fn stored(reply: &Value) -> Result<Saved> {
+    match (
+        reply["memory"]["id"].as_str(),
+        reply["memory"]["text"].as_str(),
+    ) {
+        (Some(id), Some(text)) => Ok(Saved {
+            id: id.to_string(),
+            text: text.to_string(),
+        }),
+        _ => bail!("the reply carries no memory id and text: {reply}"),
     }
+}
+
+/// The memory a save created: one that reinforced an existing memory is not
+/// the memory the case planned.
+fn created(reply: &Value) -> Result<Saved> {
+    if reply["created"] != true {
+        bail!("memory::save reinforced an existing memory instead of creating one: {reply}");
+    }
+    stored(reply)
 }
 
 /// Waits until a semantic recall of the memory's own text returns it, which
@@ -190,6 +236,8 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
             compaction: None,
             function: None,
             trigger: None,
+            seeds: vec![None; case.memories.len()],
+            changes: Vec::new(),
         },
     );
 
@@ -216,13 +264,18 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
                 .context("memory::rule::set")?;
         }
         let mut saved = Vec::new();
-        for text in planted_memories(case, run_id) {
-            saved.push((save(context, &bank, &text).await?, text));
+        for (seed, template) in planted(case) {
+            let entities = seed.map_or(&[][..], |index| case.memories[index].entities);
+            let memory = save(context, &bank, &render(template, run_id), entities).await?;
+            if let Some(index) = seed {
+                keep(run_id, index, memory.clone());
+            }
+            saved.push(memory);
         }
         // Lexical-only stores no vector to wait for.
         if retrieval == Retrieval::Minilm {
-            for (id, text) in &saved {
-                wait_for_vector(context, &bank, id, text).await?;
+            for memory in &saved {
+                wait_for_vector(context, &bank, &memory.id, &memory.text).await?;
             }
         }
     }
@@ -258,6 +311,120 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
     Ok(())
 }
 
+/// Keeps seed `index`'s memory for the changes and the evidence.
+fn keep(run_id: &str, index: usize, memory: Saved) {
+    if let Some(slot) = lock_unpoisoned(runs())
+        .get_mut(run_id)
+        .and_then(|run| run.seeds.get_mut(index))
+    {
+        *slot = Some(memory);
+    }
+}
+
+/// The payload of the memory call `change` makes; `ids` holds the memory id
+/// of each case seed saved so far.
+fn change_payload(
+    case: &Case,
+    change: Change,
+    run_id: &str,
+    ids: &[Option<String>],
+) -> Result<Value> {
+    let bank = bank(run_id);
+    let id = |seed: usize| {
+        ids.get(seed)
+            .cloned()
+            .flatten()
+            .with_context(|| format!("seed {seed} has no memory: it was never saved"))
+    };
+    let text = |seed: usize| render(case.memories[seed].text, run_id);
+    Ok(match change {
+        Change::RuleSet { name, content } => {
+            json!({"bank": bank, "name": name, "content": render(content, run_id)})
+        }
+        Change::Save { seed } => save_request(&bank, &text(seed), case.memories[seed].entities),
+        Change::Delete { seed } => json!({"bank": bank, "id": id(seed)?}),
+        Change::Supersede { old, new } => {
+            json!({"bank": bank, "id": id(old)?, "superseded_by": id(new)?})
+        }
+        Change::Update { seed, to } => json!({"bank": bank, "id": id(seed)?, "text": text(to)}),
+        Change::DeleteBank => json!({"name": bank}),
+    })
+}
+
+/// Checks what a change's reply says against its payload and returns the
+/// seed memory it leaves: a save creates a new memory, and the other calls
+/// act on the memory they named.
+fn check_reply(change: Change, payload: &Value, reply: &Value) -> Result<Option<(usize, Saved)>> {
+    let named = || {
+        let memory = stored(reply)?;
+        if payload["id"] != memory.id.as_str() {
+            bail!(
+                "{} acted on {}, not on {}",
+                change.function(),
+                memory.id,
+                payload["id"]
+            );
+        }
+        Ok(memory)
+    };
+    Ok(match change {
+        Change::Save { seed } => Some((seed, created(reply)?)),
+        Change::Update { to, .. } => Some((to, named()?)),
+        Change::Delete { .. } | Change::Supersede { .. } => {
+            named()?;
+            None
+        }
+        Change::RuleSet { .. } | Change::DeleteBank => None,
+    })
+}
+
+async fn apply(context: &E2eContext, case: &Case, run_id: &str, change: Change) -> Result<()> {
+    let (ids, retrieval) = lock_unpoisoned(runs())
+        .get(run_id)
+        .map(|run| {
+            let ids: Vec<Option<String>> = run
+                .seeds
+                .iter()
+                .map(|seed| seed.as_ref().map(|seed| seed.id.clone()))
+                .collect();
+            (ids, run.retrieval)
+        })
+        .context("the attempt was never set up")?;
+    let payload = change_payload(case, change, run_id, &ids)?;
+    let reply = context
+        .trigger_value(change.function(), payload.clone())
+        .await
+        .context(change.function())?;
+    let Some((index, memory)) = check_reply(change, &payload, &reply)? else {
+        return Ok(());
+    };
+    keep(run_id, index, memory.clone());
+    // Lexical-only stores no vector to wait for.
+    if retrieval == Some(Retrieval::Minilm) {
+        wait_for_vector(context, &bank(run_id), &memory.id, &memory.text).await?;
+    }
+    Ok(())
+}
+
+/// Applies the changes due once exchange `finished` has its answer, in order,
+/// and keeps each outcome for `snapshot`: `before_followup` cannot fail the
+/// run, so a failed change becomes an infrastructure error at evaluation.
+pub async fn apply_changes(context: &E2eContext, case: &Case, run_id: &str, finished: usize) {
+    for &(after, change) in case.changes.iter().filter(|(after, _)| *after == finished) {
+        let status = match apply(context, case, run_id, change).await {
+            Ok(()) => "ok".to_string(),
+            Err(error) => format!("error: {error:#}"),
+        };
+        if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+            run.changes.push(ChangeOutcome {
+                after,
+                function: change.function().to_string(),
+                status,
+            });
+        }
+    }
+}
+
 /// Compacts the session and keeps the outcome's status for `snapshot`.
 pub async fn compact(context: &E2eContext, run_id: &str, session_id: &str) {
     let status = match context
@@ -275,19 +442,21 @@ pub async fn compact(context: &E2eContext, run_id: &str, session_id: &str) {
     }
 }
 
-/// The prompts the observer recorded, the compaction status and the
-/// retrieval mode, each if any.
-pub fn snapshot(run_id: &str) -> (Vec<PromptRecord>, Option<String>, Option<Retrieval>) {
-    lock_unpoisoned(runs()).get(run_id).map_or_else(
-        || (Vec::new(), None, None),
-        |run| {
-            (
-                lock_unpoisoned(&run.prompts).clone(),
-                run.compaction.clone(),
-                run.retrieval,
-            )
-        },
-    )
+/// What the attempt recorded so far; empty for an attempt never set up.
+pub fn snapshot(run_id: &str) -> Snapshot {
+    lock_unpoisoned(runs())
+        .get(run_id)
+        .map_or_else(Snapshot::default, |run| Snapshot {
+            prompts: lock_unpoisoned(&run.prompts).clone(),
+            compaction: run.compaction.clone(),
+            retrieval: run.retrieval,
+            stored: run
+                .seeds
+                .iter()
+                .map(|seed| seed.as_ref().map(|seed| seed.text.clone()))
+                .collect(),
+            changes: run.changes.clone(),
+        })
 }
 
 /// Unbinds the observer and trashes the attempt's bank.
@@ -315,6 +484,7 @@ pub async fn cleanup(context: &E2eContext, run_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::memory::cases::CHANGING;
     use serde_json::json;
 
     fn input(session: &str, step: u64, prompt: &str) -> Value {
@@ -402,5 +572,92 @@ mod tests {
     fn cleanup_ignores_a_bank_that_was_never_created() {
         assert!(bank_already_gone("bank_not_found: e2e-x"));
         assert!(!bank_already_gone("storage: disk full"));
+    }
+
+    #[test]
+    fn every_change_calls_memory_on_the_attempts_bank() {
+        let case = &CHANGING;
+        let ids: Vec<Option<String>> = (0..case.memories.len())
+            .map(|index| Some(format!("m{index}")))
+            .collect();
+        let call = |change| change_payload(case, change, "a", &ids).unwrap();
+        let text = |index: usize| render(case.memories[index].text, "a");
+        assert_eq!(
+            call(Change::RuleSet {
+                name: "commit-messages",
+                content: "Prefix [{after}].",
+            }),
+            json!({"bank": "e2e-a", "name": "commit-messages",
+                   "content": render("Prefix [{after}].", "a")})
+        );
+        assert_eq!(
+            call(Change::Save { seed: 6 }),
+            json!({"bank": "e2e-a", "text": text(6), "entities": ["search"]})
+        );
+        assert_eq!(
+            call(Change::Delete { seed: 1 }),
+            json!({"bank": "e2e-a", "id": "m1"})
+        );
+        assert_eq!(
+            call(Change::Supersede { old: 2, new: 4 }),
+            json!({"bank": "e2e-a", "id": "m2", "superseded_by": "m4"})
+        );
+        assert_eq!(
+            call(Change::Update { seed: 3, to: 5 }),
+            json!({"bank": "e2e-a", "id": "m3", "text": text(5)})
+        );
+        assert_eq!(call(Change::DeleteBank), json!({"name": "e2e-a"}));
+        // A seed no save reached has no memory to act on.
+        let error = change_payload(case, Change::Delete { seed: 1 }, "a", &[]).unwrap_err();
+        assert!(format!("{error:#}").contains("seed 1"), "{error:#}");
+    }
+
+    #[test]
+    fn a_change_reply_must_show_the_planned_memory() {
+        let memory = |id: &str, text: &str| json!({"id": id, "text": text});
+        let saved = |id: &str| Saved {
+            id: id.into(),
+            text: "new text".into(),
+        };
+        // A save creates; one that reinforced an existing memory is refused.
+        let save = Change::Save { seed: 4 };
+        let created = json!({"created": true, "memory": memory("m4", "new text")});
+        assert_eq!(
+            check_reply(save, &json!({}), &created).unwrap(),
+            Some((4, saved("m4")))
+        );
+        let reinforced = json!({"created": false, "memory": memory("m4", "new text")});
+        assert!(check_reply(save, &json!({}), &reinforced).is_err());
+        // An update keeps the id and leaves the new text with the seed it writes.
+        let update = Change::Update { seed: 3, to: 5 };
+        let named = json!({"id": "m3"});
+        let rewritten = json!({"memory": memory("m3", "new text")});
+        assert_eq!(
+            check_reply(update, &named, &rewritten).unwrap(),
+            Some((5, saved("m3")))
+        );
+        let other = json!({"memory": memory("m9", "new text")});
+        assert!(check_reply(update, &named, &other).is_err());
+        // Delete and supersede answer with the memory they retired.
+        for change in [
+            Change::Delete { seed: 3 },
+            Change::Supersede { old: 3, new: 4 },
+        ] {
+            let retired = json!({"memory": memory("m3", "old text")});
+            assert_eq!(check_reply(change, &named, &retired).unwrap(), None);
+            assert!(check_reply(change, &named, &other).is_err());
+        }
+        for change in [
+            Change::RuleSet {
+                name: "r",
+                content: "",
+            },
+            Change::DeleteBank,
+        ] {
+            assert_eq!(
+                check_reply(change, &json!({}), &json!({"ok": true})).unwrap(),
+                None
+            );
+        }
     }
 }

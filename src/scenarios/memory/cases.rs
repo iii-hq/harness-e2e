@@ -16,6 +16,43 @@ pub struct Seed {
     /// Exchanges where the fact is on topic but not needed: allowed there,
     /// never required.
     pub related_on: &'static [usize],
+    /// Entity handles `memory::save` files the memory under; none by default.
+    pub entities: &'static [&'static str],
+}
+
+/// A change to the attempt's bank between two exchanges. A seed is an index
+/// into the case's `memories`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// Sets a rule; empty content removes it.
+    RuleSet {
+        name: &'static str,
+        content: &'static str,
+    },
+    /// Saves a seed setup left out.
+    Save { seed: usize },
+    /// Deletes a saved seed's memory.
+    Delete { seed: usize },
+    /// Retires `old`'s memory in favor of `new`'s, which must be live.
+    Supersede { old: usize, new: usize },
+    /// Rewrites `seed`'s memory to the text of `to`, a seed setup left out.
+    Update { seed: usize, to: usize },
+    /// Trashes the attempt's bank.
+    DeleteBank,
+}
+
+impl Change {
+    /// The memory function the change calls.
+    pub fn function(self) -> &'static str {
+        match self {
+            Change::RuleSet { .. } => "memory::rule::set",
+            Change::Save { .. } => "memory::save",
+            Change::Delete { .. } => "memory::delete",
+            Change::Supersede { .. } => "memory::supersede",
+            Change::Update { .. } => "memory::update",
+            Change::DeleteBank => "memory::bank::delete",
+        }
+    }
 }
 
 /// One standing rule to store; it belongs in the system prompt.
@@ -27,8 +64,9 @@ pub struct RuleSeed {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Check {
-    /// Every `(exchange, group)` a seed needs is injected there or still visible.
-    NeededInjected,
+    /// Every `(exchange, group)` a seed needs is injected there or still
+    /// visible; `None` = every exchange.
+    NeededInjected { exchange: Option<usize> },
     /// No injected line outside its seed's `needed_on` and `related_on`;
     /// unknown lines count.
     NothingIrrelevant,
@@ -43,8 +81,38 @@ pub enum Check {
         exchange: Option<usize>,
         canary: &'static str,
     },
-    /// No answer holds the canary for the label `canary`.
-    AnswerOmits { canary: &'static str },
+    /// No answer holds the canary for the label `canary`; `None` = every exchange.
+    AnswerOmits {
+        exchange: Option<usize>,
+        canary: &'static str,
+    },
+    /// Exchange `exchange` carries exactly one rules update, holding the
+    /// canary for `holds` and not the one for `omits`.
+    UpdateOn {
+        exchange: usize,
+        holds: Option<&'static str>,
+        omits: Option<&'static str>,
+    },
+    /// Every exchange's system prompt carries memory's section, equal to
+    /// exchange 0's: a rules change arrives as an update, never as an edit.
+    SectionFrozen,
+    /// From `exchange` on memory reads no bank and injects no block, and
+    /// `exchange` carries the update saying no memory section applies.
+    BankGoneFrom { exchange: usize },
+}
+
+impl Check {
+    /// The labels whose canaries the check reads.
+    pub fn canaries(self) -> impl Iterator<Item = &'static str> {
+        let (first, second) = match self {
+            Check::AnswerContains { canary, .. } | Check::AnswerOmits { canary, .. } => {
+                (Some(canary), None)
+            }
+            Check::UpdateOn { holds, omits, .. } => (holds, omits),
+            _ => (None, None),
+        };
+        first.into_iter().chain(second)
+    }
 }
 
 #[derive(Debug)]
@@ -75,6 +143,9 @@ pub struct Case {
     pub followups: &'static [&'static str],
     /// `harness::compact` runs before this exchange's send.
     pub compact_before: Option<usize>,
+    /// Changes to the bank, each run once exchange `.0` has its answer, in
+    /// order and before any compaction.
+    pub changes: &'static [(usize, Change)],
     pub criteria: &'static [Criterion],
 }
 
@@ -114,6 +185,7 @@ const fn seed(text: &'static str, group: &'static str, needed_on: &'static [usiz
         group,
         needed_on,
         related_on: &[],
+        entities: &[],
     }
 }
 
@@ -163,7 +235,7 @@ const RELEASE_CRITERIA: &[Criterion] = &[
     gate(
         "release_fact_injected",
         40,
-        Check::NeededInjected,
+        Check::NeededInjected { exchange: None },
         "Release fact injected on the turn",
         "Was the stored release convention injected on the turn that needs it?",
     ),
@@ -224,11 +296,12 @@ pub const CASES: [Case; 11] = [
         prompt: "I need to deploy the billing-sync service and tell the team where to watch its logs. Reply with the exact deploy command and the name of the log channel.",
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: &[
             gate(
                 "needed_memories_injected",
                 40,
-                Check::NeededInjected,
+                Check::NeededInjected { exchange: None },
                 "Both needed facts injected on the turn",
                 "Were both stored facts the task needs injected on the turn that needs them?",
             ),
@@ -273,6 +346,7 @@ pub const CASES: [Case; 11] = [
         prompt: "hi",
         followups: &["thanks!", "ok", "?"],
         compact_before: None,
+        changes: &[],
         criteria: &[gate(
             "no_memory_on_small_talk",
             100,
@@ -293,6 +367,7 @@ pub const CASES: [Case; 11] = [
         prompt: "Can you help me fix my failing test? add(2, 2) returns 5 instead of 4 in my calculator module.",
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: &[gate(
             "no_unrelated_user_memories",
             100,
@@ -329,11 +404,12 @@ pub const CASES: [Case; 11] = [
         prompt: "How do I run the ledger database migrations? Reply with the exact command.",
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: &[
             gate(
                 "migration_fact_injected",
                 35,
-                Check::NeededInjected,
+                Check::NeededInjected { exchange: None },
                 "Migration fact injected on the turn",
                 "Was the stored migration fact injected on the turn that needs it?",
             ),
@@ -394,11 +470,12 @@ pub const CASES: [Case; 11] = [
             "Remind me: which file sets the payments API rate limit?",
         ],
         compact_before: Some(3),
+        changes: &[],
         criteria: &[
             gate(
                 "needed_facts_present",
                 30,
-                Check::NeededInjected,
+                Check::NeededInjected { exchange: None },
                 "Needed facts present on every turn",
                 "Was each fact a turn needs injected on that turn or still in the context?",
             ),
@@ -451,11 +528,12 @@ pub const CASES: [Case; 11] = [
         prompt: "When does the analytics export run, and which bucket does it write to?",
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: &[
             gate(
                 "current_fact_injected",
                 35,
-                Check::NeededInjected,
+                Check::NeededInjected { exchange: None },
                 "Current fact injected on the turn",
                 "Was the newer export schedule injected on the turn that needs it?",
             ),
@@ -481,7 +559,10 @@ pub const CASES: [Case; 11] = [
             scored(
                 "answer_omits_stale_bucket",
                 15,
-                Check::AnswerOmits { canary: "old" },
+                Check::AnswerOmits {
+                    exchange: None,
+                    canary: "old",
+                },
                 "Answer omits the stale bucket",
                 "Does the answer leave out the run's stale bucket value?",
             ),
@@ -499,6 +580,7 @@ pub const CASES: [Case; 11] = [
         prompt: RELEASE_PROMPT,
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: RELEASE_CRITERIA,
     },
     Case {
@@ -513,6 +595,7 @@ pub const CASES: [Case; 11] = [
         prompt: RELEASE_PROMPT,
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: &[release_answer(100)],
     },
     Case {
@@ -527,6 +610,7 @@ pub const CASES: [Case; 11] = [
         prompt: COMMIT_PROMPT,
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
+        changes: &[],
         criteria: COMMIT_CRITERIA,
     },
     Case {
@@ -541,6 +625,7 @@ pub const CASES: [Case; 11] = [
         prompt: COMMIT_PROMPT,
         followups: COMMIT_FOLLOWUPS,
         compact_before: None,
+        changes: &[],
         criteria: &[prefix_answer(100)],
     },
     Case {
@@ -564,6 +649,7 @@ pub const CASES: [Case; 11] = [
         prompt: "Write a SQL query that counts the orders placed in the last 7 days from a table named orders. Reply with the query only.",
         followups: &[],
         compact_before: None,
+        changes: &[],
         criteria: &[
             gate(
                 "rules_in_system_prompt",
@@ -585,7 +671,10 @@ pub const CASES: [Case; 11] = [
             gate(
                 "unrelated_rule_ignored",
                 30,
-                Check::AnswerOmits { canary: "haiku" },
+                Check::AnswerOmits {
+                    exchange: None,
+                    canary: "haiku",
+                },
                 "Unrelated rule left out of the answer",
                 "Does the answer leave out the run's haiku signature value, a rule that does not apply?",
             ),
@@ -628,44 +717,204 @@ pub fn render(template: &str, run_id: &str) -> String {
     out
 }
 
-/// The memories `setup` saves, rendered for the run, in saving order: the
-/// distractors first when the case has them. A baseline plants nothing.
-pub fn planted_memories(case: &Case, run_id: &str) -> Vec<String> {
+/// The exchange after which a change saves seed `index`; `None` when setup
+/// plants it.
+pub fn saved_after(case: &Case, index: usize) -> Option<usize> {
+    case.changes
+        .iter()
+        .find_map(|&(after, change)| match change {
+            Change::Save { seed } | Change::Update { to: seed, .. } if seed == index => Some(after),
+            _ => None,
+        })
+}
+
+/// The exchange after which the case trashes its bank.
+pub fn trashed_after(case: &Case) -> Option<usize> {
+    case.changes
+        .iter()
+        .find_map(|&(after, change)| (change == Change::DeleteBank).then_some(after))
+}
+
+/// What `setup` saves, in saving order: the distractors first when the case
+/// has them, then each seed no change saves later, with its index. A
+/// baseline plants nothing.
+pub fn planted(case: &Case) -> Vec<(Option<usize>, &'static str)> {
     if case.baseline {
         return Vec::new();
     }
     let distractors: &[&str] = if case.distractors { &DISTRACTORS } else { &[] };
+    let seeds = case
+        .memories
+        .iter()
+        .enumerate()
+        .filter(|&(index, _)| saved_after(case, index).is_none())
+        .map(|(index, seed)| (Some(index), seed.text));
     distractors
         .iter()
-        .copied()
-        .chain(case.memories.iter().map(|seed| seed.text))
-        .map(|template| render(template, run_id))
+        .map(|&text| (None, text))
+        .chain(seeds)
         .collect()
+}
+
+/// The memories `setup` saves, rendered for the run, in saving order.
+pub fn planted_memories(case: &Case, run_id: &str) -> Vec<String> {
+    planted(case)
+        .into_iter()
+        .map(|(_, template)| render(template, run_id))
+        .collect()
+}
+
+/// Every template the case renders: its seeds, its rules and the rules its
+/// changes set.
+fn templates(case: &Case) -> impl Iterator<Item = &'static str> + '_ {
+    let set = case.changes.iter().filter_map(|(_, change)| match change {
+        Change::RuleSet { content, .. } => Some(*content),
+        _ => None,
+    });
+    case.memories
+        .iter()
+        .map(|seed| seed.text)
+        .chain(case.rules.iter().map(|rule| rule.content))
+        .chain(set)
 }
 
 /// Every label the case plants or checks for, sorted and deduplicated.
 pub fn labels(case: &Case) -> Vec<&'static str> {
-    let mut found: Vec<&'static str> = case
-        .memories
-        .iter()
-        .map(|seed| seed.text)
-        .chain(case.rules.iter().map(|rule| rule.content))
+    let mut found: Vec<&'static str> = templates(case)
         .flat_map(placeholders)
         .chain(
             case.criteria
                 .iter()
-                .filter_map(|criterion| match criterion.check {
-                    Check::AnswerContains { canary, .. } | Check::AnswerOmits { canary } => {
-                        Some(canary)
-                    }
-                    _ => None,
-                }),
+                .flat_map(|criterion| criterion.check.canaries()),
         )
         .collect();
     found.sort_unstable();
     found.dedup();
     found
 }
+
+/// Runs every kind of change, for the tests of shapes no registered case uses yet.
+#[cfg(test)]
+pub(crate) const CHANGING: Case = Case {
+    id: "memory_changes_fixture",
+    title: "Every change between exchanges",
+    summary: "A rule is edited, memories are deleted, saved, superseded and rewritten, and then the bank is trashed.",
+    protects: "Nothing: it exercises the change shapes in unit tests. If it fails, a test is wrong.",
+    baseline: false,
+    distractors: false,
+    memories: &[
+        seed(
+            "Deploy the billing-sync service with the command deploy-{deploy}.",
+            "deploy",
+            &[0],
+        ),
+        seed(
+            "The orders service nightly backup writes to the bucket backup-{gone}.",
+            "retired",
+            &[],
+        ),
+        seed(
+            "The orders API serves from the region region-{oldregion}.",
+            "retired",
+            &[],
+        ),
+        seed(
+            "The orders service pages the on-call alias page-{oldalias}.",
+            "retired",
+            &[],
+        ),
+        seed(
+            "The orders API serves from the region region-{newregion}.",
+            "region",
+            &[1],
+        ),
+        seed(
+            "The orders service pages the on-call alias page-{newalias}.",
+            "alias",
+            &[1],
+        ),
+        Seed {
+            entities: &["search"],
+            ..seed("The search service runs on Elasticsearch 8.", "search", &[])
+        },
+    ],
+    rules: &[RuleSeed {
+        name: "commit-messages",
+        content:
+            "Start every commit message you write with the prefix [{before}] followed by one space.",
+    }],
+    prompt: "Which command deploys billing-sync?",
+    followups: &[
+        "Which region serves the orders API, and which alias pages its on-call engineer?",
+        "Anything else?",
+    ],
+    compact_before: None,
+    changes: &[
+        (
+            0,
+            Change::RuleSet {
+                name: "commit-messages",
+                content: "Start every commit message you write with the prefix [{after}] followed by one space.",
+            },
+        ),
+        (0, Change::Delete { seed: 1 }),
+        (0, Change::Save { seed: 4 }),
+        (0, Change::Supersede { old: 2, new: 4 }),
+        (0, Change::Update { seed: 3, to: 5 }),
+        (1, Change::DeleteBank),
+    ],
+    criteria: &[
+        gate(
+            "edit_sent_as_update",
+            20,
+            Check::UpdateOn {
+                exchange: 1,
+                holds: Some("after"),
+                omits: Some("before"),
+            },
+            "Edited rule sent as one update",
+            "Did the edited rule reach the next turn as one update?",
+        ),
+        gate(
+            "section_frozen",
+            10,
+            Check::SectionFrozen,
+            "System prompt section never rewritten",
+            "Did every turn keep the first turn's memory section?",
+        ),
+        gate(
+            "current_injected_after_changes",
+            20,
+            Check::NeededInjected { exchange: Some(1) },
+            "Current memories injected after the changes",
+            "Were the memories saved and rewritten mid-session injected on the next turn?",
+        ),
+        gate(
+            "retired_left_out",
+            10,
+            Check::GroupOmitted { group: "retired" },
+            "Retired memories left out",
+            "Were the deleted, superseded and rewritten texts left out?",
+        ),
+        scored(
+            "old_prefix_dropped",
+            10,
+            Check::AnswerOmits {
+                exchange: Some(1),
+                canary: "before",
+            },
+            "Old prefix gone after the edit",
+            "Does the answer after the edit leave out the old prefix?",
+        ),
+        gate(
+            "memory_gone_after_trash",
+            30,
+            Check::BankGoneFrom { exchange: 2 },
+            "No memory after the bank is trashed",
+            "Did the turn after the trash get no memory and the note that none applies?",
+        ),
+    ],
+};
 
 #[cfg(test)]
 mod tests {
@@ -678,10 +927,32 @@ mod tests {
             .unwrap_or_else(|| panic!("no case {id}"))
     }
 
+    /// Each `(seed, exchange)` where a seed a change saves after exchange `k`
+    /// is needed or related on an exchange up to `k`, before it exists.
+    fn needed_before_saved(case: &Case) -> Vec<(usize, usize)> {
+        case.memories
+            .iter()
+            .enumerate()
+            .flat_map(|(index, seed)| {
+                let after = saved_after(case, index);
+                seed.needed_on
+                    .iter()
+                    .chain(seed.related_on)
+                    .filter(move |&&exchange| after.is_some_and(|after| exchange <= after))
+                    .map(move |&exchange| (index, exchange))
+            })
+            .collect()
+    }
+
     #[test]
     fn every_case_states_its_card() {
         for case in &CASES {
             assert!(!case.title.trim().is_empty(), "{} has no title", case.id);
+            assert!(
+                !case.baseline || case.changes.is_empty(),
+                "{}: a baseline plants nothing, so it changes nothing",
+                case.id
+            );
             assert!(
                 case.summary.ends_with('.') && !case.summary.trim_end_matches('.').contains(". "),
                 "{}: the summary is one sentence",
@@ -706,18 +977,14 @@ mod tests {
 
     #[test]
     fn every_answer_check_names_a_canary_the_case_plants() {
-        for case in &CASES {
-            let planted = |label: &str| {
-                let marker = format!("{{{label}}}");
-                case.memories.iter().any(|seed| seed.text.contains(&marker))
-                    || case.rules.iter().any(|rule| rule.content.contains(&marker))
-            };
-            for criterion in case.criteria {
-                if let Check::AnswerContains { canary, .. } | Check::AnswerOmits { canary } =
-                    criterion.check
-                {
-                    assert!(planted(canary), "{}: {canary} is never planted", case.id);
-                }
+        for case in CASES.iter().chain([&CHANGING]) {
+            for canary in case.criteria.iter().flat_map(|c| c.check.canaries()) {
+                let marker = format!("{{{canary}}}");
+                assert!(
+                    templates(case).any(|template| template.contains(&marker)),
+                    "{}: {canary} is never planted",
+                    case.id
+                );
             }
         }
     }
@@ -731,6 +998,56 @@ mod tests {
         assert_eq!(labels(case_named("memory_updated_fact")), ["new", "old"]);
         assert_eq!(labels(case_named("memory_rule_fit")), ["haiku", "sql"]);
         assert!(labels(case_named("memory_small_talk")).is_empty());
+        // `after` is only in the rule a change sets.
+        assert_eq!(
+            labels(&CHANGING),
+            [
+                "after",
+                "before",
+                "deploy",
+                "gone",
+                "newalias",
+                "newregion",
+                "oldalias",
+                "oldregion"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_seed_a_change_saves_is_not_planted_up_front() {
+        assert_eq!(saved_after(&CHANGING, 4), Some(0));
+        assert_eq!(saved_after(&CHANGING, 5), Some(0));
+        assert_eq!(saved_after(&CHANGING, 3), None);
+        assert_eq!(trashed_after(&CHANGING), Some(1));
+        assert_eq!(trashed_after(case_named("memory_relevant_recall")), None);
+        let seeds: Vec<Option<usize>> = planted(&CHANGING)
+            .into_iter()
+            .map(|(seed, _)| seed)
+            .collect();
+        assert_eq!(seeds, [Some(0), Some(1), Some(2), Some(3), Some(6)]);
+        assert_eq!(
+            planted_memories(&CHANGING, "a"),
+            [0, 1, 2, 3, 6].map(|index| render(CHANGING.memories[index].text, "a"))
+        );
+    }
+
+    #[test]
+    fn a_seed_saved_after_exchange_k_is_needed_only_after_k() {
+        for case in CASES.iter().chain([&CHANGING]) {
+            let early = needed_before_saved(case);
+            assert!(
+                early.is_empty(),
+                "{}: needed before saved: {early:?}",
+                case.id
+            );
+        }
+        // Saved after exchange 1, the region fact cannot serve exchange 1.
+        let late = Case {
+            changes: &[(1, Change::Save { seed: 4 })],
+            ..CHANGING
+        };
+        assert_eq!(needed_before_saved(&late), [(4, 1)]);
     }
 
     #[test]
