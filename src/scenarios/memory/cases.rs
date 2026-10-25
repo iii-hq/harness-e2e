@@ -1767,10 +1767,31 @@ mod tests {
     /// Each index a case uses that its shape cannot honor.
     fn index_problems(case: &Case) -> Vec<String> {
         let mut problems = Vec::new();
-        for &(after, _) in case.changes {
+        for (index, &(after, change)) in case.changes.iter().enumerate() {
             // `before_followup` runs only before a follow-up.
             if after >= case.followups.len() {
                 problems.push(format!("a change after exchange {after} never runs"));
+            }
+            // A seed a later change saves does not exist yet: every attempt fails as infra.
+            let named = match change {
+                Change::Delete { seed } | Change::Update { seed, .. } => vec![seed],
+                Change::Supersede { old, new } => vec![old, new],
+                _ => Vec::new(),
+            };
+            for seed in named {
+                let saved_later = case.changes[index + 1..]
+                    .iter()
+                    .any(|&(_, later)| match later {
+                        Change::Save { seed: saved } | Change::Update { to: saved, .. } => {
+                            saved == seed
+                        }
+                        _ => false,
+                    });
+                if saved_later {
+                    problems.push(format!(
+                        "change {index} names seed {seed} before it is saved"
+                    ));
+                }
             }
         }
         for criterion in case.criteria {
@@ -1780,6 +1801,29 @@ mod tests {
                     if !case.memories.iter().any(|seed| seed.needed_on.contains(&k)) =>
                 {
                     problems.push(format!("{}: nothing is needed on {k}", criterion.id));
+                }
+                Check::NeededInjected { exchange: None }
+                    if !case.baseline
+                        && case.memories.iter().all(|seed| seed.needed_on.is_empty()) =>
+                {
+                    problems.push(format!("{}: nothing is needed anywhere", criterion.id));
+                }
+                Check::GroupOmitted { group } | Check::Retired { group }
+                    if !case.memories.iter().any(|seed| seed.group == group) =>
+                {
+                    problems.push(format!("{}: no seed is in group {group}", criterion.id));
+                }
+                // Memory sends an update only for a rules change or a trashed bank.
+                Check::UpdateOn { exchange, .. }
+                    if !case.changes.iter().any(|&(after, change)| {
+                        after + 1 == exchange
+                            && matches!(change, Change::RuleSet { .. } | Change::DeleteBank)
+                    }) =>
+                {
+                    problems.push(format!(
+                        "{}: no rules change runs before {exchange}",
+                        criterion.id
+                    ));
                 }
                 Check::BankGoneFrom { exchange }
                     if trashed_after(case).map(|after| after + 1) != Some(exchange) =>
@@ -1813,6 +1857,7 @@ mod tests {
         // Each rule can fail.
         let never_runs = Case {
             changes: &[(2, Change::Delete { seed: 1 }), (1, Change::DeleteBank)],
+            criteria: &[],
             ..CHANGING
         };
         const NOTHING_NEEDED: &[Criterion] = &[gate(
@@ -1841,7 +1886,63 @@ mod tests {
             preview_first: &[(1, 4)],
             ..CHANGING
         };
-        for case in [never_runs, nothing_needed, not_trashed, saved_later] {
+        const NEEDED_ANYWHERE: &[Criterion] = &[gate(
+            "x",
+            100,
+            Check::NeededInjected { exchange: None },
+            "a b c",
+            "d",
+        )];
+        let needed_nowhere = Case {
+            memories: &[],
+            criteria: NEEDED_ANYWHERE,
+            ..CHANGING
+        };
+        const UNKNOWN_GROUP: &[Criterion] = &[gate(
+            "x",
+            100,
+            Check::Retired { group: "typo" },
+            "a b c",
+            "d",
+        )];
+        let unknown_group = Case {
+            criteria: UNKNOWN_GROUP,
+            ..CHANGING
+        };
+        const UPDATE_ON_ONE: &[Criterion] = &[gate(
+            "x",
+            100,
+            Check::UpdateOn {
+                exchange: 1,
+                holds: None,
+                omits: &[],
+            },
+            "a b c",
+            "d",
+        )];
+        let update_uncaused = Case {
+            changes: &[(0, Change::Delete { seed: 1 })],
+            criteria: UPDATE_ON_ONE,
+            ..CHANGING
+        };
+        let named_before_saved = Case {
+            changes: &[
+                (0, Change::Delete { seed: 4 }),
+                (0, Change::Save { seed: 4 }),
+            ],
+            criteria: &[],
+            ..CHANGING
+        };
+        for case in [
+            never_runs,
+            nothing_needed,
+            not_trashed,
+            saved_later,
+            needed_nowhere,
+            unknown_group,
+            update_uncaused,
+            named_before_saved,
+        ] {
             assert_eq!(
                 index_problems(&case).len(),
                 1,
