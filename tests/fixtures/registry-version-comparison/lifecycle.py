@@ -165,6 +165,15 @@ def fixture_action(state, action):
     return container_exec(state, f"/fixture/fixture.sh {action}", timeout=1800)
 
 
+def remove_other_stacks(state):
+    # Only the fixture's project may run when the delivery is measured: a stack
+    # the subject started and left up in the private daemon would hold its ports.
+    return container_exec(
+        state,
+        "docker ps -a --format '{{.ID}} {{.Label \"com.docker.compose.project\"}}'"
+        f" | awk '$2 != \"{state['container']}\" {{print $1}}' | xargs -r docker rm -fv")
+
+
 def prepare(args):
     root = args.root
     root.mkdir(parents=True, exist_ok=False)
@@ -331,6 +340,8 @@ def finish(args):
         result["runtime_ready"] = False
     if state["test"] in (2, 4) and "scope_deviation" not in result:
         try:
+            # Visible in the delivery: what the subject left running.
+            result["removed_containers"] = remove_other_stacks(state).decode().split()
             # Rebuild before the controller captures the host-mapped application.
             (root / "final-start.log").write_bytes(fixture_action(state, "up"))
             result["runtime_ready"] = True

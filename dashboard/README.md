@@ -142,11 +142,20 @@ invalid, undetermined, unscored) leaves both totals until the reader counts it
 again. Screenshots a run's deliverables declare are read on demand through
 `e2e::dashboard::evidence-read`, which serves only files the run's report
 declares, inside that execution's directory, up to 10 MB. **Rerun selected**
-opens Run again with B's parameters and only the ticked scenarios.
+opens Run again with B's parameters and only the ticked scenarios. Above the
+tests, the **verdict** is the worker's (`e2e::dashboard::execution-verdict`,
+the rule of `harness-e2e compare`): better, no difference, worse or cannot tell
+yet over every counted run of both, read once both have finished, whatever
+the reader counts, with its reasons, the runs per test each side has and those
+missing, the tests that fell more than the margin, the criteria groups that
+moved the score and the criterion health per side. A verdict that fails to
+load says so and the rest of the page stays.
 
 **Trends** opens on the release overview. Under **Harness evolution**, the
-verdict names the latest Harness release against the previous one and the main
-measures that moved, better or worse ("no measure moved" only when some were
+verdict names the latest Harness release against the previous one with the
+calibrated verdict of each combination it compared, or says there is none and
+why (one run per test on a side); the main measures that moved follow, untoned,
+never called better or worse ("No measure moved." only when some were
 compared), then what it compared. The line below
 plots one measure (six tabs, the rest under More), one point per release with
 Release Control results, oldest first. Each step reads against the release

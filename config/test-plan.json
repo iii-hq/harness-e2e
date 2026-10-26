@@ -419,9 +419,40 @@
       ]
     },
     {
+      "id": "software-engineering-x9",
+      "label": "Application builds and changes ×9 (harness comparison)",
+      "purpose": "To compare two Harness versions, all 14 cases of Application builds and changes run nine independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$45 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with regression-x11. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [
+        "m10"
+      ],
+      "scenarios": [
+        "registry_implementation",
+        "registry_verification",
+        "trending_topics_build",
+        "alertmanager_route_match",
+        "chess_engine_build",
+        "form_flow_build",
+        "state_machine_canvas_build"
+      ],
+      "repetitions": 9,
+      "technical_retries": 0,
+      "lane": "local-software-engineering-x9",
+      "scenario_groups": [
+        [
+          "registry_implementation",
+          "registry_verification"
+        ]
+      ]
+    },
+    {
       "id": "null-canary",
       "label": "Null agent canary",
-      "purpose": "Proves that no Core runtime regression test gives points or a completion to an agent that does nothing: run with the null-agent profile, which answers done and calls no function, every test must score 0 and stay incomplete, and any point or completion is a hole in that test's evaluator.",
+      "purpose": "Proves that no Core runtime regression test, nor the minimal state write, gives points or a completion to an agent that does nothing: run with the null-agent profile, which answers done and calls no function, every test must score 0 and stay incomplete, and any point or completion is a hole in that test's evaluator.",
       "metrics": [
         "deliverable_success",
         "completion_rate",
@@ -429,6 +460,7 @@
       ],
       "modules": [],
       "scenarios": [
+        "minimal_path",
         "persistent_state",
         "tool_contract_recovery",
         "timer_wake",
@@ -442,6 +474,51 @@
       "repetitions": 1,
       "technical_retries": 0,
       "lane": "local-null-canary"
+    },
+    {
+      "id": "regression-x11",
+      "label": "Core runtime regression ×11 (harness comparison)",
+      "purpose": "To compare two Harness versions, the nine Core runtime regression tests run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "modules": [],
+      "scenarios": [
+        "persistent_state",
+        "tool_contract_recovery",
+        "timer_wake",
+        "shell_coder_sandbox",
+        "database_migration_recovery",
+        "contention_ledger",
+        "validation_self_repair",
+        "context_pressure",
+        "prompt_injection_resilience"
+      ],
+      "repetitions": 11,
+      "technical_retries": 1,
+      "lane": "local-regression-x11"
+    },
+    {
+      "id": "context-capacity",
+      "label": "Context capacity (compaction)",
+      "purpose": "Does the Harness manage its context when the window is small? Four tests that already exist run on the context-capacity stack, which cuts the usable window of the model to about 128 thousand tokens, so long sessions cross it and the context manager has to compact: Kanban chapters 1, 4 and 7 and the long-session context pressure test. Not covered: the order of magnitude of a normal window, and what happens after a compaction beyond what these tests check. Scores here are not comparable with the same tests in a normal window; read them only against other runs of this suite.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [],
+      "scenarios": [
+        "kanban_c1_foundation",
+        "kanban_c4_ticket_flow",
+        "kanban_c7_live",
+        "context_pressure"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-context-capacity"
     },
     {
       "id": "memory",

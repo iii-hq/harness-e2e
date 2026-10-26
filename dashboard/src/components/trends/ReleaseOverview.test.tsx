@@ -12,7 +12,7 @@ import {
   type Verdict,
 } from '@/lib/release-overview'
 import { trendMetric } from '@/lib/trends'
-import { releaseOverview } from '@/test-fixtures/release-overview'
+import { cannotTell, releaseOverview } from '@/test-fixtures/release-overview'
 
 // The fixture's latest release started at 2:17 AM that day.
 const now = new Date('2026-09-28T15:00:00-03:00')
@@ -48,7 +48,7 @@ const none = (overview: Overview) =>
   renderToStaticMarkup(<VerdictHeadline overview={overview} now={now} />)
 
 describe('verdict headline', () => {
-  it('names both releases and only the measures that moved, in their tone', () => {
+  it('names both releases, says there is no calibrated verdict and why, and the measures that moved untoned', () => {
     const html = renderToStaticMarkup(
       <VerdictHeadline
         overview={releaseOverview}
@@ -60,7 +60,8 @@ describe('verdict headline', () => {
       'Harness evolution',
       'data-sync-status',
       'data-verdict-line',
-      '<strong>v1.8.36</strong> (Today) vs v1.8.35:',
+      '<strong>v1.8.36</strong> (Today) vs v1.8.35: no calibrated verdict. One run per test on a side',
+      'Moved, not read as better or worse: ',
       '−2.3',
       '+6.0%',
       '−1.7%',
@@ -68,9 +69,37 @@ describe('verdict headline', () => {
       'Compared: Regression (ran on both).',
     ])
       expect(html).toContain(text)
-    expect(count(html, /data-move="better"/)).toBe(1)
-    expect(count(html, /data-move="worse"/)).toBe(3)
+    expect(count(html, /data-move="moved"/)).toBe(4)
+    expect(html).not.toMatch(/data-move="(better|worse)"/)
+    expect(html).not.toMatch(/tr-delta" data-tone="(positive|negative)"/)
     expect(html).not.toContain('Tests completed')
+  })
+
+  it('reads better or worse from the calibrated verdict of each combination', () => {
+    const html = none({
+      ...releaseOverview,
+      verdict: {
+        ...verdict,
+        compared: [{ ...verdict.compared[0], calibrated: cannotTell }],
+      },
+    })
+    expect(html).toContain('vs v1.8.35: <span')
+    expect(html).toContain('data-verdict="cannot_tell"')
+    expect(html).toContain('Regression: cannot tell yet')
+    const worse = none({
+      ...releaseOverview,
+      verdict: {
+        ...verdict,
+        compared: [
+          {
+            ...verdict.compared[0],
+            calibrated: { ...cannotTell, verdict: 'worse' },
+          },
+        ],
+      },
+    })
+    expect(worse).toContain('data-tone="negative"')
+    expect(worse).toContain('Regression: worse')
   })
 
   it('says why there is no verdict', () => {
@@ -97,14 +126,14 @@ describe('verdict headline', () => {
     })
     expect(unshared).toContain('No suite ran on both v1.8.36 and v1.8.35')
     expect(unshared).toContain('vs v1.8.35.</p>')
-    expect(unshared).not.toContain('no measure moved')
+    expect(unshared).not.toContain('No measure moved')
     expect(unshared).not.toContain('data-move')
     expect(
       none({
         ...releaseOverview,
         verdict: { ...verdict, latest_aggregate: verdict.previous_aggregate },
       }),
-    ).toContain('vs v1.8.35: no measure moved')
+    ).toContain('No measure moved.')
   })
 })
 
@@ -218,6 +247,12 @@ describe('release overview', () => {
 })
 
 describe('release panel', () => {
+  it('shows each combination’s warnings, never hiding the verdict', () => {
+    const html = panel(8)
+    expect(html).toContain('data-verdict-warning')
+    expect(html).toContain('16 runs carry no cause')
+  })
+
   it('opens what changed at the latest release, combination by combination', () => {
     const html = panel(8)
     for (const text of [
@@ -230,6 +265,7 @@ describe('release panel', () => {
       '>100.0%<',
       'Regression · deepseek/deepseek-flash · profile none · stack default',
       'Left out: contention_ledger',
+      'No calibrated verdict: One run per test on a side',
     ])
       expect(html).toContain(text)
     for (const text of [

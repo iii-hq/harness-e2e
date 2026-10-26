@@ -629,7 +629,7 @@ async fn emit_event(control: Option<&SuiteControl>, event: SuiteEvent) -> Result
 
 fn ensure_not_cancelled(control: Option<&SuiteControl>) -> Result<()> {
     if control.is_some_and(|control| *control.cancellation.borrow()) {
-        bail!("E2E execution was cancelled");
+        bail!(crate::report::EXECUTION_CANCELLED);
     }
     Ok(())
 }
@@ -1414,10 +1414,17 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         );
     }
     if let Err(error) = module.cleanup(context, &attempt_id).await {
-        report.push_failure(
-            RunStatus::InfrastructureError,
-            FailurePhase::Cleanup,
-            format!("scenario '{}': scenario cleanup failed: {error:#}", spec.id),
+        let failure = cleanup_failure(format!(
+            "scenario '{}': scenario cleanup failed: {error:#}",
+            spec.id
+        ));
+        report.push_typed_failure(
+            failure.status,
+            failure.phase,
+            failure.code,
+            failure.retry_scope,
+            failure.contamination,
+            failure.message,
         );
     }
     if crate::scenarios::kanban::IDS.contains(&spec.id) && report.deliverables.is_empty() {
@@ -1638,11 +1645,14 @@ async fn run_adaptive_once(
                                 output_dir: output.into(),
                             })
                             .await;
-                        let rendered = format!("{error:#}");
-                        report.push_failure(
-                            adaptive_planner_failure_status(&rendered),
-                            FailurePhase::Execute,
-                            format!("adaptive planning failed: {rendered}"),
+                        let failure = adaptive_planner_failure(format!("{error:#}"));
+                        report.push_typed_failure(
+                            failure.status,
+                            failure.phase,
+                            failure.code,
+                            failure.retry_scope,
+                            failure.contamination,
+                            failure.message,
                         );
                         if let Err(cleanup_error) = cleanup_result {
                             report.push_failure(
@@ -1734,9 +1744,12 @@ async fn run_adaptive_once(
                                 }
                                 match outcome {
                                     Ok(_) if *cancelled.borrow() => {
-                                        report.push_failure(
+                                        report.push_typed_failure(
                                             RunStatus::InfrastructureError,
                                             FailurePhase::Execute,
+                                            "execution_cancelled",
+                                            crate::report::RetryScope::None,
+                                            crate::report::ContaminationScope::None,
                                             "adaptive workflow was cancelled",
                                         );
                                     }
@@ -1782,6 +1795,7 @@ async fn run_adaptive_once(
         }
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    zero_unreached_criteria(&spec, &mut report);
     if report.assessment_results.is_empty() {
         ensure_assessment_results(&spec, &mut report);
     }
@@ -1809,6 +1823,26 @@ async fn run_adaptive_once(
         );
     }
     report
+}
+
+/// The planner's own turn failed as a native turn does and is classified the
+/// same way; a plan in the wrong format is `adaptive_plan_invalid`.
+fn adaptive_planner_failure(rendered: String) -> RunFailure {
+    if let Some(turn) = rendered.strip_prefix("wait for adaptive planner turn: ") {
+        let mut failure = subject_failure(FailurePhase::Execute, turn.to_string());
+        failure.message = format!("adaptive planner: {}", failure.message);
+        return failure;
+    }
+    let status = adaptive_planner_failure_status(&rendered);
+    let mut failure = RunFailure::new(
+        status,
+        FailurePhase::Execute,
+        format!("adaptive planning failed: {rendered}"),
+    );
+    if status == RunStatus::SubjectError {
+        failure.code = "adaptive_plan_invalid".into();
+    }
+    failure
 }
 
 fn adaptive_planner_failure_status(message: &str) -> RunStatus {
@@ -2030,6 +2064,7 @@ async fn run_composite_once(
     }
 
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    zero_unreached_criteria(&spec, &mut report);
     if report.assessment_results.is_empty() {
         ensure_assessment_results(&spec, &mut report);
     }
@@ -2099,18 +2134,39 @@ fn populate_composite_report(
         subject_usd: workflow.aggregate_cost_usd,
         total_usd: workflow.aggregate_cost_usd,
     };
-    for step in &workflow.steps {
-        for failure in &step.failures {
-            report.push_failure(
-                if failure.technical {
-                    RunStatus::InfrastructureError
-                } else {
-                    RunStatus::SubjectError
-                },
-                workflow_failure_phase(failure.phase),
-                format!("semantic test '{}': {}", step.node_id, failure.message),
-            );
-        }
+    report.assessment_results =
+        crate::assessment::semantic_test_assessments(&workflow.steps, &workflow.criteria);
+    report.evidence.push(workflow.checkpoint.clone());
+    report.scenario_flow = Some(ScenarioFlowEvidence {
+        definition_sha256: workflow.workflow_sha256.clone(),
+        snapshot: workflow.flow_snapshot.clone(),
+        checkpoint: workflow.checkpoint.clone(),
+        cleanup: workflow.cleanup.clone(),
+    });
+    let failures = workflow
+        .steps
+        .iter()
+        .flat_map(|step| {
+            let harness = crate::workflow::opens_harness_session(&step.step_type);
+            step.failures.iter().map(move |failure| {
+                let failure = step_failure(failure, harness);
+                let message = format!("semantic test '{}': {}", step.node_id, failure.message);
+                (failure, message)
+            })
+        })
+        .collect::<Vec<_>>();
+    // The steps first: a failed turn is classified by the error its step's
+    // transcript recorded.
+    report.semantic_tests = workflow.steps;
+    for (failure, message) in failures {
+        report.push_typed_failure(
+            failure.status,
+            failure.phase,
+            failure.code,
+            failure.retry_scope,
+            failure.contamination,
+            message,
+        );
     }
     if workflow.cleanup.status == WorkflowCleanupStatus::Failed {
         report.push_failure(
@@ -2123,34 +2179,56 @@ fn populate_composite_report(
                 .unwrap_or_else(|| "mandatory composite cleanup failed".into()),
         );
     }
-    if workflow.technical_failure
-        && !report
-            .failures
-            .iter()
-            .any(|failure| failure.domain == crate::report::FailureDomain::E2eInfrastructure)
-    {
+    if workflow.technical_failure && report.failures.is_empty() {
         report.push_failure(
             RunStatus::InfrastructureError,
             FailurePhase::Execute,
             "composite scenario ended with an unclassified technical failure",
         );
     }
-    report.assessment_results =
-        crate::assessment::semantic_test_assessments(&workflow.steps, &workflow.criteria);
-    report.evidence.push(workflow.checkpoint.clone());
-    report.scenario_flow = Some(ScenarioFlowEvidence {
-        definition_sha256: workflow.workflow_sha256.clone(),
-        snapshot: workflow.flow_snapshot.clone(),
-        checkpoint: workflow.checkpoint.clone(),
-        cleanup: workflow.cleanup.clone(),
-    });
-    report.semantic_tests = workflow.steps;
     if report.failures.is_empty() {
         report.set_completion(
             crate::report::gate_completion(&report.criteria),
             crate::report::EvaluatorAvailability::Available,
         );
         report.finish(RunStatus::Passed);
+    }
+}
+
+/// The scheduler marks every step failure technical. A step's Harness turn
+/// that failed, or a budget the flow spent, is the subject's, classified as
+/// in a native run. A step the flow stopped because something else failed
+/// is tagged `step_aborted`: its cause is that other failure. The flow's
+/// deadline, and the deadline of a step that opened a Harness session
+/// (`harness`), are time the subject spent: a resource limit, as a native
+/// turn that stops progressing is.
+fn step_failure(failure: &crate::workflow::WorkflowStepFailure, harness: bool) -> RunFailure {
+    let phase = workflow_failure_phase(failure.phase);
+    if failure.message == crate::report::EXECUTION_CANCELLED {
+        let mut aborted = RunFailure::new(
+            RunStatus::InfrastructureError,
+            phase,
+            failure.message.clone(),
+        );
+        aborted.code = "step_aborted".into();
+        return aborted;
+    }
+    if failure.message.starts_with("workflow timed out after ")
+        || harness && failure.message.starts_with("step timed out after ")
+    {
+        return RunFailure::new(RunStatus::ResourceLimit, phase, failure.message.clone());
+    }
+    if failure.technical
+        && !failure.message.starts_with("turn ended as ")
+        && !is_resource_limit(&failure.message)
+    {
+        RunFailure::new(
+            RunStatus::InfrastructureError,
+            phase,
+            failure.message.clone(),
+        )
+    } else {
+        subject_failure(phase, failure.message.clone())
     }
 }
 
@@ -2584,7 +2662,11 @@ fn captured_measurements(
 fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
     zero_unreached_criteria(spec, report);
     ensure_assessment_results(spec, report);
-    if report.failures.is_empty() {
+    if report
+        .failures
+        .iter()
+        .all(|failure| failure.code == crate::report::SUBJECT_LEFTOVER)
+    {
         if report.evaluators.completion == crate::report::EvaluatorAvailability::Available
             || report.assessment_results.is_empty()
         {
@@ -2603,18 +2685,32 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 }
 
 /// A subject stopped by a resource limit spent the budget the task allows
-/// without finishing it: every criterion it did not reach scores zero, so the
-/// run keeps a score and a comparison counts it instead of dropping it. A
-/// scenario that scored the partial delivery keeps that score.
-fn zero_unreached_criteria(spec: &ScenarioSpec, report: &mut E2eRunReport) {
-    if report.status != RunStatus::ResourceLimit || report.score.is_some() {
+/// without finishing it, and one that failed by itself (the agent or the
+/// Harness) did not finish it either: every criterion it did not reach scores
+/// zero, so the run keeps a score and a comparison counts it instead of
+/// dropping it. A scenario that scored the partial delivery keeps that score.
+/// Native, composite and adaptive flows all end here.
+pub(crate) fn zero_unreached_criteria(spec: &ScenarioSpec, report: &mut E2eRunReport) {
+    use crate::report::RunCause;
+    let Some(cause) = report
+        .cause
+        .filter(|cause| cause.counted() && *cause != RunCause::Evaluated)
+    else {
+        return;
+    };
+    if report.score.is_some() {
         return;
     }
-    let cause = report
+    let failure = report
         .failures
-        .first()
+        .iter()
+        .find(|failure| failure.code != "step_aborted")
         .map_or("the subject was stopped", |failure| &failure.message);
-    let reason = format!("not reached within the run's resource limits: {cause}");
+    let reason = if cause == RunCause::ResourceLimit {
+        format!("not reached within the run's resource limits: {failure}")
+    } else {
+        format!("not reached before the subject failed: {failure}")
+    };
     let awards = spec
         .criteria
         .iter()
@@ -3042,6 +3138,7 @@ fn is_resource_limit(message: &str) -> bool {
         "scenario exceeded",
         "no observable progress",
         "maximum turn",
+        "max_turns",
         "turn limit",
         "context length",
         "input limit",
@@ -3081,6 +3178,11 @@ fn is_provider_transport_failure(message: &str) -> bool {
 }
 
 fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
+    if message.ends_with(crate::report::EXECUTION_CANCELLED) {
+        let mut failure = RunFailure::new(RunStatus::SubjectError, phase, message);
+        failure.code = "execution_cancelled".into();
+        return failure;
+    }
     if is_provider_transport_failure(&message) {
         // Not retried here: the Release Control re-runs the slot once.
         let mut failure = RunFailure::new(
@@ -3090,6 +3192,9 @@ fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
         );
         failure.code = "provider_transport_failed".into();
         return failure;
+    }
+    if message.contains(crate::observe::UNOBSERVABLE) {
+        return infrastructure_failure(phase, message);
     }
     let status = if is_resource_limit(&message) {
         RunStatus::ResourceLimit
@@ -3107,9 +3212,12 @@ fn subject_dispatch_failure(error: anyhow::Error) -> RunFailure {
             "harness_send_not_dispatched",
             format!("{error:#}"),
         )
+    } else if crate::context::transport_failure_code(&error).is_some() {
+        // A lost response is not proof that send did not execute, so it is
+        // never replayed; nor is it the subject's: the engine dropped it, as
+        // the adaptive planner's own send reports.
+        infrastructure_failure(FailurePhase::Execute, format!("{error:#}"))
     } else {
-        // A lost response is not proof that send did not execute. Read failures
-        // retry the read itself in E2eContext, never a completed subject run.
         subject_failure(FailurePhase::Execute, format!("{error:#}"))
     }
 }
@@ -3125,6 +3233,20 @@ fn collection_failure(phase: FailurePhase, message: String) -> RunFailure {
 
 fn infrastructure_failure(phase: FailurePhase, message: String) -> RunFailure {
     RunFailure::new(RunStatus::InfrastructureError, phase, message)
+}
+
+/// A scenario's cleanup that failed. A function the subject registered that
+/// outlived the workers it started is the subject's leftover: recorded, and
+/// the run keeps what was measured.
+// ponytail: matches alertmanager_route_match's copy, the one scenario that
+// checks its subject's registrations; a typed error replaces it if another does.
+fn cleanup_failure(message: String) -> RunFailure {
+    if message.ends_with("is still registered after stopping the workspace workers") {
+        let mut failure = RunFailure::new(RunStatus::SubjectError, FailurePhase::Cleanup, message);
+        failure.code = crate::report::SUBJECT_LEFTOVER.into();
+        return failure;
+    }
+    infrastructure_failure(FailurePhase::Cleanup, message)
 }
 
 fn journal_checkpoint_failure(phase: FailurePhase, message: String) -> RunFailure {
@@ -4240,9 +4362,91 @@ mod tests {
             iii_sdk::errors::Error::Timeout,
             iii_sdk::errors::Error::WebSocket("reset".into()),
         ] {
-            let failure = subject_dispatch_failure(anyhow::Error::new(error));
+            let failure =
+                subject_dispatch_failure(anyhow::Error::new(error).context("invoke harness::send"));
             assert_eq!(failure.retry_scope, crate::report::RetryScope::None);
+            // The engine lost it, as the adaptive planner's own send says.
+            assert_eq!(failure.status, RunStatus::InfrastructureError);
+            let mut report = test_run_report();
+            report.push_typed_failure(
+                failure.status,
+                failure.phase,
+                failure.code,
+                failure.retry_scope,
+                failure.contamination,
+                failure.message,
+            );
+            assert_eq!(
+                report.cause,
+                Some(crate::report::RunCause::E2eInfrastructure)
+            );
         }
+        // A send the Harness answered with a refusal stays the subject's.
+        let refused = subject_dispatch_failure(
+            anyhow::Error::new(iii_sdk::errors::Error::Remote {
+                code: "invocation_failed".into(),
+                message: "agent profile 'missing' was not found".into(),
+                stacktrace: None,
+            })
+            .context("invoke harness::send"),
+        );
+        assert_eq!(refused.status, RunStatus::SubjectError);
+    }
+
+    /// alertmanager_route_match's cleanup in the local history: the subject
+    /// left route::match registered. Recorded as the subject's, it neither
+    /// sets the run aside nor changes what was measured.
+    #[test]
+    fn a_subject_leftover_is_recorded_and_keeps_the_measured_result() {
+        let mut spec = mixed_assessment_spec();
+        spec.criteria[0] = spec.criteria[0].clone().with_gate(true);
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: None,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "met".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: Some(30),
+                        reason: "met".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        let leftover = cleanup_failure("scenario 'alertmanager_route_match': scenario cleanup failed: route::match is still registered after stopping the workspace workers".into());
+        report.push_typed_failure(
+            leftover.status,
+            leftover.phase,
+            leftover.code,
+            leftover.retry_scope,
+            leftover.contamination,
+            leftover.message,
+        );
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.cause, Some(crate::report::RunCause::Evaluated));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::Completed);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].code, crate::report::SUBJECT_LEFTOVER);
+        assert_eq!(
+            report.failures[0].domain,
+            crate::report::FailureDomain::Subject
+        );
+        // Any other cleanup failure is still the runner's.
+        let teardown = cleanup_failure("scenario 'database_migration_recovery': scenario cleanup failed: invoke database::executeBatch: invoke database::executeBatch: remote error (invocation_failed): handler error: {\"code\":\"UNKNOWN_DB\",\"db\":\"primary\",\"available\":[\"harness_e2e\"]}".into());
+        assert_eq!(teardown.status, RunStatus::InfrastructureError);
+        assert_eq!(teardown.code, "cleanup_failed");
     }
 
     fn measurement_deliverable(
@@ -4542,16 +4746,384 @@ mod tests {
     }
 
     #[test]
-    fn subject_error_without_evaluation_stays_unscored() {
+    fn a_subject_failure_counts_like_a_resource_limit_and_an_excluded_one_stays_unscored() {
         let spec = mixed_assessment_spec();
         let mut report = test_run_report();
         report.push_failure(
             RunStatus::SubjectError,
             FailurePhase::Execute,
-            "turn ended as Failed: provider returned 500",
+            "turn ended as Failed: The conversation is too large for the selected model.",
         );
         finish_native_assessment(&spec, &mut report);
-        assert_eq!(report.score, None);
+        assert_eq!(report.cause, Some(crate::report::RunCause::ContextOverflow));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(0));
+        assert!(report.criteria.iter().all(|criterion| {
+            criterion.awarded == Some(0) && criterion.reason.contains("before the subject failed")
+        }));
+
+        let mut cancelled = test_run_report();
+        let failure = subject_failure(
+            FailurePhase::Execute,
+            crate::report::EXECUTION_CANCELLED.into(),
+        );
+        assert_eq!(failure.code, "execution_cancelled");
+        cancelled.push_typed_failure(
+            failure.status,
+            failure.phase,
+            failure.code,
+            failure.retry_scope,
+            failure.contamination,
+            failure.message,
+        );
+        finish_native_assessment(&spec, &mut cancelled);
+        assert_eq!(
+            cancelled.cause,
+            Some(crate::report::RunCause::OperatorCancelled)
+        );
+        assert_eq!(
+            cancelled.technical,
+            crate::report::TechnicalState::TechnicalInvalid
+        );
+        assert_eq!(cancelled.score, None);
+    }
+
+    #[test]
+    fn dimension_points_add_up_to_the_score_and_gates_are_never_discipline() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: None,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "met".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: Some(12),
+                        reason: "partly".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        finish_native_assessment(&spec, &mut report);
+        report.refresh_dimensions(false);
+        let points = |dimension| {
+            report
+                .dimensions
+                .iter()
+                .find(|report| report.dimension == dimension)
+                .and_then(|report| report.points)
+        };
+        assert_eq!(points(EvaluationDimension::StructuralIntegrity), Some(70));
+        assert_eq!(points(EvaluationDimension::Deliverable), Some(12));
+        assert_eq!(points(EvaluationDimension::Efficiency), Some(0));
+        assert_eq!(
+            report
+                .dimensions
+                .iter()
+                .filter_map(|report| report.points)
+                .sum::<u16>(),
+            u16::from(report.score.unwrap())
+        );
+        // What a test protects is its gates: none of them is spend or
+        // robustness discipline.
+        for scenario in ScenarioId::ALL {
+            for criterion in scenario.spec("catalog").criteria {
+                assert!(
+                    !criterion.gate
+                        || matches!(
+                            criterion.dimension,
+                            EvaluationDimension::Deliverable
+                                | EvaluationDimension::StructuralIntegrity
+                        ),
+                    "{scenario:?} gate {} is {:?}",
+                    criterion.id,
+                    criterion.dimension
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn max_turns_is_a_turn_limit_in_native_and_composite_flows() {
+        let message = "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: result rejected by validator fp::pipe";
+        assert_eq!(
+            subject_failure(FailurePhase::Execute, message.into()).status,
+            RunStatus::ResourceLimit
+        );
+        let step = |message: &str| crate::workflow::WorkflowStepFailure {
+            phase: WorkflowFailurePhase::Execute,
+            message: message.into(),
+            technical: true,
+        };
+        assert_eq!(
+            step_failure(&step(message), true).status,
+            RunStatus::ResourceLimit
+        );
+        assert_eq!(
+            step_failure(
+                &step(
+                    "turn ended as Failed: The conversation is too large for the selected model."
+                ),
+                true
+            )
+            .status,
+            RunStatus::SubjectError
+        );
+        assert_eq!(
+            step_failure(
+                &step("turn ended as Failed: The provider is busy right now."),
+                true
+            )
+            .code,
+            "provider_transport_failed"
+        );
+        assert_eq!(
+            step_failure(
+                &step("workflow token budget exceeded: observed 12, limit 10"),
+                true
+            )
+            .status,
+            RunStatus::ResourceLimit
+        );
+        // Time the subject spent is a resource limit, as a native turn that
+        // stops progressing is; a runner step that hangs is not the subject's.
+        for (message, harness, status) in [
+            (
+                "step timed out after 30 seconds",
+                true,
+                RunStatus::ResourceLimit,
+            ),
+            (
+                "workflow timed out after 600 seconds",
+                false,
+                RunStatus::ResourceLimit,
+            ),
+            (
+                "step timed out after 30 seconds",
+                false,
+                RunStatus::InfrastructureError,
+            ),
+        ] {
+            assert_eq!(step_failure(&step(message), harness).status, status);
+        }
+        assert_eq!(
+            subject_failure(
+                FailurePhase::Execute,
+                "scenario validation_loop made no observable progress for 300s while waiting for the complete session tree s".into()
+            )
+            .status,
+            RunStatus::ResourceLimit
+        );
+        // A step the flow stopped after another one spent the budget does not
+        // decide the cause; the budget does, whatever the first status was.
+        let mut report = test_run_report();
+        for failure in [
+            step(crate::report::EXECUTION_CANCELLED),
+            step("workflow token budget exceeded: observed 12, limit 10"),
+        ] {
+            let failure = step_failure(&failure, true);
+            report.push_typed_failure(
+                failure.status,
+                failure.phase,
+                failure.code,
+                failure.retry_scope,
+                failure.contamination,
+                format!("semantic test 'node': {}", failure.message),
+            );
+        }
+        assert_eq!(report.cause, Some(crate::report::RunCause::ResourceLimit));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.status, RunStatus::InfrastructureError);
+        zero_unreached_criteria(&mixed_assessment_spec(), &mut report);
+        assert_eq!(report.score, Some(0));
+    }
+
+    /// A composite step's failed turn keeps its transcript; the failure is
+    /// classified once the step is attached, by the error code it recorded.
+    #[test]
+    fn a_composite_step_failure_is_classified_by_its_recorded_error() {
+        let workflow = |summary: &str,
+                        data: serde_json::Value|
+         -> crate::workflow::WorkflowAttemptReport {
+            serde_json::from_value(json!({
+                "workflow_id": "flow", "workflow_sha256": "sha256:0", "run_id": "run",
+                "attempt_id": "attempt", "attempt_number": 1, "started_at": "",
+                "completed_at": "", "duration_ms": 1, "passed": false,
+                "technical_failure": true, "aggregate_cost_usd": null,
+                "checkpoint": {"id": "c", "kind": "k", "path": "p", "sha256": "s",
+                               "size_bytes": 0, "media_type": "m"},
+                "steps": [{
+                    "node_id": "plan", "step_type": crate::workflow::HARNESS_STEP_ID,
+                    "required": true, "dependencies": [],
+                    "dependency_policy": "succeeded", "activation": {"policy": "always"},
+                    "status": "failed", "started_at": null, "completed_at": null,
+                    "duration_ms": 1,
+                    "transcript": {"messages": [{"custom": {"custom_type": "error", "data": data}}]},
+                    "failures": [{"phase": "execute", "technical": true,
+                                  "message": format!("turn ended as Failed: {summary}")}],
+                }],
+            }))
+            .unwrap()
+        };
+        let spec = mixed_assessment_spec();
+        // tool_contract_recovery's refusal in the local history.
+        let mut balance = test_run_report();
+        populate_composite_report(
+            &mut balance,
+            workflow(
+                "The provider rejected this request.",
+                json!({"code": "router/provider_rejected", "class": "llm.permanent",
+                       "summary": "The provider rejected this request.",
+                       "detail": "{\"error\":{\"message\":\"Insufficient Balance (request_id: 80ee98c2-eb8b-4697-8709-522b82bd642a)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"}),
+            ),
+            &spec,
+        );
+        zero_unreached_criteria(&spec, &mut balance);
+        assert_eq!(
+            balance.cause,
+            Some(crate::report::RunCause::ProviderInfrastructure)
+        );
+        assert_eq!(
+            balance.failures[0].domain,
+            crate::report::FailureDomain::E2eInfrastructure
+        );
+        assert_eq!(balance.score, None);
+        // registry_planning's malformed request: counted, with a score.
+        let mut request = test_run_report();
+        populate_composite_report(
+            &mut request,
+            workflow(
+                "The provider rejected this request.",
+                json!({"code": "provider/invalid_request", "class": "llm.permanent",
+                       "summary": "The provider rejected this request.",
+                       "detail": "remote error (provider/invalid_request): bad ProviderStreamInput: data did not match any variant of untagged enum AgentMessage"}),
+            ),
+            &spec,
+        );
+        zero_unreached_criteria(&spec, &mut request);
+        assert_eq!(
+            request.cause,
+            Some(crate::report::RunCause::InvalidProviderRequest)
+        );
+        assert_eq!(request.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(request.score, Some(0));
+        // Two failed steps with the same summary: each reads its own
+        // transcript, so step b's balance is not step a's malformed request.
+        let mut steps = workflow(
+            "The provider rejected this request.",
+            json!({"code": "provider/invalid_request", "class": "llm.permanent",
+                   "summary": "The provider rejected this request.",
+                   "detail": "remote error (provider/invalid_request): bad ProviderStreamInput: data did not match any variant of untagged enum AgentMessage"}),
+        );
+        let mut second = steps.steps[0].clone();
+        second.node_id = "review".into();
+        second.transcript = Some(
+            json!({"messages": [{"custom": {"custom_type": "error", "data": {
+            "code": "router/provider_rejected", "class": "llm.permanent",
+            "summary": "The provider rejected this request.",
+            "detail": "{\"error\":{\"message\":\"Insufficient Balance\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"}}}]}),
+        );
+        steps.steps.push(second);
+        let mut both = test_run_report();
+        populate_composite_report(&mut both, steps, &spec);
+        let causes = |report: &E2eRunReport| {
+            report
+                .failures
+                .iter()
+                .map(|failure| failure.domain)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            causes(&both),
+            [
+                crate::report::FailureDomain::Subject,
+                crate::report::FailureDomain::E2eInfrastructure
+            ]
+        );
+        assert_eq!(
+            both.cause,
+            Some(crate::report::RunCause::ProviderInfrastructure)
+        );
+    }
+
+    #[test]
+    fn an_adaptive_planner_turn_is_classified_as_a_native_turn() {
+        use crate::report::RunCause;
+        let spec = mixed_assessment_spec();
+        let classified = |rendered: &str| {
+            let failure = adaptive_planner_failure(rendered.into());
+            let mut report = test_run_report();
+            report.push_typed_failure(
+                failure.status,
+                failure.phase,
+                failure.code,
+                failure.retry_scope,
+                failure.contamination,
+                failure.message,
+            );
+            zero_unreached_criteria(&spec, &mut report);
+            (report.cause.unwrap(), report.score)
+        };
+        for (rendered, cause, score) in [
+            (
+                "wait for adaptive planner turn: turn ended as Failed: The conversation is too large for the selected model.",
+                RunCause::ContextOverflow,
+                Some(0),
+            ),
+            (
+                "wait for adaptive planner turn: turn ended as Failed: max_turns reached",
+                RunCause::ResourceLimit,
+                Some(0),
+            ),
+            (
+                "wait for adaptive planner turn: scenario release_train_recovery made no observable progress for 120s while waiting for the complete session tree adaptive_planner_a",
+                RunCause::ResourceLimit,
+                Some(0),
+            ),
+            (
+                "adaptive planner response must be bare JSON without code fences",
+                RunCause::PlannerFormat,
+                Some(0),
+            ),
+            (
+                "wait for adaptive planner turn: scenario release_train_recovery could not sample the session tree adaptive_planner_a for 120s: transport timeout",
+                RunCause::E2eInfrastructure,
+                None,
+            ),
+            (
+                "wait for adaptive planner turn: E2E execution was cancelled",
+                RunCause::OperatorCancelled,
+                None,
+            ),
+            // A planner turn keeps no error entry: the Harness's copy decides.
+            (
+                "wait for adaptive planner turn: turn ended as Failed: The provider authentication needs attention.",
+                RunCause::ProviderInfrastructure,
+                None,
+            ),
+            (
+                "wait for adaptive planner turn: turn ended as Failed: No configured provider can serve the selected model.",
+                RunCause::TestEnvironmentIncomplete,
+                None,
+            ),
+            (
+                "send adaptive planner turn: invocation timed out",
+                RunCause::E2eInfrastructure,
+                None,
+            ),
+        ] {
+            assert_eq!(classified(rendered), (cause, score), "{rendered}");
+        }
     }
 
     #[test]

@@ -744,12 +744,15 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 11);
+        assert_eq!(plan.suites.len(), 14);
         for (id, cases, runs) in [
             ("regression", 9, 27),
-            ("null-canary", 9, 9),
+            ("null-canary", 10, 10),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
+            ("software-engineering-x9", 14, 126),
+            ("regression-x11", 9, 99),
+            ("context-capacity", 4, 4),
             ("deepwork", 3, 3),
             ("linkly", 1, 1),
             ("onboarding", 1, 1),
@@ -936,12 +939,13 @@ mod tests {
     }
 
     /// Tags never reach the plan's digest: the cohort key Release Control
-    /// groups every execution by. A reviewed change to the plan updates this.
+    /// groups every execution by. A reviewed change to the plan updates this,
+    /// and gives every suite a new `profile_sha256` (README, Test plans).
     #[test]
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:8461c93109c889fd8f5001072286412325f481a01a0aea1987378a8ac000011c"
+            "sha256:4986bae35ffd70053a576418a1b8bc927cbf8a2d4e6a6ada0f41f7c5975b0ee1"
         );
     }
 
@@ -1169,16 +1173,55 @@ mod tests {
         assert_eq!(plan.materialize("regression").unwrap().campaigns.len(), 3);
     }
 
+    /// The version-comparison suites are the daily ones with more rounds,
+    /// and the capacity lane is four tests that already exist.
+    #[test]
+    fn the_comparison_and_capacity_suites_reuse_existing_tests() {
+        let plan = embedded().unwrap();
+        for (comparison, base, rounds) in [
+            ("software-engineering-x9", "software-engineering", 9),
+            ("regression-x11", "regression", 11),
+        ] {
+            let (comparison, base) = (
+                plan.materialize(comparison).unwrap(),
+                plan.materialize(base).unwrap(),
+            );
+            assert_eq!(comparison.scenario_ids, base.scenario_ids);
+            assert_eq!(comparison.campaigns.len(), rounds);
+            assert_eq!(
+                comparison.campaigns[0]["groups"],
+                base.campaigns[0]["groups"]
+            );
+        }
+        assert_eq!(
+            plan.materialize("context-capacity").unwrap().scenario_ids,
+            [
+                "kanban_c1_foundation",
+                "kanban_c4_ticket_flow",
+                "kanban_c7_live",
+                "context_pressure"
+            ]
+        );
+    }
+
     const NULL_AGENT: &str = include_str!("../config/agents/null-agent.md");
 
-    /// The canary is the regression, run by an agent that does nothing.
+    /// The canary is the regression plus the minimal path (the one test the
+    /// `pr` and `after-release` suites add), run by an agent that does nothing.
     #[test]
     fn the_null_canary_runs_the_regression_as_an_agent_that_does_nothing() {
         let plan = embedded().unwrap();
+        let mut expected = plan.materialize("regression").unwrap().scenario_ids;
+        expected.insert(0, ScenarioId::MinimalPath.to_string());
         assert_eq!(
             plan.materialize("null-canary").unwrap().scenario_ids,
-            plan.materialize("regression").unwrap().scenario_ids
+            expected
         );
+        for suite in ["pr", "after-release"] {
+            for id in plan.materialize(suite).unwrap().scenario_ids {
+                assert!(expected.contains(&id), "{suite}: {id} escapes the canary");
+            }
+        }
         // A parent, skills, preloaded functions or a model of its own would
         // bring in the calls the null agent exists never to make.
         let (frontmatter, body) = NULL_AGENT
@@ -1191,75 +1234,231 @@ mod tests {
         assert_eq!(body.trim().lines().last(), Some("done"));
     }
 
-    /// What the null agent earns from the evaluators that read only what the
-    /// subject left (transcript, response, captured deliverables), so a dead
-    /// engine connection stands in for the stack. The expected answer is 0
-    /// points and `task_incomplete`; the other six regression tests need a
-    /// stack and are measured by the null-canary suite itself
-    /// (`tests/live_worker.rs` runs it against one).
-    #[tokio::test]
-    async fn the_null_agent_earns_nothing_from_evaluators_that_read_only_the_subject() {
-        use crate::report::CompletionState;
-        use crate::scenarios::{
-            CapturedDeliverable, CapturedDeliverableContent, ScenarioObservation,
-        };
-        // Anything but 0 points and task_incomplete is a hole: (test, points,
-        // completion), as the runner reports them.
-        let context =
-            crate::context::E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
-        let run_id = "null-agent";
-        let mut paid = Vec::new();
-        for id in [
-            ScenarioId::ContextPressure,
-            ScenarioId::ToolContractRecovery,
-            ScenarioId::PromptInjectionResilience,
-        ] {
-            let materialized = id.materialize(run_id, id.canonical_seed()).unwrap();
-            let observation = ScenarioObservation {
-                case: materialized.case,
-                metrics: crate::wire::SessionMetricsResponse::from_normalized(
-                    crate::wire::SessionMetricsPayload {
-                        root_session_id: run_id.into(),
-                        complete: true,
-                        totals: Default::default(),
-                        by_session: Vec::new(),
-                        traces: None,
-                    },
-                ),
-                transcript: json!({ "messages": [] }),
-                response: "done".into(),
-                // What the injection test's capture stores when nobody wrote
-                // the canary key.
-                deliverables: vec![CapturedDeliverable {
-                    id: "resilience_report".into(),
-                    kind: "resilience_report".into(),
-                    content: CapturedDeliverableContent::Json(
-                        json!({ "report": "done", "canary_written": false }),
-                    ),
-                    invariants: Vec::new(),
-                    provenance: Vec::new(),
-                }],
-            };
-            let evaluation = materialized
-                .module
-                .evaluate(&context, &observation, run_id)
-                .await
-                .unwrap();
-            // Scored and completed as the runner does: the criteria, then the
-            // completion the gates give unless a prerequisite decided it.
-            let criteria = crate::suite::criterion_reports(&materialized.spec, evaluation.awards);
-            let completion = evaluation
-                .completion
-                .unwrap_or_else(|| crate::report::gate_completion(&criteria));
-            let points: u16 = criteria
-                .iter()
-                .filter_map(|criterion| criterion.awarded.map(u16::from))
-                .sum();
-            if points > 0 || completion != CompletionState::TaskIncomplete {
-                paid.push((id.as_str(), points, completion));
+    /// Scheduled tests whose evaluator scores what a live stack left behind:
+    /// why, and the deterministic controls CI runs for them instead. An
+    /// empty list says "no CI control" in its reason, with what runs by hand.
+    const LIVE_CONTROLS: &[(ScenarioId, &str, &[&str])] = &[
+        (
+            ScenarioId::RegistryImplementation,
+            "capture builds the delivery in Docker and probes it; validate.py and the \
+             feature probe's failure regressions are scored in CI",
+            &[
+                "tests/python/test_registry_validation.py",
+                "tests/python/test_registry_feature_probe.py",
+            ],
+        ),
+        (
+            ScenarioId::RegistryVerification,
+            "capture replays the report against the delivery in Docker; the empty, the \
+             claim-only, the one-check-executed and the all-passing report are scored in CI",
+            &["tests/python/test_registry_validation.py"],
+        ),
+        (
+            ScenarioId::TrendingTopicsBuild,
+            "capture builds the pushed site and runs Playwright in Docker; CI runs the \
+             evaluator, lifecycle and focus controls, while the reference app in \
+             validate-controls.mjs needs the private e2e-fixture app and runs by hand",
+            &[
+                "tests/fixtures/trending-topics-build/evaluator.test.mjs",
+                "tests/fixtures/trending-topics-build/test_lifecycle.py",
+                "tests/python/test_trending_focus_eval_regressions.py",
+            ],
+        ),
+        (
+            ScenarioId::ChessEngineBuild,
+            "capture plays the Compose-started Worker in the Console; CI runs the browser \
+             controls of tests/fixtures/chess-eval/negative-control.mjs",
+            &["tests/python/test_chess_eval_regressions.py"],
+        ),
+        (ScenarioId::FormFlowBuild, VISUAL_LIVE, VISUAL_CI),
+        (ScenarioId::StateMachineCanvasBuild, VISUAL_LIVE, VISUAL_CI),
+        (
+            ScenarioId::LinklyTutorial,
+            "capture probes the running linkly-agentic scaffold, chapter by chapter; \
+             no CI control",
+            &[],
+        ),
+        (
+            ScenarioId::OnboardingTour,
+            "capture reads what the tour left in the onboarding stack's engine; no CI control",
+            &[],
+        ),
+        (ScenarioId::KanbanC1Foundation, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC2Persistence, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC3Board, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC4TicketFlow, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC5EditMove, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC6Discussion, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::KanbanC7Live, KANBAN_LIVE, KANBAN_CI),
+        (ScenarioId::MemoryRelevantRecall, MEMORY_LIVE, &[]),
+        (ScenarioId::MemorySmallTalk, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryFirstPersonOffTopic, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryParaphrase, MEMORY_LIVE, &[]),
+        (ScenarioId::MemorySessionRepeat, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryUpdatedFact, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryValueProject, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryValueProjectBaseline, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryValuePreference, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryValuePreferenceBaseline, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryRuleFit, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryChatterAfterAnswer, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryUserFactNeeded, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryAboutMe, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryRewordedAcrossTurns, MEMORY_LIVE, &[]),
+        (ScenarioId::MemorySiblingFacts, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryRuleChangedMidSession, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryBankEditsMidSession, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryBankTrashedMidSession, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryManySiblings, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryAboutMeOverflow, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryLinkedUpdate, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryLearnThenRecall, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryLearnRuleThenObey, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryLearnCorrection, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryAutomationNotLearned, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryLearnFromLongMessage, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryHonorsDoNotKeep, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryKeepsWithoutARule, MEMORY_LIVE, &[]),
+    ];
+    const MEMORY_LIVE: &str =
+        "capture runs live sessions against the memory worker and audits what it injected \
+         into each turn; the subject is the memory worker, not the agent, so a null agent is \
+         no control of it, and memory/score.rs fails each gate offline; no CI control";
+    const VISUAL_LIVE: &str = "capture drives the Compose-started Worker in the Console; \
+         CI runs the browser controls of tests/fixtures/visual-worker-eval/regressions.mjs";
+    const VISUAL_CI: &[&str] = &["tests/python/test_visual_worker_eval_regressions.py"];
+    const KANBAN_LIVE: &str =
+        "capture runs the delivered application under Compose in an isolated \
+         Docker pair and probes it with Playwright; CI runs the browser controls and scoring \
+         regressions, while the base and reference controls of scripts/kanban_eval/run.py \
+         need Docker and the fixture and run by hand";
+    const KANBAN_CI: &[&str] = &[
+        "tests/python/test_kanban_browser_flows.py",
+        "tests/python/test_kanban_scoring_regressions.py",
+    ];
+    const CI: &str = include_str!("../.github/workflows/ci.yml");
+
+    /// Every control the table cites exists and CI runs it: named in the
+    /// workflow, or a `tests/python/test_*.py` its discovery runs.
+    #[test]
+    fn the_live_controls_cited_run_in_ci() {
+        let discovers = CI.contains("unittest discover -s tests/python -p 'test_*.py'");
+        for (id, reason, controls) in LIVE_CONTROLS {
+            assert_eq!(
+                controls.is_empty(),
+                reason.contains("no CI control"),
+                "{id}: say \"no CI control\" exactly when none is cited"
+            );
+            for control in *controls {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(control);
+                assert!(path.is_file(), "{id}: {control} does not exist");
+                let discovered = discovers
+                    && control.starts_with("tests/python/test_")
+                    && control.ends_with(".py");
+                assert!(
+                    discovered || CI.contains(control),
+                    "{id}: CI does not run {control}"
+                );
             }
         }
-        assert!(paid.is_empty(), "the null agent earned something: {paid:?}");
+    }
+
+    /// The null and the reference delivery of a scheduled test whose
+    /// evaluator scores offline, in that order.
+    async fn offline_controls(
+        id: ScenarioId,
+    ) -> Option<[crate::scenarios::ObjectiveEvaluation; 2]> {
+        use crate::scenarios::*;
+        Some(match id {
+            ScenarioId::MinimalPath => minimal_path::tests::controls().await,
+            ScenarioId::PersistentState => persistent_state::tests::controls().await,
+            ScenarioId::ToolContractRecovery => tool_contract_recovery::tests::controls(),
+            ScenarioId::TimerWake => timer_wake::tests::controls(),
+            ScenarioId::ShellCoderSandbox => shell_coder_sandbox::tests::controls().await,
+            ScenarioId::DatabaseMigrationRecovery => database_migration_recovery::tests::controls(),
+            ScenarioId::ContentionLedger => contention_ledger::tests::controls(),
+            ScenarioId::ValidationSelfRepair => validation_self_repair::tests::controls(),
+            ScenarioId::ContextPressure => context_pressure::tests::controls(),
+            ScenarioId::PromptInjectionResilience => prompt_injection_resilience::tests::controls(),
+            ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls().await,
+            _ => return None,
+        })
+    }
+
+    /// The null agent without a model, and its counterpart. Every scheduled
+    /// test is scored as the runner scores it against two deliveries: the
+    /// null one (no call, one turn, a reply of `done` or one that only
+    /// claims the result) earns 0 and stays `task_incomplete`; the reference
+    /// one completes with 100. Both run ten times: a result that differs
+    /// between rounds is named as drift.
+    #[tokio::test]
+    async fn every_scheduled_test_pays_nothing_for_nothing_and_everything_for_the_task() {
+        use crate::report::CompletionState;
+        let plan = embedded().unwrap();
+        // A suite schedules its own scenarios and those of the modules it names.
+        let scheduled: BTreeSet<&str> = plan
+            .suites
+            .iter()
+            .flat_map(|suite| {
+                let modules = plan
+                    .modules
+                    .iter()
+                    .filter(|module| suite.modules.contains(&module.id))
+                    .flat_map(|module| module.scenarios.iter());
+                suite.scenarios.iter().chain(modules).map(String::as_str)
+            })
+            .collect();
+        for (id, _, _) in LIVE_CONTROLS {
+            assert!(scheduled.contains(id.as_str()), "{id} is not scheduled");
+        }
+        let mut holes = Vec::new();
+        for id in scheduled {
+            let id: ScenarioId = id.parse().unwrap();
+            let live = LIVE_CONTROLS.iter().any(|(live, _, _)| *live == id);
+            let spec = id.spec("control");
+            let score = |evaluation: crate::scenarios::ObjectiveEvaluation| {
+                let criteria = crate::suite::criterion_reports(&spec, evaluation.awards);
+                let completion = evaluation
+                    .completion
+                    .unwrap_or_else(|| crate::report::gate_completion(&criteria));
+                let points: u16 = criteria
+                    .iter()
+                    .filter_map(|criterion| criterion.awarded.map(u16::from))
+                    .sum();
+                (points, completion)
+            };
+            let mut rounds = Vec::new();
+            for _ in 0..10 {
+                let Some([null, reference]) = offline_controls(id).await else {
+                    break;
+                };
+                rounds.push((score(null), score(reference)));
+            }
+            assert_eq!(
+                rounds.is_empty(),
+                live,
+                "{id}: offline controls xor a live reason"
+            );
+            for (delivery, expected, results) in [
+                (
+                    "null",
+                    (0, CompletionState::TaskIncomplete),
+                    rounds.iter().map(|round| round.0).collect::<Vec<_>>(),
+                ),
+                (
+                    "reference",
+                    (100, CompletionState::Completed),
+                    rounds.iter().map(|round| round.1).collect(),
+                ),
+            ] {
+                if results.iter().any(|result| *result != results[0]) {
+                    holes.push(format!("{id} {delivery} drifts: {results:?}"));
+                } else if results.first().is_some_and(|result| *result != expected) {
+                    holes.push(format!("{id} {delivery}: {:?}", results[0]));
+                }
+            }
+        }
+        assert!(holes.is_empty(), "{holes:#?}");
     }
 
     #[test]

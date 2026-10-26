@@ -210,6 +210,8 @@ pub(super) struct TrendTest {
 pub(super) struct TrendRun {
     pub test: String,
     pub behavior_sha256: Option<String>,
+    /// Orders the runs of a test as the verdict reads them.
+    pub attempt_id: String,
     /// Technically valid: only these are measured.
     pub counted: bool,
     pub completed: bool,
@@ -848,6 +850,7 @@ pub(super) mod tests {
         TrendRun {
             test: test.into(),
             behavior_sha256: Some(format!("sha256:{test}")),
+            attempt_id: String::new(),
             counted,
             completed,
             score,

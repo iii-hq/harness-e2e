@@ -21,6 +21,7 @@ import type {
   VersionCompareRequest,
   VersionCompareResponse,
 } from '@/lib/trends'
+import type { ExecutionVerdict } from '@/lib/verdict'
 
 export type JsonObject = Record<string, unknown>
 export type JsonValue =
@@ -569,6 +570,8 @@ export type DashboardScenarioAggregate = JsonObject & {
   failed_attempt_tokens: number | null
   tokens_per_completion: number | null
   technical_failures: number
+  /** Observed runs per cause; absent in reports written before causes. */
+  causes?: Record<string, number>
 }
 
 export type DashboardRunEfficiency = JsonObject & {
@@ -578,6 +581,16 @@ export type DashboardRunEfficiency = JsonObject & {
   function_call_errors?: number | null
   sessions?: number | null
   turns?: number | null
+  /** Input plus cache reads and writes. */
+  processed_prompt_tokens?: number | null
+  /** The largest prompt one step of the root session sent. */
+  peak_context_tokens?: number | null
+  /** The root session's usable window. */
+  usable_context_tokens?: number | null
+  /** Compaction records in the root session's transcript. */
+  compactions?: number | null
+  /** False for a provider whose prompt does not match the Harness's count. */
+  cache_comparable?: boolean | null
 }
 
 export type SemanticTestAsset = JsonObject & {
@@ -644,6 +657,9 @@ export type DashboardRunProjection = JsonObject & {
   assessment: RunAssessmentContract
   transcript?: JsonObject
   status: string
+  /** Why the run ended as it did; absent in reports written before causes,
+   *  which were classified by the earlier rule. */
+  cause?: string | null
   completion: CompletionState
   technical: TechnicalState
   evaluators: DashboardEvaluatorStates
@@ -737,6 +753,7 @@ export type RuntimeConfig = {
   functions: {
     executions_list: string
     execution_get: string
+    execution_verdict: string
     execution_delete: string
     execution_rename: string
     evidence_read: string
@@ -790,6 +807,9 @@ export type ExecutionListInput = {
 export type DashboardDataBridge = {
   listExecutions(input?: ExecutionListInput): Promise<ExecutionManifest>
   getExecution(executionId: string): Promise<DashboardExecutionDetail>
+  /** B against A over their technically valid runs: the calibrated verdict
+   *  the worker reads, never worked out here. */
+  getExecutionVerdict(a: string, b: string): Promise<ExecutionVerdict>
   deleteExecution(executionId: string): Promise<void>
   renameExecution(executionId: string, label: string): Promise<PlanExecution>
   /** One file a run's report declares, or one screenshot inside a deliverable. */
@@ -938,6 +958,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call<ExecutionBundle>(runtime.functions.execution_get, {
         execution_id: executionId,
       }).then((bundle) => bundle.detail),
+    getExecutionVerdict: (a, b) =>
+      call(runtime.functions.execution_verdict, { a, b }),
     deleteExecution: (executionId) =>
       call(runtime.functions.execution_delete, {
         execution_id: executionId,

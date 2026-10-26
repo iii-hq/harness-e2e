@@ -862,6 +862,15 @@
             "null"
           ]
         },
+        "points": {
+          "description": "The raw points the run's criteria of this dimension awarded. The dimensions' points add up to the run score: a breakdown of it, not a second score. Absent when the run has no score or a scored criterion declared no dimension.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
         "signals": true
       }
     },
@@ -906,6 +915,17 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AuditReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cause": {
+          "description": "Why the run ended as it did; `technical` follows from it. Absent only in reports written before causes, which keep the earlier rule: every subject error left the mean, and an evaluator's own failure could count as a valid zero.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunCause"
             },
             {
               "type": "null"
@@ -1147,6 +1167,24 @@
         "wall_time_ms"
       ],
       "properties": {
+        "cache_comparable": {
+          "description": "False when a session's provider reported a prompt that does not match the Harness's own count of what it sent (claude-code adds a prompt of its own): its prompt and cache figures are not comparable with another provider's.",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cache_read_tokens": {
+          "description": "Prompt tokens served from the provider's cache.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "child_sessions": {
           "type": [
             "integer",
@@ -1156,6 +1194,16 @@
           "minimum": 0.0
         },
         "child_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "compactions": {
+          "description": "Compactions of the root session: the `compaction` records the Harness wrote to its transcript, automatic or asked for. The snapshot's `compacted` only says the session holds a summary now.",
+          "default": null,
           "type": [
             "integer",
             "null"
@@ -1229,6 +1277,36 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "peak_context_tokens": {
+          "description": "The largest prompt one step of the root session sent, from the usage each assistant message recorded in the transcript. Given only when the steps add up to the root session's totals.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "processed_prompt_tokens": {
+          "description": "Every prompt token the provider processed: input, cache reads and cache writes. `input_tokens` alone leaves the cache out, and the cache is most of a long session's prompt.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "prompt_surface_digests": {
+          "description": "The Harness prompt-surface digest of each session role (`root`, `child`): data, not drift, since every Harness release changes it.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
         "root_turns": {
           "type": [
             "integer",
@@ -1263,6 +1341,16 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "usable_context_tokens": {
+          "description": "The prompt budget the Harness fit the root session's window into (its context snapshot's `usable`).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
         },
         "validation_retries": {
           "type": [
@@ -2192,6 +2280,95 @@
         }
       }
     },
+    "RunCause": {
+      "description": "Why a run ended as it did. It decides whether the run counts toward the mean: a failure of the subject or a spent budget counts, keeping the points already measured; one of the provider, the stack, the evaluator's machine or the operator does not, and is counted apart.",
+      "oneOf": [
+        {
+          "description": "No failure: the run reached evaluation.",
+          "type": "string",
+          "enum": [
+            "evaluated"
+          ]
+        },
+        {
+          "description": "A token, cost or turn budget, or no progress, stopped the subject.",
+          "type": "string",
+          "enum": [
+            "resource_limit"
+          ]
+        },
+        {
+          "description": "The provider refused a request the Harness built.",
+          "type": "string",
+          "enum": [
+            "invalid_provider_request"
+          ]
+        },
+        {
+          "description": "The conversation outgrew the model's context.",
+          "type": "string",
+          "enum": [
+            "context_overflow"
+          ]
+        },
+        {
+          "description": "The adaptive planner answered in the wrong format.",
+          "type": "string",
+          "enum": [
+            "planner_format"
+          ]
+        },
+        {
+          "description": "Any other failure of the subject.",
+          "type": "string",
+          "enum": [
+            "subject_failure"
+          ]
+        },
+        {
+          "description": "The provider was unreachable, rate limited, out of balance or not authorized.",
+          "type": "string",
+          "enum": [
+            "provider_infrastructure"
+          ]
+        },
+        {
+          "description": "The stack lacked a function or database the test relies on, or does not route the configured provider or model.",
+          "type": "string",
+          "enum": [
+            "test_environment_incomplete"
+          ]
+        },
+        {
+          "description": "The evaluator could not validate the delivery for a reason of its own machine, such as a Docker daemon that stopped answering.",
+          "type": "string",
+          "enum": [
+            "evaluation_environment"
+          ]
+        },
+        {
+          "description": "Any other failure of the runner or its fixtures.",
+          "type": "string",
+          "enum": [
+            "e2e_infrastructure"
+          ]
+        },
+        {
+          "description": "The operator cancelled the execution.",
+          "type": "string",
+          "enum": [
+            "operator_cancelled"
+          ]
+        },
+        {
+          "description": "Nobody can be blamed from the evidence: another worker timed out, the turn was cancelled without an error, or the provider rejected a request for a reason no rule recognises.",
+          "type": "string",
+          "enum": [
+            "undetermined"
+          ]
+        }
+      ]
+    },
     "RunStatus": {
       "type": "string",
       "enum": [
@@ -2242,6 +2419,15 @@
         "undetermined_runs"
       ],
       "properties": {
+        "causes": {
+          "description": "Observed runs per cause: the counted ones are the technically valid runs. Runs from reports written before causes are left out of it.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
         "completed_runs": {
           "type": "integer",
           "format": "uint32",

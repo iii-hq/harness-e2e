@@ -55,6 +55,7 @@ const bundle = {
 const READS = [
   'executions-list',
   'execution-get',
+  'execution-verdict',
   'evidence-read',
   'github-runs-list',
   'github-run-contracts',

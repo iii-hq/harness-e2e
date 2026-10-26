@@ -75,7 +75,321 @@ pub struct FailureRecord {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Why a run ended as it did. It decides whether the run counts toward the
+/// mean: a failure of the subject or a spent budget counts, keeping the points
+/// already measured; one of the provider, the stack, the evaluator's machine
+/// or the operator does not, and is counted apart.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RunCause {
+    /// No failure: the run reached evaluation.
+    Evaluated,
+    /// A token, cost or turn budget, or no progress, stopped the subject.
+    ResourceLimit,
+    /// The provider refused a request the Harness built.
+    InvalidProviderRequest,
+    /// The conversation outgrew the model's context.
+    ContextOverflow,
+    /// The adaptive planner answered in the wrong format.
+    PlannerFormat,
+    /// Any other failure of the subject.
+    SubjectFailure,
+    /// The provider was unreachable, rate limited, out of balance or not
+    /// authorized.
+    ProviderInfrastructure,
+    /// The stack lacked a function or database the test relies on, or does
+    /// not route the configured provider or model.
+    TestEnvironmentIncomplete,
+    /// The evaluator could not validate the delivery for a reason of its own
+    /// machine, such as a Docker daemon that stopped answering.
+    EvaluationEnvironment,
+    /// Any other failure of the runner or its fixtures.
+    E2eInfrastructure,
+    /// The operator cancelled the execution.
+    OperatorCancelled,
+    /// Nobody can be blamed from the evidence: another worker timed out, the
+    /// turn was cancelled without an error, or the provider rejected a request
+    /// for a reason no rule recognises.
+    Undetermined,
+}
+
+impl RunCause {
+    /// Counted runs are technically valid and enter the mean.
+    pub fn counted(self) -> bool {
+        matches!(
+            self,
+            Self::Evaluated
+                | Self::ResourceLimit
+                | Self::InvalidProviderRequest
+                | Self::ContextOverflow
+                | Self::PlannerFormat
+                | Self::SubjectFailure
+        )
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Evaluated => "evaluated",
+            Self::ResourceLimit => "resource limit",
+            Self::InvalidProviderRequest => "invalid provider request",
+            Self::ContextOverflow => "context overflow",
+            Self::PlannerFormat => "planner format",
+            Self::SubjectFailure => "subject failure",
+            Self::ProviderInfrastructure => "provider infrastructure",
+            Self::TestEnvironmentIncomplete => "test environment incomplete",
+            Self::EvaluationEnvironment => "evaluation environment",
+            Self::E2eInfrastructure => "E2E infrastructure",
+            Self::OperatorCancelled => "cancelled by the operator",
+            Self::Undetermined => "undetermined",
+        }
+    }
+}
+
+/// The runner's copy for an operator's cancellation. A composite flow's ends
+/// with the same words; the adaptive flow tags its own `execution_cancelled`.
+pub(crate) const EXECUTION_CANCELLED: &str = "E2E execution was cancelled";
+
+/// The code of what the subject left running past cleanup, such as a
+/// function it registered that outlived its workers. It is the subject's,
+/// recorded beside the run, and changes neither the run's status, its cause
+/// nor its score.
+pub(crate) const SUBJECT_LEFTOVER: &str = "subject_leftover";
+
+/// What the test environment owes a run. `functions` are the ones the run
+/// registers itself and needs, as its preflight observed them; `prompt` is
+/// the task the scenario gave, for the databases it names and the functions
+/// of the workers a stack brings for the measurement. A name the prompt
+/// alone mentions, such as a validator the scenario breaks on purpose, is
+/// owed by nobody.
+struct Owed<'a> {
+    prompt: &'a str,
+    functions: Vec<&'a str>,
+}
+
+/// Functions of the worker every stack declares for the measurement itself
+/// (`fp` in `stacks/default.yaml`).
+// ponytail: one worker; read the stack's lock if a scenario relies on another.
+const MEASUREMENT_FUNCTIONS: &str = "fp::";
+
+/// The cause one failure points to. The failure's code decides when the
+/// runner tagged it; else the error the Harness recorded for the failed turn
+/// (`custom_type: error`, matched by its summary); else the runner's and the
+/// Harness's fixed copy, which reports older than the codes carry.
+fn failure_cause(failure: &FailureRecord, transcripts: &[&Value], owed: &Owed) -> RunCause {
+    let message = failure.message.as_str();
+    if failure.code == "execution_cancelled" || message.ends_with("execution was cancelled") {
+        return RunCause::OperatorCancelled;
+    }
+    match failure.status {
+        RunStatus::Passed | RunStatus::HardGateFailed => RunCause::Evaluated,
+        RunStatus::InfrastructureError if failure.code == "provider_transport_failed" => {
+            RunCause::ProviderInfrastructure
+        }
+        RunStatus::InfrastructureError if failure.phase == FailurePhase::Evaluate => {
+            RunCause::EvaluationEnvironment
+        }
+        RunStatus::InfrastructureError => RunCause::E2eInfrastructure,
+        RunStatus::SubjectError
+            if failure.code == "adaptive_plan_invalid"
+                || message.starts_with("adaptive planning failed:") =>
+        {
+            RunCause::PlannerFormat
+        }
+        RunStatus::SubjectError | RunStatus::ResourceLimit => turn_error(message, transcripts)
+            .and_then(|error| turn_error_cause(error, owed))
+            .or_else(|| fixed_copy_cause(message, owed))
+            .unwrap_or(if failure.status == RunStatus::ResourceLimit {
+                RunCause::ResourceLimit
+            } else {
+                RunCause::SubjectFailure
+            }),
+    }
+}
+
+/// The error entry the Harness wrote for the turn the failure reports.
+fn turn_error<'a>(message: &str, transcripts: &[&'a Value]) -> Option<&'a Value> {
+    transcripts.iter().find_map(|transcript| {
+        transcript
+            .get("messages")?
+            .as_array()?
+            .iter()
+            .filter_map(|entry| entry.get("custom"))
+            .filter(|custom| custom.get("custom_type").and_then(Value::as_str) == Some("error"))
+            .filter_map(|custom| custom.get("data"))
+            .rfind(|data| {
+                data.get("summary")
+                    .and_then(Value::as_str)
+                    .is_some_and(|summary| !summary.is_empty() && message.ends_with(summary))
+            })
+    })
+}
+
+fn turn_error_cause(error: &Value, owed: &Owed) -> Option<RunCause> {
+    let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or_default();
+    let (code, class, detail) = (text("code"), text("class"), text("detail"));
+    // Only the final failure decides: a function or database missing earlier
+    // in the turn, which the turn then got past, does not.
+    if missing_test_environment(detail, owed)
+        || matches!(
+            code,
+            "router/unknown_provider"
+                | "router/no_provider_for_model"
+                | "router/ambiguous_model"
+                | "router/structured_output_unsupported"
+                | "harness.unknown_model"
+                | "harness.budget_unavailable"
+        )
+    {
+        return Some(RunCause::TestEnvironmentIncomplete);
+    }
+    let cause = if class == "llm.context_overflow" || code.ends_with("context_overflow") {
+        RunCause::ContextOverflow
+    } else if matches!(
+        class,
+        "llm.rate_limited" | "llm.transient" | "llm.auth_expired"
+    ) || matches!(
+        code,
+        "router/not_configured" | "router/provider_auth_expired" | "router/provider_unavailable"
+    ) {
+        RunCause::ProviderInfrastructure
+    } else if code == "router/provider_rejected" {
+        provider_refusal_cause(&detail.to_ascii_lowercase())
+    } else if code.ends_with("invalid_request") {
+        RunCause::InvalidProviderRequest
+    } else if detail.starts_with("max_turns") {
+        RunCause::ResourceLimit
+    } else {
+        // Unrecognized: the failure's status decides; a Harness dependency
+        // repeats its code in the summary, which the fixed copy reads.
+        return None;
+    };
+    Some(cause)
+}
+
+/// A provider's refusal, read from the provider's own words, which the
+/// Harness keeps as the error's detail.
+fn provider_refusal_cause(detail: &str) -> RunCause {
+    let says = |needles: &[&str]| needles.iter().any(|needle| detail.contains(needle));
+    if says(&[
+        "exceeded model token limit",
+        "prompt exceeds max length",
+        "exceeds the maximum number of tokens",
+        "maximum context length",
+        "context_length_exceeded",
+        "prompt is too long",
+    ]) {
+        RunCause::ContextOverflow
+    } else if says(&[
+        // A conversation the Harness sent malformed: a tool call without its
+        // result, or a function schema the provider cannot read.
+        "ids were found without `tool_result`",
+        "must be followed by tool messages",
+        "invalid schema for function",
+        "invalid_function_parameters",
+    ]) {
+        RunCause::InvalidProviderRequest
+    } else if says(&[
+        "insufficient balance",
+        "run out of balance",
+        "insufficient_quota",
+        "insufficient credits",
+        "credit balance",
+        "exceeded your current quota",
+        "exceeded_current_quota",
+        "requires more credits",
+        "usage limit",
+        "key limit exceeded",
+        "api key",
+        "余额不足",
+    ]) {
+        RunCause::ProviderInfrastructure
+    } else if says(&[
+        "model_not_found",
+        "model not found",
+        "does not exist or you do not have access",
+        "is not found for api version",
+    ]) {
+        // The stack names a model its provider does not serve.
+        RunCause::TestEnvironmentIncomplete
+    } else {
+        // A refusal no rule above explains may be the account's as well as the
+        // request's: nobody is blamed.
+        RunCause::Undetermined
+    }
+}
+
+/// The failure says the stack lacks a function or a database the run is
+/// owed. One the agent mistyped or made up stays the agent's, and so does
+/// one the scenario never provides.
+fn missing_test_environment(text: &str, owed: &Owed) -> bool {
+    fn names<'a>(text: &'a str, start: &'a str, end: &'a str) -> impl Iterator<Item = &'a str> {
+        text.split(start)
+            .skip(1)
+            .filter_map(move |rest| rest.split_once(end))
+            .map(|(name, _)| name.trim_matches(['\'', '"', '`']))
+    }
+    let named = |name: &str| {
+        !name.is_empty()
+            && owed
+                .prompt
+                .split(|c: char| !(c.is_ascii_alphanumeric() || "_:.-".contains(c)))
+                .any(|token| token.trim_end_matches('.') == name)
+    };
+    names(text, "Function ", " not found").any(|name| {
+        owed.functions.contains(&name) || name.starts_with(MEASUREMENT_FUNCTIONS) && named(name)
+    }) || text.contains("UNKNOWN_DB") && names(text, "\"db\":\"", "\"").any(named)
+}
+
+/// Failures that kept no error entry: the Harness's fixed summary for a
+/// context overflow, a provider or model the stack does not serve, a
+/// provider's refusal or a dependency, and the runner's copy for a turn
+/// cancelled without an error. The Harness's `failure_presentation` maps
+/// each router code to one summary.
+fn fixed_copy_cause(message: &str, owed: &Owed) -> Option<RunCause> {
+    let reason = message
+        .split_once("turn ended as ")
+        .map_or(message, |(_, reason)| reason);
+    let ends = |copies: &[&str]| copies.iter().any(|copy| reason.ends_with(copy));
+    if missing_test_environment(reason, owed)
+        || ends(&[
+            "No configured provider can serve the selected model.",
+            "The selected provider is no longer registered.",
+            "The selected model is not in the model catalog.",
+            "The selected model is available from multiple providers.",
+            "The selected model does not support structured output.",
+        ])
+        // A cost cap the catalog cannot price, at send or at a step.
+        || reason.contains("no pricing is configured in the model catalog")
+    {
+        Some(RunCause::TestEnvironmentIncomplete)
+    } else if ends(&[
+        "The conversation is too large for the selected model.",
+        "The conversation could not be compacted to fit the selected model.",
+    ]) {
+        Some(RunCause::ContextOverflow)
+    } else if ends(&[
+        "The provider authentication needs attention.",
+        "The selected provider is not configured.",
+    ]) {
+        Some(RunCause::ProviderInfrastructure)
+    } else if reason.ends_with("The model request is invalid.") {
+        Some(RunCause::InvalidProviderRequest)
+    } else if reason.contains("harness/dependency")
+        || reason == "Cancelled: no error was reported"
+        // Without its code, a refusal is the account's as much as the request's.
+        || reason == "Failed: The provider rejected this request."
+    {
+        Some(RunCause::Undetermined)
+    } else {
+        None
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationDimension {
     Deliverable,
@@ -90,6 +404,12 @@ pub struct DimensionReport {
     pub dimension: EvaluationDimension,
     pub passed: Option<bool>,
     pub signals: Value,
+    /// The raw points the run's criteria of this dimension awarded. The
+    /// dimensions' points add up to the run score: a breakdown of it, not a
+    /// second score. Absent when the run has no score or a scored criterion
+    /// declared no dimension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -259,6 +579,41 @@ pub struct EfficiencyReport {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
+    /// Prompt tokens served from the provider's cache.
+    #[serde(default)]
+    pub cache_read_tokens: Option<u64>,
+    /// Every prompt token the provider processed: input, cache reads and
+    /// cache writes. `input_tokens` alone leaves the cache out, and the cache
+    /// is most of a long session's prompt.
+    #[serde(default)]
+    pub processed_prompt_tokens: Option<u64>,
+    /// The largest prompt one step of the root session sent, from the usage
+    /// each assistant message recorded in the transcript. Given only when the
+    /// steps add up to the root session's totals.
+    #[serde(default)]
+    pub peak_context_tokens: Option<u64>,
+    /// The prompt budget the Harness fit the root session's window into
+    /// (its context snapshot's `usable`).
+    #[serde(default)]
+    pub usable_context_tokens: Option<u64>,
+    /// Compactions of the root session: the `compaction` records the Harness
+    /// wrote to its transcript, automatic or asked for. The snapshot's
+    /// `compacted` only says the session holds a summary now.
+    #[serde(default)]
+    pub compactions: Option<u64>,
+    /// The Harness prompt-surface digest of each session role (`root`,
+    /// `child`): data, not drift, since every Harness release changes it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prompt_surface_digests: BTreeMap<String, Vec<String>>,
+    /// False when a session's provider reported a prompt that does not match
+    /// the Harness's own count of what it sent (claude-code adds a prompt of
+    /// its own): its prompt and cache figures are not comparable with another
+    /// provider's.
+    // Judged only against a heuristic estimate (a provider-counted total is the
+    // billed value), null when no session has one; the schema text above is
+    // left as it was so the result contract's fingerprint does not move.
+    #[serde(default)]
+    pub cache_comparable: Option<bool>,
     pub cost_usd: Option<f64>,
     pub observed_work: Option<u64>,
     pub technical_attempts: u32,
@@ -439,6 +794,12 @@ pub struct E2eRunReport {
     pub wall_time_ms: u64,
     pub score: Option<u8>,
     pub status: RunStatus,
+    /// Why the run ended as it did; `technical` follows from it. Absent only
+    /// in reports written before causes, which keep the earlier rule: every
+    /// subject error left the mean, and an evaluator's own failure could
+    /// count as a valid zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<RunCause>,
     pub completion: CompletionState,
     pub technical: TechnicalState,
     pub evaluators: EvaluatorStates,
@@ -513,6 +874,9 @@ impl E2eRunReport {
             wall_time_ms: 0,
             score: None,
             status: RunStatus::InfrastructureError,
+            // Set when the run finishes or fails; a run never classified
+            // reads as one written before causes.
+            cause: None,
             completion: CompletionState::Undetermined,
             technical: TechnicalState::TechnicalInvalid,
             evaluators: EvaluatorStates::default(),
@@ -565,12 +929,18 @@ impl E2eRunReport {
         message: impl Into<String>,
     ) {
         let message = message.into();
-        let is_primary = self.failures.is_empty();
+        let code = code.into();
+        // A subject's leftover never becomes the run's status.
+        let is_primary = code != SUBJECT_LEFTOVER
+            && self
+                .failures
+                .iter()
+                .all(|failure| failure.code == SUBJECT_LEFTOVER);
         self.failures.push(FailureRecord {
             status,
             domain: status.failure_domain(),
             phase,
-            code: code.into(),
+            code,
             retry_scope,
             contamination,
             message,
@@ -578,11 +948,85 @@ impl E2eRunReport {
         if is_primary {
             self.status = status;
         }
-        self.seal_outcome_from_status();
+        self.classify();
     }
 
     pub fn finish(&mut self, status: RunStatus) {
         self.status = status;
+        self.classify();
+    }
+
+    /// Read the run's cause from its failures and seal the outcome from it.
+    /// Only the producer classifies: a report read back keeps the cause it was
+    /// written with, and one written before causes keeps the earlier rule.
+    fn classify(&mut self) {
+        let transcripts = self
+            .transcript
+            .iter()
+            .chain(
+                self.semantic_tests
+                    .iter()
+                    .filter_map(|test| test.transcript.as_ref()),
+            )
+            .collect::<Vec<_>>();
+        let owed = Owed {
+            prompt: &self.prompt,
+            functions: self
+                .worker_contracts
+                .iter()
+                .map(|contract| contract.function_id.as_str())
+                .collect(),
+        };
+        let mut causes = Vec::new();
+        // A composite step the flow stopped: another failure is the cause. A
+        // subject's leftover is recorded and decides nothing.
+        for failure in self
+            .failures
+            .iter_mut()
+            .filter(|failure| !matches!(failure.code.as_str(), "step_aborted" | SUBJECT_LEFTOVER))
+        {
+            // A composite step's failure is read from its own step's
+            // transcript (`semantic test '<node>': …`), never from another
+            // step whose error has the same summary.
+            let step = failure
+                .message
+                .strip_prefix("semantic test '")
+                .and_then(|rest| rest.split_once("': "))
+                .map(|(node, _)| node);
+            let transcripts = match step {
+                Some(node) => self
+                    .semantic_tests
+                    .iter()
+                    .filter(|test| test.node_id == node)
+                    .filter_map(|test| test.transcript.as_ref())
+                    .collect(),
+                None => transcripts.clone(),
+            };
+            let cause = failure_cause(failure, &transcripts, &owed);
+            // The domain says whose failure it is, as the cause does.
+            failure.domain = match cause {
+                RunCause::Evaluated => failure.status.failure_domain(),
+                RunCause::ResourceLimit => FailureDomain::Resource,
+                cause if cause.counted() => FailureDomain::Subject,
+                _ => FailureDomain::E2eInfrastructure,
+            };
+            causes.push(cause);
+        }
+        // A cancellation explains everything after it; any failure the subject
+        // did not cause takes the run out; else the first failure decides.
+        let cause = causes
+            .iter()
+            .find(|cause| **cause == RunCause::OperatorCancelled)
+            .or_else(|| causes.iter().find(|cause| !cause.counted()))
+            .or(causes.first())
+            .copied()
+            .unwrap_or(match self.status {
+                RunStatus::Passed | RunStatus::HardGateFailed => RunCause::Evaluated,
+                RunStatus::ResourceLimit => RunCause::ResourceLimit,
+                RunStatus::SubjectError => RunCause::SubjectFailure,
+                RunStatus::InfrastructureError => RunCause::E2eInfrastructure,
+            });
+        self.cause = Some(cause);
         self.seal_outcome_from_status();
     }
 
@@ -596,12 +1040,40 @@ impl E2eRunReport {
     }
 
     /// Seal the independent result axes while keeping `status` as a compatibility
-    /// projection for existing scenario implementations.
-    /// Seal the independent result axes while keeping `status` as a compatibility
     /// projection for existing scenario implementations. The score is never
     /// touched here: it is what the evaluated criteria awarded, and `technical`
-    /// says whether that measurement can be trusted.
+    /// says whether that measurement can be trusted, which the cause decides.
     pub fn seal_outcome_from_status(&mut self) {
+        let Some(cause) = self.cause else {
+            return self.seal_by_earlier_rule();
+        };
+        self.technical = if cause.counted() {
+            TechnicalState::Valid
+        } else {
+            TechnicalState::TechnicalInvalid
+        };
+        if self.evaluators.completion == EvaluatorAvailability::Available {
+            return;
+        }
+        match self.status {
+            RunStatus::Passed => {
+                self.completion = CompletionState::Completed;
+                self.evaluators.completion = EvaluatorAvailability::Available;
+            }
+            RunStatus::HardGateFailed => {}
+            _ if cause.counted() => {
+                self.completion = CompletionState::TaskIncomplete;
+                self.evaluators.completion = EvaluatorAvailability::Available;
+            }
+            _ => {
+                self.completion = CompletionState::Undetermined;
+                self.evaluators.completion = EvaluatorAvailability::Unavailable;
+            }
+        }
+    }
+
+    /// Reports without a cause: a subject error invalidated the run.
+    fn seal_by_earlier_rule(&mut self) {
         match self.status {
             RunStatus::Passed => {
                 self.technical = TechnicalState::Valid;
@@ -668,6 +1140,12 @@ impl E2eRunReport {
                 "input_tokens",
                 "output_tokens",
                 "total_tokens",
+                "cache_read_tokens",
+                "processed_prompt_tokens",
+                "peak_context_tokens",
+                "usable_context_tokens",
+                "compactions",
+                "cache_comparable",
                 "cost_usd",
                 "critical_path_ms",
                 "observed_work",
@@ -689,6 +1167,13 @@ impl E2eRunReport {
                 input_tokens: None,
                 output_tokens: None,
                 total_tokens: None,
+                cache_read_tokens: None,
+                processed_prompt_tokens: None,
+                peak_context_tokens: None,
+                usable_context_tokens: None,
+                compactions: None,
+                prompt_surface_digests: BTreeMap::new(),
+                cache_comparable: None,
                 cost_usd: self.cost.total_usd,
                 observed_work: None,
                 technical_attempts: 1,
@@ -814,6 +1299,7 @@ impl E2eRunReport {
                 "validation retry count is required by the work formula".into(),
             );
         }
+        let context = context_usage(metrics, self.transcript.as_ref(), &mut unavailable);
         let observed_complexity = observed_complexity(
             metrics,
             self.transcript.as_ref(),
@@ -837,12 +1323,37 @@ impl E2eRunReport {
             input_tokens: metrics.totals.input_tokens,
             output_tokens: metrics.totals.output_tokens,
             total_tokens,
+            cache_read_tokens: metrics.totals.cache_read_tokens,
+            processed_prompt_tokens: context.processed_prompt_tokens,
+            peak_context_tokens: context.peak_context_tokens,
+            usable_context_tokens: context.usable_context_tokens,
+            compactions: context.compactions,
+            prompt_surface_digests: context.prompt_surface_digests,
+            cache_comparable: context.cache_comparable,
             cost_usd: self.cost.total_usd,
             observed_work,
             technical_attempts: 1,
             observed_complexity,
             unavailable,
         });
+    }
+
+    /// The awarded points per criterion dimension, which add up to the score.
+    fn points_by_dimension(&self) -> Option<BTreeMap<EvaluationDimension, u16>> {
+        self.score?;
+        let mut points = BTreeMap::new();
+        for criterion in &self.criteria {
+            let Some(awarded) = criterion.awarded else {
+                continue;
+            };
+            let dimension = self
+                .assessment_results
+                .iter()
+                .find(|result| result.criterion_id == criterion.id)?
+                .dimension;
+            *points.entry(dimension).or_insert(0) += u16::from(awarded);
+        }
+        Some(points)
     }
 
     pub fn attach_retry_attempts(&mut self, retry_attempts: Vec<RetryAttemptReport>) {
@@ -904,6 +1415,28 @@ impl E2eRunReport {
         aggregate.input_tokens = sum_optional(&attempts, |value| value.input_tokens);
         aggregate.output_tokens = sum_optional(&attempts, |value| value.output_tokens);
         aggregate.total_tokens = sum_optional(&attempts, |value| value.total_tokens);
+        aggregate.cache_read_tokens = sum_optional(&attempts, |value| value.cache_read_tokens);
+        aggregate.processed_prompt_tokens =
+            sum_optional(&attempts, |value| value.processed_prompt_tokens);
+        aggregate.peak_context_tokens = max_optional(&attempts, |value| value.peak_context_tokens);
+        aggregate.usable_context_tokens =
+            max_optional(&attempts, |value| value.usable_context_tokens);
+        aggregate.compactions = sum_optional(&attempts, |value| value.compactions);
+        for attempt in &attempts {
+            for (role, digests) in &attempt.prompt_surface_digests {
+                let merged = aggregate
+                    .prompt_surface_digests
+                    .entry(role.clone())
+                    .or_default();
+                merged.extend(digests.iter().cloned());
+                merged.sort();
+                merged.dedup();
+            }
+        }
+        aggregate.cache_comparable = attempts
+            .iter()
+            .filter_map(|attempt| attempt.cache_comparable)
+            .reduce(|all, comparable| all && comparable);
         aggregate.cost_usd = self.cost.total_usd;
         aggregate.observed_work = sum_optional(&attempts, |value| value.observed_work);
         aggregate.technical_attempts = attempts.len().try_into().unwrap_or(u32::MAX);
@@ -929,9 +1462,16 @@ impl E2eRunReport {
             .iter()
             .filter(|failure| failure.domain == FailureDomain::E2eInfrastructure)
             .count();
+        let points = self.points_by_dimension();
+        let points = |dimension| {
+            points
+                .as_ref()
+                .map(|points| points.get(&dimension).copied().unwrap_or(0))
+        };
         self.dimensions = vec![
             DimensionReport {
                 dimension: EvaluationDimension::Deliverable,
+                points: points(EvaluationDimension::Deliverable),
                 passed: deliverable_passed,
                 signals: serde_json::json!({
                     "expected": expects_deliverables,
@@ -941,6 +1481,7 @@ impl E2eRunReport {
             },
             DimensionReport {
                 dimension: EvaluationDimension::StructuralIntegrity,
+                points: points(EvaluationDimension::StructuralIntegrity),
                 passed: None,
                 signals: serde_json::json!({
                     "criteria": self.criteria.iter().filter(|criterion| criterion.awarded.is_some()).count(),
@@ -948,11 +1489,13 @@ impl E2eRunReport {
             },
             DimensionReport {
                 dimension: EvaluationDimension::Efficiency,
+                points: points(EvaluationDimension::Efficiency),
                 passed: None,
                 signals: efficiency,
             },
             DimensionReport {
                 dimension: EvaluationDimension::Robustness,
+                points: points(EvaluationDimension::Robustness),
                 passed: None,
                 signals: serde_json::json!({
                     "available": false,
@@ -961,6 +1504,7 @@ impl E2eRunReport {
             },
             DimensionReport {
                 dimension: EvaluationDimension::E2eInfrastructure,
+                points: points(EvaluationDimension::E2eInfrastructure),
                 passed: Some(infrastructure_failures == 0),
                 signals: serde_json::json!({ "failures": infrastructure_failures }),
             },
@@ -1144,6 +1688,159 @@ fn observed_complexity(
     }
 }
 
+/// A provider whose reported prompt differs from the Harness's count of the
+/// same step by more than this does not report a comparable prompt.
+const PROMPT_RECONCILIATION_TOLERANCE: f64 = 0.10;
+
+#[derive(Default)]
+struct ContextUsage {
+    processed_prompt_tokens: Option<u64>,
+    peak_context_tokens: Option<u64>,
+    usable_context_tokens: Option<u64>,
+    compactions: Option<u64>,
+    prompt_surface_digests: BTreeMap<String, Vec<String>>,
+    cache_comparable: Option<bool>,
+}
+
+/// A step's prompt as its provider billed it: input, cache reads and writes.
+fn step_prompt(usage: &Value) -> u64 {
+    ["input", "cache_read", "cache_write"]
+        .iter()
+        .filter_map(|key| usage.get(key).and_then(Value::as_u64))
+        .fold(0, u64::saturating_add)
+}
+
+fn context_usage(
+    metrics: &SessionMetricsResponse,
+    transcript: Option<&Value>,
+    unavailable: &mut BTreeMap<String, String>,
+) -> ContextUsage {
+    let totals = &metrics.totals;
+    let mut usage = ContextUsage {
+        processed_prompt_tokens: totals.input_tokens.zip(totals.cache_read_tokens).map(
+            |(input, read)| {
+                input
+                    .saturating_add(read)
+                    .saturating_add(totals.cache_write_tokens.unwrap_or(0))
+            },
+        ),
+        ..ContextUsage::default()
+    };
+    if totals.cache_read_tokens.is_none() {
+        unavailable.insert(
+            "cache_read_tokens".into(),
+            "provider did not report cache reads".into(),
+        );
+        unavailable.insert(
+            "processed_prompt_tokens".into(),
+            "provider did not report cache reads".into(),
+        );
+    }
+    let root = metrics.by_session.iter().find(|session| session.depth == 0);
+    usage.usable_context_tokens =
+        root.and_then(|session| session.context.as_ref()?.get("usable")?.as_u64());
+    if usage.usable_context_tokens.is_none() {
+        unavailable.insert(
+            "usable_context_tokens".into(),
+            "the root session has no context snapshot".into(),
+        );
+    }
+    for session in &metrics.by_session {
+        let Some(context) = session.context.as_ref() else {
+            continue;
+        };
+        if let Some(digest) = context.get("prompt_surface_digest").and_then(Value::as_str) {
+            let role = if session.depth == 0 { "root" } else { "child" };
+            let digests = usage.prompt_surface_digests.entry(role.into()).or_default();
+            if !digests.iter().any(|known| known == digest) {
+                digests.push(digest.into());
+                digests.sort();
+            }
+        }
+        // The snapshot keeps the last step's billed usage beside the count
+        // the Harness made of the same prompt.
+        // Only a heuristic count is the Harness's own: a provider-counted
+        // total is overwritten with the billed value and always agrees.
+        let billed = context.get("usage").map_or(0, step_prompt);
+        let counted = context.get("total").and_then(Value::as_u64).unwrap_or(0);
+        let heuristic = context.get("estimator").and_then(Value::as_str) == Some("heuristic");
+        if heuristic && billed > 0 && counted > 0 {
+            let reconciles = (billed as f64 - counted as f64).abs()
+                <= PROMPT_RECONCILIATION_TOLERANCE * counted as f64;
+            usage.cache_comparable = Some(usage.cache_comparable.unwrap_or(true) && reconciles);
+        }
+    }
+    if usage.cache_comparable.is_none() {
+        unavailable.insert(
+            "cache_comparable".into(),
+            "no session has a heuristic context estimate to hold against the billed step".into(),
+        );
+    }
+    let Some(messages) = transcript
+        .and_then(|transcript| transcript.get("messages"))
+        .and_then(Value::as_array)
+    else {
+        for field in ["peak_context_tokens", "compactions"] {
+            unavailable.insert(field.into(), "transcript unavailable".into());
+        }
+        return usage;
+    };
+    let recorded = messages.iter().any(|entry| entry.get("custom").is_some());
+    let snapshot_compacted = metrics.by_session.iter().any(|session| {
+        session
+            .context
+            .as_ref()
+            .and_then(|context| context.get("compacted"))
+            == Some(&Value::Bool(true))
+    });
+    if recorded || snapshot_compacted {
+        usage.compactions = Some(
+            messages
+                .iter()
+                .filter(|entry| {
+                    entry.pointer("/custom/custom_type").and_then(Value::as_str)
+                        == Some("compaction")
+                })
+                .count() as u64,
+        );
+    } else {
+        unavailable.insert(
+            "compactions".into(),
+            "the transcript records no custom entries and no snapshot says compacted".into(),
+        );
+    }
+    let steps = messages
+        .iter()
+        .filter_map(|entry| entry.get("message"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|message| message.get("usage"))
+        .map(step_prompt)
+        .collect::<Vec<_>>();
+    let session_prompt = root.and_then(|session| {
+        session.input_tokens.map(|input| {
+            input
+                .saturating_add(session.cache_read_tokens.unwrap_or(0))
+                .saturating_add(session.cache_write_tokens.unwrap_or(0))
+        })
+    });
+    let step_sum = steps.iter().copied().fold(0, u64::saturating_add);
+    match session_prompt {
+        Some(total)
+            if !steps.is_empty() && step_sum.abs_diff(total) as f64 <= 0.01 * total as f64 =>
+        {
+            usage.peak_context_tokens = steps.iter().copied().max();
+        }
+        _ => {
+            unavailable.insert(
+                "peak_context_tokens".into(),
+                "the transcript's per-step usage does not add up to the root session's totals"
+                    .into(),
+            );
+        }
+    }
+    usage
+}
+
 fn sum_optional(
     attempts: &[&EfficiencyReport],
     value: impl Fn(&EfficiencyReport) -> Option<u64>,
@@ -1172,6 +1869,10 @@ pub struct ScenarioAggregate {
     pub undetermined_runs: u32,
     pub technical_valid_runs: u32,
     pub technical_invalid_runs: u32,
+    /// Observed runs per cause: the counted ones are the technically valid
+    /// runs. Runs from reports written before causes are left out of it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub causes: BTreeMap<RunCause, u32>,
     pub execution_reliability: Option<f64>,
     pub completion_evidence_coverage: Option<f64>,
     pub completion_rate: Option<f64>,
@@ -1421,6 +2122,10 @@ impl E2eScenarioReport {
             run.technical == TechnicalState::TechnicalInvalid
         });
         let deferred_runs = planned_runs.saturating_sub(run_count);
+        let mut causes = BTreeMap::new();
+        for cause in runs.iter().filter_map(|run| run.cause) {
+            *causes.entry(cause).or_insert(0_u32) += 1;
+        }
         let scores = runs
             .iter()
             .filter(|run| run.technical == TechnicalState::Valid)
@@ -1480,6 +2185,7 @@ impl E2eScenarioReport {
                 undetermined_runs,
                 technical_valid_runs,
                 technical_invalid_runs,
+                causes,
                 execution_reliability: ratio(technical_valid_runs, planned_runs),
                 completion_evidence_coverage: ratio(determined_runs, planned_runs),
                 completion_rate: ratio(completed_runs, determined_runs),
@@ -2064,7 +2770,19 @@ pub struct E2eReport {
     pub scenarios: Vec<E2eScenarioReport>,
 }
 
+/// What a reader is told about runs written before causes.
+pub const EARLIER_RULE: &str = "runs written before run causes were classified by the earlier rule: every subject error left the mean, and an evaluator's own failure could count as a valid zero";
+
 impl E2eReport {
+    /// Runs written before causes, which keep the earlier rule.
+    pub fn runs_without_cause(&self) -> usize {
+        self.scenarios
+            .iter()
+            .flat_map(|scenario| &scenario.runs)
+            .filter(|run| run.cause.is_none())
+            .count()
+    }
+
     pub fn execution_succeeded(&self) -> bool {
         self.report_state == ReportState::Complete
             && self.persistence_errors.is_empty()
@@ -2177,6 +2895,14 @@ impl E2eReport {
         }
         let report: Self = serde_json::from_value(value)
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
+        let earlier = report.runs_without_cause();
+        if earlier > 0 {
+            tracing::warn!(
+                path = %path.display(),
+                runs = earlier,
+                "{EARLIER_RULE}"
+            );
+        }
         validate_against_schema(&schema::results(), &report, "results")?;
         report.assessment_contract.validate(&report)?;
         let output = path
@@ -3310,6 +4036,527 @@ mod tests {
         assert_eq!(report.aggregate.mean_score, Some(90.0));
     }
 
+    /// The 26 subject errors of the local history before causes, as their
+    /// reports recorded them: failure, the Harness's error entry, and the
+    /// gate's nudges. Each run carries its scenario's own prompt and ends as
+    /// the suite ends it: a counted run always has a score.
+    #[test]
+    fn local_history_subject_errors_each_fall_in_one_cause() {
+        #[derive(Deserialize)]
+        struct Case {
+            scenario: String,
+            expected: RunCause,
+            failure: FailureRecord,
+            transcript: Value,
+        }
+        let cases: Vec<Case> =
+            serde_json::from_str(include_str!("../tests/fixtures/results/run-causes.json"))
+                .unwrap();
+        let mut counted = BTreeMap::<RunCause, u32>::new();
+        let mut excluded = BTreeMap::<RunCause, u32>::new();
+        for case in cases {
+            let spec = case
+                .scenario
+                .parse::<crate::scenarios::ScenarioId>()
+                .unwrap()
+                .spec("run");
+            let mut run = E2eRunReport::new(
+                "run".into(),
+                "attempt".into(),
+                1,
+                "session".into(),
+                spec.prompt.clone(),
+            );
+            run.transcript = Some(case.transcript);
+            let failure = case.failure;
+            run.push_typed_failure(
+                failure.status,
+                failure.phase,
+                failure.code,
+                failure.retry_scope,
+                failure.contamination,
+                failure.message,
+            );
+            crate::suite::zero_unreached_criteria(&spec, &mut run);
+            assert_eq!(run.cause, Some(case.expected), "{}", case.scenario);
+            let valid = run.technical == TechnicalState::Valid;
+            assert_eq!(valid, case.expected.counted(), "{}", case.scenario);
+            if valid {
+                assert_eq!(run.completion, CompletionState::TaskIncomplete);
+                assert_eq!(run.score, Some(0), "{}", case.scenario);
+            } else {
+                assert_eq!(run.score, None, "{}", case.scenario);
+            }
+            *if valid { &mut counted } else { &mut excluded }
+                .entry(case.expected)
+                .or_default() += 1;
+        }
+        // validation_self_repair's database was missing only earlier in the
+        // turn; its final failure is the turn limit.
+        assert_eq!(
+            counted,
+            BTreeMap::from([
+                (RunCause::ResourceLimit, 2),
+                (RunCause::InvalidProviderRequest, 1),
+                (RunCause::ContextOverflow, 1),
+                (RunCause::PlannerFormat, 2),
+            ])
+        );
+        assert_eq!(
+            excluded,
+            BTreeMap::from([
+                (RunCause::ProviderInfrastructure, 10),
+                (RunCause::TestEnvironmentIncomplete, 1),
+                (RunCause::OperatorCancelled, 7),
+                (RunCause::Undetermined, 2),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_provider_refusal_counts_only_when_the_request_was_wrong() {
+        let refused = |code: &str, detail: &str| {
+            let mut run = run(0, false);
+            run.evaluators = EvaluatorStates::default();
+            run.transcript = Some(serde_json::json!({"messages": [{"custom": {
+                "custom_type": "error",
+                "data": {"code": code, "class": "llm.permanent",
+                         "summary": "The provider rejected this request.", "detail": detail}
+            }}]}));
+            run.push_failure(
+                RunStatus::SubjectError,
+                FailurePhase::Execute,
+                "turn ended as Failed: The provider rejected this request.",
+            );
+            run.cause.unwrap()
+        };
+        for (detail, cause) in [
+            // Moonshot (Kimi), Z.ai (code 1113) and OpenRouter out of credit.
+            (
+                r#"{"error":{"message":"Your account org-1 <ak-1> is suspended, please check your plan and billing details","type":"exceeded_current_quota_error"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1234.","code":402}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            // DeepSeek, Anthropic and Z.ai (1308) usage limits, an OpenRouter
+            // key limit and an expired Gemini key.
+            (
+                r#"{"error":{"message":"You have run out of balance","type":"unknown_error"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-10-24 20:00:00"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys","code":403}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                r#"{"error":{"code":400,"message":"API key expired. Please renew the API key.","status":"INVALID_ARGUMENT"}}"#,
+                RunCause::ProviderInfrastructure,
+            ),
+            // Kimi, Z.ai (1261) and Gemini overflow in their own words.
+            (
+                r#"{"error":{"message":"Invalid request: Your request exceeded model token limit: 262144","type":"invalid_request_error"}}"#,
+                RunCause::ContextOverflow,
+            ),
+            (
+                r#"{"error":{"code":"1261","message":"Prompt exceeds max length"}}"#,
+                RunCause::ContextOverflow,
+            ),
+            (
+                r#"{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}"#,
+                RunCause::ContextOverflow,
+            ),
+            // A conversation the Harness sent malformed.
+            (
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.3: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01"}}"#,
+                RunCause::InvalidProviderRequest,
+            ),
+            (
+                r#"{"error":{"message":"Invalid schema for function 'state__set': In context=(), 'required' is required to be supplied","type":"invalid_request_error","param":"tools[0].function.parameters","code":"invalid_function_parameters"}}"#,
+                RunCause::InvalidProviderRequest,
+            ),
+            // A model the stack names and its provider does not serve.
+            (
+                r#"{"error":{"message":"The model `kimi-k3` does not exist or you do not have access to it."}}"#,
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                r#"{"error":{"message":"The model `gpt-9` does not exist or you do not have access to it.","type":"invalid_request_error","param":null,"code":"model_not_found"}}"#,
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            // A refusal no rule explains blames nobody.
+            (
+                r#"{"error":{"message":"Invalid prompt: your prompt was flagged as potentially violating our usage policy.","type":"invalid_request_error"}}"#,
+                RunCause::Undetermined,
+            ),
+        ] {
+            assert_eq!(
+                refused("router/provider_rejected", detail),
+                cause,
+                "{detail}"
+            );
+        }
+        assert_eq!(
+            refused(
+                "provider/invalid_request",
+                "remote error (provider/invalid_request): bad ProviderStreamInput"
+            ),
+            RunCause::InvalidProviderRequest
+        );
+        // A stack that does not route, single out or price the configured
+        // provider or model.
+        for code in [
+            "router/unknown_provider",
+            "router/no_provider_for_model",
+            "router/ambiguous_model",
+            "router/structured_output_unsupported",
+            "harness.unknown_model",
+            "harness.budget_unavailable",
+        ] {
+            assert_eq!(
+                refused(code, "no route"),
+                RunCause::TestEnvironmentIncomplete,
+                "{code}"
+            );
+        }
+        // Without its error entry (an adaptive planner turn, an unreadable
+        // transcript), the Harness's copy for each router code decides.
+        let bare = |message: &str| {
+            let mut bare = run(0, false);
+            bare.evaluators = EvaluatorStates::default();
+            bare.push_failure(RunStatus::SubjectError, FailurePhase::Execute, message);
+            bare.cause.unwrap()
+        };
+        for (reason, cause) in [
+            // A refusal says no more.
+            (
+                "The provider rejected this request.",
+                RunCause::Undetermined,
+            ),
+            (
+                "The provider authentication needs attention.",
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                "The selected provider is not configured.",
+                RunCause::ProviderInfrastructure,
+            ),
+            (
+                "No configured provider can serve the selected model.",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                "The selected model is available from multiple providers.",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                "The selected model does not support structured output.",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            (
+                "cannot enforce max_cost_usd for model m because no pricing is configured in the model catalog; configure input/output pricing or remove max_cost_usd",
+                RunCause::TestEnvironmentIncomplete,
+            ),
+            ("The model request is invalid.", RunCause::InvalidProviderRequest),
+        ] {
+            assert_eq!(bare(&format!("turn ended as Failed: {reason}")), cause, "{reason}");
+        }
+        // The Harness refuses a cost cap it cannot price at send as well.
+        assert_eq!(
+            bare("invoke harness::send: remote error (invocation_failed): cannot enforce max_cost_usd for model m because no pricing is configured in the model catalog; configure input/output pricing or remove max_cost_usd"),
+            RunCause::TestEnvironmentIncomplete
+        );
+    }
+
+    #[test]
+    fn only_a_function_the_run_is_owed_makes_the_stack_incomplete() {
+        let failed_with = |prompt: &str, required: &[&str], status, message: &str| {
+            let mut run = E2eRunReport::new(
+                "run".into(),
+                "attempt".into(),
+                1,
+                "session".into(),
+                prompt.into(),
+            );
+            run.worker_contracts = required
+                .iter()
+                .map(|function_id| ObservedWorkerContract {
+                    function_id: (*function_id).into(),
+                    request_schema_sha256: TEST_DIGEST.into(),
+                    response_schema_sha256: TEST_DIGEST.into(),
+                })
+                .collect();
+            run.push_failure(status, FailurePhase::Execute, message);
+            run.cause.unwrap()
+        };
+        let failed = |prompt: &str, message: &str| {
+            failed_with(prompt, &[], RunStatus::SubjectError, message)
+        };
+        // validation_chain's deliberately broken validator, which its prompt
+        // names: a Harness that fails it closed is the regression the
+        // scenario protects, never an incomplete stack.
+        let chain = crate::scenarios::ScenarioId::ValidationChain
+            .spec("run")
+            .prompt;
+        let broken = chain
+            .split("function_id \"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        assert!(broken.starts_with("e2e::does_not_exist_"), "{broken}");
+        let hook = format!("hook {broken} failed: remote error (function_not_found): Function {broken} not found in namespace my-project.");
+        for (status, message, cause) in [
+            (
+                RunStatus::ResourceLimit,
+                format!("turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: {hook}"),
+                RunCause::ResourceLimit,
+            ),
+            (
+                RunStatus::SubjectError,
+                format!("turn ended as Failed: {hook}"),
+                RunCause::SubjectFailure,
+            ),
+        ] {
+            assert_eq!(failed_with(&chain, &[], status, &message), cause, "{message}");
+        }
+        // A function the run registers itself and needs is owed, named or not.
+        let resolver = "turn ended as Failed: hook e2etest::contract_resolver_1 failed: remote error (function_not_found): Function e2etest::contract_resolver_1 not found in namespace my-project.";
+        assert_eq!(
+            failed_with(
+                "Resolve the contract.",
+                &["e2etest::contract_resolver_1"],
+                RunStatus::SubjectError,
+                resolver
+            ),
+            RunCause::TestEnvironmentIncomplete
+        );
+        assert_eq!(
+            failed("Resolve the contract.", resolver),
+            RunCause::SubjectFailure
+        );
+        let missing = "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied: hook fp::pipe failed: remote error (function_not_found): Function fp::pipe not found in namespace my-project.";
+        assert_eq!(
+            failed(
+                "Call engine::register_trigger with function_id: \"fp::pipe\".",
+                missing
+            ),
+            RunCause::TestEnvironmentIncomplete
+        );
+        // The agent's typo: the scenario never named it.
+        assert_eq!(
+            failed(
+                "Call engine::register_trigger with function_id: \"fp::pipeline\".",
+                missing
+            ),
+            RunCause::SubjectFailure
+        );
+        let database = r#"turn ended as Failed: database::query failed: {"code":"UNKNOWN_DB","db":"primary","available":["harness_e2e"]}"#;
+        assert_eq!(
+            failed("Use database::execute (db `primary`).", database),
+            RunCause::TestEnvironmentIncomplete
+        );
+        assert_eq!(
+            failed("Use database::execute (db `harness_e2e`).", database),
+            RunCause::SubjectFailure
+        );
+    }
+
+    #[test]
+    fn counted_causes_stay_in_the_mean_and_the_others_are_counted_apart() {
+        let failed = |status, phase, code: &str, message: &str| {
+            let mut run = run(0, false);
+            run.score = Some(30);
+            run.evaluators = EvaluatorStates::default();
+            run.push_typed_failure(
+                status,
+                phase,
+                code,
+                RetryScope::None,
+                ContaminationScope::None,
+                message,
+            );
+            run
+        };
+        let turns = failed(
+            RunStatus::ResourceLimit,
+            FailurePhase::Execute,
+            "subject_budget_exhausted",
+            "turn ended as Failed: max_turns reached with the post-turn gate unsatisfied",
+        );
+        assert_eq!(turns.cause, Some(RunCause::ResourceLimit));
+        assert_eq!(turns.technical, TechnicalState::Valid);
+        assert_eq!(turns.completion, CompletionState::TaskIncomplete);
+        assert_eq!(turns.score, Some(30));
+        let overflow = failed(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "subject_execution_failed",
+            "turn ended as Failed: The conversation is too large for the selected model.",
+        );
+        assert_eq!(overflow.cause, Some(RunCause::ContextOverflow));
+        // An error code the classifier does not know leaves the status to decide.
+        let mut budget = run(0, false);
+        budget.evaluators = EvaluatorStates::default();
+        budget.transcript = Some(serde_json::json!({"messages": [{"custom": {
+            "custom_type": "error",
+            "data": {"code": "harness.budget_exhausted", "summary": "token budget exhausted"}
+        }}]}));
+        budget.push_failure(
+            RunStatus::ResourceLimit,
+            FailurePhase::Execute,
+            "turn ended as Failed: token budget exhausted",
+        );
+        assert_eq!(budget.cause, Some(RunCause::ResourceLimit));
+        let transport = failed(
+            RunStatus::InfrastructureError,
+            FailurePhase::Execute,
+            "provider_transport_failed",
+            "provider transport failed, not the subject: turn ended as Failed: The provider is busy right now.",
+        );
+        assert_eq!(transport.cause, Some(RunCause::ProviderInfrastructure));
+        let evaluator = failed(
+            RunStatus::InfrastructureError,
+            FailurePhase::Evaluate,
+            "infrastructure_failed",
+            "scenario 'registry_implementation' evaluator failed: validation incomplete: Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        );
+        assert_eq!(evaluator.cause, Some(RunCause::EvaluationEnvironment));
+        assert_eq!(evaluator.technical, TechnicalState::TechnicalInvalid);
+        let cancelled = failed(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "execution_cancelled",
+            EXECUTION_CANCELLED,
+        );
+        assert_eq!(cancelled.cause, Some(RunCause::OperatorCancelled));
+        // A cancellation explains what failed before it, even a failure that
+        // was not the subject's.
+        let mut interrupted = transport.clone();
+        interrupted.push_typed_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "execution_cancelled",
+            RetryScope::None,
+            ContaminationScope::None,
+            EXECUTION_CANCELLED,
+        );
+        assert_eq!(interrupted.cause, Some(RunCause::OperatorCancelled));
+        // A later failure the subject did not cause takes a counted run out.
+        let mut cleanup = turns.clone();
+        cleanup.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Cleanup,
+            "teardown failed",
+        );
+        assert_eq!(cleanup.cause, Some(RunCause::E2eInfrastructure));
+        assert_eq!(cleanup.technical, TechnicalState::TechnicalInvalid);
+        // Any other failure of the subject counts, as its own cause.
+        let denied = failed(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "subject_execution_failed",
+            "turn ended as Failed: pre_generate hook denied: tool budget",
+        );
+        assert_eq!(denied.cause, Some(RunCause::SubjectFailure));
+        assert_eq!(denied.technical, TechnicalState::Valid);
+        assert_eq!(denied.completion, CompletionState::TaskIncomplete);
+
+        let report = aggregate(vec![
+            run(90, true),
+            turns,
+            overflow,
+            denied,
+            transport,
+            evaluator,
+            cancelled,
+        ]);
+        assert_eq!(report.aggregate.technical_valid_runs, 4);
+        assert_eq!(report.aggregate.mean_score, Some(45.0));
+        assert_eq!(
+            report.aggregate.causes,
+            BTreeMap::from([
+                (RunCause::Evaluated, 1),
+                (RunCause::ResourceLimit, 1),
+                (RunCause::ContextOverflow, 1),
+                (RunCause::SubjectFailure, 1),
+                (RunCause::ProviderInfrastructure, 1),
+                (RunCause::EvaluationEnvironment, 1),
+                (RunCause::OperatorCancelled, 1),
+            ])
+        );
+    }
+
+    /// A session keeps one error entry per failed turn; the failure reports
+    /// the last turn, so the last entry with its summary decides.
+    #[test]
+    fn the_last_error_entry_of_the_failed_turn_decides() {
+        let entry = |code: &str, detail: &str| {
+            serde_json::json!({"custom": {"custom_type": "error", "data": {
+                "code": code, "class": "llm.permanent",
+                "summary": "The provider rejected this request.", "detail": detail}}})
+        };
+        let mut run = run(0, false);
+        run.evaluators = EvaluatorStates::default();
+        run.transcript = Some(serde_json::json!({"messages": [
+            entry("router/provider_rejected", r#"{"error":{"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}}"#),
+            entry("provider/invalid_request", "remote error (provider/invalid_request): bad ProviderStreamInput: data did not match any variant of untagged enum AgentMessage"),
+        ]}));
+        run.push_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "turn ended as Failed: The provider rejected this request.",
+        );
+        assert_eq!(run.cause, Some(RunCause::InvalidProviderRequest));
+    }
+
+    #[test]
+    fn a_report_without_causes_keeps_the_earlier_rule_and_says_so() {
+        let output = tempfile::tempdir().unwrap();
+        let mut overflow = run(0, false);
+        overflow.run_id = "overflow".into();
+        overflow.attempt_id = "overflow-attempt".into();
+        overflow.score = None;
+        overflow.evaluators = EvaluatorStates::default();
+        overflow.push_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "turn ended as Failed: The conversation is too large for the selected model.",
+        );
+        assert_eq!(overflow.technical, TechnicalState::Valid);
+        // As written before causes.
+        let mut runs = vec![run(80, true), overflow];
+        for run in &mut runs {
+            run.cause = None;
+        }
+        let mut result = report(vec![aggregate(runs)]);
+        let path = result.write_to(output.path(), &manifest()).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("\"cause\"") && !written.contains("\"causes\""));
+
+        let (restored, _) = E2eReport::read_from(&path).unwrap();
+        let scenario = &restored.scenarios[0];
+        assert_eq!(scenario.runs[1].cause, None);
+        // The subject error invalidated the run, as it did then.
+        assert_eq!(scenario.runs[1].technical, TechnicalState::TechnicalInvalid);
+        assert_eq!(scenario.aggregate.mean_score, Some(80.0));
+        assert!(scenario.aggregate.causes.is_empty());
+        assert_eq!(restored.runs_without_cause(), 2);
+        assert!(restored.summary(false).contains(EARLIER_RULE));
+    }
+
     #[test]
     fn partial_aggregate_preserves_orthogonal_coverage_and_quality() {
         let completed = run(90, true);
@@ -3740,6 +4987,106 @@ mod tests {
         assert_eq!(efficiency.observed_work, Some(17));
         assert_eq!(efficiency.total_tokens, Some(1_500));
         assert!(efficiency.unavailable.contains_key("critical_path_ms"));
+        // No cache figures: unavailable, never a zero.
+        assert_eq!(efficiency.processed_prompt_tokens, None);
+        assert!(efficiency
+            .unavailable
+            .contains_key("processed_prompt_tokens"));
+        assert!(efficiency.unavailable.contains_key("peak_context_tokens"));
+    }
+
+    #[test]
+    fn context_is_measured_per_step_with_its_cache_and_compactions() {
+        let usage = |input: u64, read: u64| {
+            serde_json::json!({"message": {"role": "assistant", "content": [],
+                "usage": {"input": input, "cache_read": read, "output": 10}}})
+        };
+        let compaction =
+            serde_json::json!({"custom": {"custom_type": "compaction", "data": {"summary": "…"}}});
+        let session = |depth: u32,
+                       digest: &str,
+                       billed: u64,
+                       counted: u64,
+                       estimator: &str,
+                       compacted: bool| {
+            serde_json::json!({
+                "session_id": format!("session-{depth}"), "depth": depth, "turns": 3,
+                "function_calls": 0, "function_call_errors": 0,
+                "input_tokens": 300, "cache_read_tokens": 6_000,
+                "context": {"usable": 596_000, "total": counted, "compacted": compacted,
+                    "prompt_surface_digest": digest, "estimator": estimator, "usage": {"input": 10, "cache_read": billed - 10}}
+            })
+        };
+        let build = |child_counted: u64,
+                     estimator: &str,
+                     compacted: bool|
+         -> SessionMetricsResponse {
+            serde_json::from_value(serde_json::json!({
+                "root_session_id": "session-0", "complete": true,
+                "totals": {"sessions": 2, "turns": 6, "function_calls": 0, "function_call_errors": 0,
+                    "input_tokens": 600, "output_tokens": 60, "cache_read_tokens": 12_000},
+                "by_session": [session(0, "sha256:root", 3_100, 3_000, estimator, compacted),
+                    session(1, "sha256:child", 2_000, child_counted, estimator, compacted)]
+            }))
+            .unwrap()
+        };
+        let metrics = |child_counted: u64| build(child_counted, "heuristic", true);
+        let mut attempt = run(100, true);
+        attempt.metrics = Some(metrics(2_000));
+        attempt.transcript = Some(serde_json::json!({"messages": [
+            usage(100, 1_000), compaction.clone(), usage(100, 2_000), compaction,
+            usage(100, 3_000),
+        ]}));
+        attempt.update_efficiency();
+        let efficiency = attempt.efficiency.clone().unwrap();
+        assert_eq!(efficiency.processed_prompt_tokens, Some(12_600));
+        assert_eq!(efficiency.cache_read_tokens, Some(12_000));
+        // The steps add up to the root session's 300 + 6,000.
+        assert_eq!(efficiency.peak_context_tokens, Some(3_100));
+        assert_eq!(efficiency.usable_context_tokens, Some(596_000));
+        // Two compaction records, whatever the snapshot's `compacted` says.
+        assert_eq!(efficiency.compactions, Some(2));
+        assert_eq!(
+            efficiency.prompt_surface_digests,
+            BTreeMap::from([
+                ("child".into(), vec!["sha256:child".into()]),
+                ("root".into(), vec!["sha256:root".into()]),
+            ])
+        );
+        assert_eq!(efficiency.cache_comparable, Some(true));
+
+        // A provider that bills a prompt the Harness never sent.
+        attempt.metrics = Some(metrics(1_500));
+        attempt.update_efficiency();
+        assert_eq!(
+            attempt.efficiency.clone().unwrap().cache_comparable,
+            Some(false)
+        );
+
+        // A provider-counted total is the billed value: nothing to judge.
+        attempt.metrics = Some(build(1_500, "provider", true));
+        attempt.update_efficiency();
+        let efficiency = attempt.efficiency.clone().unwrap();
+        assert_eq!(efficiency.cache_comparable, None);
+        assert!(efficiency.unavailable.contains_key("cache_comparable"));
+
+        // Without custom entries and without a compacted snapshot, compaction
+        // is unknown, not zero.
+        attempt.metrics = Some(build(2_000, "heuristic", false));
+        attempt.transcript = Some(serde_json::json!({"messages": [usage(100, 6_000)]}));
+        attempt.update_efficiency();
+        let efficiency = attempt.efficiency.unwrap();
+        assert_eq!(efficiency.compactions, None);
+        assert!(efficiency.unavailable.contains_key("compactions"));
+
+        // Steps that do not add up give no peak rather than a wrong one.
+        let mut short = run(100, true);
+        short.metrics = Some(metrics(2_000));
+        short.transcript = Some(serde_json::json!({"messages": [usage(100, 1_000)]}));
+        short.update_efficiency();
+        let efficiency = short.efficiency.unwrap();
+        assert_eq!(efficiency.peak_context_tokens, None);
+        assert!(efficiency.unavailable.contains_key("peak_context_tokens"));
     }
 
     #[test]
@@ -4485,11 +5832,13 @@ mod tests {
         report.dimensions = vec![
             DimensionReport {
                 dimension: EvaluationDimension::Deliverable,
+                points: None,
                 passed: Some(true),
                 signals: serde_json::json!({}),
             },
             DimensionReport {
                 dimension: EvaluationDimension::StructuralIntegrity,
+                points: None,
                 passed: Some(true),
                 signals: serde_json::json!({}),
             },

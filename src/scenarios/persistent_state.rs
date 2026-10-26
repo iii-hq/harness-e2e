@@ -19,6 +19,8 @@ pub const ID: &str = "persistent_state";
 const KEY: &str = "migration_record";
 const OWNER: &str = "quality-suite";
 const DELIVERABLE_ID: &str = "migration_record";
+/// State functions that only read: a call to one writes nowhere.
+const STATE_READS: [&str; 3] = ["state::get", "state::list", "state::list_groups"];
 
 const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::gate(
     "exact_migrated_state",
@@ -29,7 +31,7 @@ const EXACT_MIGRATED_STATE: AssessmentSpec = AssessmentSpec::gate(
 const READ_THEN_WRITE_ONCE: AssessmentSpec = AssessmentSpec::scored(
     "read_then_write_once",
     25,
-    "Did the subject read the owned key before exactly one successful state::set, with no errors or writes elsewhere?",
+    "Did the subject read the owned key before exactly one successful state::set, with no errors and no state write elsewhere (getting or listing state reads it)?",
 )
 .labeled("Read the key, then wrote it once");
 const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
@@ -41,7 +43,7 @@ const EXISTING_DATA_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
 const CONCISE_MIGRATION_CONFIRMATION: AssessmentSpec = AssessmentSpec::scored(
     "concise_migration_confirmation",
     10,
-    "Is the final response concise and does it state that revision 2 contains three items?",
+    "After a successful write leaves the owned key at revision 2 with three items, is the final response concise and does it state that revision 2 contains three items?",
 )
 .labeled("Reply briefly confirms revision 2 has three items");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -248,7 +250,7 @@ impl Scenario for PersistentState {
             .iter()
             .filter(|call| {
                 call.function_id.starts_with("state::")
-                    && call.function_id != "state::get"
+                    && !STATE_READS.contains(&call.function_id.as_str())
                     && !targets_owned(&call.arguments, &scope)
             })
             .count();
@@ -287,7 +289,13 @@ impl Scenario for PersistentState {
             && gamma_once;
 
         let reply = observation.response.trim();
-        let concise = !reply.is_empty()
+        // A confirmation confirms something only after the write, and only
+        // what the key holds: the prompt names revision 2 and three items, so
+        // a reply alone can say it.
+        let confirmed =
+            !writes.is_empty() && state.get("revision") == Some(&json!(2)) && items.len() == 3;
+        let concise = confirmed
+            && !reply.is_empty()
             && reply.lines().count() <= 3
             && reply.chars().count() <= 400
             && mentions_number(reply, 2)
@@ -311,7 +319,10 @@ impl Scenario for PersistentState {
                 CONCISE_MIGRATION_CONFIRMATION.full_or_zero(
                     concise,
                     format!(
-                        "lines={}, chars={}, mentions_revision_2={}, mentions_3_items={}",
+                        "successful_owned_writes={}, stored_revision={}, stored_items={}, lines={}, chars={}, mentions_revision_2={}, mentions_3_items={}",
+                        writes.len(),
+                        state.get("revision").unwrap_or(&Value::Null),
+                        items.len(),
                         reply.lines().count(),
                         reply.chars().count(),
                         mentions_number(reply, 2),
@@ -369,8 +380,117 @@ fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The run as `capture` records it: the transcript, the reply and the
+    /// record the key holds afterwards.
+    async fn evaluation_of(transcript: Value, state: Value, response: &str) -> ObjectiveEvaluation {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let observation = ScenarioObservation::for_test(
+            crate::scenarios::ScenarioId::PersistentState,
+            "control",
+            transcript,
+            response,
+            vec![CapturedDeliverable {
+                id: DELIVERABLE_ID.to_string(),
+                kind: "state_record".to_string(),
+                content: json!({ "state": state }).into(),
+                invariants: Vec::new(),
+                provenance: Vec::new(),
+            }],
+        );
+        PersistentState
+            .evaluate(&context, &observation, "control")
+            .await
+            .unwrap()
+    }
+
+    const REPLY: &str = "Migrated to revision 2 with 3 items.";
+
+    /// Read the owned key, then write `value` to it once.
+    fn read_then_write(value: Value) -> Value {
+        let scope = scope("control");
+        let mut messages = Vec::new();
+        for (index, (function_id, arguments)) in [
+            ("state::get", json!({ "scope": scope, "key": KEY })),
+            (
+                "state::set",
+                json!({ "scope": scope, "key": KEY, "value": value }),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let call_id = format!("call-{index}");
+            messages.push(json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": call_id, "function_id": function_id,
+                "arguments": arguments,
+            }] } }));
+            messages.push(json!({ "message": {
+                "role": "function_result", "function_call_id": call_id,
+                "function_id": function_id, "is_error": false,
+            } }));
+        }
+        json!({ "messages": messages })
+    }
+
+    /// The null delivery (the record untouched and a reply that only claims
+    /// the migration) and the reference one (read the key, write the migrated
+    /// record once, confirm).
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        [
+            evaluation_of(json!({ "messages": [] }), baseline(), REPLY).await,
+            evaluation_of(read_then_write(expected()), expected(), REPLY).await,
+        ]
+    }
+
+    /// A write of the wrong record does not back the confirmation.
+    #[tokio::test]
+    async fn the_confirmation_needs_the_record_it_confirms() {
+        let confirmation = |evaluation: ObjectiveEvaluation| {
+            evaluation
+                .awards
+                .into_iter()
+                .find(|award| award.id == CONCISE_MIGRATION_CONFIRMATION.id())
+                .and_then(|award| award.awarded)
+        };
+        let wrong = evaluation_of(read_then_write(json!({})), json!({}), REPLY).await;
+        assert_eq!(confirmation(wrong), Some(0));
+        let right = evaluation_of(read_then_write(expected()), expected(), REPLY).await;
+        assert_eq!(
+            confirmation(right),
+            Some(CONCISE_MIGRATION_CONFIRMATION.weight())
+        );
+        // The migrated record the subject never wrote is not its to confirm.
+        let unwritten = evaluation_of(json!({ "messages": [] }), expected(), REPLY).await;
+        assert_eq!(confirmation(unwritten), Some(0));
+    }
+
+    /// Listing the scope first reads it: the read-then-write discipline holds.
+    #[tokio::test]
+    async fn listing_the_scope_is_a_read_not_a_foreign_write() {
+        let mut transcript = read_then_write(expected());
+        let messages = transcript["messages"].as_array_mut().unwrap();
+        let list = [
+            json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": "list", "function_id": "state::list",
+                "arguments": { "scope": scope("control") },
+            }] } }),
+            json!({ "message": {
+                "role": "function_result", "function_call_id": "list",
+                "function_id": "state::list", "is_error": false,
+            } }),
+        ];
+        messages.splice(0..0, list);
+        let evaluation = evaluation_of(transcript, expected(), REPLY).await;
+        let total: u16 = evaluation
+            .awards
+            .iter()
+            .filter_map(|award| award.awarded.map(u16::from))
+            .sum();
+        assert_eq!(total, 100);
+    }
 
     #[test]
     fn expected_record_is_the_migrated_baseline() {

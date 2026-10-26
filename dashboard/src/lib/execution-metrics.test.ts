@@ -339,6 +339,64 @@ describe('whole-execution metrics', () => {
     })
   })
 
+  it('measures the prompt with its cache, per turn and at its peak, and counts runs by cause', () => {
+    const run = (
+      id: string,
+      cause: string | undefined,
+      read: number | null,
+      efficiency: Record<string, unknown>,
+    ) =>
+      metricRun(id, 100, {
+        cause,
+        metrics: {
+          totals: { input_tokens: 100, cache_read_tokens: read, turns: 4 },
+        } as never,
+        efficiency: {
+          total_tokens: 100,
+          function_calls: 1,
+          function_call_errors: 0,
+          ...efficiency,
+        },
+      })
+    const metrics = buildExecutionMetrics(
+      executionMetricsFixture([
+        {
+          runs: [
+            run('a', 'evaluated', 900, {
+              processed_prompt_tokens: 1_000,
+              peak_context_tokens: 400,
+              usable_context_tokens: 10_000,
+              compactions: 2,
+            }),
+            run('b', 'context_overflow', 2_700, {
+              processed_prompt_tokens: 3_000,
+              peak_context_tokens: 900,
+              usable_context_tokens: 10_000,
+              compactions: 0,
+              cache_comparable: false,
+            }),
+          ],
+        },
+        // Written before causes, and without cache figures.
+        { runs: [run('c', undefined, null, {})] },
+      ]),
+    )
+    expect(metrics.processedPrompt).toMatchObject({
+      total: null,
+      observed: 4_000,
+      samples: 2,
+    })
+    expect(metrics.cacheShare).toBeCloseTo(3_600 / 4_000)
+    expect(metrics.contextPerTurn).toBe(4_000 / 8)
+    // The test's mean run peak, not the largest run's 900.
+    expect(metrics.peakContext).toBe(650)
+    expect(metrics.usableContext).toBe(10_000)
+    expect(metrics.compactions.observed).toBe(2)
+    expect(metrics.cacheNotComparable).toBe(1)
+    expect(metrics.causes).toEqual({ evaluated: 1, context_overflow: 1 })
+    expect(metrics.earlierRule).toBe(1)
+  })
+
   it('preserves a measured zero but rejects unsafe or negative token telemetry', () => {
     const zero = buildExecutionMetrics(
       executionMetricsFixture([{ runs: [metricRun('a', 0)] }]),

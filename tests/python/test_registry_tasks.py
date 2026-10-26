@@ -88,7 +88,8 @@ class RegistryDeliveryTests(unittest.TestCase):
             "fixture_files": {}, "input_files": {},
         })
         args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="timed_out")
-        with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "fixture_action", side_effect=RuntimeError("not running")):
+        with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "fixture_action", side_effect=RuntimeError("not running")), \
+             patch.object(module, "remove_other_stacks", return_value=b""):
             # git_patch's default base is bound at definition time; use the test repo base.
             original_patch = module.git_patch
             with patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
@@ -99,6 +100,44 @@ class RegistryDeliveryTests(unittest.TestCase):
         manifest = json.loads((run_root / "delivery/manifest.json").read_text())
         self.assertEqual(manifest["subject_status"], "timed_out")
         self.assertTrue((run_root / "delivery/implementation.patch").stat().st_size)
+
+    def test_final_start_first_removes_every_stack_but_the_fixture(self):
+        # The 1.8.50 A/B run: the agent left its own project (registry-test2)
+        # up in the private daemon and the final start found the port taken.
+        import argparse
+        import os
+        import subprocess
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "docker").write_text(
+            '#!/bin/sh\n'
+            'if [ "$1" = ps ]; then printf "%s\\n" "a1 registry-task-x" "b2 registry-test2" "c3 "; '
+            'else shift 2; echo "$@"; fi\n')
+        (fake_bin / "docker").chmod(0o755)
+        calls = []
+
+        def container_exec(_state, command, timeout=900):
+            calls.append(command)
+            return subprocess.run(["sh", "-c", command], capture_output=True, check=True,
+                                  env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}).stdout
+
+        run_root = self.root / "run"
+        (run_root / "workspace").mkdir(parents=True)
+        (run_root / "workspace/registry").symlink_to(self.source, target_is_directory=True)
+        module.write_json(run_root / "state.json", {
+            "test": 2, "container": "registry-task-x", "fixture_files": {}, "input_files": {},
+            "initial_patch_sha256": module.hashlib.sha256(b"").hexdigest(),
+        })
+        args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="finished")
+        original_patch = module.git_patch
+        with patch.object(module, "REGISTRY_SHA", self.base), \
+             patch.object(module, "container_exec", side_effect=container_exec), \
+             patch.object(module, "fixture_action", side_effect=lambda _state, action: calls.append(action) or b""), \
+             patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
+            result = module.finish(args)
+        self.assertEqual(result["removed_containers"], ["b2", "c3"])
+        self.assertTrue(result["runtime_ready"])
+        self.assertEqual(calls[1:], ["up"])
 
     def test_preparation_fetches_fresh_fixture_and_limits_inputs(self):
         fixture = self.root / "fixture"

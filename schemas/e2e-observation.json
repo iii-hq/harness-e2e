@@ -80,6 +80,24 @@
         "wall_time_ms"
       ],
       "properties": {
+        "cache_comparable": {
+          "description": "False when a session's provider reported a prompt that does not match the Harness's own count of what it sent (claude-code adds a prompt of its own): its prompt and cache figures are not comparable with another provider's.",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cache_read_tokens": {
+          "description": "Prompt tokens served from the provider's cache.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "child_sessions": {
           "type": [
             "integer",
@@ -89,6 +107,16 @@
           "minimum": 0.0
         },
         "child_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "compactions": {
+          "description": "Compactions of the root session: the `compaction` records the Harness wrote to its transcript, automatic or asked for. The snapshot's `compacted` only says the session holds a summary now.",
+          "default": null,
           "type": [
             "integer",
             "null"
@@ -162,6 +190,36 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "peak_context_tokens": {
+          "description": "The largest prompt one step of the root session sent, from the usage each assistant message recorded in the transcript. Given only when the steps add up to the root session's totals.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "processed_prompt_tokens": {
+          "description": "Every prompt token the provider processed: input, cache reads and cache writes. `input_tokens` alone leaves the cache out, and the cache is most of a long session's prompt.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "prompt_surface_digests": {
+          "description": "The Harness prompt-surface digest of each session role (`root`, `child`): data, not drift, since every Harness release changes it.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
         "root_turns": {
           "type": [
             "integer",
@@ -196,6 +254,16 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "usable_context_tokens": {
+          "description": "The prompt budget the Harness fit the root session's window into (its context snapshot's `usable`).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
         },
         "validation_retries": {
           "type": [

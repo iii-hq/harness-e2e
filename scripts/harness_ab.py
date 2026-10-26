@@ -7,24 +7,42 @@ the harness worker (stacks/harness-ab/).
 Each directory holds the observation artifacts of one arm, as `gh run
 download` leaves them: every `results.json` below it is read, and a run seen
 twice (a root bundle carries its groups' results too) counts once. Only
-technically valid runs count, on both arms alike: an infrastructure failure is
-not the harness's. A scenario is compared only where both arms ran the same
-definition (`behavior_sha256`).
+technically valid runs count, on both arms alike: a run whose cause is the
+provider, the stack, the evaluator's machine or the operator is not the
+harness's. Every run is still counted by its cause, per arm; one from a report
+older than causes is counted as `earlier_rule`, valid or not as its report
+said. A scenario is compared only where both arms ran the same definition
+(`behavior_sha256`).
+
+The verdict is `harness-e2e compare`'s, the one rule the Console and Release
+Control show too: this script prints it after its tables, from the runner in
+HARNESS_E2E_BIN or on PATH, and says so when there is none.
 
 Per metric it prints arm A, arm B, B − A and B / A − 1, with 95% intervals
 from a bootstrap stratified by scenario (runs resampled within each scenario
-and arm). Completion and score are the mean over scenarios, each scenario
-weighing the same; tokens, cost, time and call errors are the sum over
-scenarios of each one's mean, what one pass over them takes.
+and arm). They describe the spread and decide nothing. Completion and score
+are the mean over scenarios, each scenario weighing the same; tokens, cost,
+time and call errors are the sum over scenarios of each one's mean, what one
+pass over them takes.
+
+The prompt processed is input plus cache reads and writes; context per turn
+divides it by the turns; the peak is the largest prompt one step of the root
+session sent. A run without cache figures has none of them, never a zero, and
+a provider whose prompt does not match the Harness's heuristic count is
+flagged not comparable. The peak is the mean over scenarios of each run's peak,
+as the Console shows it. A retried run sums the totals of every attempt.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
+import shutil
+import subprocess
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 #: (key, label, how scenarios combine)
@@ -33,14 +51,81 @@ METRICS = (
     ("score", "Nota", "mean"),
     ("input_tokens", "Tokens de entrada", "sum"),
     ("output_tokens", "Tokens de saída", "sum"),
+    ("processed_prompt", "Prompt processado (entrada + cache)", "sum"),
+    ("cache_share", "Parcela do cache no prompt", "mean"),
+    ("turns", "Turnos", "sum"),
+    ("context_per_turn", "Contexto por turno", "mean"),
+    ("peak_context", "Pico de contexto (sessão principal)", "mean"),
+    ("peak_share", "Pico / janela útil", "mean"),
+    ("compactions", "Compactações", "sum"),
     ("cost_usd", "Custo (US$)", "sum"),
     ("wall_s", "Tempo (s)", "sum"),
     ("call_errors", "Erros de chamada", "sum"),
 )
+#: Figures read from the provider's prompt and cache counts.
+CACHE_METRICS = {"processed_prompt", "cache_share", "context_per_turn", "peak_context", "peak_share"}
+#: The run causes of the results contract; reports older than them have none.
+EARLIER_RULE = "earlier_rule"
+#: As `PROMPT_RECONCILIATION_TOLERANCE` in src/report.rs.
+PROMPT_TOLERANCE = 0.10
+
+
+def step_prompt(usage: dict) -> int:
+    return sum(usage.get(key) or 0 for key in ("input", "cache_read", "cache_write"))
+
+
+def context_figures(run: dict) -> dict:
+    """The run's `efficiency` context figures; for a report older than them,
+    derived from its metrics and transcript as src/report.rs derives them."""
+    efficiency = run.get("efficiency") or {}
+    if "processed_prompt_tokens" in efficiency:
+        return {key: efficiency.get(key) for key in (
+            "cache_read_tokens", "processed_prompt_tokens", "peak_context_tokens",
+            "usable_context_tokens", "compactions", "cache_comparable")}
+    metrics = run.get("metrics") or {}
+    totals = metrics.get("totals") or {}
+    sessions = metrics.get("by_session") or []
+    root = next((session for session in sessions if session.get("depth") == 0), {})
+    read = totals.get("cache_read_tokens")
+    processed = (None if totals.get("input_tokens") is None or read is None
+                 else totals["input_tokens"] + read + (totals.get("cache_write_tokens") or 0))
+    comparable = None
+    compacted = False
+    for session in sessions:
+        context = session.get("context") or {}
+        compacted = compacted or context.get("compacted") is True
+        if context.get("estimator") != "heuristic":
+            continue
+        billed, counted = step_prompt(context.get("usage") or {}), context.get("total") or 0
+        if billed and counted:
+            comparable = (comparable is not False) and abs(billed - counted) <= PROMPT_TOLERANCE * counted
+    messages = (run.get("transcript") or {}).get("messages")
+    steps = [step_prompt(entry["message"]["usage"]) for entry in messages or []
+             if (entry.get("message") or {}).get("role") == "assistant" and entry["message"].get("usage")]
+    session_prompt = (None if root.get("input_tokens") is None else
+                      root["input_tokens"] + (root.get("cache_read_tokens") or 0) + (root.get("cache_write_tokens") or 0))
+    reconciles = steps and session_prompt is not None and abs(sum(steps) - session_prompt) <= 0.01 * session_prompt
+    return {
+        "cache_read_tokens": read,
+        "processed_prompt_tokens": processed,
+        "peak_context_tokens": max(steps) if reconciles else None,
+        "usable_context_tokens": (root.get("context") or {}).get("usable"),
+        "compactions": None if messages is None or not (compacted or any("custom" in entry for entry in messages))
+        else sum(1 for entry in messages if (entry.get("custom") or {}).get("custom_type") == "compaction"),
+        "cache_comparable": comparable,
+    }
+
+
+def attempt_total(run: dict, key: str, fallback: int | None = None) -> int | None:
+    """`key` summed over the retried attempts and the final one, as the Console
+    does; `fallback` when an attempt did not report it."""
+    values = [((attempt.get("metrics") or {}).get("totals") or {}).get(key)
+              for attempt in [*(run.get("retry_attempts") or []), run]]
+    return fallback if any(value is None for value in values) else sum(values)
 
 
 def runs_of(directory: Path) -> dict[str, dict]:
-    """Every valid run below `directory`, by run id."""
+    """Every run below `directory`, by run id; `valid` says whether it counts."""
     runs = {}
     for path in sorted(directory.rglob("results.json")):
         try:
@@ -49,20 +134,30 @@ def runs_of(directory: Path) -> dict[str, dict]:
             continue
         for scenario in (results.get("scenarios") if isinstance(results, dict) else None) or []:
             for run in scenario.get("runs") or []:
-                if run.get("technical") != "valid":
-                    continue
-                totals = (run.get("metrics") or {}).get("totals") or {}
                 efficiency = run.get("efficiency") or {}
+                context = context_figures(run)
+                processed, turns = context["processed_prompt_tokens"], attempt_total(run, "turns")
+                peak, usable = context["peak_context_tokens"], context["usable_context_tokens"]
                 runs[run.get("attempt_id") or run.get("run_id") or f"{path}:{len(runs)}"] = {
                     "scenario": scenario["scenario_id"],
                     "behavior": scenario.get("behavior_sha256"),
+                    "valid": run.get("technical") == "valid",
+                    "cause": run.get("cause") or EARLIER_RULE,
+                    "comparable": context["cache_comparable"] is not False,
                     "completed": float(run.get("completion") == "completed"),
                     "score": run.get("score"),
-                    "input_tokens": totals.get("input_tokens", efficiency.get("input_tokens")),
-                    "output_tokens": totals.get("output_tokens", efficiency.get("output_tokens")),
+                    "input_tokens": attempt_total(run, "input_tokens", efficiency.get("input_tokens")),
+                    "output_tokens": attempt_total(run, "output_tokens", efficiency.get("output_tokens")),
+                    "processed_prompt": processed,
+                    "cache_share": context["cache_read_tokens"] / processed if processed else None,
+                    "turns": turns,
+                    "context_per_turn": processed / turns if processed is not None and turns else None,
+                    "peak_context": peak,
+                    "peak_share": peak / usable if peak is not None and usable else None,
+                    "compactions": context["compactions"],
                     "cost_usd": (run.get("cost") or {}).get("subject_usd", efficiency.get("cost_usd")),
                     "wall_s": None if run.get("wall_time_ms") is None else run["wall_time_ms"] / 1000,
-                    "call_errors": totals.get("function_call_errors", efficiency.get("function_call_errors")),
+                    "call_errors": attempt_total(run, "function_call_errors", efficiency.get("function_call_errors")),
                 }
     return runs
 
@@ -70,7 +165,8 @@ def runs_of(directory: Path) -> dict[str, dict]:
 def cells(runs: dict[str, dict]) -> dict[tuple[str, str], list[dict]]:
     by = defaultdict(list)
     for run in runs.values():
-        by[(run["scenario"], run["behavior"])].append(run)
+        if run["valid"]:
+            by[(run["scenario"], run["behavior"])].append(run)
     return by
 
 
@@ -126,7 +222,12 @@ def analyse(a_runs: dict[str, dict], b_runs: dict[str, dict], resamples: int = 1
     unmatched = sorted({scenario for scenario, _ in set(a_cells) ^ set(b_cells)})
     rng = random.Random(seed)
     a, b = [a_cells[cell] for cell in shared], [b_cells[cell] for cell in shared]
+    counted = [run for run in list(a_runs.values()) + list(b_runs.values())
+               if run["valid"] and (run["scenario"], run["behavior"]) in set(shared)]
     return {
+        "causes": {"a": dict(Counter(run["cause"] for run in a_runs.values())),
+                   "b": dict(Counter(run["cause"] for run in b_runs.values()))},
+        "not_comparable": sum(1 for run in counted if not run["comparable"]),
         "scenarios": [
             {"scenario": scenario, "behavior": behavior, "n_a": len(a_cells[(scenario, behavior)]),
              "n_b": len(b_cells[(scenario, behavior)]),
@@ -152,16 +253,21 @@ def percent(value: float | None, ci: tuple[float, float] | None) -> str:
 
 def report(result: dict, label_a: str, label_b: str) -> str:
     lines = [f"## {label_b} contra {label_a}", "",
+             "Os intervalos descrevem a variação e não decidem nada: o veredito, no fim, é o de "
+             "`harness-e2e compare`.", "",
              f"| Métrica | {label_a} | {label_b} | Δ (IC 95%) | Δ relativo (IC 95%) |", "|---|---|---|---|---|"]
     for key, label, _ in METRICS:
         row = result["pooled"][key]
+        if key in CACHE_METRICS and result["not_comparable"]:
+            label += " (não comparável)"
         ci = row["delta_ci"]
         delta = number(row["delta"]) + (f" [{number(ci[0])}, {number(ci[1])}]" if ci else "")
         lines.append(f"| {label} | {number(row['a'])} | {number(row['b'])} | {delta} | "
                      f"{percent(row['relative'], row['relative_ci'])} |")
     lines += ["", "### Por cenário (mesma behavior_sha256)", "",
-              "| Cenário | n | Conclusão | Nota | Tokens de saída | Custo | Tempo | Erros de chamada |",
-              "|---|---|---|---|---|---|---|---|"]
+              "| Cenário | n | Conclusão | Nota | Tokens de saída | Prompt processado | Contexto por turno | Pico de contexto "
+              "| Custo | Tempo | Erros de chamada |",
+              "|---|---|---|---|---|---|---|---|---|---|---|"]
     for scenario in result["scenarios"]:
         metrics = scenario["metrics"]
 
@@ -169,13 +275,42 @@ def report(result: dict, label_a: str, label_b: str) -> str:
             row = metrics[key]
             return f"{number(row['a'], 2)} → {number(row['b'], 2)}"
 
+        def change(key: str) -> str:
+            return percent(metrics[key]["relative"], metrics[key]["relative_ci"])
+
         lines.append(f"| {scenario['scenario']} | {scenario['n_a']}/{scenario['n_b']} | {cell('completed')} | "
-                     f"{cell('score')} | {percent(metrics['output_tokens']['relative'], metrics['output_tokens']['relative_ci'])} | "
-                     f"{percent(metrics['cost_usd']['relative'], metrics['cost_usd']['relative_ci'])} | "
-                     f"{percent(metrics['wall_s']['relative'], metrics['wall_s']['relative_ci'])} | {cell('call_errors')} |")
+                     f"{cell('score')} | {change('output_tokens')} | {change('processed_prompt')} | "
+                     f"{change('context_per_turn')} | {change('peak_context')} | {change('cost_usd')} | "
+                     f"{change('wall_s')} | {cell('call_errors')} |")
     if result["unmatched"]:
         lines += ["", "Fora da comparação (só um braço, ou definições diferentes): " + ", ".join(result["unmatched"])]
+    causes = result["causes"]
+    lines += ["", "### Execuções por causa", "", f"| Causa | {label_a} | {label_b} |", "|---|---|---|"]
+    for cause in sorted(set(causes["a"]) | set(causes["b"])):
+        lines.append(f"| {cause} | {causes['a'].get(cause, 0)} | {causes['b'].get(cause, 0)} |")
+    earlier = causes["a"].get(EARLIER_RULE, 0) + causes["b"].get(EARLIER_RULE, 0)
+    if earlier:
+        lines += ["", f"Aviso: {earlier} execuções vêm de relatórios anteriores às causas e foram classificadas "
+                      "pela regra anterior: todo erro do agente saiu da média, e uma falha do próprio avaliador "
+                      "pôde contar como zero válido."]
+    if result["not_comparable"]:
+        lines += ["", f"Aviso: {result['not_comparable']} execuções comparadas são de provedores cuja contagem de "
+                      "prompt não bate com a contagem heurística do harness: prompt, cache e contexto não comparáveis."]
     return "\n".join(lines) + "\n"
+
+
+def verdict(a: Path, b: Path, label_a: str, label_b: str, as_json: bool = False) -> str:
+    """`harness-e2e compare A B`: the calibrated verdict, or why there is none."""
+    binary = os.environ.get("HARNESS_E2E_BIN") or shutil.which("harness-e2e")
+    if not binary:
+        return "Veredito indisponível: defina HARNESS_E2E_BIN ou ponha harness-e2e no PATH.\n"
+    command = [binary, "compare", str(a), str(b), "--label-a", label_a, "--label-b", label_b]
+    try:
+        return subprocess.run(command + (["--json"] if as_json else []), check=True,
+                              capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = getattr(error, "stderr", None) or str(error)
+        return f"Veredito indisponível: {detail.strip()}\n"
 
 
 def main() -> int:
@@ -188,9 +323,16 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="also write the numbers here")
     args = parser.parse_args()
     result = analyse(runs_of(args.a), runs_of(args.b), args.resamples)
+    # One run of the runner: JSON for --json (the page then shows that), text otherwise.
+    answer = verdict(args.a, args.b, args.label_a, args.label_b, as_json=bool(args.json))
     if args.json:
+        try:
+            result["verdict"] = json.loads(answer)
+        except ValueError:
+            result["verdict"] = answer.strip()
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     sys.stdout.write(report(result, args.label_a, args.label_b))
+    sys.stdout.write("\n### Veredito (harness-e2e compare)\n\n```\n" + answer + "```\n")
     return 0
 
 

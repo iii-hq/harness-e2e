@@ -1,7 +1,11 @@
 import { ChevronRight, Info } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import { buildExecutionMetrics } from '@/lib/execution-metrics'
+import {
+  buildExecutionMetrics,
+  causeLabel,
+  type UsageCoverage,
+} from '@/lib/execution-metrics'
 import { formatTokens as compactTokens, formatCost } from '@/lib/format'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import { type ScenarioMatrixItem, unreported } from '@/lib/scenario-matrix'
@@ -65,6 +69,45 @@ export function KpiTile({
   )
 }
 
+/** Prompt and context figures, then the runs per cause. A provider whose
+ *  prompt does not match the Harness's count is marked not comparable. */
+export function contextRows(
+  metrics: ReturnType<typeof buildExecutionMetrics>,
+): Array<[string, string]> {
+  // A sum short of runs is shown as what was observed, and says so.
+  const counted = (usage: UsageCoverage): string =>
+    usage.total === null && usage.observed !== null
+      ? `${formatFull(usage.observed)} (partial: ${usage.samples} of ${usage.expected} runs)`
+      : formatFull(usage.total)
+  const notComparable =
+    metrics.cacheNotComparable > 0
+      ? ` (not comparable: ${plural(metrics.cacheNotComparable, 'run', 'runs')})`
+      : ''
+  return [
+    ['Processed prompt', `${counted(metrics.processedPrompt)}${notComparable}`],
+    [
+      'Cache share',
+      metrics.cacheShare === null
+        ? '—'
+        : `${(metrics.cacheShare * 100).toFixed(1)}%`,
+    ],
+    ['Context per turn', formatFull(metrics.contextPerTurn)],
+    [
+      'Peak context',
+      metrics.peakContext === null
+        ? '—'
+        : `${formatFull(metrics.peakContext)}${metrics.usableContext ? ` of ${formatFull(metrics.usableContext)}` : ''}`,
+    ],
+    ['Compactions', counted(metrics.compactions)],
+    ...Object.entries(metrics.causes)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([cause, count]): [string, string] => [
+        `Runs: ${causeLabel(cause)}`,
+        formatFull(count),
+      ]),
+  ]
+}
+
 /** The execution's totals: six figures, the partial note, and "All metrics"
  *  for the full set (canvas: Execution detail · Totals). */
 export function ExecutionTotals({
@@ -80,11 +123,14 @@ export function ExecutionTotals({
   detail?: DashboardExecutionDetail
 }) {
   const [open, setOpen] = useState(false)
-  const failedAttempt = useMemo(() => {
-    if (!detail) return null
-    const failed = buildExecutionMetrics(detail).failedAttemptTokens
-    return failed.total ?? failed.observed
-  }, [detail])
+  const execution = useMemo(
+    () => (detail ? buildExecutionMetrics(detail) : null),
+    [detail],
+  )
+  const failedAttempt = execution
+    ? (execution.failedAttemptTokens.total ??
+      execution.failedAttemptTokens.observed)
+    : null
   const tableId = useId()
   const m = metrics.metrics
   const total = items.length
@@ -156,6 +202,7 @@ export function ExecutionTotals({
     ['Turns', formatFull(metricNumber(m.turns))],
     ['Function calls', formatFull(metricNumber(m.functionCalls))],
     ['Function call errors', formatFull(metricNumber(m.functionErrors))],
+    ...(execution ? contextRows(execution) : []),
     ...(detail
       ? ([['Failed attempt tokens', formatFull(failedAttempt)]] as Array<
           [string, string]
@@ -182,6 +229,12 @@ export function ExecutionTotals({
             {running
               ? `Totals so far: ${reported} of ${total} tests reported.`
               : `Partial: ${scores.length} of ${total} tests reported. Totals cover only what was reported.`}
+          </span>
+        ) : null}
+        {execution && execution.earlierRule > 0 ? (
+          <span className="ep-faint ep-partial">
+            <Info size={14} aria-hidden="true" />
+            {`${plural(execution.earlierRule, 'run predates', 'runs predate')} run causes: classified by the earlier rule, where every subject error left the mean.`}
           </span>
         ) : null}
         <button

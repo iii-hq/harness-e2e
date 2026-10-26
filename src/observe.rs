@@ -246,9 +246,13 @@ fn status_is_fatal(status: &StatusReport) -> Result<()> {
     }
 }
 
+/// The watchdog's copy when the session tree could not be sampled at all, the
+/// engine unreachable: the runner's failure, not the subject's.
+pub(crate) const UNOBSERVABLE: &str = "could not sample the session tree";
+
 fn ensure_not_cancelled(cancellation: Option<&watch::Receiver<bool>>) -> Result<()> {
     if cancellation.is_some_and(|receiver| *receiver.borrow()) {
-        bail!("E2E execution was cancelled");
+        bail!(crate::report::EXECUTION_CANCELLED);
     }
     Ok(())
 }
@@ -298,6 +302,7 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
     let started = tokio::time::Instant::now();
     let mut last_progress = started;
     let mut previous_metrics = None;
+    let mut unobservable = None;
     let mut machine = ObserveMachine::new(root_session_id, expected_turn_id);
     let mut cancellation = cancellation.cloned();
 
@@ -306,6 +311,13 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         let remaining = stuck_timeout.saturating_sub(last_progress.elapsed());
         if remaining.is_zero() {
             observer.stop_tree(root_session_id).await;
+            // Progress nobody could sample is not proof the subject stalled.
+            if let Some(error) = unobservable {
+                bail!(
+                    "scenario {scenario_id} {UNOBSERVABLE} {root_session_id} for {}s: {error}",
+                    stuck_timeout.as_secs()
+                );
+            }
             bail!(
                 "scenario {scenario_id} made no observable progress for {}s while waiting for \
                  the complete session tree {root_session_id}",
@@ -329,7 +341,12 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         if let Some(event) = event {
             match machine.classify(&event) {
                 EventKind::Duplicate | EventKind::Unrelated => continue,
-                EventKind::RootFailed { message } => bail!("{message}"),
+                EventKind::RootFailed { message } => {
+                    // The operator's stop ends the turn too: the cancellation,
+                    // not the turn it stopped, is the cause.
+                    ensure_not_cancelled(cancellation.as_ref())?;
+                    bail!("{message}")
+                }
                 EventKind::Progress => {
                     last_progress = tokio::time::Instant::now();
                     match observer.pull_metrics(root_session_id).await {
@@ -352,7 +369,10 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         }
 
         let metrics = match observer.pull_metrics(root_session_id).await {
-            Ok(metrics) => metrics,
+            Ok(metrics) => {
+                unobservable = None;
+                metrics
+            }
             Err(error) => {
                 tracing::debug!(
                     scenario = scenario_id,
@@ -360,12 +380,14 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
                     %error,
                     "could not sample E2E progress metrics"
                 );
+                unobservable = Some(format!("{error:#}"));
                 continue;
             }
         };
         let mut current_turn_observed = machine.expected_turn_id.is_none();
         match observer.pull_root_status(root_session_id).await {
             Ok(Some(status)) => {
+                ensure_not_cancelled(cancellation.as_ref())?;
                 status_is_fatal(&status)?;
                 let expected_completed =
                     machine.expected_turn_id.as_deref().is_some_and(|expected| {
@@ -431,6 +453,9 @@ mod tests {
         status: Mutex<StatusReport>,
         stopped: AtomicBool,
         metrics_error: Mutex<Option<String>>,
+        /// Cancels the execution while the metrics are sampled, between the
+        /// loop's own cancellation check and the root status.
+        cancel_on_sample: Mutex<Option<watch::Sender<bool>>>,
     }
 
     impl Injected {
@@ -443,6 +468,7 @@ mod tests {
                 status: Mutex::new(status),
                 stopped: AtomicBool::new(false),
                 metrics_error: Mutex::new(None),
+                cancel_on_sample: Mutex::new(None),
             }
         }
 
@@ -462,6 +488,9 @@ mod tests {
         }
 
         async fn pull_metrics(&self, _root_session_id: &str) -> Result<SessionMetricsResponse> {
+            if let Some(sender) = self.cancel_on_sample.lock().unwrap().take() {
+                sender.send(true).unwrap();
+            }
             if let Some(error) = self.metrics_error.lock().unwrap().clone() {
                 bail!("{error}");
             }
@@ -867,6 +896,43 @@ mod tests {
         .await
         .unwrap();
         assert!(observed.complete);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_engine_is_not_a_stalled_subject() {
+        let observer = Injected::new(metrics(false, 1, 0), status(TurnStatus::Running, false));
+        *observer.metrics_error.lock().unwrap() = Some("transport timeout".into());
+        let error = wait(
+            &observer,
+            Duration::from_millis(90),
+            Duration::from_millis(20),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(UNOBSERVABLE), "{error}");
+        assert!(error.contains("transport timeout"), "{error}");
+        assert!(!error.contains("no observable progress"), "{error}");
+    }
+
+    /// The operator's cancellation stops the turn: when its `Cancelled`
+    /// status is read after the cancellation, the cancellation is reported.
+    #[tokio::test]
+    async fn a_turn_the_operator_cancelled_reports_the_cancellation() {
+        let observer = Injected::new(metrics(false, 1, 0), status(TurnStatus::Cancelled, false));
+        let (sender, receiver) = watch::channel(false);
+        *observer.cancel_on_sample.lock().unwrap() = Some(sender);
+        let error = wait(
+            &observer,
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+            Some(&receiver),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, crate::report::EXECUTION_CANCELLED);
     }
 
     #[tokio::test]

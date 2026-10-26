@@ -4,7 +4,7 @@ import type {
   JsonObject,
   StackWorker,
 } from '@/lib/dashboard-data-source'
-import { runTotalTokens } from '@/lib/execution-metrics'
+import { causeLabel, runTotalTokens } from '@/lib/execution-metrics'
 import {
   buildExecutionPresentation,
   executionTitle,
@@ -64,6 +64,14 @@ type LedgerRun = CompareRun & {
   subjectTokens: number | null
   cacheRead: number | null
   cacheWrite: number | null
+  /** Input plus cache reads and writes, retries included. */
+  processedPrompt: number | null
+  peakContext: number | null
+  compactions: number | null
+  /** False for a provider whose prompt does not match the Harness's count. */
+  cacheComparable: boolean
+  /** Null for a report written before causes. */
+  cause: string | null
   turns: number | null
   functionCalls: number | null
   functionCallErrors: number | null
@@ -225,6 +233,11 @@ type MetricId =
   | 'tokens'
   | 'cache_read'
   | 'cache_write'
+  | 'processed_prompt'
+  | 'cache_share'
+  | 'context_per_turn'
+  | 'peak_context'
+  | 'compactions'
   | 'tokens_per_completion'
   | 'cost'
   | 'duration'
@@ -240,6 +253,11 @@ const METRICS: Array<[MetricId, string, MetricFormat]> = [
   ['tokens', 'Total tokens', 'tokens'],
   ['cache_read', 'Cache read', 'tokens'],
   ['cache_write', 'Cache written', 'tokens'],
+  ['processed_prompt', 'Processed prompt (input + cache)', 'tokens'],
+  ['cache_share', 'Cache share of the prompt', 'percent_points'],
+  ['context_per_turn', 'Context per turn', 'tokens'],
+  ['peak_context', 'Peak context', 'tokens'],
+  ['compactions', 'Compactions', 'count'],
   ['tokens_per_completion', 'Tokens per completed task', 'tokens'],
   ['cost', 'Reported cost', 'usd'],
   ['duration', 'Total run duration', 'seconds'],
@@ -268,6 +286,11 @@ const BETTER_WHEN: Record<
   tokens: 'lower',
   cache_read: 'neither',
   cache_write: 'neither',
+  processed_prompt: 'lower',
+  cache_share: 'neither',
+  context_per_turn: 'lower',
+  peak_context: 'lower',
+  compactions: 'neither',
   tokens_per_completion: 'lower',
   cost: 'lower',
   duration: 'lower',
@@ -410,6 +433,16 @@ export function compareRuns(detail: DashboardExecutionDetail): LedgerRun[] {
           subjectTokens: runTotalTokens(run),
           cacheRead: usage.cacheRead,
           cacheWrite: usage.cacheWrite,
+          processedPrompt: tokenCount(
+            objectValue(run.efficiency).processed_prompt_tokens,
+          ),
+          peakContext: tokenCount(
+            objectValue(run.efficiency).peak_context_tokens,
+          ),
+          compactions: tokenCount(objectValue(run.efficiency).compactions),
+          cacheComparable:
+            objectValue(run.efficiency).cache_comparable !== false,
+          cause: text(run.cause),
           // The reported cost, as the execution page and its evidence table sum it.
           costUsd: usage.costUsd,
           scenarioId: scenario.scenario_id,
@@ -572,6 +605,39 @@ function consolidate(
     value,
     complete: settled,
   })
+  const processed = aggregate((run) => run.processedPrompt, false)
+  // Σ over Σ of the runs that report both, complete with the prompt.
+  const paired = (
+    top: (run: LedgerRun) => number | null,
+    bottom: (run: LedgerRun) => number | null,
+    scale = 1,
+  ): Aggregate => {
+    const both = runs.filter((run) => top(run) !== null && bottom(run))
+    const denominator = sum(both.map((run) => bottom(run) ?? 0))
+    return {
+      value:
+        denominator > 0
+          ? (sum(both.map((run) => top(run) ?? 0)) / denominator) * scale
+          : null,
+      complete: processed.complete && both.length === runs.length,
+    }
+  }
+  // The mean over scenarios of each scenario's mean run peak, as
+  // scripts/harness_ab.py takes it; a scenario with no peak is not measured.
+  const scenarioPeaks = new Map<string, number[]>()
+  for (const run of runs)
+    if (run.peakContext !== null)
+      scenarioPeaks.set(run.scenarioId, [
+        ...(scenarioPeaks.get(run.scenarioId) ?? []),
+        run.peakContext,
+      ])
+  const peaks = [...scenarioPeaks.values()].map(
+    (values) => sum(values) / values.length,
+  )
+  const peakRuns = [...scenarioPeaks.values()].reduce(
+    (total, values) => total + values.length,
+    0,
+  )
   return {
     score: {
       value: complete(scored.length) ? sum(scored) / scored.length : null,
@@ -588,6 +654,21 @@ function consolidate(
     tokens,
     cache_read: aggregate((run) => run.cacheRead, false),
     cache_write: aggregate((run) => run.cacheWrite, false),
+    processed_prompt: processed,
+    cache_share: paired(
+      (run) => run.cacheRead,
+      (run) => run.processedPrompt,
+      100,
+    ),
+    context_per_turn: paired(
+      (run) => run.processedPrompt,
+      (run) => run.turns,
+    ),
+    peak_context: {
+      value: peaks.length === 0 ? null : sum(peaks) / peaks.length,
+      complete: complete(peakRuns),
+    },
+    compactions: aggregate((run) => run.compactions, false),
     tokens_per_completion: {
       value:
         tokens.complete && tokens.value !== null && completed > 0
@@ -615,12 +696,30 @@ function consolidate(
   }
 }
 
+/** Figures read from the provider's prompt and cache counts. */
+const CACHE_METRICS: MetricId[] = [
+  'cache_read',
+  'cache_write',
+  'processed_prompt',
+  'cache_share',
+  'context_per_turn',
+  'peak_context',
+]
+
 function metricRows(
   a: Record<MetricId, Aggregate>,
   b: Record<MetricId, Aggregate>,
+  /** The sides ran different providers and a run's prompt does not match the
+   *  Harness's count. */
+  cacheNotComparable = false,
 ): ComparedMetric[] {
   return METRICS.map(([id, label, format]) => {
-    const metric = comparisonMetric(id, label, a[id].value, b[id].value, format)
+    // Shown with its difference, which carries the label's warning.
+    const shown =
+      cacheNotComparable && CACHE_METRICS.includes(id)
+        ? `${label} (not comparable)`
+        : label
+    const metric = comparisonMetric(id, shown, a[id].value, b[id].value, format)
     const partial = {
       baseline: a[id].value !== null && !a[id].complete,
       candidate: b[id].value !== null && !b[id].complete,
@@ -1208,6 +1307,17 @@ export function compareExecutions(
         )
     return consolidate(kept, planned, filtered || settled(details[which]))
   }
+  // Only two different providers make the prompt figures incomparable.
+  const providers = [parametersOf(a).provider, parametersOf(b).provider]
+  const providersDiffer =
+    providers[0] !== providers[1] && !providers.includes('not reported')
+  const notComparable = (scenarioIds: string[]) =>
+    providersDiffer &&
+    SIDES.some((which) =>
+      runs[which].some(
+        (run) => scenarioIds.includes(run.scenarioId) && !run.cacheComparable,
+      ),
+    )
   const stateOf = (which: 'a' | 'b', id: string) =>
     runs[which]
       .filter((run) => run.scenarioId === id)
@@ -1217,7 +1327,11 @@ export function compareExecutions(
   const scenarios = ids.map((id): ScenarioComparison => {
     const exclusion =
       exclusions.find((entry) => entry.scenario_id === id) ?? null
-    const metrics = metricRows(measure('a', [id]), measure('b', [id]))
+    const metrics = metricRows(
+      measure('a', [id]),
+      measure('b', [id]),
+      notComparable([id]),
+    )
     const { changed: criteria, lostOnBoth } = criterionChanges(
       runs.a.filter((run) => run.scenarioId === id),
       runs.b.filter((run) => run.scenarioId === id),
@@ -1281,7 +1395,32 @@ export function compareExecutions(
   }
   const planned = (which: 'a' | 'b') =>
     ids.reduce((total, id) => total + plannedRuns(details[which], id), 0)
-  const totals = metricRows(measure('a', counted), measure('b', counted)).map(
+  // Runs per cause, over every run like the invalid ones; a report written
+  // before causes counts its runs as `earlier_rule`.
+  const causeOf = (run: LedgerRun) => run.cause ?? 'earlier_rule'
+  const causes = distinct([...runs.a, ...runs.b].map(causeOf))
+    .sort()
+    .map(
+      (cause): ComparedMetric => ({
+        ...comparisonMetric(
+          `cause:${cause}`,
+          `Runs: ${causeLabel(cause)}`,
+          runs.a.filter((run) => causeOf(run) === cause).length,
+          runs.b.filter((run) => causeOf(run) === cause).length,
+          'count',
+        ),
+        partial: { baseline: false, candidate: false },
+        outside: {
+          baseline: outside('a', (run) => causeOf(run) === cause),
+          candidate: outside('b', (run) => causeOf(run) === cause),
+        },
+      }),
+    )
+  const totals = metricRows(
+    measure('a', counted),
+    measure('b', counted),
+    notComparable(counted),
+  ).map(
     (metric): ComparedMetric =>
       metric.id === 'technical_failures'
         ? everyRun(
@@ -1302,6 +1441,7 @@ export function compareExecutions(
             )
           : metric,
   )
+  totals.push(...causes)
   return {
     a: sideFacts(a),
     b: sideFacts(b),

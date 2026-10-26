@@ -490,6 +490,14 @@ impl StepExecutor for HarnessStepExecutor {
         Ok(())
     }
 
+    async fn failed_transcript(&self, context: &StepExecutorContext) -> Option<Value> {
+        let session = self
+            .lock_sessions()
+            .get(&(context.attempt_id.clone(), context.node.id.clone()))
+            .cloned()?;
+        self.context.transcript(&session).await.ok()
+    }
+
     async fn cleanup(&self, context: &StepExecutorContext) -> Result<()> {
         let session = self
             .lock_sessions()
@@ -645,6 +653,14 @@ impl StepExecutor for BoundedHarnessStepExecutor {
             self.context.stop_session(&session, None).await?;
         }
         Ok(())
+    }
+
+    async fn failed_transcript(&self, context: &StepExecutorContext) -> Option<Value> {
+        let session = self
+            .lock_sessions()
+            .get(&(context.attempt_id.clone(), context.node.id.clone()))
+            .cloned()?;
+        self.context.transcript(&session).await.ok()
     }
 
     async fn cleanup(&self, context: &StepExecutorContext) -> Result<()> {

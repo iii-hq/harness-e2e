@@ -996,7 +996,7 @@ fn deliverable_contract() -> DeliverableContract {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::scenarios::ScenarioId;
 
@@ -1065,12 +1065,12 @@ mod tests {
         }
     }
 
-    fn completion_of(
+    fn evaluation_of(
         run_id: &str,
         calls: &[(String, Value)],
         snapshot: &FixtureSnapshot,
         response: &str,
-    ) -> crate::report::CompletionState {
+    ) -> ObjectiveEvaluation {
         let observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::ToolContractRecovery,
             run_id,
@@ -1078,10 +1078,34 @@ mod tests {
             response,
             Vec::new(),
         );
+        evaluate_observation(&observation, run_id, snapshot)
+    }
+
+    fn completion_of(
+        run_id: &str,
+        calls: &[(String, Value)],
+        snapshot: &FixtureSnapshot,
+        response: &str,
+    ) -> crate::report::CompletionState {
         assessment::completion(
             ASSESSMENTS,
-            &evaluate_observation(&observation, run_id, snapshot),
+            &evaluation_of(run_id, calls, snapshot, response),
         )
+    }
+
+    /// The null delivery (no call, nothing booked) and the reference one
+    /// (resolve, read the profile, book once, report the receipt).
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let run_id = "control";
+        [
+            evaluation_of(run_id, &[], &FixtureSnapshot::default(), "done"),
+            evaluation_of(
+                run_id,
+                &canonical_calls(run_id),
+                &canonical_snapshot(run_id),
+                &format!("Booked. Receipt: {}", receipt(run_id)),
+            ),
+        ]
     }
 
     #[test]

@@ -739,6 +739,112 @@ describe('comparing two executions', () => {
     )
   })
 
+  it('counts runs by cause over every run and compares the prompt per turn and at its peak', () => {
+    const withCause = (
+      detail: DashboardExecutionDetail,
+      causes: string[],
+      efficiency: Record<string, unknown>,
+    ) => {
+      detail.reports.forEach((record, index) => {
+        const run = record.report?.scenarios[0].runs[0]
+        if (!run) return
+        run.cause = causes[index]
+        run.efficiency = {
+          ...run.efficiency,
+          processed_prompt_tokens: 2_000,
+          compactions: 1,
+          ...efficiency,
+        }
+      })
+      return detail
+    }
+    const rows = [
+      { scenario: 'timer_wake' },
+      { scenario: 'registry', technical: 'technical_invalid' },
+    ]
+    const a = withCause(
+      execution('a', rows),
+      ['evaluated', 'evaluation_environment'],
+      { peak_context_tokens: 900 },
+    )
+    const b = withCause(
+      execution('b', rows),
+      ['context_overflow', 'evaluated'],
+      { peak_context_tokens: 600 },
+    )
+    const comparison = compareExecutions(a, b)
+    const total = (id: string) =>
+      comparison.totals.find((metric) => metric.id === id)
+    expect(total('cause:evaluation_environment')).toMatchObject({
+      label: 'Runs: evaluation environment',
+      baseline: 1,
+      candidate: 0,
+      outside: { baseline: 1, candidate: 0 },
+    })
+    expect(total('cause:context_overflow')).toMatchObject({
+      baseline: 0,
+      candidate: 1,
+    })
+    // Only the counted test: 2,000 processed over its 3 turns.
+    expect(total('processed_prompt')).toMatchObject({
+      baseline: 2_000,
+      candidate: 2_000,
+    })
+    expect(total('context_per_turn')?.baseline).toBeCloseTo(2_000 / 3)
+    expect(total('cache_share')?.baseline).toBeCloseTo(0.5)
+    expect(total('peak_context')).toMatchObject({
+      baseline: 900,
+      candidate: 600,
+      delta: -300,
+    })
+    expect(total('compactions')).toMatchObject({ baseline: 1, candidate: 1 })
+
+    // A provider whose prompt does not match the Harness's count keeps its
+    // difference, labelled; the same provider on both sides is never flagged.
+    const claudeCode = withCause(
+      execution('c', rows),
+      ['evaluated', 'evaluated'],
+      { cache_comparable: false, peak_context_tokens: 600 },
+    )
+    expect(
+      compareExecutions(a, claudeCode).totals.find(
+        (metric) => metric.id === 'peak_context',
+      )?.label,
+    ).toBe('Peak context')
+    claudeCode.subjects[0].provider = 'claude-code'
+    const flagged = compareExecutions(a, claudeCode)
+    expect(
+      flagged.totals.find((metric) => metric.id === 'peak_context'),
+    ).toMatchObject({ label: 'Peak context (not comparable)', delta: -300 })
+    expect(
+      flagged.totals.find((metric) => metric.id === 'cache_read'),
+    ).toMatchObject({ label: 'Cache read (not comparable)' })
+  })
+
+  it('compares the peak as the mean over tests of each test mean, not the largest run', () => {
+    const peaks = (id: string, first: number, second: number) => {
+      const detail = execution(id, [
+        { scenario: 'timer_wake' },
+        { scenario: 'registry' },
+      ])
+      detail.reports.forEach((record, index) => {
+        const run = record.report?.scenarios[0].runs[0]
+        if (run)
+          run.efficiency = {
+            ...run.efficiency,
+            peak_context_tokens: index === 0 ? first : second,
+          }
+      })
+      return detail
+    }
+    const peak = compareExecutions(
+      peaks('a', 900, 100),
+      peaks('b', 300, 100),
+    ).totals.find((metric) => metric.id === 'peak_context')
+    // Mean 500 against 200, where the largest run says 900 against 300.
+    expect(peak).toMatchObject({ baseline: 500, candidate: 200 })
+  })
+
   it('warns when the runners differ and names the definitions that moved', () => {
     const a = imported()
     const b = local()
@@ -1006,6 +1112,8 @@ describe('comparison summary', () => {
         '| Total turns | 9 | 9 | No change |',
         '| Function calls | 9 | 9 | No change |',
         '| Function call errors | 0 | 0 | No change |',
+        // Reports written before run causes say so.
+        '| Runs: classified by the earlier rule | 5 (2 runs out of the totals) | 5 (2 runs out of the totals) | No change |',
         '',
         '| Scenario | Score A → B | Criteria that changed |',
         '| --- | --- | --- |',

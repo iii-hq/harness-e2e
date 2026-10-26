@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   type Aggregate,
   aggregateOf,
+  calibrated,
   combinationText,
   type MetricMove,
   type OverviewPoint,
@@ -10,8 +11,9 @@ import {
   scopeText,
   stepText,
   timeline,
+  uncalibratedText,
   type Verdict,
-  verdictSummary,
+  verdictMoves,
 } from '@/lib/release-overview'
 import {
   axisMarks,
@@ -21,7 +23,7 @@ import {
   type TrendPoint,
   trendMetric,
 } from '@/lib/trends'
-import { releaseOverview } from '@/test-fixtures/release-overview'
+import { cannotTell, releaseOverview } from '@/test-fixtures/release-overview'
 
 const main = TREND_METRICS.filter((metric) => metric.tier === 'main')
 const verdict = releaseOverview.verdict as Verdict
@@ -31,21 +33,35 @@ const pairs = (moves: MetricMove[]) =>
   moves.map(({ metric, delta }) => [metric.id, delta])
 
 describe('release verdict', () => {
-  it('reads the latest release against the previous one, measure by measure', () => {
-    const summary = verdictSummary(verdict, main)
-    expect(pairs(summary.better)).toEqual([['input_tokens', -1.7]])
-    expect(pairs(summary.worse)).toEqual([
+  it('reads the measures that moved, never as better or worse', () => {
+    const summary = verdictMoves(verdict, main)
+    expect(pairs(summary.moved)).toEqual([
       ['score', -2.3],
       ['duration', 6],
+      ['input_tokens', -1.7],
       ['turns', 8.9],
     ])
     expect(summary.same).toEqual(['completed', 'error_rate'])
   })
 
   it('says nothing moved when a side has no measures', () => {
+    expect(verdictMoves({ ...verdict, latest_aggregate: null }, main)).toEqual({
+      moved: [],
+      same: [],
+    })
+  })
+
+  it('reads better or worse only from a calibrated verdict, and says why there is none', () => {
+    expect(calibrated(verdict)).toEqual([])
+    expect(uncalibratedText(verdict.compared[0])).toMatch(/^One run per test/)
     expect(
-      verdictSummary({ ...verdict, latest_aggregate: null }, main),
-    ).toEqual({ better: [], worse: [], same: [] })
+      uncalibratedText({ ...verdict.compared[0], calibrated: undefined }),
+    ).toBe('The worker sent no calibrated verdict for it.')
+    const read = calibrated({
+      ...verdict,
+      compared: [{ ...verdict.compared[0], calibrated: cannotTell }],
+    })
+    expect(read.map((item) => item.summary.verdict)).toEqual(['cannot_tell'])
   })
 
   it('reads tests completed and the error rate from the combinations’ shares, never the sums', () => {

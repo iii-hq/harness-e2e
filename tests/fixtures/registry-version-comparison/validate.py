@@ -92,8 +92,11 @@ def ratio(metric_id, numerator, denominator, evidence, reason=None, empty_value=
                     "reason": reason or "zero_denominator", "evidence": evidence}
         return {"id": metric_id, "status": "not_applicable", "numerator": 0,
                 "denominator": 0, "reason": reason or "zero_denominator", "evidence": evidence}
-    return {"id": metric_id, "status": "measured", "numerator": numerator,
-            "denominator": denominator, "evidence": evidence}
+    measured = {"id": metric_id, "status": "measured", "numerator": numerator,
+                "denominator": denominator, "evidence": evidence}
+    if reason:
+        measured["reason"] = reason
+    return measured
 
 
 def controller_command(state, command, timeout=120):
@@ -462,29 +465,36 @@ def verification_observations(task_root, assets, state):
     report_evidence = relative_evidence(run_root, checks_path)
     validation_evidence = relative_evidence(run_root, receipt_path)
     evidence = [item for item in (report_evidence, feature_evidence, validation_evidence) if item]
+    # A report only claims what it did not execute: an empty failure set holds
+    # for the required checks it executed and no further, so it counts as
+    # executed/required, and a report that executed nothing earns nothing. For
+    # the same reason a reported failure is found only once its check was
+    # executed.
+    executed_share = (len(executed), len(PUBLIC_VERIFICATION_IDS))
+    found = known_failed & report_fail & executed
     observations = []
     if not truth_complete:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
     elif not known_failed:
-        observations.append(ratio("verification.recall", 0, 0, evidence,
-                                  "no_independently_failing_checks", empty_value=1))
+        observations.append(ratio("verification.recall", *executed_share, evidence,
+                                  "no_independently_failing_checks"))
     else:
-        observations.append(ratio("verification.recall", len(known_failed & report_fail), len(known_failed), evidence))
+        observations.append(ratio("verification.recall", len(found), len(known_failed), evidence))
     if any(independent.get(case_id, {}).get("status") != "measured"
            for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
     elif not report_fail and not known_failed:
-        observations.append(ratio("verification.precision", 0, 0, evidence,
-                                  "no_failures_to_reproduce", empty_value=1))
+        observations.append(ratio("verification.precision", *executed_share, evidence,
+                                  "no_failures_to_reproduce"))
     elif not report_fail:
         observations.append(ratio("verification.precision", 0, 0, evidence,
                                   "no_reported_failures"))
     else:
-        observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence))
+        observations.append(ratio("verification.precision", len(found), len(report_fail), evidence))
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", len(evidenced),
                               len(PUBLIC_VERIFICATION_IDS), evidence))
-    observations.extend(source_preservation(task_root, state, run_root))
+    observations.extend(source_preservation(task_root, state, run_root, reported=bool(executed)))
     return observations
 
 
@@ -502,17 +512,20 @@ def empty_verification(task_root, state, run_root, truth_complete, known_failed,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
                               "no_reported_outcomes", empty_value=0))
-    observations.extend(source_preservation(task_root, state, run_root))
+    observations.extend(source_preservation(task_root, state, run_root, reported=False))
     return observations
 
 
-def source_preservation(task_root, state, run_root):
+def source_preservation(task_root, state, run_root, reported=True):
+    """An unchanged source counts only beside a report with an executed check:
+    a tester that ran nothing left the source alone by doing nothing."""
     source_patch = task_root / "source.patch"
     state_path = task_root / "state.json"
     evidence = [relative_evidence(run_root, source_patch), relative_evidence(run_root, state_path)]
     expected_patch = state.get("initial_patch_sha256")
     if isinstance(expected_patch, str) and source_patch.is_file():
-        return [binary("verification.source_preservation", hashlib.sha256(source_patch.read_bytes()).hexdigest() == expected_patch, [item for item in evidence if item])]
+        unchanged = hashlib.sha256(source_patch.read_bytes()).hexdigest() == expected_patch
+        return [binary("verification.source_preservation", reported and unchanged, [item for item in evidence if item])]
     else:
         return [unavailable("verification.source_preservation", "delivery_or_final_patch_missing")]
 

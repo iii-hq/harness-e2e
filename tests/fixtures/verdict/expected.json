@@ -1,0 +1,58 @@
+{
+  "note": "Golden expectations for src/verdict.rs on the Harness A/B pair 1.8.44 -> 1.8.50 (5 runs per arm, only the Harness changes). States and repetitions, not p-values: any reproduction of the rule (Release Control) must reach the same states with the default rule and reproduce the PRNG vectors exactly. `first` holds u64 values as decimal strings.",
+  "rule": {
+    "margin": 5,
+    "equivalence": 0.05,
+    "alpha": 0.025,
+    "permutations": 10000,
+    "seed": 0
+  },
+  "prng": {
+    "seed": 0,
+    "first": [
+      "16294208416658607535",
+      "7960286522194355700",
+      "487617019471545679"
+    ],
+    "shuffle": [
+      6,
+      3,
+      2,
+      9,
+      8,
+      1,
+      4,
+      7,
+      0,
+      5
+    ]
+  },
+  "pairs": {
+    "software-engineering": {
+      "a": "se-1.8.44.json",
+      "b": "se-1.8.50.json",
+      "verdict": "cannot_tell",
+      "quality": "inconclusive",
+      "cost": "cheaper",
+      "qualifier": null,
+      "repetitions": {"needed": null, "missing": null, "more_than": 30, "settles": ["quality"]}
+    },
+    "regression": {
+      "a": "regression-1.8.44.json",
+      "b": "regression-1.8.50.json",
+      "verdict": "cannot_tell",
+      "quality": "inconclusive",
+      "cost": "inconclusive",
+      "qualifier": null,
+      "repetitions": {"needed": null, "missing": null, "more_than": 30, "settles": ["quality", "cost"]}
+    }
+  },
+  "calibration": {
+    "note": "A version against itself: both arms drawn with replacement, test by test, from one arm's counted runs (the arms in turn; SplitMix64 from `seed`, one generator over every draw, index = next() % runs), `runs_per_arm` runs per test on each; better, worse or a qualifier count as a false signal. Each trial's rule has `permutations` (fewer than the default, to keep the test fast; a permutation p counting the observed round is valid at any count) and seed = the trial's index.",
+    "seed": 5,
+    "runs_per_arm": [5, 9, 11],
+    "trials_per_size": 480,
+    "permutations": 200,
+    "max_false_signal_rate": 0.05
+  }
+}

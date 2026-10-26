@@ -60,7 +60,7 @@ const BUNDLE_BYTES: &[u8] =
 const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
     "revision_pinned",
     10,
-    "Does the checkout use the supplied Alertmanager revision or a commit based on it?",
+    "Once route::match is registered and dispatch/ was changed or proven to call it, does the checkout use the supplied Alertmanager revision or a commit based on it?",
 )
 .labeled("Checkout is based on the supplied revision");
 // Points scale with the oracle cases that match; the gate needs all of them,
@@ -81,7 +81,7 @@ const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
     10,
-    "Are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
+    "Once route::match is registered and dispatch/ was changed or proven to call it, are files tracked by Git in notify/, api/, and config/testdata/ unchanged from the supplied revision?",
 )
 .labeled("Protected Alertmanager files stay unchanged");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -126,6 +126,8 @@ struct Snapshot {
     head: Option<String>,
     pinned_reachable: bool,
     protected_unchanged: bool,
+    /// Files tracked under `dispatch/` differ from the supplied revision.
+    dispatch_changed: bool,
     delegation_wired: bool,
     delegation_detail: String,
     function_registered: bool,
@@ -343,11 +345,26 @@ and process started from this workspace."#,
 }
 
 fn evaluate_snapshot(snapshot: &Snapshot) -> Result<ObjectiveEvaluation> {
+    // An untouched checkout is pinned and in scope because nothing was
+    // attempted: both count only once route::match exists and the Go code
+    // was changed to call it. A correct delivery may keep HEAD at the pin.
+    let delivered =
+        snapshot.function_registered && (snapshot.dispatch_changed || snapshot.delegation_wired);
+    let attempt = format!(
+        "route::match registered={}, dispatch changed={}, delegation proven={}",
+        snapshot.function_registered, snapshot.dispatch_changed, snapshot.delegation_wired
+    );
     Ok(assessment::build_evaluation([
-        REVISION_PINNED.full_or_zero(snapshot.revision_pinned(), revision_reason(snapshot)),
+        REVISION_PINNED.full_or_zero(
+            delivered && snapshot.revision_pinned(),
+            format!("{}; {attempt}", revision_reason(snapshot)),
+        ),
         MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(snapshot))?,
         DELEGATION_WIRED.full_or_zero(snapshot.delegation_wired, delegation_reason(snapshot)),
-        SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(snapshot)),
+        SCOPE_EXACT.full_or_zero(
+            delivered && snapshot.scope_exact(),
+            format!("{}; {attempt}", scope_reason(snapshot)),
+        ),
     ]))
 }
 
@@ -502,43 +519,59 @@ async fn validate_bundle(bundle: &Path, checkout: &Path) -> Result<()> {
 
 async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot> {
     let checkout = root.join(CHECKOUT_RELATIVE_PATH);
+    let mut snapshot = checkout_snapshot(&checkout).await;
+    if snapshot.checkout_is_repository {
+        (snapshot.delegation_wired, snapshot.delegation_detail) =
+            delegation_probe(context, &checkout).await?;
+    }
+    snapshot.function_registered = context.function_exists(FUNCTION_ID).await?;
+    if snapshot.function_registered {
+        snapshot.match_cases =
+            probe_match_cases(|payload| context.trigger_value(FUNCTION_ID, payload)).await?;
+    }
+    Ok(snapshot)
+}
+
+/// What Git alone reads in the checkout; the live probes fill in the rest.
+async fn checkout_snapshot(checkout: &Path) -> Snapshot {
     let checkout_is_repository = checkout.join(".git").exists();
     let head = if checkout_is_repository {
-        git_optional(&checkout, &["rev-parse", "HEAD"]).await
+        git_optional(checkout, &["rev-parse", "HEAD"]).await
     } else {
         None
     };
     let pinned_reachable =
-        checkout_is_repository && revision_is_pinned(&checkout, head.as_deref()).await;
+        checkout_is_repository && revision_is_pinned(checkout, head.as_deref()).await;
     let protected_unchanged = checkout_is_repository && {
         let mut args = vec!["--"];
         args.extend(PROTECTED_PATHS.iter().copied());
-        git_diff_empty(&checkout, PINNED_REVISION, &args).await
+        git_diff_empty(checkout, PINNED_REVISION, &args).await
     };
-    let (delegation_wired, delegation_detail) = if checkout_is_repository {
-        delegation_probe(context, &checkout).await?
-    } else {
-        (false, "checkout is not a Git repository".into())
-    };
-    let function_registered = context.function_exists(FUNCTION_ID).await?;
-    let match_cases = if function_registered {
-        probe_match_cases(context).await?
-    } else {
-        Vec::new()
-    };
-    Ok(Snapshot {
+    let dispatch_changed = checkout_is_repository
+        && !git_diff_empty(checkout, PINNED_REVISION, &["--", "dispatch"]).await;
+    Snapshot {
         checkout_is_repository,
         head,
         pinned_reachable,
         protected_unchanged,
-        delegation_wired,
-        delegation_detail,
-        function_registered,
-        match_cases,
-    })
+        dispatch_changed,
+        delegation_wired: false,
+        delegation_detail: if checkout_is_repository {
+            "delegation not probed".into()
+        } else {
+            "checkout is not a Git repository".into()
+        },
+        function_registered: false,
+        match_cases: Vec::new(),
+    }
 }
 
-async fn probe_match_cases(context: &E2eContext) -> Result<Vec<(String, bool, String)>> {
+/// Calls `route::match` through `call` on every oracle case.
+async fn probe_match_cases<F, Fut>(mut call: F) -> Result<Vec<(String, bool, String)>>
+where
+    F: FnMut(Value) -> Fut,
+    Fut: std::future::Future<Output = Result<Value>>,
+{
     let oracle = oracle()?;
     let (noise_name, noise_value) = noise_label(&oracle);
     let mut results = Vec::new();
@@ -557,7 +590,7 @@ async fn probe_match_cases(context: &E2eContext) -> Result<Vec<(String, bool, St
             "route": route,
             "labels": labels,
         });
-        match context.trigger_value(FUNCTION_ID, payload).await {
+        match call(payload).await {
             Ok(value) => match parse_match_result(&value) {
                 Some(observed) if equivalent(&expected_result(&case), &observed) => {
                     results.push((case.id, true, "oracle match".into()));
@@ -714,6 +747,7 @@ fn audit_content(snapshot: &Snapshot) -> Value {
         },
         "scope": {
             "protected_unchanged": snapshot.protected_unchanged,
+            "dispatch_changed": snapshot.dispatch_changed,
         }
     })
 }
@@ -1116,7 +1150,7 @@ fn workspace_root(run_id: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::time::Duration;
 
     use super::*;
@@ -1128,6 +1162,7 @@ mod tests {
             head: Some(PINNED_REVISION.to_string()),
             pinned_reachable: true,
             protected_unchanged: true,
+            dispatch_changed: true,
             delegation_wired: true,
             delegation_detail: "probe passed".into(),
             function_registered: true,
@@ -1137,6 +1172,79 @@ mod tests {
                 "oracle match".into(),
             )],
         }
+    }
+
+    /// A clone of the supplied bundle, as the subject makes it.
+    async fn clone_bundle(root: &Path) -> PathBuf {
+        let bundle = root.join("repository.bundle");
+        fs::write(&bundle, BUNDLE_BYTES).unwrap();
+        let checkout = root.join(CHECKOUT_RELATIVE_PATH);
+        validate_bundle(&bundle, &checkout).await.unwrap();
+        checkout
+    }
+
+    /// The null delivery (no checkout, since the runner leaves only the
+    /// bundle, and no route::match) and the reference one: the bundle cloned,
+    /// `dispatch/route.go` edited, HEAD still at the pin, and route::match
+    /// answering every oracle case as the frozen matcher does. Both are read
+    /// by the same Git checks and the same probe parsing `collect_snapshot`
+    /// runs. The delegation probe needs Go, the module proxy and an engine, so
+    /// it stands proven here; CI proves it against an isolated engine
+    /// (`delegation_probe_accepts_real_rpc_and_rejects_tcp_only_routing`).
+    pub(crate) async fn controls() -> [ObjectiveEvaluation; 2] {
+        let temporary = tempfile::tempdir().unwrap();
+        let null = checkout_snapshot(&temporary.path().join(CHECKOUT_RELATIVE_PATH)).await;
+        let checkout = clone_bundle(temporary.path()).await;
+        require_engine_in_route_match(&checkout);
+        let mut reference = checkout_snapshot(&checkout).await;
+        reference.delegation_wired = true;
+        reference.function_registered = true;
+        reference.match_cases = probe_match_cases(|payload| async move {
+            oracle_answer(&payload).context("no oracle case")
+        })
+        .await
+        .unwrap();
+        [
+            evaluate_snapshot(&null).unwrap(),
+            evaluate_snapshot(&reference).unwrap(),
+        ]
+    }
+
+    /// A stub route::match on an untouched clone attempted nothing in Go:
+    /// the pin and the scope it leaves alone pay nothing.
+    #[tokio::test]
+    async fn a_stub_function_on_an_untouched_clone_earns_nothing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let checkout = clone_bundle(temporary.path()).await;
+        let mut stub = checkout_snapshot(&checkout).await;
+        assert!(stub.revision_pinned() && stub.scope_exact() && !stub.dispatch_changed);
+        stub.function_registered = true;
+        stub.match_cases = probe_match_cases(|_| async { Ok(json!({ "receivers": [] })) })
+            .await
+            .unwrap();
+        let awards = evaluate_snapshot(&stub)
+            .unwrap()
+            .awards
+            .into_iter()
+            .map(|award| (award.id, award.awarded))
+            .collect::<Vec<_>>();
+        assert!(
+            awards.iter().all(|(_, awarded)| *awarded == Some(0)),
+            "{awards:?}"
+        );
+        // The same function once dispatch/ calls it keeps the pin and scope.
+        require_engine_in_route_match(&checkout);
+        stub.dispatch_changed = checkout_snapshot(&checkout).await.dispatch_changed;
+        let awarded = |id: &str| {
+            evaluate_snapshot(&stub)
+                .unwrap()
+                .awards
+                .into_iter()
+                .find(|award| award.id == id)
+                .and_then(|award| award.awarded)
+        };
+        assert_eq!(awarded("revision_pinned"), Some(REVISION_PINNED.weight()));
+        assert_eq!(awarded("scope_exact"), Some(SCOPE_EXACT.weight()));
     }
 
     #[test]
@@ -1161,8 +1269,19 @@ mod tests {
         snapshot.match_cases = cases(3);
         assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
 
-        // Every case matches, but Alertmanager does not call route::match.
+        // Delegation proven by a change outside dispatch/ delivers all the same.
         snapshot.match_cases = cases(0);
+        snapshot.dispatch_changed = false;
+        let points: u16 = evaluate_snapshot(&snapshot)
+            .unwrap()
+            .awards
+            .iter()
+            .filter_map(|award| award.awarded.map(u16::from))
+            .sum();
+        assert_eq!(points, 100);
+        snapshot.dispatch_changed = true;
+
+        // Every case matches, but Alertmanager does not call route::match.
         snapshot.delegation_wired = false;
         assert_eq!(completion(&snapshot), CompletionState::TaskIncomplete);
 
