@@ -151,10 +151,12 @@ fn context_over_window_flag(report: &E2eRunReport) -> Option<AuditFlag> {
         severity: AuditSeverity::Warning,
         source: AuditFlagSource::Deterministic,
         summary: format!(
-            "a root step sent a {peak}-token prompt into a usable window of {usable} tokens, after {} compactions",
-            efficiency
-                .compactions
-                .map_or_else(|| "an unknown number of".to_string(), |n| n.to_string())
+            "a root step sent a {peak}-token prompt into a usable window of {usable} tokens, after {}",
+            match efficiency.compactions {
+                Some(1) => "1 compaction".to_string(),
+                Some(n) => format!("{n} compactions"),
+                None => "an unknown number of compactions".to_string(),
+            }
         ),
         evidence: Vec::new(),
         confidence: None,
@@ -551,6 +553,11 @@ mod tests {
         assert_eq!(flags[0].severity, AuditSeverity::Warning);
         assert!(flags[0].summary.contains("256135-token prompt"));
         assert!(flags[0].summary.contains("after 0 compactions"));
+        let mut once = report_with_context(161_327, 128_000);
+        once.efficiency.as_mut().unwrap().compactions = Some(1);
+        assert!(deterministic(&once, &policy)[0]
+            .summary
+            .ends_with("after 1 compaction"));
         assert!(deterministic(&report_with_context(128_000, 128_000), &policy).is_empty());
         // Without a measured peak or window there is nothing to hold.
         let mut unknown = report_with_context(256_135, 128_000);
