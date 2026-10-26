@@ -84,11 +84,6 @@ pub struct SystemUnderTestIdentity {
     /// Absent when the host or Compose process cannot be observed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_binary_sha256: Option<String>,
-    /// Digest of every running worker executable named after its Compose
-    /// container, by worker, unchanged from the start to the end of the
-    /// suite. A worker left out could not be observed.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub worker_binaries: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_source: Option<HarnessSourceIdentity>,
     pub e2e_repository: String,
@@ -143,7 +138,6 @@ impl SystemUnderTestIdentity {
             engine_revision: nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
             harness_version: required_value(harness_version, "Harness version")?,
             harness_binary_sha256: None,
-            worker_binaries: BTreeMap::new(),
             harness_source: None,
             e2e_repository: identity_value(
                 "HARNESS_E2E_REPOSITORY",
@@ -164,10 +158,6 @@ impl SystemUnderTestIdentity {
         required_value(self.harness_version.clone(), "Harness version")?;
         if let Some(digest) = &self.harness_binary_sha256 {
             validate_sha256(digest, "Harness binary digest")?;
-        }
-        for (worker, digest) in &self.worker_binaries {
-            required_value(worker.clone(), "worker name")?;
-            validate_sha256(digest, worker)?;
         }
         if let Some(source) = &self.harness_source {
             source

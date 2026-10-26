@@ -3124,7 +3124,6 @@ mod tests {
             engine_revision: None,
             harness_version: "1.8.0".into(),
             harness_binary_sha256: None,
-            worker_binaries: Default::default(),
             harness_source: None,
             e2e_repository: "iii-hq/workers".into(),
             e2e_revision: "0123456789abcdef0123456789abcdef01234567".into(),
