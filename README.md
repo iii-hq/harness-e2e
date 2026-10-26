@@ -334,6 +334,11 @@ exists:
   The other API's on-call engineer left out is scored, since recall ranks it
   and the link never reaches it.
 
+`stacks/memory.yaml` runs the released `memory`, so the gap cases
+(`memory_many_siblings`, `memory_about_me_overflow`, `memory_linked_update`,
+`memory_learn_from_long_message`, `memory_honors_do_not_keep`) fail until a
+memory release carries these fixes.
+
 Each run also records `memory_` measurements: expected, irrelevant and
 duplicate injections, the injected, rules and reminder tokens, the turns where
 the memory hook did not run (a turn after the case trashed its bank is not
@@ -388,11 +393,12 @@ included. The measured session then runs as in `memory`:
   baseline, which never runs its teacher. A memory whose extraction reads no
   hand-set rule keeps the diagnosis either way.
 
-These three were written to fail before memory changes. Their teacher is
-asked to reply with one word, `noted`, and setup fails as an infrastructure
-error on any other reply: a reply restating the host would teach it from a
-short line, and one refusing to keep the diagnosis would change what
-extraction reads in one twin only.
+The long-message and do-not-keep cases were written to fail before memory
+changes; `memory_keeps_without_a_rule` is their control, green on both builds.
+All three ask their teacher to reply with one word, `noted`, and setup fails
+as an infrastructure error on any other reply: a reply restating the host
+would teach it from a short line, and one refusing to keep the diagnosis would
+change what extraction reads in one twin only.
 
 Extraction calls a model, so these gates move with it: memory pins it with
 `extraction_model` (`deepseek::deepseek-flash` on the `memory` stack), and the

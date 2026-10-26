@@ -269,7 +269,7 @@ mod tests {
 
     fn memory_text(extra: &str) -> String {
         format!(
-            "<memory bank=\"e2e-x\">\nRelevant remembered memories (\"the user\" is the person you are talking to; recalled 2026-10-23 Friday; each dated when last updated; verify anything surprising):\n- Fact one. (2026-10-23)\n- Fact two. (2026-10-23)\n{extra}</memory>"
+            "<memory bank=\"e2e-x\">\nRelevant remembered memories (\"the user\" is the person you are talking to; recalled 2026-10-23 Friday; each dated when last stated; verify anything surprising):\n- Fact one. (2026-10-23)\n- Fact two. (2026-10-23)\n{extra}</memory>"
         )
     }
 

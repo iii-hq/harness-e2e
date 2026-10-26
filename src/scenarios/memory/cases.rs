@@ -329,8 +329,9 @@ const COMMIT_CRITERIA: &[Criterion] = &[
 /// The user's own notes for a project, one message of about 4,400
 /// characters: a release command at its start, a staging database host in
 /// its middle, and the day's narrative around them, which holds nothing to
-/// keep. Memory cuts a transcript line over 2,000 characters to its first and
-/// last 1,000, so the host sits in the cut.
+/// keep. Before memory kept a user line to 12,000 characters, it cut a
+/// transcript line over 2,000 to its first and last 1,000, and the host sat in
+/// that cut.
 const LONG_NOTES: &str =
     "Some notes for later, all of these hold for this project: this project's release \
     command is release-{head} --channel stable, and nobody cuts a release from a laptop. \
@@ -2569,10 +2570,11 @@ mod tests {
         }
     }
 
-    /// Memory keeps the first and last 1000 bytes of a transcript line over
-    /// 2000: the control fact sits in the kept head, the middle fact wholly
-    /// in the cut, more than 1000 characters from either end. Canaries render
-    /// to eight characters, so one run stands for all.
+    /// Before memory kept a user line to 12,000 bytes, it kept the first and
+    /// last 1000 bytes of a transcript line over 2000: the control fact sits in
+    /// that kept head, the middle fact wholly in that cut, more than 1000
+    /// characters from either end. Canaries render to eight characters, so one
+    /// run stands for all.
     #[test]
     fn the_long_message_puts_its_middle_fact_where_memory_cuts_a_long_line() {
         let case = case_named("memory_learn_from_long_message");
