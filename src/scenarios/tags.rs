@@ -11,6 +11,8 @@
 //! it, as in finding a replaced tool; looking a function up before calling it
 //! does not count) or when it hosts what the subject delivers (compose when the
 //! app runs under iii compose, ade when the deliverable is a Console page).
+//! The one exception is memory: the subject is denied its functions, and the
+//! tests measure what it injects into the subject's turns unasked.
 //! What only the evaluator uses to measure (the browser behind screenshots,
 //! compose in cleanup) does not count. The harness is never a tag: every test
 //! exercises it, and a test with no worker protects the harness alone.
@@ -61,6 +63,7 @@ vocabulary! {
         IiiDirectory = "iii-directory",
         Judge = "judge",
         LlmRouter = "llm-router",
+        Memory = "memory",
         Pubsub = "pubsub",
         Queue = "queue",
         RbacProxy = "rbac-proxy",
@@ -87,6 +90,7 @@ vocabulary! {
         Security = "security",
         AppBuilding = "app-building",
         Verification = "verification",
+        Memory = "memory",
     }
 }
 
@@ -119,6 +123,7 @@ impl Area {
             Self::Security => "Resisting untrusted input",
             Self::AppBuilding => "Building applications",
             Self::Verification => "Verifying a change",
+            Self::Memory => "Memory injection",
         }
     }
 }
@@ -237,6 +242,37 @@ impl ScenarioId {
                     A::AppBuilding,
                     &[D::Frontend, D::Backend, D::Data],
                 ),
+                // The subject is denied memory's functions: what the test
+                // measures is what memory injects into its turns unasked.
+                Self::MemoryRelevantRecall
+                | Self::MemorySmallTalk
+                | Self::MemoryFirstPersonOffTopic
+                | Self::MemoryParaphrase
+                | Self::MemorySessionRepeat
+                | Self::MemoryUpdatedFact
+                | Self::MemoryValueProject
+                | Self::MemoryValueProjectBaseline
+                | Self::MemoryValuePreference
+                | Self::MemoryValuePreferenceBaseline
+                | Self::MemoryRuleFit
+                | Self::MemoryChatterAfterAnswer
+                | Self::MemoryUserFactNeeded
+                | Self::MemoryAboutMe
+                | Self::MemoryRewordedAcrossTurns
+                | Self::MemorySiblingFacts
+                | Self::MemoryRuleChangedMidSession
+                | Self::MemoryBankEditsMidSession
+                | Self::MemoryBankTrashedMidSession
+                | Self::MemoryLearnThenRecall
+                | Self::MemoryLearnRuleThenObey
+                | Self::MemoryLearnCorrection
+                | Self::MemoryAutomationNotLearned
+                | Self::MemoryManySiblings
+                | Self::MemoryAboutMeOverflow
+                | Self::MemoryLinkedUpdate
+                | Self::MemoryLearnFromLongMessage
+                | Self::MemoryHonorsDoNotKeep
+                | Self::MemoryKeepsWithoutARule => (&[W::Memory], A::Memory, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {

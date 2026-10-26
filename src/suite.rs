@@ -65,6 +65,8 @@ fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
         Some(5.0)
     } else if scenario_id == crate::scenarios::linkly::ID {
         Some(10.0)
+    } else if crate::scenarios::memory::IDS.contains(&scenario_id) {
+        Some(2.0)
     } else {
         None
     }
@@ -2385,6 +2387,8 @@ async fn execute(
         .map_err(|error| scenario_setup_failure(error.to_string()))?
         .map(|root| json!({ "fs_scope": { "root": root } }))
         .or(filesystem_metadata);
+    let options_metadata =
+        turn_metadata(filesystem_metadata.as_ref(), module.send_metadata(run_id));
     let required_functions = module.required_functions(run_id);
     report.worker_contracts = context
         .observe_function_contracts(&required_functions)
@@ -2450,7 +2454,7 @@ async fn execute(
                             spec,
                             module.allowed_functions(run_id),
                         )),
-                        metadata: filesystem_metadata.clone(),
+                        metadata: options_metadata.clone(),
                     }),
                 },
             )
@@ -2918,6 +2922,23 @@ fn prepare_filesystem_root(spec: &ScenarioSpec) -> Result<Option<serde_json::Val
     Ok(Some(json!({ "fs_scope": { "root": root } })))
 }
 
+/// The `options.metadata` every send of a run carries: the scenario's own keys
+/// plus the runner's (`fs_scope`), which win on a clash. A scenario without
+/// keys leaves the runner's metadata untouched, `None` included.
+fn turn_metadata(
+    filesystem: Option<&Value>,
+    scenario: serde_json::Map<String, Value>,
+) -> Option<Value> {
+    if scenario.is_empty() {
+        return filesystem.cloned();
+    }
+    let mut metadata = scenario;
+    if let Some(Value::Object(runner)) = filesystem {
+        metadata.extend(runner.clone());
+    }
+    Some(Value::Object(metadata))
+}
+
 async fn capture_partial_observation(
     context: &E2eContext,
     session_id: &str,
@@ -3360,6 +3381,25 @@ mod tests {
         SessionMetricsPayload, SessionMetricsResponse, SessionUsageTotals, StatusReportPayload,
     };
 
+    #[test]
+    fn turn_metadata_adds_the_scenario_keys_under_the_runners_own() {
+        let fs = json!({"fs_scope": {"root": "/r"}});
+        let mut extra = serde_json::Map::new();
+        extra.insert("memory_bank".into(), json!("e2e-x"));
+        extra.insert("fs_scope".into(), json!("ignored"));
+        assert_eq!(
+            turn_metadata(Some(&fs), extra),
+            Some(json!({"fs_scope": {"root": "/r"}, "memory_bank": "e2e-x"}))
+        );
+    }
+
+    #[test]
+    fn turn_metadata_is_unchanged_without_scenario_keys() {
+        let fs = json!({"fs_scope": {"root": "/r"}});
+        assert_eq!(turn_metadata(Some(&fs), serde_json::Map::new()), Some(fs));
+        assert_eq!(turn_metadata(None, serde_json::Map::new()), None);
+    }
+
     fn terminal_metrics(complete: bool) -> SessionMetricsResponse {
         SessionMetricsResponse::from_normalized(SessionMetricsPayload {
             root_session_id: "session".into(),
@@ -3737,6 +3777,14 @@ mod tests {
         );
         subject.priced = Some(false);
         assert_eq!(subject_cost_cap(&subject, capped), None);
+    }
+
+    #[test]
+    fn every_memory_case_is_capped_at_two_dollars() {
+        for id in crate::scenarios::memory::IDS {
+            assert_eq!(subject_cost_cap_usd(id), Some(2.0), "{id}");
+        }
+        assert_eq!(subject_cost_cap_usd("minimal_path"), None);
     }
 
     #[test]

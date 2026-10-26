@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run the `pr` suite on a candidate stack from another repository's pipeline
-and say what it measured.
+"""Run a suite (`pr` unless `--suite` says) on a candidate stack from another
+repository's pipeline and say what it measured.
 
-The caller names what changed: workers at a commit (`--pins`, `--commit`), or
-an iii release (`--iii`). This tool builds the stack from `stacks/default.yaml`,
-dispatches `exact-stack-e2e.yml` without an execution (its reports only go to
+The caller names what changed: workers at a commit (`--pins`, `--commit`),
+released versions (`--versions`), or an iii release (`--iii`). This tool builds
+the stack from `stacks/default.yaml`, or the one `--stack` names, dispatches `exact-stack-e2e.yml` without an execution (its reports only go to
 artifacts), waits for the run and reads `execution-summary.json`:
 
     passed        every group measured, its objective outcome `passed` and
@@ -14,7 +14,8 @@ artifacts), waits for the run and reads `execution-summary.json`:
     not_measured  the run produced no summary, a group is inconclusive, its
                   infrastructure was invalid or it has no completion
                   evidence, or the run never finished
-    skipped       nothing the caller changed is part of the harness graph
+    skipped       nothing the caller changed is part of the harness graph (or
+                  of the stack `--stack` names)
 
 A green workflow proves nothing here: the campaign is advisory, so the
 verdict is read from the summary. Only `passed` and `skipped` exit 0, unless
@@ -47,6 +48,8 @@ WORKERS_REPOSITORY = "iii-hq/workers"
 WORKFLOW = "exact-stack-e2e.yml"
 #: Tells the comment this tool owns apart from every other one on the PR.
 MARKER = "<!-- harness-e2e-verify -->"
+#: Where the named stacks live.
+STACKS = DEFAULT_STACK.parent
 RUN_URL = re.compile(r"/actions/runs/(\d+)")
 POLL_SECONDS = 20
 DEADLINE_SECONDS = 45 * 60
@@ -84,25 +87,42 @@ def graph_workers() -> set[str]:
     return {node["name"] for node in nodes if node.get("type") != "engine"}
 
 
-def build_stack(pins: list[str], commit: str, iii: str, graph: set[str]) -> dict[str, Any] | None:
-    """The default stack with the pinned workers built from `commit`.
+def build_stack(pins: list[str], commit: str, iii: str, graph: set[str], stack: str = "default",
+                versions: dict[str, str] | None = None) -> dict[str, Any] | None:
+    """The `stack` of stacks/ with the pinned workers built from `commit` and
+    `versions` of its workers installed.
 
-    A pinned worker outside the harness graph is not part of what runs, so it
-    is dropped; none left means nothing to verify (None). The harness is
-    always pinned with them, at the same commit, so the Registry does not
-    bring a second copy of a worker that is being built from source.
+    On the default stack a pinned worker outside the harness graph is not part
+    of what runs, so it is dropped, and the harness is always pinned with the
+    rest, at the same commit, so the Registry does not bring a second copy of a
+    worker that is being built from source. On a named stack a pin is one of
+    its containers, built with that container's settings kept; the others stay
+    as the stack has them. No pin left, and no version or iii release asked
+    for, means nothing to verify (None).
     """
-    stack = load_yaml(DEFAULT_STACK.read_text())
+    named = stack != "default"
+    built = load_yaml((STACKS / f"{stack}.yaml" if named else DEFAULT_STACK).read_text())
+    containers = built["containers"]
     if iii:
-        stack["iii"] = iii
-    pinned = sorted(set(pins) & graph)
-    if pins and not pinned:
+        built["iii"] = iii
+    for name, version in (versions or {}).items():
+        if name not in containers:
+            raise VerifyError(f"the {stack} stack declares no {name} to install {version} of")
+        containers[name]["version"] = version
+    pinned = sorted(set(pins) & (set(containers) if named else graph))
+    if pins and not pinned and not (versions or iii):
         return None
-    if pinned:
-        for name in sorted({APPLICATION, *pinned}):
-            stack["containers"][name] = {"worker": f"package://{name}", "repository": WORKERS_REPOSITORY,
-                                         "commit": commit}
-    return stack
+    for name in sorted(set(pinned) if named or not pinned else {APPLICATION, *pinned}):
+        kept = {key: value for key, value in containers.get(name, {}).items()
+                if named and key not in ("worker", "version")}
+        containers[name] = {"worker": f"package://{name}", **kept, "repository": WORKERS_REPOSITORY,
+                            "commit": commit}
+    return built
+
+
+def marker(suite: str) -> str:
+    """The comment marker of `suite`: the `pr` suite keeps the original one."""
+    return MARKER if suite == "pr" else f"<!-- harness-e2e-verify:{suite} -->"
 
 
 def pinned(stack: dict[str, Any]) -> list[str]:
@@ -190,28 +210,39 @@ def verdict(summary: dict[str, Any]) -> dict[str, Any]:
             "failed": failed, "not_measured": unmeasured}
 
 
-def describe(result: dict[str, Any], label: str, run_url: str) -> str:
-    lines = [MARKER, f"### {ICONS[result['status']]} Harness E2E · {label}"]
+def label(built: list[str], commit: str, versions: dict[str, str], iii: str, suite: str) -> str:
+    """What the stack measured: the workers built from `commit`, the released
+    versions it installs (a worker built from the commit runs no version) and
+    the iii release, after the suite when it is not `pr`."""
+    named = " + ".join(filter(None, [f"{', '.join(built)} @ {commit[:7]}" if built else "",
+                                     *(f"{name} {version}" for name, version in versions.items()
+                                       if name not in built),
+                                     f"iii {iii}" if iii else ""]))
+    return named if suite == "pr" else f"{suite} · {named}"
+
+
+def describe(result: dict[str, Any], label: str, run_url: str, mark: str = MARKER) -> str:
+    lines = [mark, f"### {ICONS[result['status']]} Harness E2E · {label}"]
     if result["status"] == "skipped":
-        lines.append("Nothing this change touches is part of the harness graph.")
+        lines.append(result.get("reason") or "Nothing this change touches is part of the harness graph.")
     else:
         lines.append(f"{result['passed']}/{result['planned']} passed")
     if result.get("failed"):
         lines.append(f"- failed: {'; '.join(result['failed'])}")
     if result.get("not_measured"):
         lines.append(f"- not measured: {'; '.join(result['not_measured'])}")
-    if result.get("reason"):
+    if result.get("reason") and result["status"] != "skipped":
         lines.append(f"- {result['reason']}")
     if run_url:
         lines.append(f"[Run]({run_url})")
     return "\n".join(lines)
 
 
-def comment(target: str, body: str, token: str | None) -> None:
-    """Create or update the one comment carrying MARKER on `owner/repo#N`."""
+def comment(target: str, body: str, token: str | None, mark: str = MARKER) -> None:
+    """Create or update the one comment carrying `mark` on `owner/repo#N`."""
     repository, _, number = target.partition("#")
     listing = gh("api", "--paginate", f"repos/{repository}/issues/{number}/comments",
-                 "-q", f'.[] | select(.body | contains("{MARKER}")) | .id', token=token).split()
+                 "-q", f'.[] | select(.body | contains("{mark}")) | .id', token=token).split()
     if listing:
         gh("api", "-X", "PATCH", f"repos/{repository}/issues/comments/{listing[0]}", "-f", f"body={body}", token=token)
     else:
@@ -305,23 +336,29 @@ def main() -> int:
     parser.add_argument("--pins", default="[]", help="JSON list of the workers the change touches")
     parser.add_argument("--commit", default="", help="the commit those workers are built from")
     parser.add_argument("--iii", default="", help="an iii release version to install")
+    parser.add_argument("--versions", default="{}", help="JSON object of released worker versions to install")
     parser.add_argument("--suite", default="pr")
+    parser.add_argument("--stack", default="default", help="the stack of stacks/ the suite runs on")
     parser.add_argument("--model", default="deepseek/deepseek-flash")
     parser.add_argument("--comment-pr", default="", metavar="OWNER/REPO#N")
     parser.add_argument("--exit-zero", action="store_true", help="exit 0 whatever the verdict")
     args = parser.parse_args()
 
     pins = json.loads(args.pins)
+    versions = json.loads(args.versions)
     if pins and not args.commit:
         parser.error("--pins needs --commit")
-    if not pins and not args.iii:
-        parser.error("nothing to verify: give --pins or --iii")
+    if not pins and not args.iii and not versions:
+        parser.error("nothing to verify: give --pins, --versions or --iii")
     token = os.environ.get("GH_TOKEN")
     run_url, stack = "", None
     try:
-        stack = build_stack(pins, args.commit, args.iii, graph_workers() if pins else set())
+        graph = graph_workers() if pins and args.stack == "default" else set()
+        stack = build_stack(pins, args.commit, args.iii, graph, args.stack, versions)
         if stack is None:
             result = {"status": "skipped", "passed": 0, "planned": 0, "failed": [], "not_measured": []}
+            if args.stack != "default":
+                result["reason"] = f"Nothing this change touches is in the {args.stack} stack."
         else:
             result, run_url = measure(stack, args.suite, args.model, token)
     # Whatever went wrong (the Registry, gh, the summary), the caller still
@@ -331,13 +368,12 @@ def main() -> int:
                   "reason": f"{type(error).__name__}: {error}"}
 
     built = pinned(stack) if stack else pins
-    label = " + ".join(filter(None, [f"{', '.join(built)} @ {args.commit[:7]}" if built else "",
-                                     f"iii {args.iii}" if args.iii else ""]))
-    body = describe(result, label, run_url)
+    mark = marker(args.suite)
+    body = describe(result, label(built, args.commit, versions, args.iii, args.suite), run_url, mark)
     emit(result, body, run_url)
     if args.comment_pr and result["status"] != "skipped":
         try:
-            comment(args.comment_pr, body, os.environ.get("COMMENT_GH_TOKEN") or token)
+            comment(args.comment_pr, body, os.environ.get("COMMENT_GH_TOKEN") or token, mark)
         except VerifyError as error:
             print(f"::warning::could not update the PR comment: {error}", file=sys.stderr)
     return 0 if args.exit_zero or result["status"] in ("passed", "skipped") else 1

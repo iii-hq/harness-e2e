@@ -197,7 +197,8 @@
         "long-context",
         "security",
         "app-building",
-        "verification"
+        "verification",
+        "memory"
       ]
     },
     "ArtifactExpectation": {
@@ -2728,7 +2729,36 @@
         "performance_regression",
         "browser_cross_site",
         "release_train_recovery",
-        "cross_repo_contract_migration"
+        "cross_repo_contract_migration",
+        "memory_relevant_recall",
+        "memory_small_talk",
+        "memory_first_person_off_topic",
+        "memory_paraphrase",
+        "memory_session_repeat",
+        "memory_updated_fact",
+        "memory_value_project",
+        "memory_value_project_baseline",
+        "memory_value_preference",
+        "memory_value_preference_baseline",
+        "memory_rule_fit",
+        "memory_chatter_after_answer",
+        "memory_user_fact_needed",
+        "memory_about_me",
+        "memory_reworded_across_turns",
+        "memory_sibling_facts",
+        "memory_rule_changed_mid_session",
+        "memory_bank_edits_mid_session",
+        "memory_bank_trashed_mid_session",
+        "memory_many_siblings",
+        "memory_about_me_overflow",
+        "memory_linked_update",
+        "memory_learn_then_recall",
+        "memory_learn_rule_then_obey",
+        "memory_learn_correction",
+        "memory_automation_not_learned",
+        "memory_learn_from_long_message",
+        "memory_honors_do_not_keep",
+        "memory_keeps_without_a_rule"
       ]
     },
     "ScenarioMeasurement": {
@@ -3221,6 +3251,7 @@
         "iii-directory",
         "judge",
         "llm-router",
+        "memory",
         "pubsub",
         "queue",
         "rbac-proxy",
