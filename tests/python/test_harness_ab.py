@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -181,8 +183,9 @@ class HarnessAbTest(unittest.TestCase):
                 arm.mkdir()
                 shutil.copy(fixtures / f"{name}.json", arm / "results.json")
                 arms.append(arm)
-            text = MODULE.verdict(*arms, "1.8.44", "1.8.50")
-            answer = json.loads(MODULE.verdict(*arms, "1.8.44", "1.8.50", as_json=True))
+            text, answered = MODULE.verdict(*arms, "1.8.44", "1.8.50")
+            answer = json.loads(MODULE.verdict(*arms, "1.8.44", "1.8.50", as_json=True)[0])
+        self.assertTrue(answered)
         self.assertIn("Verdict, 1.8.50 against 1.8.44: cannot tell", text)
         self.assertIn("Cost -19.5%: cheaper", text)
         self.assertEqual((answer["verdict"], answer["cost"]["state"]), ("cannot_tell", "cheaper"))
@@ -191,10 +194,55 @@ class HarnessAbTest(unittest.TestCase):
         previous = os.environ.pop("HARNESS_E2E_BIN", None)
         try:
             with unittest.mock.patch.object(MODULE.shutil, "which", return_value=None):
-                self.assertIn("Veredito indisponível", MODULE.verdict(Path("a"), Path("b"), "A", "B"))
+                text, answered = MODULE.verdict(Path("a"), Path("b"), "A", "B")
+            self.assertIn("Veredito indisponível", text)
+            self.assertFalse(answered)
         finally:
             if previous is not None:
                 os.environ["HARNESS_E2E_BIN"] = previous
+
+    def main(self, *argv, runner=None):
+        """`harness_ab.py` run with `argv` and HARNESS_E2E_BIN set to `runner`: its exit and what it printed."""
+        out = io.StringIO()
+        with unittest.mock.patch.object(MODULE.sys, "argv", ["harness_ab.py", *map(str, argv)]), \
+                unittest.mock.patch.dict(os.environ, {"HARNESS_E2E_BIN": runner or ""}), \
+                unittest.mock.patch.object(MODULE.shutil, "which", return_value=None), \
+                contextlib.redirect_stdout(out):
+            return MODULE.main(), out.getvalue()
+
+    def arms(self, directory):
+        """Two arms that share no test, and one with no run."""
+        a, b, empty = Path(directory, "a"), Path(directory, "b"), Path(directory, "empty")
+        for arm, scenario in ((a, "kanban"), (b, "registry")):
+            arm.mkdir()
+            runs = [(f"{arm.name}{i}", "valid", True, 90, 0.1, 10) for i in range(3)]
+            (arm / "results.json").write_text(json.dumps(results(scenario, f"sha:{scenario}", runs)))
+        empty.mkdir()
+        return a, b, empty
+
+    def test_arms_that_share_no_test_print_their_tables_and_without_a_verdict_exit_1(self):
+        with tempfile.TemporaryDirectory() as directory:
+            a, b, empty = self.arms(directory)
+            # The runner missing, or failing: the tables still print, and the exit says it.
+            for arms, runner in (((a, b), None), ((a, empty), shutil.which("false"))):
+                code, text = self.main(*arms, "--resamples", "100", runner=runner)
+                self.assertEqual(code, 1, text)
+                self.assertIn("| Nota | — | — | — | — |", text)
+                self.assertIn("Veredito indisponível", text)
+
+    @unittest.skipUnless(os.environ.get("HARNESS_E2E_BIN"), "needs the runner: HARNESS_E2E_BIN")
+    def test_the_runners_answer_that_there_is_no_verdict_is_printed(self):
+        runner = os.environ["HARNESS_E2E_BIN"]
+        with tempfile.TemporaryDirectory() as directory:
+            a, b, empty = self.arms(directory)
+            code, text = self.main(a, b, "--resamples", "100", runner=runner)
+            self.assertEqual(code, 0, text)
+            self.assertIn("No calibrated verdict: No test ran on both sides under the same definition.", text)
+            self.assertIn("Fora da comparação (só um braço, ou definições diferentes): kanban, registry", text)
+            # An arm without a run: the runner cannot answer.
+            code, text = self.main(a, empty, "--resamples", "100", runner=runner)
+            self.assertEqual(code, 1, text)
+            self.assertIn("Veredito indisponível: Error: no run", text)
 
 
 if __name__ == "__main__":

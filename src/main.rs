@@ -276,6 +276,7 @@ fn compare(args: CompareArgs) -> Result<()> {
     let (a, skipped_a) = verdict::read_arm(&args.a)?;
     let (b, skipped_b) = verdict::read_arm(&args.b)?;
     let mut comparison = verdict::compare(&a, &b, &rule);
+    comparison.warnings.extend(verdict::shared_runs(&a, &b));
     for (label, skipped) in [(&args.label_a, skipped_a), (&args.label_b, skipped_b)] {
         comparison.warnings.extend(
             skipped

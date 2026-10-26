@@ -637,9 +637,12 @@ design a version against itself reads better, worse or a qualifier at most
 about 2α = 5% of the time: quality moves either way at α/2, the cost either
 way at α/2, and a test falls beyond the margin on its own at α over all the
 tests together. Drawing both arms with replacement from one arm of the pair
-below, 3,000 comparisons each at the default rule, it did in 3.4%, 3.4% and
-3.0% of them at 5, 9 and 11 runs per test (better or worse alone, 2.6%,
-3.0% and 2.5%).
+below, the four arms in turn (SplitMix64 seed 5 for the draws, each
+comparison seeded with its index), 3,000 comparisons each at the default
+rule, it did in 3.6%, 3.7% and 3.5% of them at 5, 9 and 11 runs per test
+(better or worse alone, 2.8%, 2.9% and 3.1%); with every compared test in
+Holm's count, as before tests whose runs all score the same left it, 3.5%,
+3.7% and 3.5%.
 
 A/B: dispatch the suite once with each stack (for example
 `1.8.44.yaml` and `1.8.50.yaml`), pass the YAML as `stack`:
@@ -658,9 +661,12 @@ harness-e2e compare A_DIR B_DIR --label-a 1.8.44 --label-b 1.8.50
 Each argument is a `results.json` or a directory read for every
 `results.json` below it. A run is its test and attempt: read twice with the
 same content it counts once (a root bundle carries its groups' results),
-with other content the first read stays and a warning says so, and an
-attempt id under two tests stays under both, with a warning; a file that does
-not parse is skipped with a warning. `--margin` (5 points, a finite number
+with other content the first read stays and a warning says so, an attempt id
+under two tests stays under both, with a warning, and a run both arms hold (an
+arm compared with itself, or arms that share files) stays on each side, with a
+warning that counts them and names their tests; a file that does not parse or
+has no `scenarios` list, and a scenario without a `scenario_id`, are skipped
+with a warning that names the file. `--margin` (5 points, a finite number
 above 0), `--equivalence` (0.05, between 0 and 1), `--permutations` (10,000,
 at least 1) and `--seed` (0) change the rule; `--json` prints the comparison
 whole. The Console's comparison of two executions shows the same verdict,
@@ -669,32 +675,38 @@ finished, and the Trends overview shows it, with its warnings, for each
 combination of the latest release against the previous one, or says there is
 none when a side ran one run per test. `python3 scripts/harness_ab.py A_DIR
 B_DIR` keeps its tables per metric and per scenario, whose intervals only
-describe the spread, and ends with this verdict.
+describe the spread, and ends with this verdict; it exits 1 when the runner is
+missing or fails, and arms that share no test print empty tables and the
+runner's answer that there is no verdict.
 
 Only counted runs enter, those whose cause is the subject's (a run without a
-cause, or with a cause this version does not know, falls back to
-`technical`, with a warning), and a test only where both arms ran the same
-definition (`behavior_sha256`); each definition left out is listed with why.
-A counted run without a numeric score leaves the quality, and one without a
-cost above 0 (missing, zero or negative) leaves the cost, each with a warning
-that counts the runs and names their tests, as does a cost read over fewer
-tests than the quality. A sum too large to be a finite number makes its tests
-read p = 1, with a warning, never "within ±5%". An arm that mixes models or
-stacks, sides whose stacks differ in more than the Harness, and unreadable
-results are warnings. Quality is the official score, the mean over tests of
-each test's mean, with a margin of 5 points. Cost is the efficiency that
-decides, set before looking: `cost.subject_usd`, the sum over tests of each
-test's mean, shown as a relative change and tested as the difference of the
-sums (a ratio of the sums let one run made 5% cheaper turn "cannot tell" into
-"worse" when the arms had uneven runs). Completion, time, the processed
-prompt, the context per turn and its peak are shown beside it and decide
-nothing. Each question is a permutation test that exchanges the A and B
-labels within each test, one-sided: quality improved (B ahead) and fell (B
-behind) at α/2 = 0.0125, non-inferior (B shifted up by the margin, B ahead)
+cause, or with a cause this version does not know, falls back to `technical`,
+with a warning), and a test only where both arms ran the same definition
+(`behavior_sha256`); each definition left out is listed with why. A counted
+run without a numeric score, or with one outside 0–100, leaves the quality,
+and one without a cost above 0 (missing, zero or negative) leaves the cost,
+each with a warning that counts the runs and names their tests, as does a cost
+read over fewer tests than the quality. A sum too large to be a finite number
+makes its tests read p = 1, with a warning, never "within ±5%". An arm that
+mixes models or stacks, sides whose stacks differ in more than the Harness,
+and unreadable results are warnings. Quality is the official score, the mean
+over tests of each test's mean, with a margin of 5 points. Cost is the
+efficiency that decides, set before looking: `cost.subject_usd`, the sum over
+tests of each test's mean, shown as a relative change and tested as the
+difference of the sums (a ratio of the sums let one run made 5% cheaper turn
+"cannot tell" into "worse" when the arms had uneven runs). Completion, time,
+the processed prompt, the context per turn and its peak are shown beside it
+and decide nothing. Each question is a permutation test that exchanges the A
+and B labels within each test, one-sided: quality improved (B ahead) and fell
+(B behind) at α/2 = 0.0125, non-inferior (B shifted up by the margin, B ahead)
 and inferior beyond the margin (shifted, B behind) at α = 0.025; cost within
-±5% (B divided by 0.95, B ahead, and by 1.05, B behind) at α, cheaper and
-more expensive at α/2. Each test also has its own test of a fall beyond the
-margin, Holm-adjusted over the tests compared. The algorithm, down to the
+±5% (B divided by 0.95, B ahead, and by 1.05, B behind) at α, cheaper and more
+expensive at α/2. Each test also has its own test of a fall beyond the margin,
+Holm-adjusted over the tests whose scores vary: a test whose runs all scored
+the same on both sides reads p = 1 whatever the margin, cannot reject, and is
+left out of the count. Quality within the margin whose fall is shown at α/2
+stays non-inferior, and its reason says so: "Quality -2.6 points: it fell (p =
+0.002), within the 5-point margin (p = 0.019)". The algorithm, down to the
 generator (SplitMix64) and the shuffle (Fisher–Yates), is written at the top
 of [src/verdict.rs](src/verdict.rs), for Release Control to reproduce on
 [tests/fixtures/verdict/](tests/fixtures/verdict/expected.json), the pair
@@ -716,13 +728,16 @@ difference, 3% cheaper cannot tell and 3.5% cheaper better.
 
 "Cannot tell" adds "a test fell beyond the margin" when one test's own fall
 beyond the margin holds after Holm's adjustment (so steady tests added to
-both sides cannot dilute a test that lost 22 points into "better"), "quality
-fell" when quality fell by an amount the runs cannot bound, and "trade-off"
-when quality improved and the cost rose. A test whose observed fall merely
-passes the margin is no warning: at nine runs a version against itself shows
-one in nearly every comparison. Raising a B score or lowering a B cost never
-makes a p-value, a state or the verdict worse; property tests check it with
-uneven runs per test and with a sweep of B's cost.
+both sides, whose runs all score the same, are not counted and cannot dilute
+a test that lost 22 points into "better"), "quality fell" when quality fell
+by an amount the runs cannot bound, and "trade-off" when quality improved and
+the cost rose. A test whose observed fall merely passes the margin is no
+warning: at nine runs a version against itself shows one in nearly every
+comparison. Raising a B score or lowering a B cost never
+makes a p-value, a state or the verdict worse, but for Holm's count: a raise
+that leaves every run of a test at one score takes that test out of the
+count, which can bring another test's adjusted p under α. Property tests
+check it with uneven runs per test and with a sweep of B's cost.
 
 When the runs cannot tell, it says how many runs per test each arm would
 need, the runs made kept, to settle what is undecided: quality at the margin

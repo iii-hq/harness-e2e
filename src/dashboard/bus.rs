@@ -1156,12 +1156,14 @@ pub(super) async fn execution_verdict(
                 .map(|warning| format!("{side}: {warning}")),
         );
     }
+    let shared = crate::verdict::shared_runs(&sides[0], &sides[1]);
     // Tens of thousands of permutations: off the async workers.
     let mut comparison = tokio::task::spawn_blocking(move || {
         crate::verdict::compare(&sides[0], &sides[1], &crate::verdict::Rule::default())
     })
     .await
     .context("compare two executions")?;
+    comparison.warnings.extend(shared);
     comparison.warnings.extend(doubts);
     Ok(comparison)
 }
