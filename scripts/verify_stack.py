@@ -97,7 +97,8 @@ def build_stack(pins: list[str], commit: str, iii: str, graph: set[str], stack: 
     rest, at the same commit, so the Registry does not bring a second copy of a
     worker that is being built from source. On a named stack a pin is one of
     its containers, built with that container's settings kept; the others stay
-    as the stack has them. No pin left means nothing to verify (None).
+    as the stack has them. No pin left, and no version or iii release asked
+    for, means nothing to verify (None).
     """
     named = stack != "default"
     built = load_yaml((STACKS / f"{stack}.yaml" if named else DEFAULT_STACK).read_text())
@@ -109,7 +110,7 @@ def build_stack(pins: list[str], commit: str, iii: str, graph: set[str], stack: 
             raise VerifyError(f"the {stack} stack declares no {name} to install {version} of")
         containers[name]["version"] = version
     pinned = sorted(set(pins) & (set(containers) if named else graph))
-    if pins and not pinned:
+    if pins and not pinned and not (versions or iii):
         return None
     for name in sorted(set(pinned) if named or not pinned else {APPLICATION, *pinned}):
         kept = {key: value for key, value in containers.get(name, {}).items()
@@ -209,17 +210,28 @@ def verdict(summary: dict[str, Any]) -> dict[str, Any]:
             "failed": failed, "not_measured": unmeasured}
 
 
+def label(built: list[str], commit: str, versions: dict[str, str], iii: str, suite: str) -> str:
+    """What the stack measured: the workers built from `commit`, the released
+    versions it installs (a worker built from the commit runs no version) and
+    the iii release, after the suite when it is not `pr`."""
+    named = " + ".join(filter(None, [f"{', '.join(built)} @ {commit[:7]}" if built else "",
+                                     *(f"{name} {version}" for name, version in versions.items()
+                                       if name not in built),
+                                     f"iii {iii}" if iii else ""]))
+    return named if suite == "pr" else f"{suite} · {named}"
+
+
 def describe(result: dict[str, Any], label: str, run_url: str, mark: str = MARKER) -> str:
     lines = [mark, f"### {ICONS[result['status']]} Harness E2E · {label}"]
     if result["status"] == "skipped":
-        lines.append(result.pop("reason", None) or "Nothing this change touches is part of the harness graph.")
+        lines.append(result.get("reason") or "Nothing this change touches is part of the harness graph.")
     else:
         lines.append(f"{result['passed']}/{result['planned']} passed")
     if result.get("failed"):
         lines.append(f"- failed: {'; '.join(result['failed'])}")
     if result.get("not_measured"):
         lines.append(f"- not measured: {'; '.join(result['not_measured'])}")
-    if result.get("reason"):
+    if result.get("reason") and result["status"] != "skipped":
         lines.append(f"- {result['reason']}")
     if run_url:
         lines.append(f"[Run]({run_url})")
@@ -356,13 +368,8 @@ def main() -> int:
                   "reason": f"{type(error).__name__}: {error}"}
 
     built = pinned(stack) if stack else pins
-    label = " + ".join(filter(None, [f"{', '.join(built)} @ {args.commit[:7]}" if built else "",
-                                     *(f"{name} {version}" for name, version in versions.items()),
-                                     f"iii {args.iii}" if args.iii else ""]))
-    if args.suite != "pr":
-        label = f"{args.suite} · {label}"
     mark = marker(args.suite)
-    body = describe(result, label, run_url, mark)
+    body = describe(result, label(built, args.commit, versions, args.iii, args.suite), run_url, mark)
     emit(result, body, run_url)
     if args.comment_pr and result["status"] != "skipped":
         try:

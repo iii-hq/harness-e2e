@@ -81,6 +81,14 @@ class BuildStackTests(unittest.TestCase):
         self.assertEqual(stack["containers"]["memory"]["version"], "0.2.22")
         self.assertIn("config_override", stack["containers"]["memory"])
 
+    def test_a_requested_version_is_measured_even_when_no_pin_applies(self):
+        stack = verify_stack.build_stack(["ade"], COMMIT, "", set(), stack="memory", versions={"memory": "0.2.22"})
+        self.assertEqual(stack["containers"]["memory"]["version"], "0.2.22")
+
+    def test_the_label_names_only_versions_the_stack_installs(self):
+        label = verify_stack.label(["memory"], COMMIT, {"memory": "0.2.22", "fp": "1.0.0"}, "", "memory")
+        self.assertEqual(label, "memory · memory @ c46ead4 + fp 1.0.0")
+
     def test_a_version_for_a_worker_the_stack_lacks_is_an_error(self):
         with self.assertRaises(verify_stack.VerifyError):
             verify_stack.build_stack([], "", "", set(), stack="memory", versions={"ade": "1.0.0"})
@@ -91,6 +99,13 @@ class BuildStackTests(unittest.TestCase):
         body = verify_stack.describe({"status": "passed", "passed": 1, "planned": 1}, "memory @ c46ead4",
                                      "", verify_stack.marker("memory"))
         self.assertTrue(body.startswith(verify_stack.marker("memory")))
+
+    def test_a_skip_keeps_its_reason_for_the_outputs(self):
+        result = {"status": "skipped", "passed": 0, "planned": 0, "failed": [], "not_measured": [],
+                  "reason": "Nothing this change touches is in the memory stack."}
+        body = verify_stack.describe(result, "ade @ c46ead4", "")
+        self.assertEqual(body.count(result["reason"]), 1)
+        self.assertIn("reason", result)
 
 
 class VerdictTests(unittest.TestCase):
