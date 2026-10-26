@@ -918,6 +918,14 @@ pub async fn cleanup(context: &E2eContext, case: &Case, run_id: &str) -> Result<
             Undo::DeleteTeacher(session) => {
                 // A turn a failed setup left running; stopping an idle one is a no-op.
                 let _ = context.stop_session(&session, None).await;
+                // Memory extracts a failed or stopped turn too, and `teach` skips
+                // its wait when a turn failed: a pass landing after the purge
+                // below would leave its writes in a stray bank. Best effort.
+                if let Ok(transcript) = context.transcript(&session).await {
+                    if let Some(entry) = cursor_target(&transcript) {
+                        let _ = wait_cursor(context, &session, entry).await;
+                    }
+                }
                 context
                     .trigger_value("session::delete", json!({"session_id": session}))
                     .await
