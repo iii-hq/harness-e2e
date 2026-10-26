@@ -63,12 +63,18 @@ const MACHINE_DOMAIN_BRANCH: AssessmentSpec = AssessmentSpec::scored(
     "After adding the cancel transition, does a cancel event in the running state return the cancelled state?",
 )
 .labeled("Cancel moves a running job to cancelled");
-const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
+const FORM_INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     "invalid_inputs",
     10,
-    "Does the Worker reject invalid input and preserve the applied edit on the next valid request?",
+    "Does the form Worker reject unknown work types, unknown edits, and non-object values while preserving the Environment edit?",
 )
-.labeled("Invalid input is rejected and the edit kept");
+.labeled("Invalid form input rejected; edits remain saved");
+const MACHINE_INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
+    "invalid_inputs",
+    10,
+    "Across every state and event pair, does the Worker return each of the five valid transitions, reject every invalid pair and unknown edit, and preserve the Cancel edit?",
+)
+.labeled("All valid and invalid state transitions match");
 const CANVAS_INITIAL: AssessmentSpec = AssessmentSpec::scored(
     "canvas_initial",
     10,
@@ -106,7 +112,7 @@ const FORM_ASSESSMENTS: &[AssessmentSpec] = &[
     RUNTIME,
     FORM_DOMAIN_PRIMARY,
     FORM_DOMAIN_BRANCH,
-    INVALID_INPUTS,
+    FORM_INVALID_INPUTS,
     CANVAS_INITIAL,
     CANVAS_UPDATE,
     CONSOLE,
@@ -117,7 +123,7 @@ const MACHINE_ASSESSMENTS: &[AssessmentSpec] = &[
     RUNTIME,
     MACHINE_DOMAIN_PRIMARY,
     MACHINE_DOMAIN_BRANCH,
-    INVALID_INPUTS,
+    MACHINE_INVALID_INPUTS,
     CANVAS_INITIAL,
     CANVAS_UPDATE,
     CONSOLE,
@@ -171,6 +177,13 @@ impl Kind {
         match self {
             Self::Form => "preview",
             Self::Machine => "transition",
+        }
+    }
+
+    fn edit(self) -> &'static str {
+        match self {
+            Self::Form => "add_environment",
+            Self::Machine => "add_cancel",
         }
     }
 
@@ -714,18 +727,24 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         }));
     }
 
-    let (primary, branch, invalid, health, _) = match kind {
+    let (primary, branch, invalid, health, direct, _) = match kind {
         Kind::Form => form_probes(context.client(), &contract).await,
         Kind::Machine => machine_probes(context.client(), &contract).await,
     };
-    for result in [&primary, &branch, &invalid, &health] {
+    for result in [&primary, &branch, &invalid, &health, &direct] {
         ensure_remote_or_success(result, "invoke visual Worker domain probe")?;
     }
     let (primary_ok, branch_ok, invalid_ok) =
-        domain_results(kind, &primary, &branch, &invalid, &health);
+        domain_results(kind, &primary, &branch, &invalid, &health, &direct);
     checks.insert("domain_primary".into(), json!({"passed":primary_ok,"reason":if primary_ok {"primary domain path matches the oracle"} else {"primary domain path differs from the oracle"},"observed":result_value(primary)}));
     checks.insert("domain_branch".into(), json!({"passed":branch_ok,"reason":if branch_ok {"edited domain path matches the oracle"} else {"edited domain path differs from the oracle"},"observed":result_value(branch)}));
-    checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid input was rejected and the domain edit persisted into a later call"} else {"invalid-input rejection or edited-state persistence failed"},"observed":{"invalid":result_value(invalid),"health":result_value(health)}}));
+    let invalid_reason = match (kind, invalid_ok) {
+        (Kind::Form, true) => "unknown work types, edits, and non-object values were rejected and the Environment edit persisted",
+        (Kind::Form, false) => "form rejection or Environment-edit persistence failed",
+        (Kind::Machine, true) => "all state/event pairs matched, invalid pairs and the unknown edit were rejected, and Cancel persisted",
+        (Kind::Machine, false) => "state/event matrix, unknown-edit rejection, or Cancel persistence failed",
+    };
+    checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":invalid_reason,"observed":{"invalid":result_value(invalid),"health":result_value(health),"direct":result_value(direct)}}));
 
     let mut files = serde_json::Map::new();
     insert_text_file(
@@ -763,6 +782,7 @@ async fn form_probes(
     Result<Value>,
     Result<Value>,
     Result<Value>,
+    Result<Value>,
     &'static str,
 ) {
     let id = &contract.functions["preview"];
@@ -770,13 +790,20 @@ async fn form_probes(
     let branch = common::invoke(client, id, json!({"edit":"add_environment","values":{"title":"Login crashes","work_type":"bug","reproduction":"Open login","expected_behavior":"Dashboard opens","environment":"Chrome"}})).await;
     let invalid = common::invoke(client, id, json!({"values":{"work_type":"chore"}})).await;
     let health = common::invoke(client, id, json!({"values":{"work_type":"bug"}})).await;
-    (primary, branch, invalid, health, form_source())
+    let unknown_edit = common::invoke(client, id, json!({"edit":"unknown_edit","values":{"title":"x","work_type":"bug","reproduction":"x","expected_behavior":"x","environment":"x"}})).await;
+    let malformed_values = common::invoke(client, id, json!({"values":[]})).await;
+    let direct = rejection_results([
+        ("unknown_edit", unknown_edit),
+        ("malformed_values", malformed_values),
+    ]);
+    (primary, branch, invalid, health, direct, form_source())
 }
 
 async fn machine_probes(
     client: &IIIClient,
     contract: &WorkerContract,
 ) -> (
+    Result<Value>,
     Result<Value>,
     Result<Value>,
     Result<Value>,
@@ -793,7 +820,80 @@ async fn machine_probes(
     .await;
     let invalid = common::invoke(client, id, json!({"state":"queued","event":"pass"})).await;
     let health = common::invoke(client, id, json!({"state":"running","event":"cancel"})).await;
-    (primary, branch, invalid, health, machine_source())
+    let direct = machine_matrix_probes(client, id).await;
+    (primary, branch, invalid, health, direct, machine_source())
+}
+
+fn rejection_results<const N: usize>(entries: [(&str, Result<Value>); N]) -> Result<Value> {
+    let mut passed = true;
+    let mut observed = serde_json::Map::new();
+    for (name, result) in entries {
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| !common::is_remote_failure(error))
+        {
+            return result.with_context(|| format!("invoke {name} rejection probe"));
+        }
+        passed &= result.as_ref().err().is_some_and(common::is_remote_failure);
+        observed.insert(name.into(), result_value(result));
+    }
+    Ok(json!({"passed":passed,"observed":observed}))
+}
+
+async fn machine_matrix_probes(client: &IIIClient, id: &str) -> Result<Value> {
+    let states = ["queued", "running", "passed", "failed", "cancelled"];
+    let events = ["start", "pass", "fail", "retry", "cancel"];
+    let mut passed = true;
+    let mut observed = Vec::new();
+    for state in states {
+        for event in events {
+            let expected = match (state, event) {
+                ("queued", "start") => Some("running"),
+                ("running", "pass") => Some("passed"),
+                ("running", "fail") => Some("failed"),
+                ("failed", "retry") => Some("queued"),
+                ("running", "cancel") => Some("cancelled"),
+                _ => None,
+            };
+            let result = common::invoke(client, id, json!({"state":state,"event":event})).await;
+            if result
+                .as_ref()
+                .err()
+                .is_some_and(|error| !common::is_remote_failure(error))
+            {
+                return result.with_context(|| format!("invoke {state}/{event} matrix probe"));
+            }
+            let matches = match expected {
+                Some(next) => result
+                    .as_ref()
+                    .ok()
+                    .is_some_and(|value| value["state"] == next),
+                None => result.as_ref().err().is_some_and(common::is_remote_failure),
+            };
+            passed &= matches;
+            observed.push(json!({"state":state,"event":event,"expected":expected,"passed":matches,"result":result_value(result)}));
+        }
+    }
+    let unknown_edit = common::invoke(
+        client,
+        id,
+        json!({"state":"queued","event":"start","edit":"unknown_edit"}),
+    )
+    .await;
+    if unknown_edit
+        .as_ref()
+        .err()
+        .is_some_and(|error| !common::is_remote_failure(error))
+    {
+        return unknown_edit.context("invoke unknown state-machine edit probe");
+    }
+    let unknown_rejected = unknown_edit
+        .as_ref()
+        .err()
+        .is_some_and(common::is_remote_failure);
+    passed &= unknown_rejected;
+    Ok(json!({"passed":passed,"matrix":observed,"unknown_edit":result_value(unknown_edit)}))
 }
 
 fn domain_results(
@@ -802,6 +902,7 @@ fn domain_results(
     branch: &Result<Value>,
     invalid: &Result<Value>,
     health: &Result<Value>,
+    direct: &Result<Value>,
 ) -> (bool, bool, bool) {
     match kind {
         Kind::Form => {
@@ -846,7 +947,11 @@ fn domain_results(
                         ],
                         &["title", "reproduction", "expected_behavior", "environment"],
                         false,
-                    ),
+                    )
+                    && direct
+                        .as_ref()
+                        .ok()
+                        .is_some_and(|value| value["passed"] == true),
             )
         }
         Kind::Machine => (
@@ -865,7 +970,11 @@ fn domain_results(
                 && health
                     .as_ref()
                     .ok()
-                    .is_some_and(|value| value["state"] == "cancelled"),
+                    .is_some_and(|value| value["state"] == "cancelled")
+                && direct
+                    .as_ref()
+                    .ok()
+                    .is_some_and(|value| value["passed"] == true),
         ),
     }
 }
@@ -1179,6 +1288,27 @@ async fn capture_browser_session(
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
     let before_state = inspect_ui(context, kind, session, "initial").await?;
     let before = common::screenshot_png(context, session).await?;
+    let domain_function = identity["functions"][kind.domain_operation()]
+        .as_str()
+        .context("visual Worker identity omitted its domain function")?;
+    let canvas_function = identity["functions"]["canvas"]
+        .as_str()
+        .context("visual Worker identity omitted its Canvas function")?;
+    context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!(r#"return (()=>{{
+window.__harnessRpc={{requests:[],results:[],invalid:0,sequence:0}};
+window.__harnessOriginalWebSocketSend=WebSocket.prototype.send;
+window.__harnessOriginalMessageData=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data');
+window.__harnessSeenRpcEvents=new WeakSet;
+const expected=new Set([{},{}]),observe=(data,expectedType)=>{{if(typeof data!=='string')return;try{{const message=JSON.parse(data);if(!expected.has(message.function_id)||typeof message.invocation_id!=='string'||message.type!==expectedType)return;const base={{type:message.type,invocation_id:message.invocation_id,function_id:message.function_id,sequence:++window.__harnessRpc.sequence}};if(message.type==='invokefunction')window.__harnessRpc.requests.push({{...base,data:message.data}});if(message.type==='invocationresult')window.__harnessRpc.results.push({{...base,...('result'in message?{{result:message.result}}:{{}}),...('error'in message?{{error:message.error}}:{{}})}})}}catch{{window.__harnessRpc.invalid++}}}};
+WebSocket.prototype.send=function(data){{observe(data,'invokefunction');return window.__harnessOriginalWebSocketSend.call(this,data)}};
+Object.defineProperty(MessageEvent.prototype,'data',{{configurable:true,get(){{const data=window.__harnessOriginalMessageData.get.call(this);if(this.isTrusted&&this.target instanceof WebSocket&&!window.__harnessSeenRpcEvents.has(this)){{window.__harnessSeenRpcEvents.add(this);observe(data,'invocationresult')}}return data}}}});
+return true;
+}})();"#, serde_json::to_string(domain_function)?, serde_json::to_string(canvas_function)?)}),
+        )
+        .await?;
     let keyboard = exercise_keyboard_edit(context, kind, session).await?;
     let interaction_code = match kind {
         Kind::Form => {
@@ -1246,6 +1376,12 @@ return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorde
             json!({"session_id":session,"timeout_ms":30000,"code":interaction_code}),
         )
         .await?;
+    let worker_rpc = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":r#"return (()=>{const rpc=window.__harnessRpc??{requests:[],results:[],invalid:0};if(window.__harnessOriginalWebSocketSend)WebSocket.prototype.send=window.__harnessOriginalWebSocketSend;if(window.__harnessOriginalMessageData)Object.defineProperty(MessageEvent.prototype,'data',window.__harnessOriginalMessageData);delete window.__harnessRpc;delete window.__harnessOriginalWebSocketSend;delete window.__harnessOriginalMessageData;delete window.__harnessSeenRpcEvents;return rpc})();"#}),
+        )
+        .await?;
     let after_state = inspect_ui(context, kind, session, "edited").await?;
     let after = common::screenshot_png(context, session).await?;
     let expected_canvas_id = serde_json::to_string(&identity["canvas_id"])?;
@@ -1277,12 +1413,21 @@ return {{visible,same_id:sameId,url,canvas_route:/^#\/worker\/[^/]+\/canvas$/.te
                     "browser::execute",
                     json!({"session_id":session,"timeout_ms":30000,"code":format!(r#"return await (async()=>{{
 const label={};
+const colorCanvas=document.createElement('canvas');colorCanvas.width=colorCanvas.height=1;const colorContext=colorCanvas.getContext('2d',{{willReadFrequently:true}});
+const rgba=value=>{{colorContext.clearRect(0,0,1,1);colorContext.fillStyle='rgba(0,0,0,0)';colorContext.fillStyle=value;colorContext.fillRect(0,0,1,1);return [...colorContext.getImageData(0,0,1,1).data].map((v,i)=>i===3?v/255:v)}};
+const composite=(front,back)=>{{const alpha=front[3]+back[3]*(1-front[3]);return alpha?[0,1,2].map(i=>(front[i]*front[3]+back[i]*back[3]*(1-front[3]))/alpha).concat(alpha):[0,0,0,0]}};
+const background=element=>{{const layers=[];for(let node=element;node instanceof Element;node=node.parentElement)layers.push(rgba(getComputedStyle(node).backgroundColor));let color=getComputedStyle(document.documentElement).colorScheme==='dark'?[0,0,0,1]:[255,255,255,1];for(const layer of layers.reverse())color=composite(layer,color);return color}};
+const luminance=color=>{{const channels=color.slice(0,3).map(v=>{{v/=255;return v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4)}});return .2126*channels[0]+.7152*channels[1]+.0722*channels[2]}};
+const contrast=(a,b)=>(Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
+const opacity=target=>{{let value=1;for(let node=target;node instanceof Element;node=node.parentElement)value*=Number(getComputedStyle(node).opacity);return value}};
 for(let i=0;i<200;i++){{
   const graph=document.querySelector('[data-iii-ui="canvas"] [aria-label^="diagram preview"] svg');
-  if(graph?.textContent?.includes(label))return {{rendered_graph:true,graph_label:label}};
+  const labels=graph?[...graph.querySelectorAll('text,tspan,foreignObject *')].filter(e=>(e.textContent||'').includes(label)&&![...e.children].some(child=>(child.textContent||'').includes(label))):[];
+  const painted=labels.some(e=>{{const range=document.createRange();range.selectNodeContents(e);const r=range.getBoundingClientRect(),s=getComputedStyle(e),root=graph.getBoundingClientRect(),alpha=opacity(e);if(r.width<=0||r.height<=0||r.left<root.left||r.right>root.right||r.top<root.top||r.bottom>root.bottom||s.display==='none'||s.visibility==='hidden'||alpha<=0)return false;for(let node=e.parentElement;node&&node!==graph;node=node.parentElement){{const style=getComputedStyle(node);if(/hidden|clip|scroll|auto/.test(`${{style.overflow}} ${{style.overflowX}} ${{style.overflowY}}`)){{const clip=node.getBoundingClientRect();if(r.left<clip.left||r.right>clip.right||r.top<clip.top||r.bottom>clip.bottom)return false}}}}const hit=[.1,.5,.9].some(x=>[.1,.5,.9].some(y=>{{const top=document.elementFromPoint(r.left+r.width*x,r.top+r.height*y);return top===e||e.contains(top)}}));if(!hit)return false;const bg=background(e),fg=rgba(s.fill&&s.fill!=='none'?s.fill:s.color);fg[3]*=alpha;return fg[3]>0&&contrast(composite(fg,bg),bg)>=3}});
+  if(painted)return {{rendered_graph:true,graph_label:label,label_painted:true}};
   await new Promise(r=>setTimeout(r,100));
 }}
-return {{rendered_graph:false}};
+return {{rendered_graph:false,label_painted:false}};
 }})();"#, serde_json::to_string(if kind == Kind::Form { "Environment" } else { "cancelled" })?)}),
                 )
                 .await?["result"]
@@ -1328,7 +1473,8 @@ const luminance=color=>{const channels=color.slice(0,3).map(v=>{v/=255;return v<
 const contrast=(foreground,background)=>{const a=luminance(foreground),b=luminance(background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
 const visible=e=>{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};
 const style=e=>{const computed=getComputedStyle(e),bg=background(e),fg=composite(rgba(computed.color),bg);return {visible:visible(e),contrast:Number(contrast(fg,bg).toFixed(2)),signature:[computed.color,computed.backgroundColor,computed.borderTopColor,computed.boxShadow,bg.slice(0,3).map(Math.round).join(',')].join('|')}};
-const apply=async theme=>{document.documentElement.dataset.theme=theme;await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);const samples=[domain,control].map(style);return {theme,usable:samples.every(sample=>sample.visible&&sample.contrast>=3),samples}};
+const settle=async()=>{const elements=new Set([domain,control].flatMap(e=>{const chain=[];for(let node=e;node instanceof Element;node=node.parentElement)chain.push(node);return chain}));const transitions=[...elements].flatMap(e=>e.getAnimations({subtree:false})).filter(a=>typeof CSSTransition==='undefined'||a instanceof CSSTransition);await Promise.race([Promise.all(transitions.map(a=>a.finished.catch(()=>{}))),new Promise(resolve=>setTimeout(resolve,2000))]);await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame)};
+const apply=async theme=>{document.documentElement.dataset.theme=theme;await settle();const samples=[domain,control].map(style);return {theme,usable:samples.every(sample=>sample.visible&&sample.contrast>=3),samples}};
 const light=await apply('light');
 const dark=await apply('dark');
 const bounds=pane?.getBoundingClientRect();
@@ -1351,6 +1497,14 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         && reloaded_state["passed"] == true
         && persisted_canvas_id["result"] == true
         && keyboard_and_theme_passed(&keyboard, &mobile["result"])
+        && visual_worker_rpc_observed(
+            &worker_rpc["result"],
+            domain_function,
+            canvas_function,
+            identity["canvas_id"].as_str().unwrap_or_default(),
+            edited_source(kind),
+            kind,
+        )
         && interaction["result"].get("error").is_none();
     let captures = json!([
         {"id":"before","caption":format!("The {} page alone in the Console before editing",kind.page_id()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
@@ -1359,8 +1513,97 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         {"id":"narrow_dark","caption":format!("The {} page after reload in a narrow dark Console",kind.page_id()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page, persisted edit, keyboard action, both themes, and the Canvas graph it opened rendered in the Console"} else {"Console layout, Worker interaction, keyboard action, reload persistence, Canvas graph, or narrow theme check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"keyboard":keyboard,"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page delegated domain actions, persisted its edit, passed keyboard and theme checks, and opened a painted Canvas graph"} else {"Console layout, matched Worker RPC, keyboard action, reload persistence, painted Canvas graph, or narrow theme check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"worker_rpc":worker_rpc["result"],"keyboard":keyboard,"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
     )
+}
+
+fn visual_worker_rpc_observed(
+    rpc: &Value,
+    domain_function: &str,
+    canvas_function: &str,
+    canvas_id: &str,
+    edited_source: &str,
+    kind: Kind,
+) -> bool {
+    let matched = |function_id: &str,
+                   after_sequence: Option<u64>,
+                   accept_request: &dyn Fn(&Value) -> bool,
+                   accept_result: &dyn Fn(&Value) -> bool| {
+        rpc["requests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|request| {
+                let request_sequence = request["sequence"].as_u64()?;
+                if request["type"] != "invokefunction"
+                    || request["function_id"] != function_id
+                    || !request["invocation_id"].is_string()
+                    || after_sequence.is_some_and(|sequence| request_sequence <= sequence)
+                    || !accept_request(request)
+                {
+                    return None;
+                }
+                rpc["results"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|result| {
+                        let result_sequence = result["sequence"].as_u64()?;
+                        (result_sequence > request_sequence
+                            && result["type"] == "invocationresult"
+                            && result["invocation_id"] == request["invocation_id"]
+                            && result["function_id"] == function_id
+                            && result.get("error").is_none()
+                            && accept_result(result))
+                        .then_some((request_sequence, result_sequence))
+                    })
+                    .min()
+            })
+            .collect::<Vec<_>>()
+    };
+    let domain_edit = matched(
+        domain_function,
+        None,
+        &|request| request["data"]["edit"] == kind.edit(),
+        &|result| result["result"].is_object(),
+    );
+    let canvas_edit = matched(
+        canvas_function,
+        None,
+        &|request| {
+            request["data"]["edit"] == kind.edit()
+                && (request["data"].get("canvas_id").is_none()
+                    || request["data"]["canvas_id"] == canvas_id)
+        },
+        &|result| {
+            result["result"]["canvas_id"] == canvas_id
+                && result["result"]["source"] == edited_source
+        },
+    );
+    domain_edit
+        .into_iter()
+        .chain(canvas_edit)
+        .any(|(_, edit_result_sequence)| match kind {
+            Kind::Form => !matched(
+                domain_function,
+                Some(edit_result_sequence),
+                &|request| request["data"]["values"]["work_type"] == "bug",
+                &|result| {
+                    result["result"]["visible_fields"]
+                        .as_array()
+                        .is_some_and(|fields| fields.iter().any(|field| field == "environment"))
+                },
+            )
+            .is_empty(),
+            Kind::Machine => !matched(
+                domain_function,
+                Some(edit_result_sequence),
+                &|request| {
+                    request["data"]["state"] == "running" && request["data"]["event"] == "cancel"
+                },
+                &|result| result["result"]["state"] == "cancelled",
+            )
+            .is_empty(),
+        })
 }
 
 fn browser_evidence_complete(screenshots: [&Value; 4], canvas_evidence_ok: bool) -> bool {
@@ -1814,11 +2057,202 @@ mod tests {
         let health = Ok(
             json!({"visible_fields":["title","work_type","reproduction","expected_behavior","environment"],"missing_required":["title","reproduction","expected_behavior","environment"],"can_submit":false}),
         );
+        let direct = Ok(json!({"passed":true}));
         assert_eq!(
-            domain_results(Kind::Form, &ok, &branch, &invalid, &health),
+            domain_results(Kind::Form, &ok, &branch, &invalid, &health, &direct),
             (true, true, true)
         );
+        let failed_direct = Ok(json!({"passed":false}));
+        assert!(!domain_results(Kind::Form, &ok, &branch, &invalid, &health, &failed_direct).2);
         assert!(form_source().starts_with("flowchart TD"));
         assert!(machine_source().starts_with("stateDiagram-v2"));
+    }
+
+    #[test]
+    fn test_visual_worker_eval_requires_matched_worker_rpc() {
+        let function = "visual-worker::preview";
+        let canvas = "visual-worker::canvas";
+        let request = json!({"type":"invokefunction","invocation_id":"one","function_id":function,"sequence":1,"data":{"edit":"add_environment","values":{}}});
+        let bug = json!({"type":"invokefunction","invocation_id":"bug","function_id":function,"sequence":3,"data":{"values":{"work_type":"bug"}}});
+        let without_result =
+            json!({"requests":[request.clone(),bug.clone()],"results":[],"invalid":1});
+        assert!(!visual_worker_rpc_observed(
+            &without_result,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let matched = json!({"requests":[request,bug],"results":[
+            {"type":"invocationresult","invocation_id":"one","function_id":function,"sequence":2,"result":{"visible_fields":["title","work_type"]}},
+            {"type":"invocationresult","invocation_id":"bug","function_id":function,"sequence":4,"result":{"visible_fields":["title","work_type","environment"]}}
+        ],"invalid":1});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &matched,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+
+        let canvas_request = json!({"type":"invokefunction","invocation_id":"edit","function_id":canvas,"sequence":1,"data":{"canvas_id":"canvas-one","edit":"add_environment"}});
+        let canvas_result = json!({"type":"invocationresult","invocation_id":"edit","function_id":canvas,"sequence":2,"result":{"canvas_id":"canvas-one","source":edited_source(Kind::Form)}});
+        let canvas_route = json!({"requests":[canvas_request,matched["requests"][1]],"results":[canvas_result,matched["results"][1]]});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &canvas_route,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+        let mut wrong_canvas = canvas_route.clone();
+        wrong_canvas["results"][0]["result"]["canvas_id"] = json!("other");
+        assert!(!visual_worker_rpc_observed(
+            &wrong_canvas,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let mut canned = canvas_route;
+        canned["results"][0]["invocation_id"] = json!("wrong");
+        assert!(!visual_worker_rpc_observed(
+            &canned,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let mut wrong_source = matched.clone();
+        wrong_source["requests"] = json!([
+            {"type":"invokefunction","invocation_id":"canvas","function_id":canvas,"sequence":1,"data":{"canvas_id":"canvas-one","edit":"add_environment"}},
+            wrong_source["requests"][1]
+        ]);
+        wrong_source["results"][0] = json!({"type":"invocationresult","invocation_id":"canvas","function_id":canvas,"sequence":2,"result":{"canvas_id":"canvas-one","source":"canned"}});
+        assert!(!visual_worker_rpc_observed(
+            &wrong_source,
+            function,
+            canvas,
+            "canvas-one",
+            edited_source(Kind::Form),
+            Kind::Form
+        ));
+        let mut missing_sequence = matched.clone();
+        missing_sequence["requests"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("sequence");
+        for _ in 0..100 {
+            assert!(!visual_worker_rpc_observed(
+                &missing_sequence,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+
+        let before_and_after = json!({"requests":[
+            {"type":"invokefunction","invocation_id":"before","function_id":function,"sequence":1,"data":{"values":{"work_type":"bug"}}},
+            {"type":"invokefunction","invocation_id":"edit","function_id":function,"sequence":3,"data":{"edit":"add_environment"}},
+            {"type":"invokefunction","invocation_id":"after","function_id":function,"sequence":5,"data":{"values":{"work_type":"bug"}}}
+        ],"results":[
+            {"type":"invocationresult","invocation_id":"before","function_id":function,"sequence":2,"result":{"visible_fields":["environment"]}},
+            {"type":"invocationresult","invocation_id":"edit","function_id":function,"sequence":4,"result":{"visible_fields":["environment"]}},
+            {"type":"invocationresult","invocation_id":"after","function_id":function,"sequence":6,"result":{"visible_fields":["environment"]}}
+        ]});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &before_and_after,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+        let only_before = json!({"requests":[before_and_after["requests"][0],before_and_after["requests"][1]],"results":[before_and_after["results"][0],before_and_after["results"][1]]});
+        for _ in 0..100 {
+            assert!(!visual_worker_rpc_observed(
+                &only_before,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+        let late_edit_result = json!({"requests":[
+            {"type":"invokefunction","invocation_id":"edit","function_id":function,"sequence":1,"data":{"edit":"add_environment"}},
+            {"type":"invokefunction","invocation_id":"bug","function_id":function,"sequence":2,"data":{"values":{"work_type":"bug"}}}
+        ],"results":[
+            {"type":"invocationresult","invocation_id":"bug","function_id":function,"sequence":3,"result":{"visible_fields":["environment"]}},
+            {"type":"invocationresult","invocation_id":"edit","function_id":function,"sequence":4,"result":{}}
+        ]});
+        for _ in 0..100 {
+            assert!(!visual_worker_rpc_observed(
+                &late_edit_result,
+                function,
+                canvas,
+                "canvas-one",
+                edited_source(Kind::Form),
+                Kind::Form
+            ));
+        }
+
+        let transition = "visual-worker::transition";
+        let machine_canvas = "visual-worker::canvas";
+        let machine = json!({"requests":[
+            {"type":"invokefunction","invocation_id":"edit","function_id":machine_canvas,"sequence":1,"data":{"canvas_id":"canvas-one","edit":"add_cancel"}},
+            {"type":"invokefunction","invocation_id":"cancel","function_id":transition,"sequence":3,"data":{"state":"running","event":"cancel"}}
+        ],"results":[
+            {"type":"invocationresult","invocation_id":"edit","function_id":machine_canvas,"sequence":2,"result":{"canvas_id":"canvas-one","source":edited_source(Kind::Machine)}},
+            {"type":"invocationresult","invocation_id":"cancel","function_id":transition,"sequence":4,"result":{"state":"cancelled"}}
+        ]});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &machine,
+                transition,
+                machine_canvas,
+                "canvas-one",
+                edited_source(Kind::Machine),
+                Kind::Machine
+            ));
+        }
+        let mut domain_machine = machine.clone();
+        domain_machine["requests"][0]["function_id"] = json!(transition);
+        domain_machine["requests"][0]["data"] =
+            json!({"state":"queued","event":"start","edit":"add_cancel"});
+        domain_machine["results"][0] = json!({"type":"invocationresult","invocation_id":"edit","function_id":transition,"sequence":2,"result":{"state":"running"}});
+        for _ in 0..100 {
+            assert!(visual_worker_rpc_observed(
+                &domain_machine,
+                transition,
+                machine_canvas,
+                "canvas-one",
+                edited_source(Kind::Machine),
+                Kind::Machine
+            ));
+        }
+        let mut no_edit = machine;
+        no_edit["requests"][0]["data"]["edit"] = json!("other");
+        assert!(!visual_worker_rpc_observed(
+            &no_edit,
+            transition,
+            machine_canvas,
+            "canvas-one",
+            edited_source(Kind::Machine),
+            Kind::Machine
+        ));
     }
 }

@@ -13,7 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "scripts" / "kanban_eval" / "probe.mjs"
-PLAYWRIGHT = ROOT / "dashboard" / "node_modules" / "playwright" / "index.mjs"
+PLAYWRIGHT = Path(os.environ.get(
+    "PLAYWRIGHT_MODULE_PATH", ROOT / "dashboard" / "node_modules" / "playwright" / "index.mjs"
+))
 CASE_IDS = [
     "kanban_c1_foundation",
     "kanban_c2_persistence",
@@ -32,7 +34,7 @@ class KanbanProbeContractTest(unittest.TestCase):
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ boardTicketTotal, mutationFailureFeedback }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{headless:true}})
+const browser = await chromium.launch({{headless:true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}})
 try {{
   const page = await browser.newPage()
   const totals = []
@@ -50,7 +52,8 @@ try {{
   const feedback = []
   for (const role of ['status', 'alert']) {{
     for (const message of ['Request failed (probe failure).', 'Unable to create ticket (500)',
-      'Unable to delete ticket (500)', 'Created', 'Deleted', 'Creating ticket…', 'Deleting ticket…']) {{
+      'Could not be created', 'Unable to delete ticket (500)', 'Could not be deleted',
+      'Created', 'Deleted', 'Creating ticket…', 'Deleting ticket…']) {{
       await page.setContent(`<p role="${{role}}">${{message}}</p>`)
       feedback.push(await mutationFailureFeedback(page).count())
     }}
@@ -63,7 +66,7 @@ try {{
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {
             "totals": [1, 1, 1, 1, 0, 0, 0],
-            "feedback": [1, 1, 1, 0, 0, 0, 0] * 2,
+            "feedback": [1, 1, 1, 1, 1, 0, 0, 0, 0] * 2,
         })
 
     def test_restored_store_checks_the_discussion_in_details_and_rejects_stale_drafts(self):
@@ -72,7 +75,7 @@ try {{
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ assertClearedDiscussionDraft }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{headless:true}})
+const browser = await chromium.launch({{headless:true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}})
 try {{
   const page = await browser.newPage()
   page.setDefaultTimeout(1000)
@@ -177,9 +180,9 @@ export const chromium = {
             self.skipTest("dashboard Playwright is not installed")
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
-import {{ boardTicketTotal, ticketEditor, commentParentAction, reachedCommentParent,
+import {{ boardTicketTotal, ticketEditor, activateCommentParent,
   assertAccessibleFormControls, mutationFailureFeedback }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{headless:true}})
+const browser = await chromium.launch({{headless:true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}})
 try {{
   const page = await browser.newPage()
   const totals = []
@@ -204,13 +207,10 @@ try {{
   await edit.getByLabel('Title').fill('Explicit editor')
   const explicit = await edit.getByLabel('Title').inputValue()
   await page.setContent('<ul><li id="parent" tabindex="-1">Alice: first</li><li id="reply"><button aria-label="Show the comment from Alice that this reply answers">↳ Reply to Alice</button>second</li></ul>')
-  const action = commentParentAction(page.locator('#reply'))
+  const action = page.locator('#reply button')
   await action.evaluate(button => button.onclick = () => document.querySelector('#parent').focus())
   const parent = await page.locator('#parent').elementHandle()
-  const link = await action.elementHandle()
-  await action.focus()
-  await action.press('Enter')
-  const navigated = await page.evaluate(reachedCommentParent, {{parent,link}})
+  const navigated = await activateCommentParent(page.locator('#reply'), parent, page)
   await page.setContent('<p id="status">Settings</p><form><label for="status">Status</label><select id="status"><option>Todo</option></select></form>')
   let duplicate = ''
   try {{ await assertAccessibleFormControls(page.locator('form')) }} catch (error) {{ duplicate = error.message }}
@@ -302,13 +302,44 @@ console.log(JSON.stringify(observed))
             "missing": "unverified",
         })
 
+    def test_drag_replays_are_stable_and_subchecks_are_independent(self):
+        if not PLAYWRIGHT.exists():
+            self.fail("dashboard Playwright is required for the C5 stability gate")
+        fixture = ROOT / "tests/fixtures/kanban-evaluator/drag-stability.mjs"
+        env = os.environ.copy()
+        env["PLAYWRIGHT_MODULE_PATH"] = str(PLAYWRIGHT)
+        completed = subprocess.run(
+            ["node", str(fixture), str(PROBE)], cwd=ROOT, text=True,
+            capture_output=True, check=False, timeout=90, env=env,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        for style in ("baseline", "deepwork"):
+            with self.subTest(style=style):
+                self.assertEqual(result[style], {
+                    "attempts": 100, "patches": 100, "valid": 100,
+                    "height": 693, "clipped": True,
+                })
+        self.assertEqual(result["wrongPayload"]["patches"], 1)
+        self.assertEqual(result["wrongPayload"]["valid"], 0)
+        self.assertEqual(result["missingDrop"], 0)
+        self.assertEqual(result["malformedPayload"], [
+            {"id": "malformed_json", "status": "failed"},
+            {"id": "after_malformed_json", "status": "passed"},
+        ])
+        self.assertEqual(result["independent"], [
+            {"id": "criterion_drag_failure", "status": "failed"},
+            {"id": "criterion_drag", "status": "passed"},
+            {"id": "criterion_move_navigation", "status": "passed"},
+        ])
+
     def test_board_semantics_accept_equivalent_dom_without_accepting_wrong_state(self):
         if not PLAYWRIGHT.exists():
             self.skipTest("dashboard Playwright is not installed")
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ PROBES, boardLane, boardLaneCount, boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{ headless: true }})
+const browser = await chromium.launch({{ headless: true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }})
 try {{
   const page = await browser.newPage()
   await page.setContent(`
@@ -487,7 +518,7 @@ try {{
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ ticketCreationDialog, assertAccessibleFormControls }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{ headless: true }})
+const browser = await chromium.launch({{ headless: true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }})
 try {{
   const page = await browser.newPage()
   const results = []
@@ -554,7 +585,7 @@ console.log(JSON.stringify({{
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ commentAuthor }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{headless:true}})
+const browser = await chromium.launch({{headless:true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}})
 const comment = (author, id = 'author') => `<form>${{author ? `<label for="${{id}}">${{author}}</label><input id="${{id}}">` : ''}}<label for="${{id}}-body">Comment</label><textarea id="${{id}}-body"></textarea></form>`
 try {{
   const page = await browser.newPage()
@@ -586,7 +617,7 @@ try {{
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ reachedCommentParent }} from {json.dumps(PROBE.as_uri())}
-const browser = await chromium.launch({{headless:true}})
+const browser = await chromium.launch({{headless:true, executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}})
 try {{
   const page = await browser.newPage()
   await page.setContent('<ul><li id="parent" tabindex="-1">first</li><li><button id="back">Reply to Alice: first</button></li></ul>')

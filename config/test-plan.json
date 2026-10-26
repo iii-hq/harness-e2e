@@ -296,7 +296,7 @@
     {
       "id": "deepwork",
       "label": "Application builds with Deepwork",
-      "purpose": "Can Deepwork delegate the implementation and verification of real Workers and deliver working Console applications? Runs the existing chess, form-flow and state-machine build contracts on the deepwork stack with the deepwork-e2e profile. These native workspaces support delegation; the separate Kanban, Registry and trending-topics tests restrict execution to their own fixture tools and are not included. This suite exercises the plain flow, without Git worktrees or interactive approval.",
+      "purpose": "Can Deepwork delegate the implementation and verification of real Workers and deliver working Console applications? Runs the existing chess, form-flow and state-machine build contracts on the deepwork stack with the deepwork-e2e profile. This suite exercises the plain flow, without Git worktrees or interactive approval.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",

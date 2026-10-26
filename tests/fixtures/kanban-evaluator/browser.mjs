@@ -97,7 +97,7 @@ async function run(caseId, variant = {}) {
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const baseUrl = `http://127.0.0.1:${server.address().port}`
-  const browser = await chromium.launch({ headless: true })
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH })
   const output = await mkdtemp(join(tmpdir(), 'kanban-browser-'))
   const checks = []
   const recorder = createCheckRecorder(checks, async () => {}, async () => {

@@ -74,7 +74,7 @@ on external site availability.
 
 Required controls use the accessible names above; topic links use their titles.
 They must be real links, reachable with Tab, activated with Enter, and have
-visible focus. Each page has an identifying document title, one main landmark
+visible focus with an indicator of at least 3:1 contrast. Each page has an identifying document title, one main landmark
 and one level-one heading: the blog name on the home page and the topic title on
 the article page.
 
@@ -264,8 +264,9 @@ evaluation and cleanup hooks. It keeps `trend_blog` unchanged. Its case identity
 includes the fixture revision, baseline and embedded runtime/evaluator hashes.
 
 The [runtime package](../tests/fixtures/trending-topics-build/README.md) creates a
-private per-attempt Git service and restricted application containers. Only the
-public app tree reaches the subject. Finalization stops subject writes, resolves
+private per-attempt Git service and restricted application containers. The
+scenario tool exposes the public app tree; the agent may use other available
+tools and delegate work. Finalization stops subject writes, resolves
 the pushed SHA once, validates commit history and workspace cleanliness, then
 builds and tests independent checkouts against original and varied inputs.
 

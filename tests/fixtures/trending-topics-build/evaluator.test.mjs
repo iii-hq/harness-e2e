@@ -79,7 +79,7 @@ function findTest(reportValue, title, project) {
   return spec.tests.find(item => item.projectName === project);
 }
 
-test('feed variant CLI writes the deterministic control dataset', async () => {
+test('feed variant CLI generates an unpredictable dataset and preserves its replay seed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'trending-evaluator-'));
   try {
     const originalPath = join(root, 'original.json');
@@ -87,7 +87,17 @@ test('feed variant CLI writes the deterministic control dataset', async () => {
     await writeFile(originalPath, JSON.stringify(feed('original')));
     await execFileAsync(process.execPath, [fileURLToPath(new URL('./evaluate.mjs', import.meta.url)),
       '--feed-variant', originalPath, variedPath]);
-    assert.deepEqual(JSON.parse(await readFile(variedPath, 'utf8')), variedFeed);
+    const generated = JSON.parse(await readFile(variedPath, 'utf8'));
+    assert.deepEqual(generated, variedFeed(generated.variant_seed));
+    assert.match(generated.variant_seed, /^[a-f0-9]{32}$/);
+    const otherPath = join(root, 'other.json');
+    await execFileAsync(process.execPath, [fileURLToPath(new URL('./evaluate.mjs', import.meta.url)),
+      '--feed-variant', originalPath, otherPath]);
+    assert.notDeepEqual(JSON.parse(await readFile(otherPath, 'utf8')), generated);
+    const replayPath = join(root, 'replay.json');
+    await execFileAsync(process.execPath, [fileURLToPath(new URL('./evaluate.mjs', import.meta.url)),
+      '--feed-variant', originalPath, replayPath, generated.variant_seed]);
+    assert.deepEqual(JSON.parse(await readFile(replayPath, 'utf8')), generated);
   } finally {
     await rm(root, { recursive: true });
   }

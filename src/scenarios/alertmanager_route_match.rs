@@ -10,6 +10,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -73,7 +75,7 @@ const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::gate_in(
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::gate(
     "delegation_wired",
     10,
-    "Does Alertmanager's TestRouteMatch pass using route::match on the live engine and fail when that engine is unavailable?",
+    "Does Alertmanager's TestRouteMatch pass using route::match, fail without the engine, and fail after receiving deliberately wrong route::match results in an isolated namespace?",
 )
 .labeled("Alertmanager's route test passes through iii");
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
@@ -254,7 +256,9 @@ mentions. It does not start Alertmanager.
 Go 1.25 is on PATH. Your Go code must reach the engine at the URL in the `III_URL` environment
 variable and the namespace in `III_NAMESPACE`. The runner copies your checkout, restores upstream
 `dispatch/route_test.go`, and runs `go test -run '^TestRouteMatch$' ./dispatch/` twice: with the
-live engine it must pass, and with `III_URL` pointing at a closed port it must fail. When the run ends, the runner stops every worker
+live engine it must pass, and with `III_URL` pointing at a closed port it must fail. The runner also
+runs the test with a temporary `III_NAMESPACE` whose `route::match` returns deliberately wrong
+answers: your Go code must invoke that function and the test must fail. When the run ends, the runner stops every worker
 and process started from this workspace."#,
                 bundle = bundle.display(),
                 checkout = checkout.display(),
@@ -512,13 +516,13 @@ async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot>
         git_diff_empty(&checkout, PINNED_REVISION, &args).await
     };
     let (delegation_wired, delegation_detail) = if checkout_is_repository {
-        delegation_probe(context, &checkout).await
+        delegation_probe(context, &checkout).await?
     } else {
         (false, "checkout is not a Git repository".into())
     };
-    let function_registered = context.function_exists(FUNCTION_ID).await.unwrap_or(false);
+    let function_registered = context.function_exists(FUNCTION_ID).await?;
     let match_cases = if function_registered {
-        probe_match_cases(context).await
+        probe_match_cases(context).await?
     } else {
         Vec::new()
     };
@@ -534,10 +538,8 @@ async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot>
     })
 }
 
-async fn probe_match_cases(context: &E2eContext) -> Vec<(String, bool, String)> {
-    let Ok(oracle) = oracle() else {
-        return vec![("oracle".into(), false, "embedded oracle is invalid".into())];
-    };
+async fn probe_match_cases(context: &E2eContext) -> Result<Vec<(String, bool, String)>> {
+    let oracle = oracle()?;
     let (noise_name, noise_value) = noise_label(&oracle);
     let mut results = Vec::new();
     for case in oracle.cases {
@@ -570,10 +572,13 @@ async fn probe_match_cases(context: &E2eContext) -> Vec<(String, bool, String)> 
                 )),
                 None => results.push((case.id, false, format!("unrecognized payload {value}"))),
             },
-            Err(error) => results.push((case.id, false, format!("{error:#}"))),
+            Err(error) if common::is_remote_failure(&error) => {
+                results.push((case.id, false, format!("{error:#}")))
+            }
+            Err(error) => return Err(error).context("route-match probe infrastructure failed"),
         }
     }
-    results
+    Ok(results)
 }
 
 /// A label no route tree mentions, drawn fresh for every probe. Matching
@@ -793,7 +798,7 @@ async fn revision_is_pinned(checkout: &Path, head: Option<&str>) -> bool {
 /// test file restored to the pinned revision. Delegation is proven when the
 /// test passes with the live engine and fails when `III_URL` points at a
 /// closed port: the Go router then depends on `route::match`.
-async fn delegation_probe(context: &E2eContext, checkout: &Path) -> (bool, String) {
+async fn delegation_probe(context: &E2eContext, checkout: &Path) -> Result<(bool, String)> {
     let namespace = context
         .client()
         .namespace()
@@ -801,14 +806,15 @@ async fn delegation_probe(context: &E2eContext, checkout: &Path) -> (bool, Strin
     delegation_probe_at(context.client().address(), &namespace, checkout).await
 }
 
-async fn delegation_probe_at(url: &str, namespace: &str, checkout: &Path) -> (bool, String) {
+async fn delegation_probe_at(
+    url: &str,
+    namespace: &str,
+    checkout: &Path,
+) -> Result<(bool, String)> {
     let probe = checkout.with_file_name(".delegation-probe");
     let outcome = run_delegation_probe(url, namespace, checkout, &probe).await;
     let _ = common::remove_directory(&probe);
-    match outcome {
-        Ok(outcome) => outcome,
-        Err(error) => (false, format!("delegation probe failed: {error:#}")),
-    }
+    outcome
 }
 
 async fn run_delegation_probe(
@@ -852,9 +858,49 @@ async fn run_delegation_probe(
                 .into(),
         ));
     }
+    let namespace = format!("alertmanager-probe-{}", uuid::Uuid::new_v4().simple());
+    let client = iii_sdk::register_worker(
+        url,
+        iii_sdk::InitOptions {
+            namespace: Some(namespace.clone()),
+            ..Default::default()
+        },
+    );
+    let probe_context = E2eContext::from_client(client);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = calls.clone();
+    probe_context.client().register_function(FUNCTION_ID, iii_sdk::RegisterFunction::new_async(move |_payload: Value| {
+        let calls = observed_calls.clone();
+        async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok::<Value, iii_sdk::errors::Error>(json!({"receivers":[],"group_by":[],"group_by_all":[],"harness_counterfactual":true}))
+        }
+    }).description("Temporary counterfactual for the route-match delegation evaluator"));
+    let ready = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if probe_context
+                .trigger_value(FUNCTION_ID, json!({}))
+                .await
+                .is_ok_and(|value| value["harness_counterfactual"] == true)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    if ready.is_err() {
+        probe_context.shutdown().await;
+        bail!("counterfactual route::match could not register on the evaluator engine");
+    }
+    calls.store(0, Ordering::SeqCst);
+    let counterfactual = go_route_test(probe, url, &namespace).await;
+    let invoked = calls.load(Ordering::SeqCst) > 0;
+    probe_context.shutdown().await;
+    let counterfactual = counterfactual?;
     Ok((
-        true,
-        "TestRouteMatch passes with the engine and fails without it".into(),
+        invoked && !counterfactual.0,
+        format!("TestRouteMatch passes live, fails with a closed port; wrong route::match invoked={invoked}, test_passed={}", counterfactual.0),
     ))
 }
 
@@ -1343,9 +1389,8 @@ mod tests {
         assert!(snapshot.revision_pinned(), "{}", revision_reason(&snapshot));
         assert!(snapshot.scope_exact(), "{}", scope_reason(&snapshot));
         assert!(
-            snapshot.delegation_wired,
-            "{}",
-            delegation_reason(&snapshot)
+            !snapshot.delegation_wired,
+            "a TCP health check must not count as route::match delegation"
         );
         assert_eq!(evaluation.completion, None);
         let match_award = evaluation
@@ -1436,7 +1481,7 @@ mod tests {
 
     /// Needs Go 1.25+ on PATH, as CI and the exact-stack runners provide.
     #[tokio::test]
-    async fn delegation_probe_tells_a_wired_router_from_the_pinned_one() {
+    async fn delegation_probe_never_accepts_a_tcp_health_check_as_function_delegation() {
         require_go_toolchain().await.unwrap();
         let engine = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", engine.local_addr().unwrap());
@@ -1448,13 +1493,138 @@ mod tests {
         if !fetch_dispatch_modules(&checkout).await {
             return;
         }
-        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
+        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await.unwrap();
         assert!(!wired, "the pinned router must not count: {detail}");
         assert!(detail.contains("passes without the engine"), "{detail}");
         require_engine_in_route_match(&checkout);
-        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
-        assert!(wired, "{detail}");
+        let error = delegation_probe_at(&url, "probe", &checkout)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("counterfactual route::match"),
+            "{error:#}"
+        );
         assert!(!temporary.path().join(".delegation-probe").exists());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires iii on PATH; CI runs this explicitly with the pinned Engine"]
+    async fn delegation_probe_accepts_real_rpc_and_rejects_tcp_only_routing() {
+        require_go_toolchain().await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let config = root.join("engine.yaml");
+        fs::write(&config, format!("workers:\n  - name: iii-worker-manager\n    config:\n      host: 127.0.0.1\n      port: {port}\n")).unwrap();
+        let mut engine = Command::new("iii")
+            .arg("--no-update-check")
+            .arg("--config")
+            .arg(&config)
+            .current_dir(root)
+            .env("III_TELEMETRY_ENABLED", "false")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let url = format!("ws://127.0.0.1:{port}");
+        let context = E2eContext::connect(&url)
+            .await
+            .expect("isolated engine ready");
+        let bundle = root.join("repository.bundle");
+        fs::write(&bundle, BUNDLE_BYTES).unwrap();
+        let checkout = root.join("checkout");
+        validate_bundle(&bundle, &checkout).await.unwrap();
+        assert!(
+            fetch_dispatch_modules(&checkout).await,
+            "positive delegation proof requires the fixture Go dependencies"
+        );
+        let route_file = checkout.join("dispatch/route.go");
+        let source = fs::read_to_string(&route_file).unwrap();
+        let local = source
+            .replace(
+                "func (r *Route) Match(lset model.LabelSet)",
+                "func (r *Route) MatchLocal(lset model.LabelSet)",
+            )
+            .replace(
+                "matches := cr.Match(lset)",
+                "matches := cr.MatchLocal(lset)",
+            );
+        fs::write(&route_file, local).unwrap();
+        fs::write(
+            checkout.join("dispatch/zz_e2e_remote.go"),
+            include_str!("../../tests/fixtures/alertmanager-route-match/positive-client.go"),
+        )
+        .unwrap();
+        fs::create_dir_all(checkout.join("cmd/e2e-match")).unwrap();
+        fs::write(
+            checkout.join("cmd/e2e-match/main.go"),
+            include_str!("../../tests/fixtures/alertmanager-route-match/positive-matcher.go"),
+        )
+        .unwrap();
+        let matcher = root.join("reference-matcher");
+        let output = Command::new("go")
+            .args(["build", "-o"])
+            .arg(&matcher)
+            .arg("./cmd/e2e-match")
+            .current_dir(&checkout)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        context.client().register_function(
+            FUNCTION_ID,
+            iii_sdk::RegisterFunction::new_async(move |payload: Value| {
+                let matcher = matcher.clone();
+                async move {
+                    let output = Command::new(matcher)
+                        .arg(payload.to_string())
+                        .kill_on_drop(true)
+                        .output()
+                        .await
+                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))?;
+                    serde_json::from_slice::<Value>(&output.stdout)
+                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))
+                }
+            })
+            .description("Independent frozen Alertmanager matcher for positive evaluator control"),
+        );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !context.function_exists(FUNCTION_ID).await.unwrap() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (accepted, detail) = delegation_probe_at(
+            &url,
+            context.client().namespace().as_deref().unwrap_or("default"),
+            &checkout,
+        )
+        .await
+        .unwrap();
+        assert!(accepted, "real RPC must pass: {detail}");
+        git(
+            &checkout,
+            &["checkout", PINNED_REVISION, "--", "dispatch/route.go"],
+        )
+        .await
+        .unwrap();
+        fs::remove_file(checkout.join("dispatch/zz_e2e_remote.go")).unwrap();
+        require_engine_in_route_match(&checkout);
+        let (accepted, detail) = delegation_probe_at(&url, "default", &checkout)
+            .await
+            .unwrap();
+        assert!(!accepted, "TCP-only routing must fail: {detail}");
+        context.shutdown().await;
+        engine.kill().await.unwrap();
+        engine.wait().await.unwrap();
     }
 
     #[tokio::test]

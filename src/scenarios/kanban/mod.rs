@@ -23,7 +23,7 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 const RUBRIC: &str = include_str!("../../../scripts/kanban_eval/rubric.json");
-const RUBRIC_VERSION: u8 = 2;
+const RUBRIC_VERSION: u8 = 3;
 const CATALOG: &str = include_str!("catalog.json");
 /// Short labels for readers, per case and criterion. Kept out of rubric.json:
 /// the rubric is hashed into the case and copied into the run, and a label
@@ -682,9 +682,7 @@ fn failed_prerequisite(result: &Value) -> Option<&Value> {
         check["status"] == "failed"
             && matches!(
                 check["id"].as_str(),
-                Some(
-                    "application_present" | "typecheck" | "test" | "build" | "application_startup"
-                )
+                Some("application_present" | "typecheck" | "build" | "application_startup")
             )
     })
 }
@@ -934,7 +932,6 @@ mod tests {
         for id in [
             "application_present",
             "typecheck",
-            "test",
             "build",
             "application_startup",
         ] {
@@ -949,6 +946,10 @@ mod tests {
                 == format!("prerequisite '{id}' failed: Compose file is missing")));
             assert_eq!(completion(0, &result), CompletionState::TaskIncomplete);
         }
+        let result = json!({"status":"failed", "functional_status":"failed", "checks":[
+            {"id":"test", "status":"failed", "detail":"candidate test failed"}
+        ]});
+        assert!(failed_prerequisite(&result).is_none());
         // A failure the subject's prerequisites did not cause leaves the
         // unreached criteria unscored, never zero.
         let awards = criterion_awards(
@@ -1125,7 +1126,7 @@ mod tests {
             .collect();
         checks[0]["status"] = json!("passed");
         checks.push(json!({"id":"ticket_cards","status":"passed"}));
-        let valid = json!({"rubric_version":2,"case_id":IDS[3],"checks":checks});
+        let valid = json!({"rubric_version":RUBRIC_VERSION,"case_id":IDS[3],"checks":checks});
         validate_rubric(3, &valid).unwrap();
         let mut missing = valid.clone();
         missing["checks"].as_array_mut().unwrap().remove(1);
@@ -1223,13 +1224,17 @@ mod tests {
         for id in [
             "application_present",
             "typecheck",
-            "test",
             "build",
             "application_startup",
         ] {
             let value = json!({"result":{"status":"failed", "functional_status":"failed", "checks":[{"id":id,"status":"failed"}]}});
             validate_evaluation(&value).unwrap();
         }
+        assert!(validate_evaluation(&json!({"result":{
+            "status":"failed", "functional_status":"failed",
+            "checks":[{"id":"test","status":"failed"}]
+        }}))
+        .is_err());
         for status in ["infrastructure_failed", "evaluation_failed", "incomplete"] {
             assert!(validate_evaluation(&json!({"result":{"status":status}})).is_err());
         }

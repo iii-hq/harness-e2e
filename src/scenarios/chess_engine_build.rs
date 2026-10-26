@@ -77,7 +77,7 @@ const CHECK_RULES: AssessmentSpec = AssessmentSpec::scored(
     "Do the check-evasion-position legal moves and perft results match the independent oracle?",
 )
 .labeled("Check-evasion moves match the oracle");
-const PLAY_RULES: AssessmentSpec = AssessmentSpec::scored(
+const PLAY_RULES: AssessmentSpec = AssessmentSpec::gate(
     "play_contract",
     10,
     "Does the Worker apply a legal move to the exact oracle FEN and reject an illegal move?",
@@ -99,7 +99,7 @@ const CONSOLE_DELIVERY: AssessmentSpec = AssessmentSpec::scored_in(
 const PLAYABLE_UI: AssessmentSpec = AssessmentSpec::gate_in(
     "playable_ui",
     10,
-    "Does the real iii Console render the 64-square page and play e2-e4 and e7-e5 through Worker functions to both oracle FENs?",
+    "Does the real iii Console render 64 squares with visible, distinguishable FEN pieces and play e2-e4 and e7-e5 through Worker functions to both oracle FENs?",
     EvaluationDimension::Deliverable,
 )
 .labeled("Console board plays e2-e4 and e7-e5");
@@ -209,6 +209,7 @@ must return an ESM module with `export default function setup(host)` that calls
 
 The registered Console page must render exactly 64 board squares carrying `data-square="a1"`
 through `data-square="h8"`; occupied squares must also carry `data-piece` with the FEN piece letter.
+Visibly distinguish the FEN piece types using readable glyphs or local graphics.
 Show the current FEN in an element with `data-testid="fen"`, let a user choose a source and
 destination square, call `{play}` through `host.iii.trigger`, remain interactive for the next move,
 and show failures in an element with `data-testid="error"`. The page must be usable at 1280x900
@@ -837,7 +838,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     let browser_blocked = browser["status"] == "blocked";
     checks.insert(
         "playable_ui".into(),
-        json!({"passed":browser["passed"],"status":if browser_blocked {"blocked"} else if browser["passed"] == true {"passed"} else {"failed"},"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"]}}),
+        json!({"passed":browser["passed"],"status":if browser_blocked {"blocked"} else if browser["passed"] == true {"passed"} else {"failed"},"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"],"ui_before":browser["ui_before"],"ui_after":browser["ui_after"],"worker_rpc":browser["worker_rpc"],"conditions":browser["conditions"]}}),
     );
 
     let mut files = serde_json::Map::new();
@@ -856,7 +857,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     }
     let evidence_ok = files.contains_key("screenshots/before.png")
         && files.contains_key("screenshots/after.png")
-        && browser["passed"] == true
+        && chess_capture_evidence_complete(&browser, &identity, &files)
         && source_sha256.is_some()
         && compose_sha256.is_some();
     checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser probe was blocked by prerequisites"} else if evidence_ok {"portable screenshots are bound to candidate and checked FENs"} else {"screenshot or identity evidence is incomplete"}}));
@@ -990,16 +991,12 @@ fn ui_content_ok(script: &Result<Value>, style: &Result<Value>, contract: &Worke
         .as_ref()
         .ok()
         .and_then(|value| value["content"].as_str());
-    script.is_some_and(|content| {
-        content.contains("export default")
-            && content.contains("host.pages.register")
-            && content.contains("host.iii.trigger")
-            && content.contains("chess")
-    }) && style.is_some_and(|content| {
-        content.contains(&format!("[data-iii-ui=\"{}\"]", contract.worker))
-            || content.contains(&format!("[data-iii-ui='{}']", contract.worker))
-            || content.contains(&format!("[data-iii-ui={}]", contract.worker))
-    })
+    script.is_some_and(|content| content.contains("export default") && content.contains("chess"))
+        && style.is_some_and(|content| {
+            content.contains(&format!("[data-iii-ui=\"{}\"]", contract.worker))
+                || content.contains(&format!("[data-iii-ui='{}']", contract.worker))
+                || content.contains(&format!("[data-iii-ui={}]", contract.worker))
+        })
 }
 
 fn ensure_remote_or_success(result: &Result<Value>, action: &str) -> Result<()> {
@@ -1082,6 +1079,23 @@ async fn capture_browser_session(
         .await?;
     let before_state = inspect_ui(context, session, START_FEN, false).await?;
     let before = common::screenshot_png(context, session).await?;
+    let play_function = contract_function(identity, "play")?;
+    let encoded_play_function = serde_json::to_string(play_function)?;
+    context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!(r#"return (()=>{{
+window.__harnessRpc={{requests:[],results:[],invalid:0}};
+window.__harnessOriginalWebSocketSend=WebSocket.prototype.send;
+window.__harnessOriginalMessageData=Object.getOwnPropertyDescriptor(MessageEvent.prototype,'data');
+window.__harnessSeenRpcEvents=new WeakSet;
+const expected={encoded_play_function},observe=(data,expectedType)=>{{if(typeof data!=='string')return;try{{const message=JSON.parse(data);if(message.function_id!==expected||typeof message.invocation_id!=='string'||message.type!==expectedType)return;const base={{type:message.type,invocation_id:message.invocation_id,function_id:message.function_id}};if(message.type==='invokefunction')window.__harnessRpc.requests.push({{...base,data:message.data}});if(message.type==='invocationresult')window.__harnessRpc.results.push({{...base,...('result'in message?{{result:message.result}}:{{}}),...('error'in message?{{error:message.error}}:{{}})}})}}catch{{window.__harnessRpc.invalid++}}}};
+WebSocket.prototype.send=function(data){{observe(data,'invokefunction');return window.__harnessOriginalWebSocketSend.call(this,data)}};
+Object.defineProperty(MessageEvent.prototype,'data',{{configurable:true,get(){{const data=window.__harnessOriginalMessageData.get.call(this);if(this.isTrusted&&this.target instanceof WebSocket&&!window.__harnessSeenRpcEvents.has(this)){{window.__harnessSeenRpcEvents.add(this);observe(data,'invocationresult')}}return data}}}});
+return true;
+}})();"#)}),
+        )
+        .await?;
     let interaction_code = format!(
         "const expectedFirst = {}; const expectedFinal = {};\n{}",
         serde_json::to_string(actual_after)?,
@@ -1111,20 +1125,167 @@ async fn capture_browser_session(
             json!({"session_id":session,"timeout_ms":30000,"code":interaction_code}),
         )
         .await?;
+    let worker_rpc = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":r#"return (()=>{const rpc=window.__harnessRpc??{requests:[],results:[],invalid:0};if(window.__harnessOriginalWebSocketSend)WebSocket.prototype.send=window.__harnessOriginalWebSocketSend;if(window.__harnessOriginalMessageData)Object.defineProperty(MessageEvent.prototype,'data',window.__harnessOriginalMessageData);delete window.__harnessRpc;delete window.__harnessOriginalWebSocketSend;delete window.__harnessOriginalMessageData;delete window.__harnessSeenRpcEvents;return rpc})();"#}),
+        )
+        .await?;
     let after_state = inspect_ui(context, session, actual_final, true).await?;
     let after = common::screenshot_png(context, session).await?;
-    let passed = before_state["passed"] == true
-        && after_state["passed"] == true
-        && before["data"].is_string()
-        && after["data"].is_string()
-        && interaction["result"]["fen"] == actual_final;
+    let mut conditions = chess_browser_observations(
+        &before_state,
+        &after_state,
+        &interaction["result"],
+        &worker_rpc["result"],
+        actual_after,
+        actual_final,
+        play_function,
+    );
+    conditions["checks"]["before_png"] = json!(before["data"].is_string());
+    conditions["checks"]["after_png"] = json!(after["data"].is_string());
+    conditions["passed"] = json!(conditions["checks"]
+        .as_object()
+        .is_some_and(|checks| checks.values().all(|value| value == true)));
+    let passed = conditions["passed"] == true;
+    let failures = conditions["checks"]
+        .as_object()
+        .into_iter()
+        .flat_map(|checks| checks.iter())
+        .filter_map(|(name, value)| (value != true).then_some(name.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let captures = json!([
-        {"id":"before","caption":"Playable chess Worker in iii Console before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":START_FEN,"sha256":before["sha256"]},
-        {"id":"after","caption":"Playable chess Worker in iii Console after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":actual_final,"transitions":[actual_after,actual_final],"sha256":after["sha256"]}
+        {"id":"before","caption":"Playable chess Worker in iii Console before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":before_state["fen"],"sha256":before["sha256"]},
+        {"id":"after","caption":"Playable chess Worker in iii Console after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":after_state["fen"],"transitions":interaction["result"]["transitions"],"sha256":after["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"reason":if passed {"iii Console rendered a visible board and completed two moves"} else {"Console interaction, visibility, pieces, or checked FEN failed"},"url":url,"captures":captures,"before":before,"after":after,"interaction":interaction["result"]}),
+        json!({"passed":passed,"reason":if passed {String::from("iii Console rendered the full board and completed two Worker-backed moves")} else {format!("Chess browser conditions failed: {failures}")},"url":url,"captures":captures,"before":before,"after":after,"ui_before":before_state,"ui_after":after_state,"interaction":interaction["result"],"worker_rpc":worker_rpc["result"],"conditions":conditions}),
     )
+}
+
+fn contract_function<'a>(identity: &'a Value, name: &str) -> Result<&'a str> {
+    identity["functions"][name]
+        .as_str()
+        .with_context(|| format!("chess identity omitted {name} function"))
+}
+
+#[cfg(test)]
+fn chess_browser_passed(
+    before: &Value,
+    after: &Value,
+    interaction: &Value,
+    rpc: &Value,
+    expected_after: &str,
+    expected_final: &str,
+    function_id: &str,
+) -> bool {
+    chess_browser_observations(
+        before,
+        after,
+        interaction,
+        rpc,
+        expected_after,
+        expected_final,
+        function_id,
+    )["passed"]
+        == true
+}
+
+fn chess_browser_observations(
+    before: &Value,
+    after: &Value,
+    interaction: &Value,
+    rpc: &Value,
+    expected_after: &str,
+    expected_final: &str,
+    function_id: &str,
+) -> Value {
+    let succeeded = |fen: &str, mv: &str, expected: &str| {
+        rpc["requests"].as_array().is_some_and(|requests| {
+            requests.iter().any(|request| {
+                request["type"] == "invokefunction"
+                    && request["function_id"] == function_id
+                    && request["invocation_id"].is_string()
+                    && request["data"]["fen"] == fen
+                    && request["data"]["move"] == mv
+                    && rpc["results"].as_array().is_some_and(|results| {
+                        results.iter().any(|result| {
+                            result["type"] == "invocationresult"
+                                && result["invocation_id"] == request["invocation_id"]
+                                && result["function_id"] == function_id
+                                && result.get("error").is_none()
+                                && result["result"]["fen"] == expected
+                        })
+                    })
+            })
+        })
+    };
+    let checks = json!({
+        "before_ui": before["passed"] == true,
+        "after_ui": after["passed"] == true,
+        "final_fen": interaction["fen"] == expected_final,
+        "rendered_transitions": interaction["transitions"] == json!([expected_after, expected_final]),
+        "e2e4_rpc": succeeded(START_FEN, "e2e4", expected_after),
+        "e7e5_rpc": succeeded(expected_after, "e7e5", expected_final),
+    });
+    let passed = checks
+        .as_object()
+        .is_some_and(|checks| checks.values().all(|value| value == true));
+    json!({"passed":passed,"checks":checks})
+}
+
+fn chess_capture_evidence_complete(
+    browser: &Value,
+    identity: &Value,
+    files: &serde_json::Map<String, Value>,
+) -> bool {
+    let Some(captures) = browser["captures"].as_array() else {
+        return false;
+    };
+    let capture = |id: &str| captures.iter().find(|capture| capture["id"] == id);
+    let (Some(before), Some(after)) = (capture("before"), capture("after")) else {
+        return false;
+    };
+    let url = browser["url"]
+        .as_str()
+        .filter(|url| url.starts_with("http://127.0.0.1:"));
+    let session = before["session_id"]
+        .as_str()
+        .filter(|session| !session.is_empty());
+    url.is_some()
+        && session.is_some()
+        && after["session_id"].as_str() == session
+        && before["url"].as_str() == url
+        && after["url"].as_str() == url
+        && before["identity"] == *identity
+        && after["identity"] == *identity
+        && before["status"] == "captured"
+        && after["status"] == "captured"
+        && before["screenshot"] == "before.png"
+        && after["screenshot"] == "after.png"
+        && after["transitions"]
+            == json!([
+                identity["fen"]["actual"]["after_e2e4"],
+                identity["fen"]["actual"]["after_e7e5"]
+            ])
+        && after["transitions"] == browser["interaction"]["transitions"]
+        && browser["before"]["data"].is_string()
+        && browser["after"]["data"].is_string()
+        && before["sha256"] == browser["before"]["sha256"]
+        && after["sha256"] == browser["after"]["sha256"]
+        && files["screenshots/before.png"]["sha256"] == before["sha256"]
+        && files["screenshots/after.png"]["sha256"] == after["sha256"]
+        && before["sha256"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+        && after["sha256"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+        && before["fen"] == browser["ui_before"]["fen"]
+        && after["fen"] == browser["ui_after"]["fen"]
+        && browser["ui_before"]["fen"] == identity["fen"]["start"]
+        && browser["ui_after"]["fen"] == identity["fen"]["actual"]["after_e7e5"]
 }
 
 async fn inspect_ui(
@@ -1142,13 +1303,33 @@ async fn inspect_ui(
         const expectedSquares = [...'abcdefgh'].flatMap(file => [...'12345678'].map(rank => file + rank));
         const visible = element => { const rect=element.getBoundingClientRect(); const style=getComputedStyle(element); return rect.width>=20 && rect.height>=20 && rect.bottom>0 && rect.right>0 && rect.top<innerHeight && rect.left<innerWidth && style.visibility!=='hidden' && style.display!=='none' && Number(style.opacity)>0; };
         const hit = element => { const rect=element.getBoundingClientRect(); return document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)===element || element.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)); };
+        const expectedPieces={};expected.split(' ')[0].split('/').forEach((rankText,index)=>{let file=0;for(const token of rankText){if(/\d/.test(token))file+=Number(token);else{expectedPieces['abcdefgh'[file]+String(8-index)]=token;file++}}});
         const piece = square => document.querySelector(`[data-square="${square}"]`)?.dataset.piece || '';
         const e2=piece('e2'), e4=piece('e4'), e7=piece('e7'), e5=piece('e5');
         const piecesOk = afterMove ? e2==='' && e4==='P' && e7==='' && e5==='p' : e2==='P' && e4==='' && e7==='p' && e5==='';
-        const occupiedVisible = elements.filter(element=>element.dataset.piece).every(element=>visible(element) && ((element.textContent||'').trim()!=='' || getComputedStyle(element).backgroundImage!=='none'));
+        const colorCanvas=document.createElement('canvas');colorCanvas.width=colorCanvas.height=1;const colorContext=colorCanvas.getContext('2d',{willReadFrequently:true});
+        const rgba=value=>{colorContext.clearRect(0,0,1,1);colorContext.fillStyle='rgba(0,0,0,0)';colorContext.fillStyle=value;colorContext.fillRect(0,0,1,1);return [...colorContext.getImageData(0,0,1,1).data].map((v,i)=>i===3?v/255:v)};
+        const composite=(front,back)=>{const alpha=front[3]+back[3]*(1-front[3]);return alpha?[0,1,2].map(i=>(front[i]*front[3]+back[i]*back[3]*(1-front[3]))/alpha).concat(alpha):[0,0,0,0]};
+        const background=element=>{const layers=[];for(let node=element;node instanceof Element;node=node.parentElement)layers.push(rgba(getComputedStyle(node).backgroundColor));let color=getComputedStyle(document.documentElement).colorScheme==='dark'?[0,0,0,1]:[255,255,255,1];for(const layer of layers.reverse())color=composite(layer,color);return color};
+        const luminance=color=>{const channels=color.slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*channels[0]+.7152*channels[1]+.0722*channels[2]};
+        const contrast=(a,b)=>(Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
+        const cumulativeOpacity=target=>{let opacity=1;for(let node=target;node instanceof Element;node=node.parentElement)opacity*=Number(getComputedStyle(node).opacity);return opacity};
+        const solidPaint=(value,opacity,bg)=>{const paint=rgba(value);paint[3]*=opacity;return paint[3]>0&&contrast(composite(paint,bg),bg)>=3};
+        const svgGeometry=target=>['d','points','x','y','x1','y1','x2','y2','cx','cy','r','rx','ry','width','height','href'].map(name=>`${name}=${target.getAttribute(name)||''}`).join(';');
+        const raster=async(source,bg,opacity)=>{const image=source instanceof HTMLImageElement?source:new Image();if(!(source instanceof HTMLImageElement)){image.src=source;try{await image.decode()}catch{return null}}if(!image.complete||!image.naturalWidth||!image.naturalHeight)return null;const canvas=document.createElement('canvas');canvas.width=canvas.height=16;const context=canvas.getContext('2d',{willReadFrequently:true});try{context.drawImage(image,0,0,16,16);const pixels=context.getImageData(0,0,16,16).data;let painted=false,hash=2166136261;for(let i=0;i<pixels.length;i+=4){const pixel=[pixels[i],pixels[i+1],pixels[i+2],pixels[i+3]/255*opacity];if(pixel[3]>.02&&contrast(composite(pixel,bg),bg)>=3)painted=true;for(let j=0;j<4;j++){hash^=pixels[i+j]>>4;hash=Math.imul(hash,16777619)}}return painted?`raster:${hash>>>0}`:null}catch{return null}};
+        const backgroundRaster=async(style,bg,opacity)=>{const image=style.backgroundImage;if(image==='none')return null;const url=image.match(/^url\(["']?(.*?)["']?\)$/);if(url){try{return raster(new URL(url[1],location.href).href,bg,opacity)}catch{return null}}const escaped=image.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><foreignObject width="32" height="32"><div xmlns="http://www.w3.org/1999/xhtml" style="width:32px;height:32px;background-image:${escaped};background-size:100% 100%"></div></foreignObject></svg>`;return raster(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,bg,opacity)};
+        const glyphRect=target=>{if(target instanceof HTMLImageElement||target.matches('path,use,polygon,polyline,circle,ellipse,rect,line')||getComputedStyle(target).backgroundImage!=='none')return target.getBoundingClientRect();const range=document.createRange();range.selectNodeContents(target);return range.getBoundingClientRect()};
+        const unclipped=(target,rect)=>{for(let node=target.parentElement;node instanceof Element;node=node.parentElement){const style=getComputedStyle(node);if(/hidden|clip|scroll|auto/.test(`${style.overflow} ${style.overflowX} ${style.overflowY}`)){const clip=node.getBoundingClientRect();if(rect.left<clip.left||rect.right>clip.right||rect.top<clip.top||rect.bottom>clip.bottom)return false}}return true};
+        const piecePainted=async element=>{const target=[...element.querySelectorAll('*'),element].find(node=>{const style=getComputedStyle(node),text=(node.textContent||'').trim();return (text&&![...node.children].some(child=>(child.textContent||'').trim()))||style.backgroundImage!=='none'||node.matches('path,use,polygon,polyline,circle,ellipse,rect,line')||node instanceof HTMLImageElement});if(!target||!visible(element))return null;const style=getComputedStyle(target),rect=glyphRect(target),opacity=cumulativeOpacity(target);if(rect.width<=0||rect.height<=0||rect.left<0||rect.top<0||rect.right>innerWidth||rect.bottom>innerHeight||style.display==='none'||style.visibility==='hidden'||opacity<=0||!unclipped(target,rect))return null;const hit=[.1,.5,.9].some(x=>[.1,.5,.9].some(y=>{const top=document.elementFromPoint(rect.left+rect.width*x,rect.top+rect.height*y);return top===target||target.contains(top)}));if(!hit)return null;const bg=background(target),text=(target.textContent||'').trim();if(target instanceof HTMLImageElement)return raster(target,bg,opacity);if(style.backgroundImage!=='none')return backgroundRaster(style,bg,opacity);if(target.matches('path,use,polygon,polyline,circle,ellipse,rect,line')){const fill=solidPaint(style.fill,opacity*Number(style.fillOpacity),bg),stroke=parseFloat(style.strokeWidth)>0&&solidPaint(style.stroke,opacity*Number(style.strokeOpacity),bg);return fill||stroke?`svg:${target.tagName}:${svgGeometry(target)}:${style.fill}:${style.stroke}:${style.strokeWidth}`:null}const fg=rgba(style.color);fg[3]*=opacity;return text&&contrast(composite(fg,bg),bg)>=3?`text:${text}:${style.color}`:null};
+        const piecesMatch=expectedSquares.every(square=>piece(square)===(expectedPieces[square]||''));
+        const occupied=elements.filter(element=>element.dataset.piece),visuals=await Promise.all(occupied.map(piecePainted));
+        const signatures={};occupied.forEach((element,index)=>(signatures[element.dataset.piece]??=new Set()).add(visuals[index]));
+        const occupiedVisible=visuals.every(Boolean),pieceTypes=Object.values(expectedPieces),expectedTypes=new Set(pieceTypes),visualTypes=[...expectedTypes].map(piece=>signatures[piece]);
+        const representationsMatch=visualTypes.every((values,index)=>values?.size>0&&!values.has(null)
+          &&visualTypes.slice(index+1).every(other=>[...values].every(value=>!other?.has(value))));
         const targets = afterMove ? ['e7','e5'] : ['e2','e4'];
         const targetsHit = targets.every(square => { const element=document.querySelector(`[data-square="${square}"]`); return element && visible(element) && hit(element); });
-        return {passed: fen===expected && elements.length===64 && new Set(squares).size===64 && expectedSquares.every(square => squares.includes(square)) && elements.every(visible) && occupiedVisible && piecesOk && targetsHit,fen,square_count:squares.length,e2,e4,e7,e5,targets_hit:targetsHit};"#
+        return {passed: fen===expected && elements.length===64 && new Set(squares).size===64 && expectedSquares.every(square => squares.includes(square)) && elements.every(visible) && occupiedVisible && representationsMatch && piecesMatch && piecesOk && targetsHit,fen,square_count:squares.length,piece_count:occupied.length,pieces_match:piecesMatch,representations_match:representationsMatch,e2,e4,e7,e5,targets_hit:targetsHit};"#
     );
     let value = context
         .trigger_value(
@@ -1528,6 +1709,121 @@ mod tests {
         let mut warned = manifest;
         warned["assets"][1]["warnings"] = json!(["unscoped selector"]);
         assert!(!console_assets_ok(&warned, &contract));
+
+        let alias = Ok(
+            json!({"content":"export default function setup(host) { const { pages, iii } = host; const invoke = iii.trigger.bind(iii); pages.register({ id: 'chess', render: () => invoke('play') }) }","content_type":"text/javascript"}),
+        );
+        assert!(ui_content_ok(&alias, &style, &contract));
+    }
+
+    #[test]
+    fn test_chess_eval_rejects_full_board_canned_fens_and_requests_without_results() {
+        let expected_after = chess_engine::apply_move(START_FEN, "e2e4").unwrap().new_fen;
+        let expected_final = chess_engine::apply_move(&expected_after, "e7e5")
+            .unwrap()
+            .new_fen;
+        let before = json!({"passed":true});
+        let after = json!({"passed":true});
+        let interaction = json!({"fen":expected_final.clone(),"transitions":[expected_after.clone(),expected_final.clone()]});
+        let fake_packets = json!({"requests":[
+            {"type":"invokefunction","invocation_id":"one","function_id":"play","data":{"fen":START_FEN,"move":"e2e4"}},
+            {"type":"invokefunction","invocation_id":"two","function_id":"play","data":{"fen":expected_after,"move":"e7e5"}}
+        ],"results":[],"invalid":1});
+        for _ in 0..100 {
+            assert!(!chess_browser_passed(
+                &before,
+                &after,
+                &interaction,
+                &fake_packets,
+                &expected_after,
+                &expected_final,
+                "play",
+            ));
+        }
+        let rpc = json!({"requests":fake_packets["requests"],"results":[
+            {"type":"invocationresult","invocation_id":"one","function_id":"play","result":{"fen":expected_after}},
+            {"type":"invocationresult","invocation_id":"two","function_id":"play","result":{"fen":expected_final}}
+        ],"invalid":1});
+        for _ in 0..100 {
+            assert!(chess_browser_passed(
+                &before,
+                &after,
+                &interaction,
+                &rpc,
+                &expected_after,
+                &expected_final,
+                "play",
+            ));
+        }
+    }
+
+    #[test]
+    fn chess_evidence_uses_observed_fens_and_independent_capture_identity() {
+        let final_fen = "final observed fen";
+        let identity = json!({"fen":{"start":START_FEN,"actual":{"after_e2e4":"first observed fen","after_e7e5":final_fen}}});
+        let browser = json!({
+            "url":"http://127.0.0.1:3113/#/worker/chess/chess",
+            "before":{"data":"png","sha256":"sha256:before"},
+            "after":{"data":"png","sha256":"sha256:after"},
+            "ui_before":{"fen":START_FEN,"passed":false},
+            "ui_after":{"fen":final_fen,"passed":false},
+            "interaction":{"transitions":["first observed fen",final_fen]},
+            "captures":[
+                {"id":"before","url":"http://127.0.0.1:3113/#/worker/chess/chess","session_id":"session","fen":START_FEN,"sha256":"sha256:before","identity":identity,"status":"captured","screenshot":"before.png"},
+                {"id":"after","url":"http://127.0.0.1:3113/#/worker/chess/chess","session_id":"session","fen":final_fen,"sha256":"sha256:after","identity":identity,"status":"captured","screenshot":"after.png","transitions":["first observed fen",final_fen]}
+            ]
+        });
+        let files = serde_json::Map::from_iter([
+            (
+                "screenshots/before.png".into(),
+                json!({"sha256":"sha256:before"}),
+            ),
+            (
+                "screenshots/after.png".into(),
+                json!({"sha256":"sha256:after"}),
+            ),
+        ]);
+        for _ in 0..100 {
+            assert!(chess_capture_evidence_complete(&browser, &identity, &files));
+        }
+        for field in ["identity", "status", "screenshot", "transitions"] {
+            let mut incomplete = browser.clone();
+            incomplete["captures"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(!chess_capture_evidence_complete(
+                &incomplete,
+                &identity,
+                &files
+            ));
+        }
+        let mut swapped_identity = browser.clone();
+        swapped_identity["captures"][1]["identity"]["worker"] = json!("other-candidate");
+        assert!(!chess_capture_evidence_complete(
+            &swapped_identity,
+            &identity,
+            &files
+        ));
+        let mut wrong_transition = browser.clone();
+        wrong_transition["captures"][1]["transitions"][0] = json!("unobserved first move");
+        assert!(!chess_capture_evidence_complete(
+            &wrong_transition,
+            &identity,
+            &files
+        ));
+        let mut hardcoded = browser.clone();
+        hardcoded["captures"][1]["fen"] = json!("expected but not observed");
+        assert!(!chess_capture_evidence_complete(
+            &hardcoded, &identity, &files
+        ));
+        let mut wrong_session = browser;
+        wrong_session["captures"][1]["session_id"] = json!("other");
+        assert!(!chess_capture_evidence_complete(
+            &wrong_session,
+            &identity,
+            &files
+        ));
     }
 
     #[test]

@@ -314,7 +314,10 @@
       "weight": 15,
       "description": "Soft deletion survives restart and retires the readable key.",
       "checks": [
-        "ticket_durable_deletion"
+        "ticket_deletion_get",
+        "ticket_deletion_disk",
+        "ticket_deletion_restart",
+        "ticket_deletion_key"
       ]
     },
     {
@@ -362,7 +365,7 @@
     {
       "id": "criterion_save",
       "weight": 15,
-      "description": "Retry saves supported fields and preserves immutable metadata.",
+      "description": "Saving supported fields preserves immutable metadata.",
       "checks": [
         "edit_success"
       ],
