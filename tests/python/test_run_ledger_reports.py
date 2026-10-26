@@ -309,6 +309,20 @@ class ReportPayloadTests(unittest.TestCase):
         # In the third round the same journal is the third repetition.
         runs, _ = report_execution.collect_runs(artifacts, offset=2)
         self.assertEqual(runs[0]["repetition"], 2)
+        # The journal keeps no definition: the shard takes it from the
+        # snapshot's case, so the run is not read as another definition.
+        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
+        snapshot["cases"] = [{"scenario_id": "tool_contract_recovery", "behavior_sha256": "sha256:" + "b" * 64,
+                              "inputs_sha256": "sha256:" + "i" * 64}]
+        self.snapshot.write_text(json.dumps(snapshot))
+        payload = report_execution.shard_payload(
+            Args(artifacts=artifacts, campaign_id="regression-r01", group_id="case-tool-contract-recovery",
+                 outcome="failure", plan=self.plan, profile_snapshot=self.snapshot)
+        )
+        [run] = payload["runs"]
+        self.assertEqual(payload["group"]["evidence"], "journal")
+        self.assertEqual(run["behavior_sha256"], "sha256:" + "b" * 64)
+        self.assertEqual(run["definition_sha256"], "sha256:" + "i" * 64)
 
     def test_each_round_of_a_profile_is_its_own_repetition(self):
         # A profile of 3 repetitions is 3 identical campaigns of runs=1
