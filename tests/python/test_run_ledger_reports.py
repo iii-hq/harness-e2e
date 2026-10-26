@@ -1068,6 +1068,36 @@ class CommitPinTests(unittest.TestCase):
             with self.assertRaisesRegex(prepare_execution.ResolutionError, "hashes to"):
                 prepare_execution.verified_build(root / "workers/app", pin)
 
+    def test_two_workers_built_from_one_commit_depend_on_each_other_as_built(self):
+        # Eval measures a change in harness and in context-manager, which
+        # harness depends on: both are built from the candidate commit, and
+        # harness must start after the context-manager that commit built, never
+        # beside a released one.
+        with tempfile.TemporaryDirectory() as directory:
+            folders = {}
+            for worker in ("harness", "context-manager"):
+                folder = Path(directory) / "workers" / worker
+                (folder / "bin").mkdir(parents=True)
+                (folder / "build.json").write_text(json.dumps({"bin": worker}))
+                (folder / "iii.worker.yaml").write_text(f"name: {worker}\n")
+                folders[worker] = folder
+            containers = {worker: {"worker": f"package://{worker}", "version": "latest", "commit": "3f2a9c1"}
+                          for worker in folders}
+            graph = {"nodes": {"harness": "1.8.36", "context-manager": "0.4.2", "state": "0.22.17"},
+                     "edges": [["harness", "context-manager"], ["harness", "state"], ["context-manager", "state"]]}
+            pins = {"harness": {"worker": "harness", "release": graph},
+                    "context-manager": {"worker": "context-manager", "release": {
+                        "nodes": {"context-manager": "0.4.2", "state": "0.22.17"},
+                        "edges": [["context-manager", "state"]]}}}
+            prepare_execution.declare_commits(containers, pins, folders)
+        self.assertEqual(containers["harness"]["worker"], f"path://{folders['harness']}")
+        self.assertEqual(containers["context-manager"]["worker"], f"path://{folders['context-manager']}")
+        self.assertEqual(containers["harness"]["start_after"], ["context-manager", "state"])
+        self.assertEqual(containers["context-manager"]["start_after"], ["state"])
+        # Only what no commit built is held at its release.
+        self.assertEqual(pins["harness"]["dependencies"], ["state"])
+        self.assertEqual(containers["state"], {"worker": "package://state", "version": "0.22.17"})
+
     def test_a_built_worker_is_declared_as_a_path_worker_with_its_release_dependencies_and_config(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory) / "workers/harness"
