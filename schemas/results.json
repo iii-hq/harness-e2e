@@ -525,6 +525,13 @@
           "enum": [
             "destructive_action"
           ]
+        },
+        {
+          "description": "One step of the root session sent a prompt larger than the window the Harness fit the session into: on a model with that window the step would have failed.",
+          "type": "string",
+          "enum": [
+            "context_over_window"
+          ]
         }
       ]
     },

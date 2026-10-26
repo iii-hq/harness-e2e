@@ -37,6 +37,10 @@ pub enum AuditFlagKind {
     SecretExposure,
     /// The subject invoked a destructive session or state operation.
     DestructiveAction,
+    /// One step of the root session sent a prompt larger than the window the
+    /// Harness fit the session into: on a model with that window the step
+    /// would have failed.
+    ContextOverWindow,
 }
 
 impl AuditFlagKind {
@@ -46,6 +50,7 @@ impl AuditFlagKind {
             Self::OutOfScopeSessionAccess => "audit_out_of_scope_session_access",
             Self::SecretExposure => "audit_secret_exposure",
             Self::DestructiveAction => "audit_destructive_action",
+            Self::ContextOverWindow => "audit_context_over_window",
         }
     }
 }
@@ -132,7 +137,28 @@ fn deterministic_flags_inputs(
         flags.extend(out_of_scope_session_flags(report, transcript));
         flags.extend(secret_exposure_flags(policy, transcript));
     }
+    flags.extend(context_over_window_flag(report));
     flags
+}
+
+fn context_over_window_flag(report: &E2eRunReport) -> Option<AuditFlag> {
+    let efficiency = report.efficiency.as_ref()?;
+    let (peak, usable) = efficiency
+        .peak_context_tokens
+        .zip(efficiency.usable_context_tokens)?;
+    (peak > usable).then(|| AuditFlag {
+        kind: AuditFlagKind::ContextOverWindow,
+        severity: AuditSeverity::Warning,
+        source: AuditFlagSource::Deterministic,
+        summary: format!(
+            "a root step sent a {peak}-token prompt into a usable window of {usable} tokens, after {} compactions",
+            efficiency
+                .compactions
+                .map_or_else(|| "an unknown number of".to_string(), |n| n.to_string())
+        ),
+        evidence: Vec::new(),
+        confidence: None,
+    })
 }
 
 /// A provider's login: the credential vault (`auth::*`) or a provider's own
@@ -504,6 +530,32 @@ mod tests {
         assert_eq!(flags[0].severity, AuditSeverity::Critical);
         let rendered = serde_json::to_string(&flags).unwrap();
         assert!(!rendered.contains(TEST_SECRET));
+    }
+
+    fn report_with_context(peak: u64, usable: u64) -> E2eRunReport {
+        let mut report = report_with_transcript(transcript_with(Vec::new()));
+        report.update_efficiency();
+        let efficiency = report.efficiency.as_mut().unwrap();
+        efficiency.peak_context_tokens = Some(peak);
+        efficiency.usable_context_tokens = Some(usable);
+        efficiency.compactions = Some(0);
+        report
+    }
+
+    #[test]
+    fn a_prompt_past_the_usable_window_is_flagged_and_one_within_it_is_not() {
+        let policy = RedactionPolicy::with_known_values(Vec::<String>::new());
+        let flags = deterministic(&report_with_context(256_135, 128_000), &policy);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].kind, AuditFlagKind::ContextOverWindow);
+        assert_eq!(flags[0].severity, AuditSeverity::Warning);
+        assert!(flags[0].summary.contains("256135-token prompt"));
+        assert!(flags[0].summary.contains("after 0 compactions"));
+        assert!(deterministic(&report_with_context(128_000, 128_000), &policy).is_empty());
+        // Without a measured peak or window there is nothing to hold.
+        let mut unknown = report_with_context(256_135, 128_000);
+        unknown.efficiency.as_mut().unwrap().usable_context_tokens = None;
+        assert!(deterministic(&unknown, &policy).is_empty());
     }
 
     #[test]
