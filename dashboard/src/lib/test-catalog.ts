@@ -236,6 +236,7 @@ export const AREA_LABELS: Record<string, string> = {
   security: 'Resisting untrusted input',
   'app-building': 'Building applications',
   verification: 'Verifying a change',
+  memory: 'Memory injection',
 }
 
 export const DISCIPLINE_LABELS: Record<string, string> = {

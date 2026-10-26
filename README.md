@@ -200,6 +200,8 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
+| Memory quality | `memory` | What the memory worker injects into a live session, twenty-two cases three times each, on the `memory` stack. |
+| Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -271,6 +273,207 @@ is the tour the test was written against. If the worker serves a different
 tour, the run loses the `tour.current` criterion and nothing else. When the
 tour changes on purpose, regenerate the fixture from the worker's
 `src/tours.mjs` with `scripts/onboarding_tour_fixture.mjs`.
+
+The `memory` suite runs twenty-two cases, three independent rounds, one
+technical retry. Each case plants its own bank (`e2e-<attempt>`) with the
+rules, memories and unrelated distractor facts it calls for, waits until
+memory has indexed all of them (with MiniLM; lexical-only stores nothing to
+wait for), sends its prompt and follow-ups, and audits what memory injected
+into each turn against what that turn needed: the right facts, no duplicates,
+nothing unrelated, rules intact in the system prompt. A case may also change
+its bank between turns (a rule set or removed, memories deleted, superseded,
+rewritten or saved, the bank trashed) and judge what the next turn gets: a
+rules change must arrive as one appended `<memory update="rules">` notice
+while the system prompt keeps the section the first turn froze. The subject
+may call no function (`memory::*` is denied), so a planted value reaches the
+answer only through memory's injection. Two cases are baselines: the same task
+with nothing planted, expected to fail, since a baseline that passes means its
+value case proves nothing. Scoring is deterministic, never a model.
+
+Beside recall, small talk, first person, paraphrases, repeats, stale facts,
+rule fit and the two value cases with their baselines, eight cases cover:
+
+- `memory_chatter_after_answer`: "tell me more" and "I know." after an answer
+  inject nothing. Their words match nothing the case plants, since in
+  lexical-only mode one shared word can still inject a memory.
+- `memory_user_fact_needed`: a task that asks for the user's own preference
+  gets that fact about the user, and no other.
+- `memory_about_me`: "What do you remember about me?" brings back the six
+  facts about the user and none of the eight workplace facts.
+- `memory_reworded_across_turns`: a fact still in context is not sent again in
+  other words. Setup checks with `memory::preview` that memory still ranks the
+  two wordings as the case needs; when it does not, the attempt is an
+  infrastructure error, so the case is redesigned instead of passing without
+  testing its point.
+- `memory_sibling_facts`: two services on Postgres 16 both reach the turn that
+  asks which services use it.
+- `memory_rule_changed_mid_session`: a rule edited, then removed, arrives as
+  one update each time, the per-turn rules reminder follows it, and the
+  system prompt never changes.
+- `memory_bank_edits_mid_session`: a memory deleted, one superseded, one
+  rewritten and one saved between turns reach the next turn as they now stand.
+- `memory_bank_trashed_mid_session`: once the bank is trashed, the next turn
+  reads no bank, gets no memory, and is told that no memory section applies.
+
+Three more cases were written to fail before memory changes, to prove a gap
+exists:
+
+- `memory_many_siblings`: seven services on Postgres 16 all reach the turn that
+  asks which use it. A memory that cuts a turn to six lines by count, before
+  its token budget, always leaves one out.
+- `memory_about_me_overflow`: "What do you remember about me?" over ten facts
+  about the user brings back all ten and none of the eight workplace facts.
+  The same six-line cut returns six.
+- `memory_linked_update`: a newer note that the payments-api on-call engineer
+  left reaches the turn that asks whom to page, beside the escalation
+  contact. The note shares no word with the question and has no word memory
+  reads as a change; only the entity it shares with the on-call line links
+  the two. It is built for lexical-only retrieval, as on the Linux builds CI
+  and the local recipe below use: with MiniLM, the note's meaning could rank
+  it on its own.
+  The other API's on-call engineer left out is scored, since recall ranks it
+  and the link never reaches it.
+
+`stacks/memory.yaml` runs the released `memory`, so the gap cases
+(`memory_many_siblings`, `memory_about_me_overflow`, `memory_linked_update`,
+`memory_learn_from_long_message`, `memory_honors_do_not_keep`) fail until a
+memory release carries these fixes.
+
+Each run also records `memory_` measurements: expected, irrelevant and
+duplicate injections, the injected, rules and reminder tokens, the turns where
+the memory hook did not run (a turn after the case trashed its bank is not
+one), and, for a case that changes its rules or trashes its bank, the rules
+updates memory sent (`memory_rules_updates`). An attempt that cannot show
+memory ran on its own bank is an infrastructure error, reported unscored and
+not retried automatically, so rerun the case: no hook, another bank, a recall
+count its parsed lines do not match, a rules update memory announced that did
+not parse, an unobserved prompt, a failed compaction, or a change between
+turns that failed or never ran. The one exception is a turn after the case
+trashed its bank: no bank or another bank there is what that case's gate
+scores, so a fallback to `main` fails the case instead of being rerun. The
+evidence never keeps another bank's text: such a block keeps its line count
+with every line withheld, and a rules update or memory section naming another
+bank is withheld whole. The run's raw transcript (`transcript.json`) is not
+filtered: when memory falls back to another bank, that bank's text stays
+there. A fresh bank per attempt makes every case safe to
+rerun, and `memory::bank::delete` moves the attempt's bank to memory's
+`.trash` afterwards; the user's own banks are never touched.
+
+The `memory-learning` suite runs the learning cycle: seven cases, three rounds,
+one technical retry, on the same stack. Before the measured session, setup
+sends the case's teacher messages in a session of the user's own kind
+(`teach_<attempt>`), pinned to the attempt's bank and with nothing to call,
+waits until memory's extraction cursor names the teacher's last user or
+assistant message (up to four minutes), and reads the bank, retired memories
+included. The measured session then runs as in `memory`:
+
+- `memory_learn_then_recall`: a release command said in chat is learned,
+  reaches the later session and is used; a deploy key said in passing, in a
+  turn of its own, is never stored, injected or answered.
+- `memory_learn_rule_then_obey`: an instruction given in chat becomes a
+  standing rule the next session's two commit messages follow.
+- `memory_learn_correction`: a correction of a planted fact is learned; the
+  stale fact left out and retired are scored, since they rest on the
+  extraction model's wording.
+- `memory_automation_not_learned`: a non-user session asking memory to
+  remember a release command leaves the bank as setup planted it, once
+  extraction has read the session. It runs as the runner's own `e2e` kind,
+  which memory treats like `automation` and every other non-user kind.
+- `memory_learn_from_long_message`: one user message of about 4,400
+  characters states a release command near its start and a staging database
+  host in its middle, and both must be learned. A memory that cuts a
+  transcript line over 2,000 characters to its first and last 1,000 before
+  extraction reads it loses the host; the release command is the control that
+  extraction ran.
+- `memory_honors_do_not_keep` and its control `memory_keeps_without_a_rule`:
+  the same chat states a release command and a diagnosis. With a rule never
+  to remember the user's health, the diagnosis must not be stored, injected
+  or answered; without it, it must be stored, or the first case would pass
+  with the rule doing nothing. The control is a case of its own, not a
+  baseline, which never runs its teacher. A memory whose extraction reads no
+  hand-set rule keeps the diagnosis either way.
+
+The long-message and do-not-keep cases were written to fail before memory
+changes; `memory_keeps_without_a_rule` is their control, green on both builds.
+All three ask their teacher to reply with one word, `noted`, and setup fails
+as an infrastructure error on any other reply: a reply restating the host
+would teach it from a short line, and one refusing to keep the diagnosis would
+change what extraction reads in one twin only.
+
+Extraction calls a model, so these gates move with it: memory pins it with
+`extraction_model` (`deepseek::deepseek-flash` on the `memory` stack), and the
+teacher always talks to `deepseek-flash`. Extraction that ran and kept nothing
+fails the learned gate; a teacher turn that never finished, a cursor that
+never arrived, or a teacher turn memory read on another bank is an
+infrastructure error. The two value cases share the `memory` suite's
+baselines, whose task is the same. The teacher and extraction run outside the
+subject's session and its cost cap, so each run records `memory_learned`
+(memories and learned rule lines extraction kept) and `memory_extraction_ms`.
+That is how long the runner waited for memory's cursor once it had read the
+session, not how long extraction took: memory extracts in the background as a
+turn ends, so it is usually 0, and a nonzero value is extraction still running
+after the runner saw the turn finish. Cleanup deletes the teacher session before it trashes the bank, and when
+memory read another bank on a teacher turn, it retires there what the
+teacher's extraction wrote.
+
+Run it on the `memory` stack, the default stack plus the `memory` worker.
+Memory ranks recalls with the local MiniLM embedder where iii-directory has
+one, and lexical-only (BM25 and entities) where it has none, as on the Linux
+builds CI and the local recipe below use. Each run records which mode ran
+(`retrieval` in its evidence). Lexical-only counts once the doctor has said so
+for 15 seconds, so a stack still loading MiniLM is not taken for one without
+it. Setup fails when memory embeds with any other model. To run a case on your own stack, from a checkout:
+
+```bash
+D=~/iii-memory-e2e && mkdir -p "$D" && cd "$D"
+cat > worker-compose.yaml <<'YAML'
+namespace: memory-e2e
+startup_timeout: 600s
+stop_timeout: 30s
+engine:
+  url: ws://127.0.0.1:49334        # own port, away from a live stack's 49134
+# The Harness graph is listed explicitly: a bare `iii compose --up` does not
+# resolve it from `harness` alone, and harness exits at boot without it.
+containers:
+  queue:             {worker: package://queue,             version: latest}
+  state:             {worker: package://state,             version: latest}
+  session-manager:   {worker: package://session-manager,   version: latest}
+  llm-router:        {worker: package://llm-router,        version: latest, start_after: [state]}
+  context-manager:   {worker: package://context-manager,   version: latest, start_after: [llm-router]}
+  iii-directory:     {worker: package://iii-directory,     version: latest}
+  cron:              {worker: package://cron,              version: latest}
+  ide:               {worker: package://ide,               version: latest}
+  harness:
+    worker: package://harness
+    version: latest
+    start_after: [state, queue, session-manager, llm-router, context-manager, iii-directory, cron, ide]
+  memory:
+    worker: package://memory
+    version: latest
+    start_after: [state, queue, session-manager, llm-router]
+    config_override: {extraction_model: "deepseek::deepseek-flash"}
+  fp:                {worker: package://fp,                version: latest}
+  provider-deepseek: {worker: package://provider-deepseek, version: latest, start_after: [llm-router, state]}
+YAML
+# Strip OpenAI so router::embed falls back to MiniLM or to none, as on CI:
+# with an OPENAI_API_KEY in llm-router's environment memory embeds with
+# text-embedding-3-small, whose vectors the cases are not calibrated for.
+env -u III_URL -u OPENAI_API_KEY III_COMPOSE_STATE_DIR="$D/.compose-state" iii compose --up
+```
+
+Then, from the checkout of this repository:
+
+```bash
+III_NAMESPACE=memory-e2e III_TELEMETRY_ENABLED=false \
+cargo run --locked --bin harness-e2e -- run \
+  --url ws://127.0.0.1:49334 --provider deepseek --model deepseek-flash \
+  --scenario memory_relevant_recall
+cargo run --locked --bin harness-e2e -- report target/e2e
+```
+
+A CI or Docker run takes its suite from the stack's runner: until a
+`harness-e2e` release carries `memory`, give the dispatch an inline stack that
+pins `harness-e2e` with `commit:`.
 
 ## Release Control
 
@@ -414,8 +617,9 @@ campaigns.
 
 The composite action
 [`.github/actions/verify-stack`](.github/actions/verify-stack/action.yml)
-lets a pipeline in another repository run the `pr` suite on a candidate stack:
-workers built from a commit (`pins`, `commit`), or an iii release (`iii`).
+lets a pipeline in another repository run a suite (`pr` by default) on a
+candidate stack: workers built from a commit (`pins`, `commit`), released
+worker versions (`versions`), or an iii release (`iii`).
 `scripts/verify_stack.py` dispatches `exact-stack-e2e.yml` without an
 execution, waits for it and reads `execution-summary.json`, because a green
 workflow does not say the scenarios passed (the campaign is advisory). The
@@ -426,10 +630,16 @@ action never fails its job; it sets `status`, and the caller decides.
 | `passed` | Every group was measured and passed. |
 | `failed` | A measured group failed. |
 | `not_measured` | No readable summary, an inconclusive group, invalid infrastructure or a run that never finished. |
-| `skipped` | None of the pinned workers is part of the harness graph. |
+| `skipped` | None of the pinned workers is part of the harness graph (or of the named stack). |
 
-Pinned workers are filtered against the Registry graph of the harness release,
-and the harness is always pinned with them at the same commit. The token needs
+On the default stack, pinned workers are filtered against the Registry graph of
+the harness release, and the harness is always pinned with them at the same
+commit. A named stack (`stack: memory` runs `stacks/memory.yaml`) builds only
+the pinned workers it declares, keeping their `config_override`, and leaves the
+rest released. Each suite keeps its own comment on the pull request. The
+workers repository runs the `memory` and `memory-learning` suites this way on
+every pull request that changes memory, and on every memory release with
+`versions`. The token needs
 `actions: read` and `write` on this repository. Runs from these pipelines do
 not reach Release Control's ledger, which accepts only its own bot's dispatches.
 

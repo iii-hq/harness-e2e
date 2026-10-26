@@ -1,0 +1,52 @@
+# The stack the `memory` suite runs on: the default stack plus the memory
+# worker, which the Harness does not bring. The executor resolves the Harness
+# graph from a Registry lock, and memory's own dependencies (configuration,
+# session-manager, llm-router, state, queue) arrive with it, so only memory is
+# declared. A bare local `iii compose --up` does not resolve that graph; the
+# README's local recipe lists it. Keep the other containers in step with
+# default.yaml.
+#
+# Embeddings: iii-directory's local MiniLM (provider::minilm::embed) is
+# router::embed's fallback when no registered provider has an embed key. The
+# published Linux builds carry no MiniLM, so there memory ranks lexical-only
+# (BM25 and entities). Each mode is stable on its own; the two rank
+# differently. An OPENAI_API_KEY reaching llm-router moves memory to
+# text-embedding-3-small; the suite's setup refuses it and records which mode
+# ran.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The worker under test. Its extraction model is pinned: left empty, memory
+  # takes the first model the router lists, in no set order. The router reads
+  # `provider::model` as that provider's model.
+  memory:
+    worker: package://memory
+    version: latest
+    config_override:
+      extraction_model: deepseek::deepseek-flash
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

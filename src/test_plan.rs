@@ -161,14 +161,44 @@ pub struct UncoveredTag {
 }
 
 /// Left out of every selection by tag: the registry pair runs 17 to 34 min
-/// a test, and Linkly and the onboarding tour need a stack of their own.
+/// a test, and Linkly, the onboarding tour and the memory tests need a stack
+/// of their own.
 // ponytail: a fixed list; a ceiling from run durations belongs where the
 // durations are (Release Control's deploy check).
-const IMPACT_EXCLUDED: [ScenarioId; 4] = [
+const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::RegistryImplementation,
     ScenarioId::RegistryVerification,
     ScenarioId::LinklyTutorial,
     ScenarioId::OnboardingTour,
+    ScenarioId::MemoryRelevantRecall,
+    ScenarioId::MemorySmallTalk,
+    ScenarioId::MemoryFirstPersonOffTopic,
+    ScenarioId::MemoryParaphrase,
+    ScenarioId::MemorySessionRepeat,
+    ScenarioId::MemoryUpdatedFact,
+    ScenarioId::MemoryValueProject,
+    ScenarioId::MemoryValueProjectBaseline,
+    ScenarioId::MemoryValuePreference,
+    ScenarioId::MemoryValuePreferenceBaseline,
+    ScenarioId::MemoryRuleFit,
+    ScenarioId::MemoryChatterAfterAnswer,
+    ScenarioId::MemoryUserFactNeeded,
+    ScenarioId::MemoryAboutMe,
+    ScenarioId::MemoryRewordedAcrossTurns,
+    ScenarioId::MemorySiblingFacts,
+    ScenarioId::MemoryRuleChangedMidSession,
+    ScenarioId::MemoryBankEditsMidSession,
+    ScenarioId::MemoryBankTrashedMidSession,
+    ScenarioId::MemoryLearnThenRecall,
+    ScenarioId::MemoryLearnRuleThenObey,
+    ScenarioId::MemoryLearnCorrection,
+    ScenarioId::MemoryAutomationNotLearned,
+    ScenarioId::MemoryManySiblings,
+    ScenarioId::MemoryAboutMeOverflow,
+    ScenarioId::MemoryLinkedUpdate,
+    ScenarioId::MemoryLearnFromLongMessage,
+    ScenarioId::MemoryHonorsDoNotKeep,
+    ScenarioId::MemoryKeepsWithoutARule,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -714,7 +744,7 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 9);
+        assert_eq!(plan.suites.len(), 11);
         for (id, cases, runs) in [
             ("regression", 9, 27),
             ("null-canary", 9, 9),
@@ -725,6 +755,8 @@ mod tests {
             ("onboarding", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
+            ("memory", 22, 66),
+            ("memory-learning", 7, 21),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -909,7 +941,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:e9886394144fee21c77ce4548388ea718cb33d9891d6e0a49b3d2de595ceac16"
+            "sha256:8461c93109c889fd8f5001072286412325f481a01a0aea1987378a8ac000011c"
         );
     }
 
@@ -978,6 +1010,8 @@ mod tests {
             "software-engineering",
             "software-engineering-x3",
             "linkly",
+            "memory",
+            "memory-learning",
         ] {
             for id in plan.materialize(suite).unwrap().scenario_ids {
                 let scenario = id.parse::<ScenarioId>().unwrap();
@@ -1043,6 +1077,67 @@ mod tests {
                 "id": "case-linkly-tutorial", "execution_kind": "scripted_dialogue",
                 "runs": 1, "technical_retries": 0, "scenarios": ["linkly_tutorial"],
             }])
+        );
+    }
+
+    /// Every memory case is its own group, so a retry reruns one case and a
+    /// case never shares a stack with its baseline. The learning cases run in
+    /// a suite of their own, after the deterministic ones; their baselines
+    /// stay in `memory`.
+    #[test]
+    fn memory_runs_each_case_alone_three_times_with_one_retry() {
+        let plan = embedded().unwrap();
+        let mut every_case = Vec::new();
+        for suite in ["memory", "memory-learning"] {
+            let snapshot = plan.materialize(suite).unwrap();
+            assert_eq!(snapshot.campaigns.len(), 3);
+            for campaign in &snapshot.campaigns {
+                let groups = campaign["groups"].as_array().unwrap();
+                assert_eq!(groups.len(), snapshot.scenario_ids.len());
+                for (group, id) in groups.iter().zip(&snapshot.scenario_ids) {
+                    assert_eq!(group["scenarios"], json!([id]));
+                    assert_eq!(group["execution_kind"], "harness_turn");
+                    assert_eq!(group["technical_retries"], 1);
+                }
+            }
+            every_case.extend(snapshot.scenario_ids);
+        }
+        assert_eq!(every_case, crate::scenarios::memory::IDS);
+        // Exactly the cases whose outcome rests on memory's extraction.
+        use crate::scenarios::memory::cases::{audits_bank_after, CASES};
+        let learning: Vec<&str> = CASES
+            .iter()
+            .filter(|case| !case.teacher.is_empty() || audits_bank_after(case))
+            .map(|case| case.id)
+            .collect();
+        assert_eq!(
+            plan.materialize("memory-learning").unwrap().scenario_ids,
+            learning
+        );
+    }
+
+    /// The memory cases need the memory stack, so a selection by tag leaves
+    /// them out instead of running them where they would fail in setup.
+    #[test]
+    fn a_selection_by_the_memory_worker_leaves_the_memory_cases_out() {
+        let plan = embedded().unwrap();
+        let impact = plan
+            .materialize_suite(
+                serde_json::from_value(json!({"id": "impact", "workers": ["memory"]})).unwrap(),
+            )
+            .unwrap();
+        assert!(!impact
+            .scenario_ids
+            .iter()
+            .any(|id| id.starts_with("memory_")));
+        let impact = impact.impact.unwrap();
+        assert!(impact.matched.is_empty());
+        let mut every_case = crate::scenarios::memory::IDS;
+        every_case.sort_unstable();
+        assert_eq!(impact.excluded, every_case);
+        assert_eq!(
+            impact.uncovered[0].reason,
+            "only tests a selection by tag leaves out carry it"
         );
     }
 
