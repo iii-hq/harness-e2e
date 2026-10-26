@@ -16,7 +16,9 @@ said. A scenario is compared only where both arms ran the same definition
 
 The verdict is `harness-e2e compare`'s, the one rule the Console and Release
 Control show too: this script prints it after its tables, from the runner in
-HARNESS_E2E_BIN or on PATH, and says so when there is none.
+HARNESS_E2E_BIN or on PATH, and exits 1 when the runner is missing or fails
+(an arm without a run, say). Arms that share no test print empty tables and
+the runner's answer that there is no verdict.
 
 Per metric it prints arm A, arm B, B − A and B / A − 1, with 95% intervals
 from a bootstrap stratified by scenario (runs resampled within each scenario
@@ -195,8 +197,8 @@ def interval(values: list[float]) -> tuple[float, float] | None:
 def compare(a: list[list[dict]], b: list[list[dict]], key: str, how: str,
             resamples: int, rng: random.Random) -> dict:
     base, treated = statistic(a, key, how), statistic(b, key, how)
-    # One run is no sample of its own variance: no interval then.
-    if min(len(runs) for runs in a + b) < 2:
+    # No test, or one run (no sample of its own variance): no interval then.
+    if min((len(runs) for runs in a + b), default=0) < 2:
         resamples = 0
     deltas, ratios = [], []
     for _ in range(resamples):
@@ -299,18 +301,19 @@ def report(result: dict, label_a: str, label_b: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def verdict(a: Path, b: Path, label_a: str, label_b: str, as_json: bool = False) -> str:
-    """`harness-e2e compare A B`: the calibrated verdict, or why there is none."""
+def verdict(a: Path, b: Path, label_a: str, label_b: str, as_json: bool = False) -> tuple[str, bool]:
+    """`harness-e2e compare A B`: what it answered (the calibrated verdict, or
+    why there is none), or why the runner could not answer; and whether it did."""
     binary = os.environ.get("HARNESS_E2E_BIN") or shutil.which("harness-e2e")
     if not binary:
-        return "Veredito indisponível: defina HARNESS_E2E_BIN ou ponha harness-e2e no PATH.\n"
+        return "Veredito indisponível: defina HARNESS_E2E_BIN ou ponha harness-e2e no PATH.\n", False
     command = [binary, "compare", str(a), str(b), "--label-a", label_a, "--label-b", label_b]
     try:
         return subprocess.run(command + (["--json"] if as_json else []), check=True,
-                              capture_output=True, text=True).stdout
+                              capture_output=True, text=True).stdout, True
     except (OSError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", None) or str(error)
-        return f"Veredito indisponível: {detail.strip()}\n"
+        return f"Veredito indisponível: {detail.strip()}\n", False
 
 
 def main() -> int:
@@ -324,7 +327,7 @@ def main() -> int:
     args = parser.parse_args()
     result = analyse(runs_of(args.a), runs_of(args.b), args.resamples)
     # One run of the runner: JSON for --json (the page then shows that), text otherwise.
-    answer = verdict(args.a, args.b, args.label_a, args.label_b, as_json=bool(args.json))
+    answer, answered = verdict(args.a, args.b, args.label_a, args.label_b, as_json=bool(args.json))
     if args.json:
         try:
             result["verdict"] = json.loads(answer)
@@ -333,7 +336,8 @@ def main() -> int:
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     sys.stdout.write(report(result, args.label_a, args.label_b))
     sys.stdout.write("\n### Veredito (harness-e2e compare)\n\n```\n" + answer + "```\n")
-    return 0
+    # The tables alone are no comparison: without the verdict, a failure.
+    return 0 if answered else 1
 
 
 if __name__ == "__main__":

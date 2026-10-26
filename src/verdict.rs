@@ -8,7 +8,10 @@
 //! again with the same content is skipped (a root bundle carries its groups'
 //! results too), with other content it is skipped with a warning, the first
 //! read kept; an attempt id under several scenarios is kept under each, with
-//! a warning. A run without an id is never skipped.
+//! a warning. A run without an id is never skipped. A run both arms hold (the
+//! same test and attempt: an arm compared with itself, or arms that share
+//! files) stays on each side, with a warning that counts them and names their
+//! tests.
 //!
 //! Inputs. Counted runs only: those whose `cause` counts; a run without a
 //! cause, or with one this version does not know, falls back to
@@ -16,13 +19,15 @@
 //! `behavior_sha256`) both arms ran; any other is dropped and listed, one
 //! entry per definition. Within a test the runs are ordered by `attempt_id`
 //! (byte order); tests by `scenario_id`, then `behavior_sha256` (none first).
-//! A score is a number (`score`); a cost is a finite `cost.subject_usd`
-//! above 0. A counted run of a compared test without one leaves that figure,
-//! with a warning that counts and names them. A figure reads the tests with a
-//! value on both sides (cost over fewer tests than quality is a warning), and
-//! there is a verdict only when some test has two scores or more on each
-//! side. An arm that mixes models or stacks, sides that differ in more than
-//! the Harness, and a results.json that does not parse are warnings.
+//! A score is a number (`score`) from 0 to 100; a cost is a finite
+//! `cost.subject_usd` above 0. A counted run of a compared test without one
+//! leaves that figure, with a warning that counts and names them. A figure
+//! reads the tests with a value on both sides (cost over fewer tests than
+//! quality is a warning), and there is a verdict only when some test has two
+//! scores or more on each side. An arm that mixes models or stacks, sides
+//! that differ in more than the Harness, a results.json that does not parse
+//! or has no `scenarios` list (skipped) and a scenario without a
+//! `scenario_id` (skipped) are warnings.
 //!
 //! Figures. Quality is the official run score: the suite figure is the mean
 //! over tests of each test's mean, Δ = (Σ mean_B − Σ mean_A) / K. Cost is
@@ -51,8 +56,10 @@
 //! Cost with B / (1 − equivalence): `p_within_low` is high; with
 //! B / (1 + equivalence): `p_within_high` is low. Each compared test alone:
 //! `p_fell` as is, and `p_inferior` with B + margin, Holm-adjusted over the K
-//! tests (ascending, ties in test order; adjusted p_(i) = the largest over
-//! j ≤ i of min(1, (K − j + 1) p_(j))).
+//! tests whose scores vary (ascending, ties in test order; adjusted p_(i) =
+//! the largest over j ≤ i of min(1, (K − j + 1) p_(j))). A test whose runs
+//! all scored the same, on both sides, reads p = 1 at any margin and cannot
+//! reject: it is not one of the K, and its adjusted p is 1.
 //!
 //! States. Quality: improved when `p_improved` < α / 2, else non-inferior
 //! when `p_non_inferior` < α, else inferior when `p_inferior` < α, else fell
@@ -60,16 +67,18 @@
 //! `p_within_*` < α, else cheaper when `p_cheaper` < α / 2, else below the
 //! bound when `p_within_high` < α, else more expensive when
 //! `p_more_expensive` < α / 2, else inconclusive; no cost reads as
-//! inconclusive. A test is inferior when its adjusted `p_inferior` < α and
-//! its Δ < −margin, a warning that names it. Verdict: worse = quality
-//! inferior, or cost more expensive unless quality improved; better = quality
-//! improved and cost equivalent, below the bound or cheaper, or quality
-//! non-inferior and cost cheaper; no difference = quality non-inferior and
-//! cost equivalent or below the bound; anything else cannot tell. An inferior
-//! test turns better or no difference into cannot tell. Cannot tell is
-//! qualified `test_inferior` when a test is inferior, else `quality_fell`
-//! when quality fell, else `trade_off` when quality improved and cost is more
-//! expensive.
+//! inconclusive. Non-inferior quality whose `p_fell` < α / 2 stays
+//! non-inferior, its reason saying that it fell, by Δ, with `p_fell`, and is
+//! within the margin, with `p_non_inferior`. A test is inferior when its
+//! adjusted `p_inferior` < α and its Δ < −margin, a warning that names it.
+//! Verdict: worse = quality inferior, or cost more expensive unless quality
+//! improved; better = quality improved and cost equivalent, below the bound
+//! or cheaper, or quality non-inferior and cost cheaper; no difference =
+//! quality non-inferior and cost equivalent or below the bound; anything else
+//! cannot tell. An inferior test turns better or no difference into cannot
+//! tell. Cannot tell is qualified `test_inferior` when a test is inferior,
+//! else `quality_fell` when quality fell, else `trade_off` when quality
+//! improved and cost is more expensive.
 //!
 //! Calibration and order. A version against itself reads better, worse or a
 //! qualifier at most about 2α = 5% of the time: quality moves either way at
@@ -81,7 +90,9 @@
 //! score or lowering a B cost moves each of its side's statistics against
 //! the observed one the same way in every round, so no p, state or verdict
 //! gets worse (cheaper implies below the bound: B divided by 1 + equivalence
-//! is B lowered).
+//! is B lowered), but for Holm's K: a raise that leaves every run of a test
+//! at one score takes that test out of the K, which can bring another test's
+//! adjusted `p_inferior` under α.
 //!
 //! Repetitions. When the runs cannot tell, the runs per arm N that would
 //! settle what is undecided, the runs already made kept: quality when it is
@@ -288,8 +299,9 @@ fn listed(items: &[String]) -> String {
 }
 
 /// One arm's runs: a results.json, or every results.json below a directory,
-/// and a warning for each file that could not be read or parsed (skipped)
-/// and each run left out or kept with a doubt.
+/// and a warning for each file that could not be read or parsed or has no
+/// `scenarios` list (skipped), each scenario without a `scenario_id`
+/// (skipped) and each run left out or kept with a doubt.
 pub fn read_arm(path: &std::path::Path) -> anyhow::Result<(Vec<Run>, Vec<String>)> {
     fn files(path: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
         if path.is_file() {
@@ -313,12 +325,33 @@ pub fn read_arm(path: &std::path::Path) -> anyhow::Result<(Vec<Run>, Vec<String>
     files(path, &mut paths).with_context(|| format!("read {}", path.display()))?;
     let (mut documents, mut skipped) = (Vec::new(), Vec::new());
     for file in &paths {
-        match std::fs::read(file)
+        let document = match std::fs::read(file)
             .map_err(anyhow::Error::from)
             .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
         {
-            Ok(document) => documents.push(document),
-            Err(error) => skipped.push(format!("Skipped {}: {error}.", file.display())),
+            Ok(document) => document,
+            Err(error) => {
+                skipped.push(format!("Skipped {}: {error}.", file.display()));
+                continue;
+            }
+        };
+        let unnamed = document["scenarios"].as_array().map(|scenarios| {
+            scenarios
+                .iter()
+                .filter(|scenario| !scenario["scenario_id"].is_string())
+                .count()
+        });
+        match unnamed {
+            None => skipped.push(format!("Skipped {}: no `scenarios` list.", file.display())),
+            Some(0) => documents.push(document),
+            Some(n) => {
+                skipped.push(format!(
+                    "Skipped {n} {} of {}: no `scenario_id`.",
+                    number(n, "scenario", "scenarios"),
+                    file.display()
+                ));
+                documents.push(document);
+            }
         }
     }
     let (runs, warnings) = runs_of(&documents);
@@ -331,6 +364,27 @@ pub fn read_arm(path: &std::path::Path) -> anyhow::Result<(Vec<Run>, Vec<String>
         );
     }
     Ok((runs, skipped))
+}
+
+/// The runs both arms hold, the same test and attempt (an arm compared with
+/// itself, or arms that share files): a warning that counts them and names
+/// their tests. Each side keeps them.
+pub fn shared_runs(a: &[Run], b: &[Run]) -> Option<String> {
+    let in_a = a
+        .iter()
+        .filter(|run| !run.attempt_id.is_empty())
+        .map(|run| (run.scenario.as_str(), run.attempt_id.as_str()))
+        .collect::<BTreeSet<_>>();
+    let (n, names) = tally(
+        b.iter()
+            .filter(|run| in_a.contains(&(run.scenario.as_str(), run.attempt_id.as_str()))),
+    );
+    (n > 0).then(|| {
+        format!(
+            "{n} {} in both arms, the same test and attempt: {names}.",
+            number(n, "run is", "runs are")
+        )
+    })
 }
 
 fn run_of(scenario: &str, behavior: Option<&str>, attempt: &str, run: &Value) -> Run {
@@ -716,9 +770,9 @@ fn permutation(
     }
 }
 
-/// A score the verdict reads.
+/// A score the verdict reads: from 0 to 100.
 fn score_of(run: &Run) -> Option<f64> {
-    run.score.filter(|score| score.is_finite())
+    run.score.filter(|score| (0.0..=100.0).contains(score))
 }
 
 /// A cost the verdict reads: finite and above 0.
@@ -874,7 +928,7 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
         None
     };
 
-    let tests = tests(&scores, rule);
+    let (tests, varying) = tests(&scores, rule);
     let blocked = tests.iter().any(|test| test.warning);
     let states = quality
         .as_ref()
@@ -935,13 +989,12 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
     warnings.extend(tests.iter().filter(|test| test.warning).map(|test| {
         format!(
             "{} fell {:.1} points, beyond the {}-point margin on its own ({} Holm-adjusted over \
-             {} {}): the verdict cannot read better or no difference.",
+             {varying} {} whose scores vary): the verdict cannot read better or no difference.",
             test.scenario,
             -test.delta,
             rule.margin,
             p(test.p_inferior_adjusted),
-            tests.len(),
-            number(tests.len(), "test", "tests")
+            number(varying, "test", "tests")
         )
     }));
     Comparison {
@@ -966,8 +1019,10 @@ pub fn compare(a: &[Run], b: &[Run], rule: &Rule) -> Comparison {
 }
 
 /// Each compared test on its own: its fall, and its fall beyond the margin
-/// Holm-adjusted over the tests.
-fn tests(scores: &[Cell], rule: &Rule) -> Vec<TestDelta> {
+/// Holm-adjusted over the tests whose scores vary, and their number. A test
+/// whose runs all scored the same, on both sides, reads p = 1 whatever the
+/// margin: it cannot reject, so it keeps an adjusted 1 and is not counted.
+fn tests(scores: &[Cell], rule: &Rule) -> (Vec<TestDelta>, usize) {
     let mut tests = scores
         .iter()
         .map(|cell| {
@@ -997,12 +1052,26 @@ fn tests(scores: &[Cell], rule: &Rule) -> Vec<TestDelta> {
             }
         })
         .collect::<Vec<_>>();
-    let adjusted = holm(&tests.iter().map(|test| test.p_inferior).collect::<Vec<_>>());
-    for (test, adjusted) in tests.iter_mut().zip(adjusted) {
-        test.p_inferior_adjusted = adjusted;
-        test.warning = adjusted < rule.alpha && test.delta < -rule.margin;
+    let varies = scores
+        .iter()
+        .map(|cell| cell.a.iter().chain(&cell.b).any(|v| *v != cell.a[0]))
+        .collect::<Vec<_>>();
+    let adjusted = holm(
+        &tests
+            .iter()
+            .zip(&varies)
+            .filter(|(_, varies)| **varies)
+            .map(|(test, _)| test.p_inferior)
+            .collect::<Vec<_>>(),
+    );
+    let mut next = adjusted.iter();
+    for (test, varies) in tests.iter_mut().zip(varies) {
+        if varies {
+            test.p_inferior_adjusted = *next.next().unwrap();
+        }
+        test.warning = test.p_inferior_adjusted < rule.alpha && test.delta < -rule.margin;
     }
-    tests
+    (tests, adjusted.len())
 }
 
 /// Holm's step-down adjustment: ascending, ties in input order, each the
@@ -1053,8 +1122,11 @@ fn input_warnings(a: &[Run], b: &[Run], shared: &[Key]) -> Vec<String> {
             })
         };
         type Leaves = fn(&Run) -> bool;
-        let rows: [(&str, &str, Leaves); 3] = [
-            ("no numeric score", "quality", |run| score_of(run).is_none()),
+        let rows: [(&str, &str, Leaves); 4] = [
+            ("no numeric score", "quality", |run| run.score.is_none()),
+            ("a score outside 0–100", "quality", |run| {
+                run.score.is_some() && score_of(run).is_none()
+            }),
             ("no subject cost", "cost", |run| run.cost_usd.is_none()),
             ("a subject cost at or below 0", "cost", |run| {
                 run.cost_usd.is_some() && cost_of(run).is_none()
@@ -1528,6 +1600,13 @@ fn reasons(quality: Option<&Quality>, cost: Option<&Cost>, rule: &Rule) -> Vec<S
                     p(q.p_improved)
                 )
             }
+            // Within the margin, and a fall shown at α / 2 all the same: said,
+            // the state kept.
+            QualityState::NonInferior if q.p_fell < rule.alpha / 2.0 => format!(
+                "Quality {delta:+.1} points: it fell ({}), within the {margin}-point margin \
+                 ({within}).",
+                p(q.p_fell)
+            ),
             QualityState::NonInferior => {
                 format!("Quality {delta:+.1} points: within the {margin}-point margin ({within}).")
             }
@@ -2232,6 +2311,184 @@ mod tests {
             .any(|w| w.starts_with("core fell 22.0 points, beyond the 5-point margin")));
     }
 
+    #[test]
+    fn tests_whose_runs_all_score_the_same_cannot_dilute_holm() {
+        // One test 30 points down at five runs a side and two that hold: over
+        // the three whose scores vary, its fall beyond the margin holds. Tests
+        // at 100 on every run, on both sides, read p = 1 and cannot reject:
+        // however many, they are no part of Holm's K, and the mean they bring
+        // within the margin cannot read no difference.
+        let rule = Rule {
+            permutations: 2_000,
+            ..Rule::default()
+        };
+        let mut adjusted = Vec::new();
+        for steady in [0, 6, 20] {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            for i in 0..5 {
+                let score = 90.0 + (i % 3) as f64;
+                for (test, fall) in [("core", 30.0), ("held", 0.0), ("kept", 0.0)] {
+                    a.push(run(&format!("a{test}{i}"), test, score, 1.0));
+                    b.push(run(&format!("b{test}{i}"), test, score - fall, 1.0));
+                }
+                for test in 0..steady {
+                    let scenario = format!("steady{test:02}");
+                    a.push(run(&format!("a{test}-{i}"), &scenario, 100.0, 1.0));
+                    b.push(run(&format!("b{test}-{i}"), &scenario, 100.0, 1.0));
+                }
+            }
+            let comparison = compare(&a, &b, &rule);
+            let warned = comparison
+                .tests
+                .iter()
+                .filter(|test| test.warning)
+                .map(|test| test.scenario.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(warned, ["core"], "{steady}");
+            assert!(comparison
+                .tests
+                .iter()
+                .filter(|test| test.scenario.starts_with("steady"))
+                .all(|test| test.p_inferior == 1.0 && test.p_inferior_adjusted == 1.0));
+            let warning = comparison
+                .warnings
+                .iter()
+                .find(|w| w.starts_with("core fell 30.0 points"))
+                .unwrap();
+            assert!(
+                warning.contains("Holm-adjusted over 3 tests whose scores vary)"),
+                "{warning}"
+            );
+            adjusted.push(comparison.tests[0].p_inferior_adjusted);
+            assert_eq!(
+                (comparison.verdict, comparison.qualifier),
+                (Some(Verdict::CannotTell), Some(Qualifier::TestInferior)),
+                "{steady}: {:?}",
+                comparison.reasons
+            );
+        }
+        assert!(adjusted.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn a_fall_within_the_margin_says_it_fell_and_by_how_much() {
+        let base = arm("a", [90.0, 91.0, 92.0, 90.0, 91.0], 1.0);
+        let rule = Rule::default();
+        let lower = compare(&base, &arm("b", [88.0, 89.0, 90.0, 88.0, 89.0], 1.0), &rule);
+        let quality = lower.quality.as_ref().unwrap();
+        // The state and the verdict stay non-inferior and no difference.
+        assert_eq!(quality.state, QualityState::NonInferior);
+        assert!(quality.p_fell < rule.alpha / 2.0, "{}", quality.p_fell);
+        assert_eq!(lower.verdict, Some(Verdict::NoDifference));
+        assert_eq!(
+            lower.reasons[0],
+            "Quality -2.0 points: it fell (p < 0.001), within the 5-point margin (p < 0.001)."
+        );
+        // No fall shown: the margin alone.
+        let level = compare(&base, &arm("b", [91.0, 90.0, 92.0, 91.0, 90.0], 1.0), &rule);
+        assert_eq!(
+            level.reasons[0],
+            "Quality +0.0 points: within the 5-point margin (p < 0.001)."
+        );
+    }
+
+    #[test]
+    fn a_score_outside_0_to_100_leaves_the_quality_with_a_warning() {
+        let rule = Rule {
+            permutations: 500,
+            ..Rule::default()
+        };
+        let a = arm("a", [90.0, 91.0, 92.0, 90.0, 91.0], 1.0);
+        let b = arm("b", [88.0, 89.0, 90.0, 88.0, 89.0], 1.0);
+        let base = compare(&a, &b, &rule);
+        for score in [-1.0, 100.5, 1e13, 1e20, f64::INFINITY, f64::NAN] {
+            let mut odd = b.clone();
+            odd.push(Run {
+                attempt_id: "b-odd".into(),
+                score: Some(score),
+                ..b[0].clone()
+            });
+            let comparison = compare(&a, &odd, &rule);
+            assert_eq!(
+                (&comparison.quality, &comparison.tests),
+                (&base.quality, &base.tests),
+                "{score}"
+            );
+            assert!(
+                comparison.warnings.contains(
+                    &"B: 1 counted run has a score outside 0–100 and leaves the quality: t0 ×1."
+                        .to_owned()
+                ),
+                "{score}: {:#?}",
+                comparison.warnings
+            );
+        }
+        // 0 and 100 are scores.
+        let mut edges = b.clone();
+        edges[0].score = Some(0.0);
+        edges[1].score = Some(100.0);
+        assert!(compare(&a, &edges, &rule).warnings.is_empty());
+    }
+
+    #[test]
+    fn a_run_in_both_arms_is_counted_and_named() {
+        let a = arm("a", [90.0, 91.0, 92.0, 90.0, 91.0], 1.0);
+        let b = arm("b", [90.0, 91.0, 92.0, 90.0, 91.0], 1.0);
+        assert_eq!(shared_runs(&a, &b), None);
+        assert_eq!(
+            shared_runs(&a, &a).as_deref(),
+            Some("15 runs are in both arms, the same test and attempt: t0 ×5, t1 ×5, t2 ×5.")
+        );
+        // The same attempt under another test is another run.
+        let mut moved = a[0].clone();
+        moved.scenario = "t9".into();
+        let shared = [b.clone(), vec![a[5].clone(), moved]].concat();
+        assert_eq!(
+            shared_runs(&a, &shared).as_deref(),
+            Some("1 run is in both arms, the same test and attempt: t1 ×1.")
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_no_results_document_is_skipped_and_named() {
+        let arm = tempfile::tempdir().unwrap();
+        let named = serde_json::json!({"scenarios": [
+            {"scenario_id": "t", "runs": [{"attempt_id": "x", "cause": "evaluated", "score": 90}]},
+            {"runs": [{"attempt_id": "y", "cause": "evaluated", "score": 10}]},
+        ]})
+        .to_string();
+        let files = [
+            ("empty", "{}"),
+            ("list", "[]"),
+            ("named", named.as_str()),
+            ("null", "null"),
+            ("text", r#"{"scenarios": "x"}"#),
+        ];
+        for (name, content) in files {
+            std::fs::create_dir(arm.path().join(name)).unwrap();
+            std::fs::write(arm.path().join(name).join("results.json"), content).unwrap();
+        }
+        let (runs, skipped) = read_arm(arm.path()).unwrap();
+        assert_eq!(runs.len(), 1);
+        let file = |name: &str| {
+            arm.path()
+                .join(name)
+                .join("results.json")
+                .display()
+                .to_string()
+        };
+        assert_eq!(
+            skipped,
+            [
+                format!("Skipped {}: no `scenarios` list.", file("empty")),
+                format!("Skipped {}: no `scenarios` list.", file("list")),
+                format!("Skipped 1 scenario of {}: no `scenario_id`.", file("named")),
+                format!("Skipped {}: no `scenarios` list.", file("null")),
+                format!("Skipped {}: no `scenarios` list.", file("text")),
+            ]
+        );
+    }
+
     /// A warning about one run or one test says so in the singular.
     #[test]
     fn a_warning_about_one_run_says_run() {
@@ -2264,7 +2521,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("Holm-adjusted over 1 test)")),
+                .any(|w| w.contains("Holm-adjusted over 1 test whose scores vary)")),
             "{warnings:#?}"
         );
     }
@@ -2308,7 +2565,9 @@ mod tests {
                 let at = (rng.next_u64() % b.len() as u64) as usize;
                 let raise = step % 2 == 0;
                 if raise {
-                    *b[at].score.as_mut().unwrap() += (1 + rng.next_u64() % 12) as f64;
+                    // A score stays a score: 100 at most.
+                    let score = b[at].score.as_mut().unwrap();
+                    *score = (*score + (1 + rng.next_u64() % 12) as f64).min(100.0);
                 } else {
                     *b[at].cost_usd.as_mut().unwrap() *= [0.95, 0.7, 0.4][step % 3];
                 }
@@ -2544,9 +2803,10 @@ mod tests {
     #[test]
     fn the_repetitions_settle_what_is_undecided_with_a_predicted_80_percent() {
         // Nine tests at 100 on both sides and one that falls 100 → 60, cost
-        // −20%: no noise within an arm. At five runs its own test cannot show
-        // the fall beyond the margin over ten tests, and the mean cannot tell
-        // within 30 runs; from ten, the test is clearly inferior.
+        // −20%: no noise within an arm. At three runs its own test cannot show
+        // the fall beyond the margin (its smallest p is 1/20), and the mean
+        // cannot tell within 30 runs; from five, the test is clearly inferior
+        // (the nine that cannot reject leave Holm's K).
         let ten = |prefix: &str, n: usize, fallen: f64, cost: f64| {
             (0..10)
                 .flat_map(|test| (0..n).map(move |i| (test, i)))
@@ -2565,11 +2825,11 @@ mod tests {
             permutations: 2_000,
             ..Rule::default()
         };
-        let five = compare(&ten("a", 5, 100.0, 1.0), &ten("b", 5, 60.0, 0.8), &rule);
-        assert_eq!(five.verdict, Some(Verdict::CannotTell));
-        let r = &five.repetitions;
+        let three = compare(&ten("a", 3, 100.0, 1.0), &ten("b", 3, 60.0, 0.8), &rule);
+        assert_eq!(three.verdict, Some(Verdict::CannotTell));
+        let r = &three.repetitions;
         assert_eq!((r.needed, r.missing, r.more_than), (None, None, Some(30)));
-        for n in [10, 20] {
+        for n in [5, 10, 20] {
             let comparison = compare(&ten("a", n, 100.0, 1.0), &ten("b", n, 60.0, 0.8), &rule);
             assert_eq!(comparison.qualifier, Some(Qualifier::TestInferior), "{n}");
             assert!(comparison.repetitions.note.is_some(), "{n}");
