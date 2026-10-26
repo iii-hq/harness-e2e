@@ -60,6 +60,38 @@ class BuildStackTests(unittest.TestCase):
         self.assertEqual(stack["iii"], "0.24.3-rc.1")
         self.assertEqual(stack["containers"], default["containers"])
 
+    def test_a_named_stack_builds_its_own_worker_and_keeps_its_settings(self):
+        stack = verify_stack.build_stack(["memory"], COMMIT, "", set(), stack="memory")
+        self.assertEqual(stack["containers"]["memory"], {
+            "worker": "package://memory",
+            "config_override": {"extraction_model": "deepseek::deepseek-flash"},
+            "repository": "iii-hq/workers",
+            "commit": COMMIT,
+        })
+        # Only what the stack declares is built: the harness stays released.
+        self.assertEqual(stack["containers"]["harness"], {"worker": "package://harness", "version": "latest"})
+
+    def test_a_named_stack_ignores_workers_it_does_not_declare(self):
+        stack = verify_stack.build_stack(["memory", "ade"], COMMIT, "", set(), stack="memory")
+        self.assertNotIn("ade", stack["containers"])
+        self.assertIsNone(verify_stack.build_stack(["ade"], COMMIT, "", set(), stack="memory"))
+
+    def test_a_released_version_runs_that_version_with_the_stack_settings(self):
+        stack = verify_stack.build_stack([], "", "", set(), stack="memory", versions={"memory": "0.2.22"})
+        self.assertEqual(stack["containers"]["memory"]["version"], "0.2.22")
+        self.assertIn("config_override", stack["containers"]["memory"])
+
+    def test_a_version_for_a_worker_the_stack_lacks_is_an_error(self):
+        with self.assertRaises(verify_stack.VerifyError):
+            verify_stack.build_stack([], "", "", set(), stack="memory", versions={"ade": "1.0.0"})
+
+    def test_each_suite_keeps_a_comment_of_its_own(self):
+        self.assertEqual(verify_stack.marker("pr"), verify_stack.MARKER)
+        self.assertNotIn(verify_stack.MARKER, verify_stack.marker("memory"))
+        body = verify_stack.describe({"status": "passed", "passed": 1, "planned": 1}, "memory @ c46ead4",
+                                     "", verify_stack.marker("memory"))
+        self.assertTrue(body.startswith(verify_stack.marker("memory")))
+
 
 class VerdictTests(unittest.TestCase):
     def test_every_group_passing_is_passed(self):

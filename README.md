@@ -617,8 +617,9 @@ campaigns.
 
 The composite action
 [`.github/actions/verify-stack`](.github/actions/verify-stack/action.yml)
-lets a pipeline in another repository run the `pr` suite on a candidate stack:
-workers built from a commit (`pins`, `commit`), or an iii release (`iii`).
+lets a pipeline in another repository run a suite (`pr` by default) on a
+candidate stack: workers built from a commit (`pins`, `commit`), released
+worker versions (`versions`), or an iii release (`iii`).
 `scripts/verify_stack.py` dispatches `exact-stack-e2e.yml` without an
 execution, waits for it and reads `execution-summary.json`, because a green
 workflow does not say the scenarios passed (the campaign is advisory). The
@@ -629,10 +630,16 @@ action never fails its job; it sets `status`, and the caller decides.
 | `passed` | Every group was measured and passed. |
 | `failed` | A measured group failed. |
 | `not_measured` | No readable summary, an inconclusive group, invalid infrastructure or a run that never finished. |
-| `skipped` | None of the pinned workers is part of the harness graph. |
+| `skipped` | None of the pinned workers is part of the harness graph (or of the named stack). |
 
-Pinned workers are filtered against the Registry graph of the harness release,
-and the harness is always pinned with them at the same commit. The token needs
+On the default stack, pinned workers are filtered against the Registry graph of
+the harness release, and the harness is always pinned with them at the same
+commit. A named stack (`stack: memory` runs `stacks/memory.yaml`) builds only
+the pinned workers it declares, keeping their `config_override`, and leaves the
+rest released. Each suite keeps its own comment on the pull request. The
+workers repository runs the `memory` and `memory-learning` suites this way on
+every pull request that changes memory, and on every memory release with
+`versions`. The token needs
 `actions: read` and `write` on this repository. Runs from these pipelines do
 not reach Release Control's ledger, which accepts only its own bot's dispatches.
 
