@@ -37,6 +37,9 @@ scenarios, runs, technical retries, model and agent profile copied and
 editable; a suite this runner does not list is offered *as recorded*. Both call
 `e2e::dashboard::execution-start`, which creates an execution with a `local`
 origin on this worker's stack, and the Console follows it on its page. The
+request may include `idempotency_key`: repeating it with the same canonical
+parameters returns the original execution, while different parameters are
+refused. Starts without a key keep creating new executions. The
 execution records its suite (name and snapshot digest) and shows it in its
 header; an imported execution also shows the stack its contract names. The form discovers registered provider/model pairs from the stack and
 scenario ids from the same E2E binary only when it opens, and still sends what

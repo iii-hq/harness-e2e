@@ -77,6 +77,9 @@ RELEASE_CANDIDATE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.(
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 #: What a stack may write as `commit:`, short or full.
 COMMIT = re.compile(r"^[0-9a-f]{4,40}$")
+FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+BINARY_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+BINARY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 KIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?$")
 #: Where the Registry points a release: the repository it was built from.
 RELEASE_ASSET = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/")
@@ -440,15 +443,56 @@ def resolve_commits(stack: dict[str, Any], token: str | None) -> dict[str, dict[
     return commits
 
 
+def verified_build(built: Path, pin: dict[str, Any]) -> dict[str, Any]:
+    """The `build.json` of a build folder, once it is the build of `pin`: the
+    same worker, repository, folder and full commit, and a regular binary
+    whose bytes hash to the digest it records. Anything else is an error,
+    never a reason to rebuild: a cache entry or a copy that says one thing
+    and holds another is not used."""
+    at = f"{pin['worker']} @{str(pin['commit'])[:12]} ({built})"
+    for path in (built, built / "build.json"):
+        if path.is_symlink():
+            raise ResolutionError(f"{at}: {path.name} is a symbolic link")
+    try:
+        record = json.loads((built / "build.json").read_text())
+    except (OSError, ValueError) as error:
+        raise ResolutionError(f"{at}: unreadable build.json ({error})") from error
+    if not isinstance(record, dict):
+        raise ResolutionError(f"{at}: build.json is not an object")
+    for key in ("worker", "repository", "path", "commit"):
+        if record.get(key) != pin[key]:
+            raise ResolutionError(f"{at}: build.json {key} {record.get(key)!r} is not {pin[key]!r}")
+    if not FULL_COMMIT.fullmatch(str(record["commit"])):
+        raise ResolutionError(f"{at}: build.json commit is not a full commit sha")
+    binary, digest = record.get("bin"), record.get("sha256")
+    if not isinstance(binary, str) or not BINARY_NAME.fullmatch(binary):
+        raise ResolutionError(f"{at}: build.json bin {binary!r} is not a binary name")
+    if not isinstance(digest, str) or not BINARY_DIGEST.fullmatch(digest):
+        raise ResolutionError(f"{at}: build.json sha256 {digest!r} is not sha256:<64 hex>")
+    for path in (built / "bin", built / "bin" / binary):
+        if path.is_symlink():
+            raise ResolutionError(f"{at}: {path.relative_to(built)} is a symbolic link")
+    if not (built / "bin" / binary).is_file():
+        raise ResolutionError(f"{at}: bin/{binary} is not a regular file")
+    actual = "sha256:" + hashlib.sha256((built / "bin" / binary).read_bytes()).hexdigest()
+    if actual != digest:
+        raise ResolutionError(f"{at}: bin/{binary} hashes to {actual}, build.json records {digest}")
+    return record
+
+
 def build_worker(pin: dict[str, Any], cache: Path) -> Path:
     """The worker at a pinned commit, built with its own manifest once per
     (repository, commit, folder): a folder of the cache holding the binary
     under `bin/`, its `iii.worker.yaml`, its `config.yaml` if it has one, and
     `build.json`. Fetched anonymously and built without the token, outside
     the cache: a build runs the commit's code. The entry appears whole, by a
-    rename; one another build completed first is kept."""
+    rename; one another build completed first is kept. Every entry returned,
+    cached, fresh or another's, is first verified against the pin."""
+    if not FULL_COMMIT.fullmatch(str(pin["commit"])):
+        raise ResolutionError(f"{pin['worker']}: commit {pin['commit']!r} is not a full commit sha")
     built = cache / pin["repository"] / pin["commit"] / (pin["path"] or "_root")
-    if (built / "build.json").is_file():
+    if (built / "build.json").exists() or built.is_symlink():
+        verified_build(built, pin)
         print(f"{pin['worker']} @{pin['commit'][:12]}: built before, from the cache", file=sys.stderr)
         return built
     built.parent.mkdir(parents=True, exist_ok=True)
@@ -503,6 +547,7 @@ def build_worker(pin: dict[str, Any], cache: Path) -> Path:
             # Another execution built the same commit first: its entry stands.
             if not (built / "build.json").is_file():
                 raise
+    verified_build(built, pin)
     return built
 
 
@@ -713,7 +758,8 @@ def build_contract(
         # none of its dependencies, and the Console names its commit.
         runtime["commits"] = {
             name: {key: pin.get(key) for key in (
-                "worker", "repository", "path", "commit", "on_default_branch", "dependencies", "config", "env")}
+                "worker", "repository", "path", "commit", "binary_sha256", "on_default_branch", "dependencies",
+                "config", "env")}
             for name, pin in commits.items()
         }
     if kits:
@@ -831,7 +877,9 @@ def command_commits(args: argparse.Namespace) -> None:
         built = build_worker(pin, args.cache_dir.resolve())
         folders[name] = (directory / "workers" / name).resolve()
         shutil.rmtree(folders[name], ignore_errors=True)
-        shutil.copytree(built, folders[name])
+        shutil.copytree(built, folders[name], symlinks=True)
+        # The copy the groups receive is the build the contract names.
+        pin["binary_sha256"] = verified_build(folders[name], pin)["sha256"]
     declare_commits(stack["containers"], commits, folders)
     (directory / "stack.yaml").write_text(yaml.safe_dump(stack, sort_keys=False))
     write_json(directory / "execution.json", execution)

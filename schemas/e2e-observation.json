@@ -220,6 +220,31 @@
         }
       }
     },
+    "HarnessSourceIdentity": {
+      "description": "A validated source build, bound to the executable the runner observed.",
+      "type": "object",
+      "required": [
+        "binary_sha256",
+        "path",
+        "repository",
+        "revision"
+      ],
+      "properties": {
+        "binary_sha256": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "ObservationDataAvailability": {
       "type": "string",
       "enum": [
@@ -781,6 +806,23 @@
         },
         "engine_version": {
           "type": "string"
+        },
+        "harness_binary_sha256": {
+          "description": "Digest of the running Harness executable, captured by the local runner. Absent when the host or Compose process cannot be observed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness_source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HarnessSourceIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "harness_version": {
           "type": "string"

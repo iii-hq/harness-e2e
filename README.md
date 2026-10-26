@@ -986,6 +986,17 @@ Every completed execution records the subject and E2E revisions, observed wire
 contracts, definition digest, materialized inputs, seed, policies, artifacts,
 and raw structural evidence.
 
+On a local Linux Compose stack, `system_under_test.harness_binary_sha256`
+records the running Harness executable only when its PID, process start time
+and executable digest agree before and after the suite. A restart or an
+unavailable observation leaves the digest absent. It stays in
+the report after teardown. It is absent when the process cannot be observed;
+a version or source revision does not substitute for this executable digest. A source-built Harness
+also records `system_under_test.harness_source`: the full commit and executable
+digest from the validated build record. The runner refuses that source identity
+before testing if its running bytes differ, and omits it if the process changes
+during the suite. Short version labels do not prove a source commit.
+
 Deterministic assessment has one payload shape, written only to `results.json`.
 Scenario contracts are the only versioned domain. Before cleanup, asset
 capture applies explicit safety limits and writes an unversioned sidecar with

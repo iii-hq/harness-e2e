@@ -366,13 +366,19 @@ impl Runner for ControlPlane {
         let context = crate::context::E2eContext::from_client(self.client().clone());
         let contracts = context.preflight_control_plane().await?;
         let versions = context.runtime_versions().await?;
-        Ok(serde_json::to_value(
-            crate::identity::SystemUnderTestIdentity::from_environment(
-                versions.engine,
-                versions.harness,
-                &contracts,
-            )?,
-        )?)
+        let mut identity = crate::identity::SystemUnderTestIdentity::from_environment(
+            versions.engine,
+            versions.harness,
+            &contracts,
+        )?;
+        identity.harness_binary_sha256 = crate::runtime_artifact::observe(&context, self.url())
+            .await
+            .ok()
+            .map(|current| current.digest);
+        identity.harness_source = crate::identity::HarnessSourceIdentity::from_environment()?
+            .map(|source| source.attest(identity.harness_binary_sha256.as_deref()))
+            .transpose()?;
+        Ok(serde_json::to_value(identity)?)
     }
     async fn cancel(&self, id: &str) -> Result<()> {
         ControlPlane::cancel(self, id).await?;
@@ -561,7 +567,7 @@ impl PlanStore {
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
-        if matches!(execution.source, ExecutionSource::Docker { .. }) || github_started(execution) {
+        if !matches!(execution.source, ExecutionSource::Local) || !execution.active() {
             // No one listening is fine.
             let _ = self.changes.send(execution.id.clone());
         }
@@ -577,7 +583,7 @@ impl PlanStore {
         )
         .await
     }
-    /// The ids of Docker executions as they change in the background.
+    /// The ids of plan executions as they change in the background.
     pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
         self.changes.subscribe()
     }
@@ -868,7 +874,7 @@ impl PlanStore {
         parameters: ExecutionParameters,
         label: &str,
     ) -> Result<PlanExecution> {
-        self.start_execution_in(parameters, label, None).await
+        self.start_execution_in(parameters, label, None, None).await
     }
 
     /// `start_execution`, with the GitHub repository a GitHub execution is
@@ -878,6 +884,7 @@ impl PlanStore {
         mut parameters: ExecutionParameters,
         label: &str,
         repository: Option<&str>,
+        idempotency_key: Option<&str>,
     ) -> Result<PlanExecution> {
         let label = clean_label(label)?;
         parameters.model = parameters.model.trim().into();
@@ -901,6 +908,9 @@ impl PlanStore {
                 parameters.stack.is_some(),
                 "Pick the stack the execution runs on on GitHub."
             ),
+        }
+        if let Some(stack) = &mut parameters.stack {
+            stack.sha256 = artifact::sha256_bytes(stack.yaml.as_bytes());
         }
         let suite = parameters.suite.as_ref();
         for (name, value) in [
@@ -943,7 +953,17 @@ impl PlanStore {
             parameters.technical_retries <= 3,
             "technical_retries must be between 0 and 3"
         );
-        let key = format!("execution:{}", uuid::Uuid::new_v4().simple());
+        let key = match idempotency_key {
+            Some(key) => {
+                let key = key.trim();
+                ensure!(
+                    !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control),
+                    "idempotency_key must contain 1 to 256 bytes without control characters"
+                );
+                key.to_owned()
+            }
+            None => format!("execution:{}", uuid::Uuid::new_v4().simple()),
+        };
         let id = format!("plan-{}", &artifact::sha256_bytes(key.as_bytes())[7..39]);
         let slots = parameter_slots(
             &master,
@@ -955,7 +975,7 @@ impl PlanStore {
         let execution = PlanExecution {
             slots,
             id,
-            idempotency_key: key,
+            idempotency_key: key.clone(),
             label,
             parameters: Some(parameters),
             source: ExecutionSource::Local,
@@ -971,6 +991,19 @@ impl PlanStore {
             system_under_test: None,
             rerun: None,
         };
+        let _guard = self.lock.lock().await;
+        if let Some(previous) = self
+            .executions()
+            .await?
+            .into_iter()
+            .find(|previous| previous.idempotency_key == key)
+        {
+            ensure!(
+                previous.parameters.as_ref() == execution.parameters.as_ref(),
+                "idempotency_key already belongs to an execution with different parameters"
+            );
+            return Ok(previous);
+        }
         if parameters_where(&execution) == Where::Docker {
             return self.start_docker(execution, &master).await;
         }
@@ -979,7 +1012,6 @@ impl PlanStore {
                 .context("This worker has no GitHub repository to dispatch the execution to.")?;
             return self.start_github(execution, &master, repository).await;
         }
-        let _guard = self.lock.lock().await;
         let runner = self.runner()?;
         if let Err(error) = runner.reserve(&execution.id).await {
             return Err(self.busy(runner, error).await);
@@ -1093,11 +1125,15 @@ impl PlanStore {
         if matches!(execution.source, ExecutionSource::Docker { .. }) {
             self.remove_docker_folder(id).await;
         }
+        let tombstone = match &execution.source {
+            ExecutionSource::Github {
+                repository, run_id, ..
+            } => Some(import_id(repository, *run_id)),
+            _ => None,
+        };
         self.change_saved(
-            self.persistence()?.delete_execution_receipt(
-                id,
-                matches!(execution.source, ExecutionSource::Github { .. }),
-            ),
+            self.persistence()?
+                .delete_execution_receipt(id, tombstone.as_deref()),
             |saved| {
                 saved.remove(id);
             },
@@ -1123,6 +1159,8 @@ impl PlanStore {
     pub(crate) async fn skip_import(
         &self,
         id: &str,
+        repository: &str,
+        run_id: u64,
         run_updated_at: &str,
         reason: &str,
     ) -> Result<()> {
@@ -1133,7 +1171,12 @@ impl PlanStore {
             "An import of this run began meanwhile; it is not skipped."
         );
         self.change_saved(
-            self.persistence()?.skip_import(id, run_updated_at, reason),
+            self.persistence()?.skip_import(
+                id,
+                &import_id(repository, run_id),
+                run_updated_at,
+                reason,
+            ),
             |saved| {
                 saved.remove(id);
             },
@@ -1338,24 +1381,9 @@ impl PlanStore {
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
         if github_started(&execution) && execution.active() {
-            // `gh run cancel`: GitHub stops the running jobs; the follow loop
-            // imports what finished once the run ends.
             if execution.state != "cancelling" {
-                if let ExecutionSource::Github {
-                    repository, run_id, ..
-                } = &execution.source
-                {
-                    self.gh(
-                        self.github.api_timeout,
-                        &[
-                            "api",
-                            "-X",
-                            "POST",
-                            &format!("repos/{repository}/actions/runs/{run_id}/cancel"),
-                        ],
-                    )
-                    .await
-                    .context("gh run cancel")?;
+                if let ExecutionSource::Github { status, .. } = &mut execution.source {
+                    *status = Some("cancel_pending".into());
                 }
                 execution.cancel_requested = true;
                 execution.state = "cancelling".into();
@@ -2198,7 +2226,7 @@ fn finish(execution: &mut PlanExecution, error: Option<String>, root: &Path) -> 
     Ok(())
 }
 pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
-    json!({"id": execution.id, "state": execution.state, "started_at": execution.started_at, "finished_at": execution.finished_at, "planned": execution.slots.len(),
+    json!({"id": execution.id, "idempotency_key": execution.idempotency_key, "state": execution.state, "started_at": execution.started_at, "finished_at": execution.finished_at, "planned": execution.slots.len(),
         "finished": execution.slots.iter().filter(|s| s.state == "finished").count(), "observed": execution.slots.iter().map(|s| s.observed).sum::<u32>(), "completed": execution.slots.iter().map(|s| s.completed).sum::<u32>(), "passed": execution.slots.iter().map(|s| s.passed).sum::<u32>(), "technical_valid": execution.slots.iter().map(|s| s.technical_valid).sum::<u32>(), "error": execution.error,
         "active_slot": execution.slots.iter().find(|s| matches!(s.state.as_str(), "running" | "admitting"))})
 }
@@ -2262,6 +2290,8 @@ pub(crate) mod tests {
                 engine_version: "0.22.0".into(),
                 engine_revision: None,
                 harness_version: harness.into(),
+                harness_binary_sha256: Some(artifact::sha256_bytes(harness.as_bytes())),
+                harness_source: None,
                 e2e_repository: "iii-hq/harness-e2e".into(),
                 e2e_revision: "0123456789abcdef0123456789abcdef01234567".into(),
                 contract_hashes: BTreeMap::from([(
@@ -3928,11 +3958,25 @@ esac"#,
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let first = manager(root.path(), runner.clone());
         let reason = "This run keeps no e2e-contract artifact; GitHub keeps artifacts for 90 days";
-        let failed = PlanExecution {
+        let mut failed = PlanExecution {
             state: "failed".into(),
             error: Some(reason.into()),
             ..import_stub()
         };
+        failed.source = ExecutionSource::Github {
+            repository: "owner/repo".into(),
+            run_id: 1,
+            run_attempt: 1,
+            url: String::new(),
+            release_control_execution_id: None,
+            stack: None,
+            run_updated_at: None,
+            sync_attempts: 1,
+            conclusion: None,
+            status: None,
+            follow: Default::default(),
+        };
+        let marker = import_id("owner/repo", 1);
         let kept = PlanExecution {
             id: "plan-kept".into(),
             idempotency_key: "kept".into(),
@@ -3941,9 +3985,9 @@ esac"#,
         };
         first.write_execution(&failed).await.unwrap();
         first.write_execution(&kept).await.unwrap();
-        assert_eq!(first.import_skipped(&failed.id).await.unwrap(), None);
+        assert_eq!(first.import_skipped(&marker).await.unwrap(), None);
         first
-            .skip_import(&failed.id, "2026-10-20T11:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-20T11:00:00Z", reason)
             .await
             .unwrap();
         // Its execution goes, with no tombstone: a re-run imports again.
@@ -3958,31 +4002,23 @@ esac"#,
             serde_json::to_value(restarted.executions().await.unwrap()).unwrap()
         );
         assert_eq!(
-            restarted
-                .import_skipped(&failed.id)
-                .await
-                .unwrap()
-                .as_deref(),
+            restarted.import_skipped(&marker).await.unwrap().as_deref(),
             Some("2026-10-20T11:00:00Z")
         );
         // Skipped again once GitHub ran it again, it keeps the later time.
         restarted
-            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-21T09:00:00Z", reason)
             .await
             .unwrap();
         assert_eq!(
-            restarted
-                .import_skipped(&failed.id)
-                .await
-                .unwrap()
-                .as_deref(),
+            restarted.import_skipped(&marker).await.unwrap().as_deref(),
             Some("2026-10-21T09:00:00Z")
         );
 
         // An import begun meanwhile is not deleted under it.
         restarted.write_execution(&import_stub()).await.unwrap();
         assert!(restarted
-            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-21T09:00:00Z", reason)
             .await
             .is_err());
         assert_eq!(
@@ -3996,7 +4032,7 @@ esac"#,
         };
         restarted.write_execution(&completed).await.unwrap();
         assert!(restarted
-            .skip_import(&failed.id, "2026-10-21T09:00:00Z", reason)
+            .skip_import(&failed.id, "owner/repo", 1, "2026-10-21T09:00:00Z", reason)
             .await
             .is_err());
         assert_eq!(
@@ -4341,6 +4377,10 @@ esac"#,
             system_under_test: None,
             rerun: None,
         }
+    }
+
+    pub(crate) async fn save_execution(store: &PlanStore, execution: &PlanExecution) {
+        store.write_execution(execution).await.unwrap();
     }
 
     #[tokio::test]
@@ -4960,6 +5000,80 @@ esac"#,
         }
     }
 
+    #[tokio::test]
+    async fn an_idempotency_key_returns_one_persisted_execution_for_canonical_parameters() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let store = manager(root.path(), runner.clone());
+        let baseline = parameters(&["minimal_path"]);
+        let first =
+            store.start_execution_in(baseline.clone(), "First name", None, Some("eval:work-1"));
+        let duplicate = store.start_execution_in(
+            baseline.clone(),
+            "Ignored duplicate name",
+            None,
+            Some("eval:work-1"),
+        );
+        let (first, duplicate) = tokio::join!(first, duplicate);
+        let first = first.unwrap();
+        let duplicate = duplicate.unwrap();
+        assert_eq!(duplicate.id, first.id);
+        assert_eq!(duplicate.idempotency_key, "eval:work-1");
+        terminal(&store, &first.id).await;
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
+
+        store.rename(&first.id, "Renamed").await.unwrap();
+        let restarted = manager(root.path(), runner.clone());
+        let persisted = restarted
+            .start_execution_in(baseline.clone(), "Another name", None, Some("eval:work-1"))
+            .await
+            .unwrap();
+        assert_eq!(persisted.id, first.id);
+        assert_eq!(persisted.label.as_deref(), Some("Renamed"));
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
+
+        let (summaries, _) = restarted.dashboard_summaries(&[]).await.unwrap();
+        let summary = summaries
+            .iter()
+            .find(|summary| summary["id"] == first.id)
+            .unwrap();
+        assert_eq!(summary["idempotency_key"], "eval:work-1");
+        assert_eq!(summary["plan_execution"]["idempotency_key"], "eval:work-1");
+        let detail = restarted
+            .execution_detail(&first.id, &[])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail["idempotency_key"], "eval:work-1");
+        assert_eq!(detail["plan_execution"]["idempotency_key"], "eval:work-1");
+
+        let mut changed = baseline;
+        changed.runs = 2;
+        let error = restarted
+            .start_execution_in(changed, "", None, Some("eval:work-1"))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("different parameters"),
+            "{error}"
+        );
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
+
+        for key in ["", "control\nkey"] {
+            let error = restarted
+                .start_execution_in(parameters(&["minimal_path"]), "", None, Some(key))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("idempotency_key"), "{error}");
+        }
+        let too_long = "x".repeat(257);
+        let error = restarted
+            .start_execution_in(parameters(&["minimal_path"]), "", None, Some(&too_long))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("idempotency_key"), "{error}");
+    }
+
     #[test]
     fn parameters_keep_the_sequential_groups_of_the_master_plan() {
         let mut parameters = ExecutionParameters {
@@ -5440,6 +5554,27 @@ esac"#,
             serde_json::to_value(&unchanged).unwrap(),
             serde_json::to_value(&finished).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn rerun_accepts_the_same_captured_binary_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let started = manager
+            .start_execution(parameters(&["minimal_path"]), "")
+            .await
+            .unwrap();
+        let before = terminal(&manager, &started.id).await;
+        let pinned = before.system_under_test.as_ref().unwrap();
+        assert!(pinned["harness_binary_sha256"].as_str().is_some());
+        let rerun = manager
+            .rerun_scenario(&before.id, "minimal_path")
+            .await
+            .unwrap();
+        let after = terminal(&manager, &rerun.id).await;
+        assert_eq!(after.system_under_test, before.system_under_test);
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -5944,10 +6079,10 @@ esac"#,
             gh,
         );
         let started = manager
-            .start_execution_in(github_parameters(), "On GitHub", Some("o/r"))
+            .start_execution_in(github_parameters(), "On GitHub", Some("o/r"), None)
             .await
             .unwrap();
-        assert_eq!(started.id, github::import_id("o/r", 77));
+        assert_ne!(started.id, github::import_id("o/r", 77));
         assert!(github_started(&started));
         assert!(matches!(
             &started.source,
@@ -5982,8 +6117,93 @@ esac"#,
         assert!(dispatch.contains("inputs[suite]=pr"));
         assert!(dispatch.contains("inputs[stack]=default"));
         assert!(dispatch.contains("inputs[model]=provider/model"));
-        assert!(!dispatch.contains("execution_id"));
+        assert!(dispatch.contains(&format!("inputs[request]={}", started.id)));
+        assert!(!dispatch.contains("inputs[execution_id]"));
         assert!(log.contains("api repos/o/r/actions/runs/77"));
+    }
+
+    #[tokio::test]
+    async fn a_lost_github_dispatch_response_is_recovered_without_a_second_post() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("gh.log");
+        let gh = fake_gh(
+            root.path(),
+            &format!(
+                r#"echo "$*" >> '{log}'
+case "$*" in
+  "auth status"*) echo "  Logged in to github.com account octo (keyring)";;
+  "api repos/o/r --jq .default_branch") echo main;;
+  *"actions/runs/77/cancel"*) : ;;
+  *"actions/workflows/exact-stack-e2e.yml/dispatches"*) exit 1;;
+  *"actions/workflows/exact-stack-e2e.yml/runs?"*)
+    [ -f '{recover}' ] || {{ echo '{{"workflow_runs":[]}}'; exit; }}
+    request=$(sed -n 's/.*inputs\[request\]=\([^ ]*\).*/\1/p' '{log}' | tail -1)
+    printf '{{"workflow_runs":[{{"id":77,"run_attempt":1,"status":"queued","display_title":"E2E run · pr · provider/model · %s","html_url":"https://github.com/o/r/actions/runs/77"}}]}}' "$request";;
+  "api repos/o/r/actions/runs/77") echo '{{"status":"in_progress","run_attempt":1}}';;
+  *jobs*) echo '{{"jobs":[]}}';;
+  *) exit 1;;
+esac"#,
+                log = log.display(),
+                recover = root.path().join("recover").display(),
+            ),
+        );
+        let manager = manager_with_gh(
+            root.path(),
+            Arc::new(FakeRunner::new(root.path().into())),
+            gh,
+        );
+
+        let admitted = manager
+            .start_execution_in(github_parameters(), "", Some("o/r"), Some("eval-work-1"))
+            .await
+            .unwrap();
+        assert_eq!(admitted.idempotency_key, "eval-work-1");
+        assert!(matches!(
+            &admitted.source,
+            ExecutionSource::Github { run_id: 0, .. }
+        ));
+
+        let retry = manager
+            .start_execution_in(github_parameters(), "", Some("o/r"), Some("eval-work-1"))
+            .await
+            .unwrap();
+        assert_eq!(retry.id, admitted.id);
+        let cancelling = manager.cancel(&admitted.id).await.unwrap();
+        assert_eq!(cancelling["state"], "cancelling");
+        fs::write(root.path().join("recover"), "").unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let execution = manager.read_execution(&admitted.id).await.unwrap();
+                let cancelled = fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .lines()
+                    .any(|call| call.contains("actions/runs/77/cancel"));
+                if matches!(execution.source, ExecutionSource::Github { run_id: 77, .. })
+                    && cancelled
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .filter(|call| call.contains("actions/workflows/exact-stack-e2e.yml/dispatches"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .filter(|call| call.contains("actions/runs/77/cancel"))
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -5993,7 +6213,7 @@ esac"#,
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager_with_gh(root.path(), runner.clone(), gh.clone());
         let started = manager
-            .start_execution_in(github_parameters(), "", Some("o/r"))
+            .start_execution_in(github_parameters(), "", Some("o/r"), None)
             .await
             .unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -6009,7 +6229,17 @@ esac"#,
         .unwrap();
         let execution = manager.cancel(&started.id).await.unwrap();
         assert_eq!(execution["state"], json!("cancelling"));
-        let log = fs::read_to_string(root.path().join("gh.log")).unwrap();
+        let log = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let log = fs::read_to_string(root.path().join("gh.log")).unwrap();
+                if log.contains("api -X POST repos/o/r/actions/runs/77/cancel") {
+                    break log;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(log.contains("api -X POST repos/o/r/actions/runs/77/cancel"));
         // The jobs of the latest attempt were read while it ran.
         let current = manager.read_execution(&started.id).await.unwrap();
@@ -6025,6 +6255,85 @@ esac"#,
         restarted.reconcile().await.unwrap();
         let execution = restarted.read_execution(&started.id).await.unwrap();
         assert_eq!(execution.state, "cancelling");
+    }
+
+    #[tokio::test]
+    async fn a_cancel_error_still_observes_a_github_run_that_already_completed() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("gh.log");
+        let cancelled = root.path().join("cancelled");
+        let gh = fake_gh(
+            root.path(),
+            &format!(
+                r#"echo "$*" >> '{log}'
+case "$*" in
+  "auth status"*) echo "  Logged in to github.com account octo (keyring)";;
+  "api repos/o/r --jq .default_branch") echo main;;
+  *"actions/workflows/exact-stack-e2e.yml/dispatches"*) echo '{{"workflow_run_id":77}}';;
+  *"actions/runs/77/cancel"*) touch '{cancelled}'; echo conflict >&2; exit 1;;
+  "api repos/o/r/actions/runs/77")
+    if [ -f '{cancelled}' ]; then
+      echo '{{"status":"completed","conclusion":"success","run_attempt":1}}'
+    else
+      echo '{{"status":"in_progress","run_attempt":1}}'
+    fi;;
+  *jobs*) echo '{{"jobs":[]}}';;
+  *) exit 1;;
+esac"#,
+                log = log.display(),
+                cancelled = cancelled.display(),
+            ),
+        );
+        let manager = manager_with_gh(
+            root.path(),
+            Arc::new(FakeRunner::new(root.path().into())),
+            gh,
+        );
+        let started = manager
+            .start_execution_in(github_parameters(), "", Some("o/r"), Some("cancel-race"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let execution = manager.read_execution(&started.id).await.unwrap();
+                if matches!(&execution.source, ExecutionSource::Github { status: Some(status), .. } if status == "in_progress") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        manager.cancel(&started.id).await.unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let execution = manager.read_execution(&started.id).await.unwrap();
+                if execution.state == "cancelled" {
+                    break execution;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(ended.state, "cancelled");
+        let calls = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|call| call.contains("actions/workflows/exact-stack-e2e.yml/dispatches"))
+                .count(),
+            1
+        );
+        let cancel = calls
+            .lines()
+            .position(|call| call.contains("actions/runs/77/cancel"))
+            .unwrap();
+        assert!(calls
+            .lines()
+            .skip(cancel + 1)
+            .any(|call| call == "api repos/o/r/actions/runs/77"));
     }
 
     #[tokio::test]
@@ -6052,7 +6361,7 @@ esac"#,
             gh,
         );
         let started = manager
-            .start_execution_in(parameters, "", Some("o/r"))
+            .start_execution_in(parameters, "", Some("o/r"), None)
             .await
             .unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -6114,7 +6423,7 @@ esac"#,
             fake_gh(root.path(), "exit 1"),
         );
         let error = manager
-            .start_execution_in(github_parameters(), "", Some("o/r"))
+            .start_execution_in(github_parameters(), "", Some("o/r"), None)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("gh auth login"));

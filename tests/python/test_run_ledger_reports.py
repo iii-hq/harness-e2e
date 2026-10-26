@@ -5,6 +5,7 @@ repository now assembles for itself. They are the executable half of the
 agreement — Release Control reads exactly the fields asserted here.
 """
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -951,6 +952,17 @@ class CommitPinTests(unittest.TestCase):
                 self.assertRaisesRegex(prepare_execution.ResolutionError, "not a Rust worker"):
             prepare_execution.build_worker(pin, Path(directory))
 
+    def native_entry(self, entry, pin, data=b"binary"):
+        """A build folder as `build_worker` leaves one: the binary, its
+        manifest and the `build.json` naming the pin and the binary's digest."""
+        (entry / "bin").mkdir(parents=True)
+        (entry / "bin/harness").write_bytes(data)
+        (entry / "iii.worker.yaml").write_text("name: harness\nlanguage: rust\nbin: harness\n")
+        (entry / "build.json").write_text(json.dumps({
+            **{key: pin[key] for key in ("worker", "repository", "path", "commit")},
+            "bin": "harness", "sha256": "sha256:" + hashlib.sha256(data).hexdigest()}))
+        return entry
+
     def test_a_build_another_execution_completed_first_stands_and_leftovers_go(self):
         pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL}
         with tempfile.TemporaryDirectory() as directory:
@@ -966,16 +978,125 @@ class CommitPinTests(unittest.TestCase):
             def racing(command, **kwargs):
                 result = build(command, **kwargs)
                 if command[0] == "cargo":
-                    # Another execution's build lands while this one runs.
-                    (entry / "bin").mkdir(parents=True)
-                    (entry / "build.json").write_text('{"first": true}')
+                    # Another execution's build of the same pin lands first.
+                    self.native_entry(entry, pin, b"winner")
                 return result
 
             with patch.object(prepare_execution.subprocess, "run", side_effect=racing):
                 self.assertEqual(prepare_execution.build_worker(pin, cache), entry)
-            self.assertEqual(json.loads((entry / "build.json").read_text()), {"first": True})
+            self.assertEqual((entry / "bin/harness").read_bytes(), b"winner")
             # What an interrupted build left goes; a copy under way stays.
             self.assertEqual(sorted(path.name for path in entry.parent.iterdir()), [".build-copying", "harness"])
+
+    def test_a_winner_of_the_race_that_is_not_this_build_is_refused(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            entry = cache / "iii-hq/workers" / self.FULL / "harness"
+            build = self.fake_build([])
+
+            def racing(command, **kwargs):
+                result = build(command, **kwargs)
+                if command[0] == "cargo":
+                    self.native_entry(entry, {**pin, "path": "elsewhere"})
+                return result
+
+            with patch.object(prepare_execution.subprocess, "run", side_effect=racing), \
+                    self.assertRaisesRegex(prepare_execution.ResolutionError, "build.json path 'elsewhere'"):
+                prepare_execution.build_worker(pin, cache)
+
+    def test_a_cache_entry_that_is_not_the_pinned_build_fails_before_any_build(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL}
+        digest = "sha256:" + hashlib.sha256(b"binary").hexdigest()
+
+        def tampered(entry):
+            (entry / "bin/harness").write_bytes(b"swapped")
+
+        def field(key, value):
+            def change(entry):
+                record = json.loads((entry / "build.json").read_text())
+                (entry / "build.json").write_text(json.dumps({**record, key: value}))
+            return change
+
+        def linked(entry):
+            (entry / "bin/real").write_bytes(b"binary")
+            (entry / "bin/harness").unlink()
+            (entry / "bin/harness").symlink_to("real")
+
+        cases = [
+            (tampered, "hashes to sha256:"),
+            (field("commit", "3f2a9c1" + "e" * 33), "build.json commit"),
+            (field("repository", "someone/fork"), "build.json repository"),
+            (field("worker", "other"), "build.json worker"),
+            (field("sha256", digest.removeprefix("sha256:")), "is not sha256:<64 hex>"),
+            (field("sha256", "sha256:" + "A" * 64), "is not sha256:<64 hex>"),
+            (field("bin", "../harness"), "is not a binary name"),
+            (linked, "is a symbolic link"),
+            (lambda entry: (entry / "build.json").write_text("{not json"), "unreadable build.json"),
+        ]
+        for change, message in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                cache = Path(directory)
+                entry = self.native_entry(cache / "iii-hq/workers" / self.FULL / "harness", pin)
+                self.assertEqual(prepare_execution.build_worker(pin, cache), entry)
+                change(entry)
+                calls = []
+                with patch.object(prepare_execution.subprocess, "run", side_effect=self.fake_build(calls)), \
+                        self.assertRaisesRegex(prepare_execution.ResolutionError, message):
+                    prepare_execution.build_worker(pin, cache)
+                # No silent rebuild over it.
+                self.assertEqual(calls, [])
+        with tempfile.TemporaryDirectory() as directory, \
+                self.assertRaisesRegex(prepare_execution.ResolutionError, "not a full commit sha"):
+            prepare_execution.build_worker({**pin, "commit": self.FULL[:12]}, Path(directory))
+
+    def test_the_pin_carries_the_digest_of_the_build_the_groups_receive(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL,
+               "release": {"nodes": {}, "edges": []}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(prepare_execution.subprocess, "run", side_effect=self.fake_build([])):
+            root = Path(directory) / "contract"
+            root.mkdir()
+            (root / "execution.json").write_text(json.dumps({"commits": {"app": pin}}))
+            (root / "stack.yaml").write_text("containers:\n  app:\n    worker: package://harness\n")
+            args = SimpleNamespace(contract_dir=root, cache_dir=Path(directory) / "cache")
+            prepare_execution.command_commits(args)
+            recorded = json.loads((root / "execution.json").read_text())["commits"]["app"]
+            self.assertEqual(recorded["binary_sha256"], "sha256:" + hashlib.sha256(b"binary").hexdigest())
+            # A copy that no longer is the build is refused, not recorded.
+            (root / "workers/app/bin/harness").write_bytes(b"swapped")
+            with self.assertRaisesRegex(prepare_execution.ResolutionError, "hashes to"):
+                prepare_execution.verified_build(root / "workers/app", pin)
+
+    def test_two_workers_built_from_one_commit_depend_on_each_other_as_built(self):
+        # Eval measures a change in harness and in context-manager, which
+        # harness depends on: both are built from the candidate commit, and
+        # harness must start after the context-manager that commit built, never
+        # beside a released one.
+        with tempfile.TemporaryDirectory() as directory:
+            folders = {}
+            for worker in ("harness", "context-manager"):
+                folder = Path(directory) / "workers" / worker
+                (folder / "bin").mkdir(parents=True)
+                (folder / "build.json").write_text(json.dumps({"bin": worker}))
+                (folder / "iii.worker.yaml").write_text(f"name: {worker}\n")
+                folders[worker] = folder
+            containers = {worker: {"worker": f"package://{worker}", "version": "latest", "commit": "3f2a9c1"}
+                          for worker in folders}
+            graph = {"nodes": {"harness": "1.8.36", "context-manager": "0.4.2", "state": "0.22.17"},
+                     "edges": [["harness", "context-manager"], ["harness", "state"], ["context-manager", "state"]]}
+            pins = {"harness": {"worker": "harness", "release": graph},
+                    "context-manager": {"worker": "context-manager", "release": {
+                        "nodes": {"context-manager": "0.4.2", "state": "0.22.17"},
+                        "edges": [["context-manager", "state"]]}}}
+            prepare_execution.declare_commits(containers, pins, folders)
+        self.assertEqual(containers["harness"]["worker"], f"path://{folders['harness']}")
+        self.assertEqual(containers["context-manager"]["worker"], f"path://{folders['context-manager']}")
+        self.assertEqual(containers["harness"]["start_after"], ["context-manager", "state"])
+        self.assertEqual(containers["context-manager"]["start_after"], ["state"])
+        # Only what no commit built is held at its release.
+        self.assertEqual(pins["harness"]["dependencies"], ["state"])
+        self.assertEqual(containers["state"], {"worker": "package://state", "version": "0.22.17"})
 
     def test_a_built_worker_is_declared_as_a_path_worker_with_its_release_dependencies_and_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1021,6 +1142,7 @@ class CommitPinTests(unittest.TestCase):
 
     def test_the_contract_and_the_reports_name_the_commit_that_ran(self):
         pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL,
+               "binary_sha256": "sha256:" + "b" * 64,
                "on_default_branch": True, "dependencies": ["llm-router"], "config": {"max_depth": 3}, "env": {},
                "release": {"nodes": {}, "edges": []}}
         with tempfile.TemporaryDirectory() as directory:
@@ -1047,7 +1169,8 @@ class CommitPinTests(unittest.TestCase):
             observed = report_execution.identity_of(Args(resolution=resolution), root)
         # What the scaffold and the launcher read, without the release graph.
         self.assertEqual(contract["runtime"]["commits"], {"app": {key: pin[key] for key in (
-            "worker", "repository", "path", "commit", "on_default_branch", "dependencies", "config", "env")}})
+            "worker", "repository", "path", "commit", "binary_sha256", "on_default_branch", "dependencies", "config",
+            "env")}})
         self.assertEqual(identity["stack_commits"], commits)
         # Named by its commit, never a release a series would compare it with.
         self.assertEqual(identity["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})

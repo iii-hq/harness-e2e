@@ -366,7 +366,13 @@ async fn decide(controller: &Controller, row: &Value) -> Result<bool> {
         &controller.github_repository,
         row["run_id"].as_u64().unwrap_or_default(),
     );
-    let mut execution = controller.plan_store.read_execution(&id).await.ok();
+    let mut execution = controller
+        .plan_store
+        .github_execution(
+            &controller.github_repository,
+            row["run_id"].as_u64().unwrap_or_default(),
+        )
+        .await;
     let mut skipped = controller.plan_store.import_skipped(&id).await?;
     // An import that left no results before CI sync skipped such runs is
     // skipped as GitHub had updated the run then; one made by hand after a
@@ -400,10 +406,18 @@ async fn decide(controller: &Controller, row: &Value) -> Result<bool> {
 /// (an import of it began meanwhile, or the write failed): one run's skip
 /// only goes to the log, and the pass goes on.
 async fn skip(controller: &Controller, failed: &PlanExecution, run_updated_at: &str) -> bool {
+    let ExecutionSource::Github {
+        repository, run_id, ..
+    } = &failed.source
+    else {
+        return false;
+    };
     if let Err(error) = controller
         .plan_store
         .skip_import(
             &failed.id,
+            repository,
+            *run_id,
             run_updated_at,
             failed.error.as_deref().unwrap_or_default(),
         )
@@ -494,7 +508,7 @@ mod tests {
     use super::*;
     use crate::dashboard::controller::tests::without_control_plane;
     use crate::plans::store::tests::{
-        exact_stack_bundle, fake_gh, import_stub, manager_with_gh, FakeRunner,
+        exact_stack_bundle, fake_gh, import_stub, manager_with_gh, save_execution, FakeRunner,
     };
     use crate::plans::store::{import_id, ExecutionSource, PlanExecution};
 
@@ -514,6 +528,55 @@ case "$*" in
             manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
             &data,
         )
+    }
+
+    #[tokio::test]
+    async fn skipping_a_stable_github_execution_blocks_unchanged_ci_reimport() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = controller_on(root.path(), "exit 1");
+        let mut stable = import_stub();
+        stable.id = "plan-cccccccccccccccccccccccccccccccc".into();
+        stable.state = "failed".into();
+        stable.error = Some(
+            "This run keeps no e2e-contract artifact; GitHub keeps artifacts for 90 days".into(),
+        );
+        stable.source = ExecutionSource::Github {
+            repository: "o/r".into(),
+            run_id: 7,
+            run_attempt: 1,
+            url: "https://github.com/o/r/actions/runs/7".into(),
+            release_control_execution_id: None,
+            stack: None,
+            run_updated_at: Some("2026-10-20T11:00:00Z".into()),
+            sync_attempts: 1,
+            conclusion: None,
+            status: None,
+            follow: Default::default(),
+        };
+        save_execution(&controller.plan_store, &stable).await;
+
+        assert!(skip(&controller, &stable, "2026-10-20T11:00:00Z").await);
+        let marker = import_id("o/r", 7);
+        assert_eq!(
+            controller
+                .plan_store
+                .import_skipped(&marker)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-20T11:00:00Z")
+        );
+        assert!(controller
+            .plan_store
+            .read_execution(&stable.id)
+            .await
+            .is_err());
+        assert!(!decide(
+            &controller,
+            &json!({"run_id": 7, "updated_at": "2026-10-20T11:00:00Z"}),
+        )
+        .await
+        .unwrap());
     }
 
     /// The runs whose artifacts `gh` listed, in the order it listed them.
@@ -588,9 +651,13 @@ case "$*" in
         ];
         let mut not_needed = vec![
             imported("importing", None, same, 0),
-            PlanExecution {
-                idempotency_key: "github-start:o/r#1".into(),
-                ..imported("completed", None, earlier, 0)
+            {
+                let mut execution = imported("completed", None, earlier, 0);
+                let ExecutionSource::Github { follow, .. } = &mut execution.source else {
+                    unreachable!()
+                };
+                follow.followed = true;
+                execution
             },
             imported("completed", None, same, 0),
             imported("interrupted", None, None, 0),
@@ -652,9 +719,13 @@ case "$*" in
                 ..failed(none)
             },
             failed("The run produced no bundle: Root artifact validation failed"),
-            PlanExecution {
-                idempotency_key: "github-start:o/r#1".into(),
-                ..failed(none)
+            {
+                let mut execution = failed(none);
+                let ExecutionSource::Github { follow, .. } = &mut execution.source else {
+                    unreachable!()
+                };
+                follow.followed = true;
+                execution
             },
             kept_runs,
         ] {
