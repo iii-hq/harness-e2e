@@ -309,6 +309,29 @@ export_compose() {
     --artifact-root "$artifact_dir" --allowed-root "$repo_root/target" "$@"
 }
 
+# Stops a daemon this script started (a session of its own) and reaps it. One
+# that does not stop within DAEMON_STOP_SECONDS is killed with its session: on
+# 2026-10-26 the engine hung for good destroying its workers ("Shutting down
+# engine" without "Engine shutdown complete"), and an unbounded wait held the
+# group until the job's timeout, though its results were already written.
+DAEMON_STOP_SECONDS=${HARNESS_E2E_DAEMON_STOP_SECONDS:-30}
+stop_daemon() {
+  local pid=$1 name=$2 log=$3 watchdog
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || return 0
+  kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+  (
+    sleep "$DAEMON_STOP_SECONDS"
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[harness-e2e] $name did not stop within ${DAEMON_STOP_SECONDS}s; killed" >>"$log"
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" 2>/dev/null || true
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+}
+
 cleanup() {
   local status=$?
   local exited=$status
@@ -327,14 +350,8 @@ cleanup() {
   [[ -f "$artifact_dir/stack/down.json" ]] || jq -n \
     --arg phase "$failure_phase" '{status:"not_reached",phase:$phase}' >"$artifact_dir/stack/down.json"
   capture_processes "$artifact_dir/stack/processes-after.json"
-  if [[ -n "$compose_pid" ]] && kill -0 "$compose_pid" 2>/dev/null; then
-    kill -- "-$compose_pid" 2>/dev/null || kill "$compose_pid" 2>/dev/null || true
-    wait "$compose_pid" 2>/dev/null || true
-  fi
-  if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
-    kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
-    wait "$engine_pid" 2>/dev/null || true
-  fi
+  stop_daemon "$compose_pid" "iii compose" "$artifact_dir/logs/compose.log"
+  stop_daemon "$engine_pid" "iii engine" "$artifact_dir/logs/engine.log"
   if ((status != 0)); then
     # The phase, and what iii answered when one of its calls failed: its code
     # and the start of its message, not the line of this script.
