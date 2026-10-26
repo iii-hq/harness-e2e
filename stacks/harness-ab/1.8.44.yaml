@@ -3,6 +3,8 @@
 # harness 1.8.56) resolved, from its worker-compose.lock; only `harness`
 # changes between arms. The dependencies are declared with the edges Compose
 # wrote, so the executor holds them at these versions (see the README).
+# The runner is held at harness-e2e 0.21.0 instead, the first that records
+# each run's cause and carries software-engineering-x9 and regression-x11.
 
 iii: 0.24.6-rc.5
 containers:
@@ -25,7 +27,7 @@ containers:
     - state
   harness-e2e:
     worker: package://harness-e2e
-    version: 0.19.0
+    version: 0.21.0
     start_after:
     - browser
     - database
