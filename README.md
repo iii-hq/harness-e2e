@@ -594,7 +594,12 @@ gets another window from the same numbers: read `usable` in the run.
 Scores of this lane are not scores of the normal window. The tests keep their
 ids, so compare them only with other runs of this suite and stack, never with
 the same test on `default`. Report the number of compactions and the peak
-context of each run from the run's context snapshots.
+context of each run from the run's context snapshots. A run whose root session
+sent one step a prompt larger than its usable window carries the advisory audit
+flag `audit_context_over_window`, which moves no score: the provider's real
+window took the step, but a model with the cut window would have refused it. On
+2026-10-26 `context_pressure` did that, a 256,135-token step into 128,000 with
+no compaction, all 48 documents read in one turn, and still scored 100.
 
 Projection, not a measurement (the usage of each step of recorded
 `deepseek-flash` sessions, assuming the session goes on the same until it
