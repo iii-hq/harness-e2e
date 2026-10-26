@@ -4,6 +4,7 @@ import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import {
   buildScenarioMatrix,
   detailForScenario,
+  failureReason,
   stepSignals,
 } from '@/lib/scenario-matrix'
 
@@ -426,6 +427,21 @@ describe('scenario matrix presentation model', () => {
     expect(item.runCount).toBe(0)
     expect(item.runs).toEqual([])
     expect(item.objective.status).toBe('inconclusive')
+  })
+
+  it('says a broken Harness invariant when the run recorded no failure', () => {
+    const run = (fields: Record<string, unknown>) =>
+      fields as unknown as Parameters<typeof failureReason>[0]
+    const harness_violations = [{ detail: 'call c2 in e_t1_1 has no result' }]
+    expect(failureReason(run({ failures: [], harness_violations }))).toBe(
+      'Harness invariant broken: call c2 in e_t1_1 has no result',
+    )
+    expect(
+      failureReason(
+        run({ failures: [{ message: 'provider down' }], harness_violations }),
+      ),
+    ).toBe('provider down')
+    expect(failureReason(run({ failures: [] }))).toBeNull()
   })
 
   it('prioritizes usage and domain counters for each workflow step', () => {

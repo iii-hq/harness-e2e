@@ -349,6 +349,7 @@ async fn run(args: RunArgs) -> Result<()> {
         provider: args.provider,
         agent: args.agent,
         priced: None,
+        context_window: None,
     };
     let execution_id = args
         .runs_dir

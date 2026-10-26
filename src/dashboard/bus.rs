@@ -1482,7 +1482,7 @@ mod response_contract_tests {
         assert_eq!(point["release"], "1.8.31");
         assert_eq!(
             keys(&point["measures"]),
-            "cache_read_tokens_mean,cache_write_tokens_mean,completed,cost_usd_mean,duration_ms_mean,function_call_errors,function_calls,function_calls_mean,input_tokens_mean,output_tokens_mean,planned,reasoning_tokens_mean,score_mean,technical_retries_mean,turns_mean,validation_retries_mean"
+            "cache_read_tokens_mean,cache_write_tokens_mean,compactions_mean,completed,cost_usd_mean,duration_ms_mean,function_call_errors,function_calls,function_calls_mean,input_tokens_mean,output_tokens_mean,peak_context_fill_mean,planned,reasoning_tokens_mean,score_mean,technical_retries_mean,turns_mean,validation_retries_mean"
         );
         assert_eq!(
             point["tests"],

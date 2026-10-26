@@ -78,6 +78,11 @@ export type TrendMeasures = {
   validation_retries_mean: number | null
   /** Invalid attempts re-run, per run. */
   technical_retries_mean: number | null
+  /** Root-session compactions per run. */
+  compactions_mean: number | null
+  /** The largest root prompt over the window the Harness fit it into, per
+   *  run; above 1 the prompt went past it. */
+  peak_context_fill_mean: number | null
 }
 
 export type TrendTestState =
@@ -744,6 +749,8 @@ export type TrendMetricId =
   | 'validation_retries'
   | 'technical_retries'
   | 'function_calls'
+  | 'compactions'
+  | 'peak_context'
 
 export type TrendMetric = {
   id: TrendMetricId
@@ -931,6 +938,31 @@ export const TREND_METRICS: TrendMetric[] = [
     figure: fixed1,
     axis: whole,
     delta: 'percent',
+  },
+  {
+    id: 'compactions',
+    tier: 'more',
+    label: 'Compactions',
+    note: 'root session, mean per run',
+    better: betterWhen('compactions'),
+    value: measure('compactions_mean'),
+    figure: fixed1,
+    axis: fixed1,
+    delta: 'points',
+  },
+  {
+    id: 'peak_context',
+    tier: 'more',
+    label: 'Peak context',
+    note: 'largest root prompt ÷ usable window, mean per run',
+    better: betterWhen('peak_context'),
+    value: (point) => {
+      const fill = measure('peak_context_fill_mean')(point)
+      return fill === null ? null : fill * 100
+    },
+    figure: (value) => `${fixed1(value)}%`,
+    axis: (value) => `${round1(value)}%`,
+    delta: 'percent_points',
   },
 ]
 
@@ -1524,6 +1556,8 @@ function consolidate(
           cost_usd_mean: weighted((m) => m.cost_usd_mean),
           validation_retries_mean: weighted((m) => m.validation_retries_mean),
           technical_retries_mean: weighted((m) => m.technical_retries_mean),
+          compactions_mean: weighted((m) => m.compactions_mean),
+          peak_context_fill_mean: weighted((m) => m.peak_context_fill_mean),
         }
       : null,
     tests,

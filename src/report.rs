@@ -840,6 +840,10 @@ pub struct E2eRunReport {
     /// Never contributes to score, status, gates, or longitudinal inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<crate::audit::AuditReport>,
+    /// Harness invariants the run broke; README Completion says what each
+    /// costs the run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -895,6 +899,7 @@ impl E2eRunReport {
             retry_attempts: Vec::new(),
             failures: Vec::new(),
             audit: None,
+            harness_violations: Vec::new(),
             terminal_status: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),

@@ -113,6 +113,9 @@ pub struct SubjectConfig {
     /// Whether the router catalog prices the subject model per token. `None`
     /// until `run_suite` resolves the catalog record; callers pass `None`.
     pub priced: Option<bool>,
+    /// The subject model's catalog context window. `None` until `run_suite`
+    /// resolves the catalog record; callers pass `None`.
+    pub context_window: Option<u64>,
 }
 
 pub struct SuiteRunConfig {
@@ -267,6 +270,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .await
         .context("resolve subject model")?;
     config.subject.priced = Some(subject_model.pricing.is_some());
+    config.subject.context_window = Some(subject_model.context_window);
     let built_in_scenarios = config.scenarios.to_vec();
     let composite_definitions = built_in_scenarios
         .iter()
@@ -1471,6 +1475,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     finish_native_assessment(&spec, &mut report);
+    observe_harness(subject, &mut report);
     report.update_cost();
     report.update_efficiency();
     report.refresh_dimensions(expects_deliverables);
@@ -2684,6 +2689,47 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
     }
 }
 
+/// Checks the Harness invariants. Unresolved context limits make the
+/// measurement untrustworthy, an infrastructure error the slot re-runs. A
+/// lost function result is incomplete like a failed gate, whatever the agent
+/// delivered; the score stays what the criteria awarded.
+fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
+    use crate::harness_invariants::HarnessInvariant;
+    use crate::report::{CompletionState, EvaluatorAvailability};
+
+    report.harness_violations = crate::harness_invariants::violations(report, subject);
+    let broken = |invariant| {
+        report
+            .harness_violations
+            .iter()
+            .filter(|violation| violation.invariant == invariant)
+            .map(|violation| violation.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let unresolved = broken(HarnessInvariant::FallbackContextLimits);
+    let lost = broken(HarnessInvariant::LostFunctionResult);
+    if !unresolved.is_empty() {
+        report.push_typed_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Evaluate,
+            "context_limits_unresolved",
+            crate::report::RetryScope::SameSlot,
+            crate::report::ContaminationScope::None,
+            format!("the context-manager fell back to 8192-token limits: {unresolved}"),
+        );
+        report.set_completion(
+            CompletionState::Undetermined,
+            EvaluatorAvailability::Unavailable,
+        );
+    } else if !lost.is_empty() {
+        report.set_completion(
+            CompletionState::TaskIncomplete,
+            EvaluatorAvailability::Available,
+        );
+    }
+}
+
 /// A subject stopped by a resource limit spent the budget the task allows
 /// without finishing it, and one that failed by itself (the agent or the
 /// Harness) did not finish it either: every criterion it did not reach scores
@@ -3763,6 +3809,7 @@ mod tests {
             thinking_level: None,
             provider_options: None,
             priced: None,
+            context_window: None,
         };
         let capped = crate::scenarios::linkly::ID;
         // Unknown pricing and priced both keep whatever the scenario asks for.
@@ -3835,6 +3882,7 @@ mod tests {
             thinking_level: Some("low".into()),
             provider_options: None,
             priced: None,
+            context_window: None,
         };
         configured.model = profile.route().unwrap().0;
         configured.provider = profile.route().unwrap().1.unwrap();
@@ -4685,6 +4733,117 @@ mod tests {
         // The unevaluated criterion adds nothing; the evaluated one awarded zero.
         assert_eq!(report.score, Some(0));
         assert_eq!(report.score, Some(0));
+    }
+
+    /// A run that delivered everything and passed every gate.
+    fn full_marks_run(transcript: serde_json::Value) -> E2eRunReport {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: Some(CompletionState::Completed),
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "ok".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: Some(30),
+                        reason: "ok".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        report.transcript = Some(transcript);
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.status, RunStatus::Passed);
+        report
+    }
+
+    fn harness_subject(context_window: Option<u64>) -> SubjectConfig {
+        SubjectConfig {
+            model: "m".into(),
+            provider: "p".into(),
+            agent: None,
+            thinking_level: None,
+            provider_options: None,
+            priced: None,
+            context_window,
+        }
+    }
+
+    #[test]
+    fn a_lost_function_result_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [
+            { "entry_id": "e_t1_1_assistant", "message": {
+                "role": "assistant", "stop_reason": "end",
+                "content": [
+                    { "type": "function_call", "id": "c1", "function_id": "state::get" },
+                    { "type": "function_call", "id": "c2", "function_id": "state::get" },
+                ],
+            } },
+            { "message": { "role": "function_result", "function_call_id": "c1" } },
+        ] }));
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        // Like a failed gate: still passed, incomplete, valid, scored.
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn unresolved_context_limits_are_an_infrastructure_error_the_slot_reruns() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.metrics = Some(crate::wire::Observed::from_normalized(
+            crate::wire::SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: crate::wire::SessionUsageTotals::default(),
+                by_session: vec![crate::wire::SessionUsage {
+                    session_id: "session".into(),
+                    parent_session_id: None,
+                    depth: 0,
+                    turns: 1,
+                    function_calls: 0,
+                    function_call_errors: 0,
+                    validation_retries: None,
+                    transient_resumes: None,
+                    wake_resumes: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    cost_usd: None,
+                    context: Some(serde_json::json!({
+                        "model": "m", "usable": 6_349, "effective_max_output_tokens": 1_024,
+                    })),
+                }],
+                traces: None,
+            },
+        ));
+
+        observe_harness(&harness_subject(Some(128_000)), &mut report);
+
+        assert_eq!(report.status, RunStatus::InfrastructureError);
+        assert_eq!(report.completion, CompletionState::Undetermined);
+        assert_eq!(
+            report.technical,
+            crate::report::TechnicalState::TechnicalInvalid
+        );
+        assert_eq!(report.failures[0].code, "context_limits_unresolved");
+        assert!(is_retryable_technical_failure(&report));
     }
 
     #[test]

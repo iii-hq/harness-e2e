@@ -116,6 +116,18 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
+Two Harness invariants hold on every native run that passed, whatever its
+gates. They belong to no scenario's digest; the run's `harness_violations`
+records what broke.
+
+- A message whose calls the Harness dispatched (some have a result) leaves one
+  without a result: incomplete, like a failed gate, and the score stays.
+- A session on the subject model was fit into the context-manager's
+  8192-token fallback limits while the catalog window is at least 32,768
+  tokens: the router could not resolve the model, so nothing measured there
+  can be trusted. It is an infrastructure error (`context_limits_unresolved`)
+  the slot re-runs.
+
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches
 the migration exactly"). The description is part of the behavior digest and

@@ -622,6 +622,8 @@ fn aggregate(all: &[&TrendMeasures], other: &[&TrendMeasures]) -> Option<Aggrega
             reasoning_tokens_mean: mean_of(|m| m.reasoning_tokens_mean),
             validation_retries_mean: mean_of(|m| m.validation_retries_mean),
             technical_retries_mean: mean_of(|m| m.technical_retries_mean),
+            compactions_mean: mean_of(|m| m.compactions_mean),
+            peak_context_fill_mean: mean_of(|m| m.peak_context_fill_mean),
         },
         completed_share: mean_of(|m| {
             (m.planned > 0).then(|| m.completed as f64 / m.planned as f64)

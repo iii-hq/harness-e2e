@@ -145,7 +145,7 @@ describe('release overview', () => {
     expect(html).toMatch(
       /role="radiogroup"[^>]*tr-segments|tr-segments[^>]*role="radiogroup"/,
     )
-    expect(count(html, /role="menuitemradio"/)).toBe(8)
+    expect(count(html, /role="menuitemradio"/)).toBe(10)
     expect(count(html, /class="tr-point"/)).toBe(9)
     expect(count(html, /data-source="local"/)).toBe(5)
     expect(count(html, /data-latest="true"/)).toBe(1)

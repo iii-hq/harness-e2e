@@ -175,7 +175,9 @@
             "reasoning_tokens_mean": 672,
             "cost_usd_mean": 0.0202,
             "validation_retries_mean": 1,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -286,7 +288,9 @@
             "reasoning_tokens_mean": 488,
             "cost_usd_mean": 0.0146,
             "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -417,7 +421,9 @@
             "reasoning_tokens_mean": 564,
             "cost_usd_mean": 0.0169,
             "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -528,7 +534,9 @@
             "reasoning_tokens_mean": 440,
             "cost_usd_mean": 0.0132,
             "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -659,7 +667,9 @@
             "reasoning_tokens_mean": 549,
             "cost_usd_mean": 0.0165,
             "validation_retries_mean": 1,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -790,7 +800,9 @@
             "reasoning_tokens_mean": 1815,
             "cost_usd_mean": 0.0545,
             "validation_retries_mean": 0.8,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -921,7 +933,9 @@
             "reasoning_tokens_mean": 1834,
             "cost_usd_mean": 0.055,
             "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -1054,7 +1068,9 @@
             "reasoning_tokens_mean": 1788,
             "cost_usd_mean": 0.0537,
             "validation_retries_mean": 0.8,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -1375,7 +1391,9 @@
             "reasoning_tokens_mean": 1483,
             "cost_usd_mean": 0.0445,
             "validation_retries_mean": 0.8,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -1508,7 +1526,9 @@
             "reasoning_tokens_mean": 1992,
             "cost_usd_mean": 0.0598,
             "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -1641,7 +1661,9 @@
             "reasoning_tokens_mean": 1800,
             "cost_usd_mean": 0.054,
             "validation_retries_mean": 0.8,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -1904,7 +1926,9 @@
             "reasoning_tokens_mean": 270,
             "cost_usd_mean": null,
             "validation_retries_mean": 8.6,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -1982,7 +2006,9 @@
             "reasoning_tokens_mean": 269,
             "cost_usd_mean": null,
             "validation_retries_mean": 9.7,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -2060,7 +2086,9 @@
             "reasoning_tokens_mean": 265,
             "cost_usd_mean": null,
             "validation_retries_mean": 7.2,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -2138,7 +2166,9 @@
             "reasoning_tokens_mean": 260,
             "cost_usd_mean": null,
             "validation_retries_mean": 6.1,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -2216,7 +2246,9 @@
             "reasoning_tokens_mean": 277,
             "cost_usd_mean": null,
             "validation_retries_mean": 8.1,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -2304,7 +2336,9 @@
             "reasoning_tokens_mean": 40091,
             "cost_usd_mean": 1.2027,
             "validation_retries_mean": 11,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
@@ -2445,7 +2479,9 @@
             "reasoning_tokens_mean": 7708,
             "cost_usd_mean": 0.2312,
             "validation_retries_mean": 5.1,
-            "technical_retries_mean": 0
+            "technical_retries_mean": 0,
+            "compactions_mean": null,
+            "peak_context_fill_mean": null
           },
           "tests": [
             {
