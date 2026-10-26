@@ -1415,7 +1415,7 @@ pub const CASES: [Case; 29] = [
                 "All seven sibling facts injected",
                 "Were all seven services on Postgres 16 injected, each as its own line?",
             ),
-            scored(
+            gate(
                 "no_unrelated_memories",
                 30,
                 Check::NothingIrrelevant,
