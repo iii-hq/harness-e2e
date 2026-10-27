@@ -611,7 +611,13 @@ sent one step a prompt larger than its usable window carries the advisory audit
 flag `audit_context_over_window`, which moves no score: the provider's real
 window took the step, but a model with the cut window would have refused it. On
 2026-10-26 `context_pressure` did that, a 256,135-token step into 128,000 with
-no compaction, all 48 documents read in one turn, and still scored 100.
+no compaction, all 48 documents read in one turn, and still scored 100. Its
+`charter_preserved` gate now also needs every root step's billed prompt within
+the usable window (within the 10% the window's estimate may miss by), so such a
+run is incomplete: the charter survived the provider's window, not the context
+manager. A run without a context snapshot is not held to a window; on
+`default`, where `context_pressure` peaks near 255,000 of 596,000, nothing
+changes.
 
 Projection, not a measurement (the usage of each step of recorded
 `deepseek-flash` sessions, assuming the session goes on the same until it

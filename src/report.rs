@@ -1695,7 +1695,7 @@ fn observed_complexity(
 
 /// A provider whose reported prompt differs from the Harness's count of the
 /// same step by more than this does not report a comparable prompt.
-const PROMPT_RECONCILIATION_TOLERANCE: f64 = 0.10;
+pub(crate) const PROMPT_RECONCILIATION_TOLERANCE: f64 = 0.10;
 
 #[derive(Default)]
 struct ContextUsage {
@@ -1708,7 +1708,7 @@ struct ContextUsage {
 }
 
 /// A step's prompt as its provider billed it: input, cache reads and writes.
-fn step_prompt(usage: &Value) -> u64 {
+pub(crate) fn step_prompt(usage: &Value) -> u64 {
     ["input", "cache_read", "cache_write"]
         .iter()
         .filter_map(|key| usage.get(key).and_then(Value::as_u64))

@@ -52,10 +52,10 @@ const MAX_SEGMENTS: u32 = 48;
 const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::gate_in(
     "charter_preserved",
     40,
-    "Was the charter read only before the first document, and does the final report repeat its mission, checkpoint, quorum and seal verbatim?",
+    "Was the charter read only before the first document, did every root step's prompt fit the usable window, and does the final report repeat its mission, checkpoint, quorum and seal verbatim?",
     EvaluationDimension::Deliverable,
 )
-.labeled("Report repeats the charter values verbatim");
+.labeled("Charter kept verbatim within the usable window");
 const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::gate(
     "needles_recovered",
     30,
@@ -485,6 +485,30 @@ fn case_segments(case: &ScenarioCase) -> anyhow::Result<u32> {
         })
 }
 
+/// The largest prompt one root step was billed for, and the usable window the
+/// Harness fit the root session into. Either is None when not reported, and
+/// the window is then not checked.
+fn root_window(observation: &ScenarioObservation) -> (Option<u64>, Option<u64>) {
+    let peak = observation
+        .transcript
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("message"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|message| message.get("usage"))
+        .map(crate::report::step_prompt)
+        .max();
+    let usable = observation
+        .metrics
+        .by_session
+        .iter()
+        .find(|session| session.depth == 0)
+        .and_then(|session| session.context.as_ref()?.get("usable")?.as_u64());
+    (peak, usable)
+}
+
 /// Report budget: the expected report plus slack, so pasting document text
 /// forfeits the conciseness signal without failing a gate.
 fn report_budget_chars(segments: u32) -> usize {
@@ -504,6 +528,12 @@ fn evaluate_rung(
         && ingestion.segments_exact
         && ingestion.other_calls == 0
         && errors == 0;
+    let (peak, usable) = root_window(observation);
+    // A charter that survived a prompt past the usable window survived the
+    // provider's real window, not the context manager.
+    let within_window = peak.zip(usable).is_none_or(|(peak, usable)| {
+        peak as f64 <= usable as f64 * (1.0 + crate::report::PROMPT_RECONCILIATION_TOLERANCE)
+    });
     let response_chars = observation.response.chars().count();
     let concise = report.header
         && report.charter_preserved
@@ -512,12 +542,15 @@ fn evaluate_rung(
 
     Ok(assessment::build_evaluation([
         CHARTER_PRESERVED.full_or_zero(
-            ingestion.charter_before_documents && report.charter_preserved,
+            ingestion.charter_before_documents && report.charter_preserved && within_window,
             format!(
-                "charter_read_only_before_documents={} (charter_calls={}), charter_values_in_report={}",
+                "charter_read_only_before_documents={} (charter_calls={}), charter_values_in_report={}, \
+                 within_usable_window={within_window} (peak root prompt {}, usable window {})",
                 ingestion.charter_before_documents,
                 ingestion.charter_calls,
-                report.charter_preserved
+                report.charter_preserved,
+                peak.map_or("unreported".into(), |tokens| tokens.to_string()),
+                usable.map_or("unreported".into(), |tokens| tokens.to_string()),
             ),
         ),
         NEEDLES_RECOVERED.full_or_zero(
@@ -803,6 +836,81 @@ pub(crate) mod tests {
             completion_of(clumsy, &format!("Here is the report.\n{report}")),
             CompletionState::Completed
         );
+    }
+
+    #[test]
+    fn completion_needs_every_root_prompt_within_the_usable_window() {
+        let run_id = "run";
+        let mut calls = vec![call(charter_function_id(run_id), json!({}))];
+        calls.extend(
+            (0..RUNG.segments)
+                .map(|index| call(segment_function_id(run_id), json!({ "index": index }))),
+        );
+        let blocks = calls
+            .into_iter()
+            .map(|call| {
+                json!({ "type": "function_call", "id": "call",
+                        "function_id": call.function_id, "arguments": call.arguments })
+            })
+            .collect::<Vec<_>>();
+        let report = full_report(run_id, RUNG.segments);
+        let completion = |peak: u64, usable: Option<u64>| {
+            let mut observation = ScenarioObservation::for_test(
+                crate::scenarios::ScenarioId::ContextPressure,
+                run_id,
+                json!({ "messages": [{ "message": {
+                    "role": "assistant", "content": blocks,
+                    "usage": { "input": 5_000, "cache_read": peak - 5_000 },
+                } }] }),
+                &report,
+                Vec::new(),
+            );
+            observation.metrics = crate::wire::SessionMetricsResponse::from_normalized(
+                crate::wire::SessionMetricsPayload {
+                    root_session_id: format!("e2e_{run_id}"),
+                    complete: true,
+                    totals: crate::wire::SessionUsageTotals::default(),
+                    by_session: vec![crate::wire::SessionUsage {
+                        session_id: format!("e2e_{run_id}"),
+                        parent_session_id: None,
+                        depth: 0,
+                        turns: 1,
+                        function_calls: 0,
+                        function_call_errors: 0,
+                        validation_retries: None,
+                        transient_resumes: None,
+                        wake_resumes: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        cache_read_tokens: None,
+                        cache_write_tokens: None,
+                        reasoning_tokens: None,
+                        cost_usd: None,
+                        context: usable.map(|usable| json!({ "usable": usable })),
+                    }],
+                    traces: None,
+                },
+            );
+            assessment::completion(ASSESSMENTS, &evaluate_rung(&observation, run_id).unwrap())
+        };
+
+        // The context-capacity lane on 2026-10-26: 256k sent into 128k.
+        assert_eq!(
+            completion(256_135, Some(128_000)),
+            CompletionState::TaskIncomplete
+        );
+        assert_eq!(
+            completion(120_000, Some(128_000)),
+            CompletionState::Completed
+        );
+        // The window is fit from an estimate: a billed prompt within its
+        // tolerance still fits.
+        assert_eq!(
+            completion(135_000, Some(128_000)),
+            CompletionState::Completed
+        );
+        // No snapshot, no window to hold the prompt to.
+        assert_eq!(completion(256_135, None), CompletionState::Completed);
     }
 
     #[test]
