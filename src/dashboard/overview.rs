@@ -624,6 +624,9 @@ fn aggregate(all: &[&TrendMeasures], other: &[&TrendMeasures]) -> Option<Aggrega
             technical_retries_mean: mean_of(|m| m.technical_retries_mean),
             compactions_mean: mean_of(|m| m.compactions_mean),
             peak_context_fill_mean: mean_of(|m| m.peak_context_fill_mean),
+            // A mean of the combinations' means weighs each the same: no runs
+            // to weigh by.
+            samples: Default::default(),
         },
         completed_share: mean_of(|m| {
             (m.planned > 0).then(|| m.completed as f64 / m.planned as f64)

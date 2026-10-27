@@ -197,6 +197,10 @@ pub(super) struct TrendMeasures {
     pub compactions_mean: Option<f64>,
     /// The largest root prompt over the window the Harness fit it into, per run.
     pub peak_context_fill_mean: Option<f64>,
+    /// The counted runs behind each mean, by its name: a run without the
+    /// value is left out of it, so a group weighs each mean by these.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub samples: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -758,25 +762,35 @@ pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasur
         .filter(|run| run.counted)
         .copied()
         .collect::<Vec<_>>();
-    (!counted.is_empty()).then(|| TrendMeasures {
-        score_mean: mean(counted.iter().map(|run| run.score)),
+    if counted.is_empty() {
+        return None;
+    }
+    let mut samples = BTreeMap::new();
+    let mut mean_of = |name: &str, value: fn(&TrendRun) -> Option<f64>| {
+        let present = counted.iter().filter(|run| value(run).is_some()).count();
+        samples.insert(name.to_string(), present);
+        mean(counted.iter().map(|run| value(run)))
+    };
+    Some(TrendMeasures {
+        score_mean: mean_of("score_mean", |run| run.score),
         completed: counted.iter().filter(|run| run.completed).count(),
         planned,
-        duration_ms_mean: mean(counted.iter().map(|run| run.duration_ms)),
-        input_tokens_mean: mean(counted.iter().map(|run| run.input_tokens)),
-        function_calls_mean: mean(counted.iter().map(|run| run.function_calls)),
+        duration_ms_mean: mean_of("duration_ms_mean", |run| run.duration_ms),
+        input_tokens_mean: mean_of("input_tokens_mean", |run| run.input_tokens),
+        function_calls_mean: mean_of("function_calls_mean", |run| run.function_calls),
         function_calls: sum(counted.iter().map(|run| run.function_calls)),
         function_call_errors: sum(counted.iter().map(|run| run.function_call_errors)),
-        turns_mean: mean(counted.iter().map(|run| run.turns)),
-        cost_usd_mean: mean(counted.iter().map(|run| run.cost_usd)),
-        output_tokens_mean: mean(counted.iter().map(|run| run.output_tokens)),
-        cache_read_tokens_mean: mean(counted.iter().map(|run| run.cache_read_tokens)),
-        cache_write_tokens_mean: mean(counted.iter().map(|run| run.cache_write_tokens)),
-        reasoning_tokens_mean: mean(counted.iter().map(|run| run.reasoning_tokens)),
-        validation_retries_mean: mean(counted.iter().map(|run| run.validation_retries)),
-        technical_retries_mean: mean(counted.iter().map(|run| run.technical_retries)),
-        compactions_mean: mean(counted.iter().map(|run| run.compactions)),
-        peak_context_fill_mean: mean(counted.iter().map(|run| run.peak_context_fill)),
+        turns_mean: mean_of("turns_mean", |run| run.turns),
+        cost_usd_mean: mean_of("cost_usd_mean", |run| run.cost_usd),
+        output_tokens_mean: mean_of("output_tokens_mean", |run| run.output_tokens),
+        cache_read_tokens_mean: mean_of("cache_read_tokens_mean", |run| run.cache_read_tokens),
+        cache_write_tokens_mean: mean_of("cache_write_tokens_mean", |run| run.cache_write_tokens),
+        reasoning_tokens_mean: mean_of("reasoning_tokens_mean", |run| run.reasoning_tokens),
+        validation_retries_mean: mean_of("validation_retries_mean", |run| run.validation_retries),
+        technical_retries_mean: mean_of("technical_retries_mean", |run| run.technical_retries),
+        compactions_mean: mean_of("compactions_mean", |run| run.compactions),
+        peak_context_fill_mean: mean_of("peak_context_fill_mean", |run| run.peak_context_fill),
+        samples,
     })
 }
 
@@ -958,6 +972,34 @@ pub(super) mod tests {
         // A run without a cost is left out of the mean, never counted as zero.
         assert_eq!(m.cost_usd_mean, Some(0.25));
         assert_eq!(m.validation_retries_mean, Some(2.0));
+    }
+
+    #[test]
+    fn each_mean_says_how_many_counted_runs_it_is_over() {
+        let unmeasured = TrendRun {
+            peak_context_fill: None,
+            ..run("t02", true, true, Some(40.0))
+        };
+        let m = measures(
+            &[
+                &run("t01", true, true, Some(80.0)),
+                &unmeasured,
+                &run("t03", false, true, Some(10.0)),
+            ],
+            3,
+        )
+        .unwrap();
+        assert_eq!(m.samples["score_mean"], 2);
+        // A group weighs this mean by the one run that measured it.
+        assert_eq!(m.samples["peak_context_fill_mean"], 1);
+        let means = serde_json::to_value(&m).unwrap();
+        let means = means
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|key| key.ends_with("_mean"))
+            .collect::<Vec<_>>();
+        assert_eq!(m.samples.keys().collect::<Vec<_>>(), means);
     }
 
     #[test]
