@@ -193,6 +193,10 @@ pub(super) struct TrendMeasures {
     pub reasoning_tokens_mean: Option<f64>,
     pub validation_retries_mean: Option<f64>,
     pub technical_retries_mean: Option<f64>,
+    /// Root-session compactions per run.
+    pub compactions_mean: Option<f64>,
+    /// The largest root prompt over the window the Harness fit it into, per run.
+    pub peak_context_fill_mean: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -228,6 +232,8 @@ pub(super) struct TrendRun {
     pub reasoning_tokens: Option<f64>,
     pub validation_retries: Option<f64>,
     pub technical_retries: Option<f64>,
+    pub compactions: Option<f64>,
+    pub peak_context_fill: Option<f64>,
 }
 
 /// An execution of the Console that belongs to a series.
@@ -769,6 +775,8 @@ pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasur
         reasoning_tokens_mean: mean(counted.iter().map(|run| run.reasoning_tokens)),
         validation_retries_mean: mean(counted.iter().map(|run| run.validation_retries)),
         technical_retries_mean: mean(counted.iter().map(|run| run.technical_retries)),
+        compactions_mean: mean(counted.iter().map(|run| run.compactions)),
+        peak_context_fill_mean: mean(counted.iter().map(|run| run.peak_context_fill)),
     })
 }
 
@@ -866,6 +874,8 @@ pub(super) mod tests {
             reasoning_tokens: Some(8.0),
             validation_retries: Some(1.0),
             technical_retries: Some(0.0),
+            compactions: Some(2.0),
+            peak_context_fill: Some(0.5),
         }
     }
 
@@ -922,6 +932,8 @@ pub(super) mod tests {
         assert_eq!(measures.cache_read_tokens_mean, Some(500.0));
         assert_eq!(measures.cache_write_tokens_mean, Some(30.0));
         assert_eq!(measures.reasoning_tokens_mean, Some(8.0));
+        assert_eq!(measures.compactions_mean, Some(2.0));
+        assert_eq!(measures.peak_context_fill_mean, Some(0.5));
         assert_eq!(measures.validation_retries_mean, Some(1.0));
         assert_eq!(measures.technical_retries_mean, Some(0.0));
         let invalid = &point.tests[12];
