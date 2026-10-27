@@ -264,18 +264,22 @@ function scenarioItem(
 
 /**
  * Audit SM-01: a scenario that did not pass says why, from the retained
- * evidence — the first technical failure the run recorded.
+ * evidence — the first technical failure the run recorded, else the first
+ * Harness invariant it broke.
  */
 export function failureReason(run: DashboardRunProjection | null) {
   if (!run) return null
   const record = run as unknown as {
     failures?: Array<{ message?: string; reason?: string }>
+    harness_violations?: Array<{ detail?: string }>
   }
   const failure = record.failures?.find(
     (entry) => entry && (entry.message || entry.reason),
   )
   const message = failure?.message ?? failure?.reason
-  return typeof message === 'string' && message.trim() ? message.trim() : null
+  if (typeof message === 'string' && message.trim()) return message.trim()
+  const broken = record.harness_violations?.find((v) => v?.detail)?.detail
+  return broken ? `Harness invariant broken: ${broken}` : null
 }
 
 /** Planned in the execution and never started: its plan slot says

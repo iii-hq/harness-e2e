@@ -211,7 +211,9 @@ profile); the page marks a change of model or profile with a diamond. Each execu
 technically valid runs only; completed runs are counted out of the planned ones
 (tests × runs per test), and a planned test with no run is `not_run`. A point
 also carries the means of output, cache read, cache write and reasoning tokens,
-of cost, and of validation and technical retries (attempts beyond the first);
+of cost, of validation and technical retries (attempts beyond the first), of
+root-session compactions, and of the run's peak context over its usable window
+(`peak_context_fill_mean`, above 1 when a prompt went past it);
 a run that lacks one is left out of that mean, and the cost is null for a model
 without pricing. A run stored before trends measured these keeps them null until
 the next start reprojects it once from its native bundle; a run whose bundle is

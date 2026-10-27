@@ -256,7 +256,25 @@ describe('measures', () => {
       'validation_retries',
       'technical_retries',
       'function_calls',
+      'compactions',
+      'peak_context',
     ])
+  })
+
+  it('reads compactions per run and the peak context as a share of the window', () => {
+    const point = {
+      ...regression[0],
+      measures: {
+        ...regression[0].measures,
+        compactions_mean: 1.5,
+        peak_context_fill_mean: 0.423,
+      } as TrendMeasures,
+    }
+    const peak = metric('peak_context')
+    expect(metric('compactions').value(point)).toBe(1.5)
+    expect(peak.value(point)).toBeCloseTo(42.3)
+    expect(peak.figure(42.3, point)).toBe('42.3%')
+    expect(peak.value(regression[0])).toBeNull()
   })
 
   it('reads tokens, cost and retries like the other measures, a cost without pricing as none', () => {
@@ -552,7 +570,7 @@ describe('grouping', () => {
     expect(grouped.measures?.score_mean).toBe(40)
     expect(trendMetric('error_rate').value(grouped)).toBe(5)
     const keys = Object.keys(one.measures as TrendMeasures).sort()
-    expect(keys).toHaveLength(16)
+    expect(keys).toHaveLength(18)
     expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(keys)
     expect(grouped.measures?.output_tokens_mean).toBe(400)
     expect(grouped.measures?.validation_retries_mean).toBe(1.5)

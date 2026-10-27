@@ -116,6 +116,18 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
+Two Harness invariants hold on every native run that passed, whatever its
+gates. They belong to no scenario's digest; the run's `harness_violations`
+records what broke.
+
+- A message whose calls the Harness dispatched (some have a result) leaves one
+  without a result: incomplete, like a failed gate, and the score stays.
+- A session on the subject model was fit into the context-manager's
+  8192-token fallback limits while the catalog window is at least 32,768
+  tokens: the router could not resolve the model, so nothing measured there
+  can be trusted. It is an infrastructure error (`context_limits_unresolved`)
+  the slot re-runs.
+
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches
 the migration exactly"). The description is part of the behavior digest and
@@ -599,7 +611,15 @@ sent one step a prompt larger than its usable window carries the advisory audit
 flag `audit_context_over_window`, which moves no score: the provider's real
 window took the step, but a model with the cut window would have refused it. On
 2026-10-26 `context_pressure` did that, a 256,135-token step into 128,000 with
-no compaction, all 48 documents read in one turn, and still scored 100.
+no compaction, all 48 documents read in one turn, and still scored 100. Its
+`charter_preserved` gate now also needs every root step's billed prompt within
+the usable window (within the 10% the window's estimate may miss by), so such a
+run is incomplete: the charter survived the provider's window, not the context
+manager. The peak is the one the efficiency report measures. A run without a
+context snapshot, or whose root steps' usage does not add up to the root
+session's totals (a step reported none), is not held to a window and says the
+peak is unmeasured. On `default`, where `context_pressure` peaks near 255,000
+of 596,000, nothing changes.
 
 Projection, not a measurement (the usage of each step of recorded
 `deepseek-flash` sessions, assuming the session goes on the same until it

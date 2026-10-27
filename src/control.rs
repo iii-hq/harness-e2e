@@ -207,6 +207,7 @@ impl RunRequest {
             thinking_level: None,
             provider_options: None,
             priced: None,
+            context_window: None,
         }
     }
 }

@@ -988,6 +988,13 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
+        "harness_violations": {
+          "description": "Harness invariants the run broke; README Completion says what each costs the run.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HarnessViolation"
+          }
+        },
         "metrics": {
           "anyOf": [
             {
@@ -1576,6 +1583,39 @@
               "$ref": "#/definitions/RunStatus"
             }
           ]
+        }
+      }
+    },
+    "HarnessInvariant": {
+      "oneOf": [
+        {
+          "description": "A message whose calls the Harness dispatched (some have results) left one without a result: the persisted history is malformed.",
+          "type": "string",
+          "enum": [
+            "lost_function_result"
+          ]
+        },
+        {
+          "description": "A session's context was fit into the context-manager's fallback limits while the model's catalog window is far larger: the router could not resolve the model's limits (unreachable, or the stack names a model it does not list), so compaction fires on a fraction of the window.",
+          "type": "string",
+          "enum": [
+            "fallback_context_limits"
+          ]
+        }
+      ]
+    },
+    "HarnessViolation": {
+      "type": "object",
+      "required": [
+        "detail",
+        "invariant"
+      ],
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "invariant": {
+          "$ref": "#/definitions/HarnessInvariant"
         }
       }
     },

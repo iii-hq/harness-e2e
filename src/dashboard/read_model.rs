@@ -460,6 +460,12 @@ struct RunMetrics {
     /// Technical attempts beyond the first.
     #[serde(default)]
     technical_retries: Option<f64>,
+    /// Compactions in the root session.
+    #[serde(default)]
+    compactions: Option<f64>,
+    /// The largest root prompt over the window the Harness fit it into.
+    #[serde(default)]
+    peak_context_fill: Option<f64>,
 }
 
 impl RunMetrics {
@@ -1243,6 +1249,8 @@ impl DashboardReadModel {
                         reasoning_tokens: run.reasoning_tokens,
                         validation_retries: run.validation_retries,
                         technical_retries: run.technical_retries,
+                        compactions: run.compactions,
+                        peak_context_fill: run.peak_context_fill,
                     }
                 }));
             }
@@ -1675,6 +1683,17 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
             .efficiency
             .as_ref()
             .map(|efficiency| f64::from(efficiency.technical_attempts.saturating_sub(1))),
+        compactions: run
+            .efficiency
+            .as_ref()
+            .and_then(|efficiency| efficiency.compactions)
+            .map(|value| value as f64),
+        peak_context_fill: run.efficiency.as_ref().and_then(|efficiency| {
+            let usable = efficiency
+                .usable_context_tokens
+                .filter(|usable| *usable > 0)?;
+            Some(efficiency.peak_context_tokens? as f64 / usable as f64)
+        }),
     }
 }
 
@@ -2389,6 +2408,10 @@ mod tests {
         ));
         run.update_efficiency();
         run.efficiency.as_mut().unwrap().technical_attempts = 3;
+        let efficiency = run.efficiency.as_mut().unwrap();
+        efficiency.compactions = Some(3);
+        efficiency.peak_context_tokens = Some(64_000);
+        efficiency.usable_context_tokens = Some(128_000);
         let projection = ExecutionProjection::from_stored(&StoredRun {
             metadata: super::super::tests::metadata(),
             report: Some(report),
@@ -2417,6 +2440,10 @@ mod tests {
         assert_eq!(
             (run.cost_usd, run.validation_retries, run.technical_retries),
             (Some(0.1), Some(2.0), Some(2.0))
+        );
+        assert_eq!(
+            (run.compactions, run.peak_context_fill),
+            (Some(3.0), Some(0.5))
         );
     }
 
