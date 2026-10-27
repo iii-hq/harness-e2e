@@ -746,7 +746,7 @@ mod tests {
         let plan = embedded().unwrap();
         assert_eq!(plan.suites.len(), 14);
         for (id, cases, runs) in [
-            ("regression", 9, 27),
+            ("regression", 9, 99),
             ("null-canary", 10, 10),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
@@ -945,7 +945,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:4986bae35ffd70053a576418a1b8bc927cbf8a2d4e6a6ada0f41f7c5975b0ee1"
+            "sha256:9a097b81f10f2da794e0f1febad03e6ff14d65c2ca0d9f43c53442e8e5dfa2ea"
         );
     }
 
@@ -1170,7 +1170,7 @@ mod tests {
         for campaign in &weekly.campaigns {
             assert_eq!(campaign["groups"], daily.campaigns[0]["groups"]);
         }
-        assert_eq!(plan.materialize("regression").unwrap().campaigns.len(), 3);
+        assert_eq!(plan.materialize("regression").unwrap().campaigns.len(), 11);
     }
 
     /// The version-comparison suites are the daily ones with more rounds,
