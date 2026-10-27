@@ -114,7 +114,7 @@ describe('release verdict', () => {
 
   it('names what was compared, what was left out and why', () => {
     expect(scopeText(releaseOverview, releaseOverview.releases[3])).toEqual(
-      'Compared: Core runtime regression, Application builds and changes. Not compared: Application builds with Deepwork (ran, 3 runs failed in the E2E infrastructure); Complete the onboarding tour (not run on v1.8.36).',
+      'Compared: Core runtime regression, Application builds and changes. Not compared: Application builds with Deepwork (ran on v1.8.36, 3 runs failed in the E2E infrastructure); Complete the onboarding tour (not run on v1.8.36).',
     )
     const latest = releaseOverview.releases[3]
     const opus = {
@@ -136,11 +136,13 @@ describe('release verdict', () => {
             },
             { ...onboarding, reason: 'nothing_alike', only_in: null },
             { ...deepwork, reason: 'no_completed_execution', only_in: null },
+            // Counted on the latest: the release before failed every run.
+            { ...deepwork, only_in: '1.8.36' },
           ],
         },
       }),
     ).toEqual(
-      'Compared: Core runtime regression, Application builds and changes. Not compared: Core runtime regression · anthropic/claude-opus-5-5 · profile none · stack default (only in v1.8.36); Complete the onboarding tour (no test comparable); Application builds with Deepwork (no completed execution on v1.8.36).',
+      'Compared: Core runtime regression, Application builds and changes. Not compared: Core runtime regression · anthropic/claude-opus-5-5 · profile none · stack default (only in v1.8.36); Complete the onboarding tour (no test comparable); Application builds with Deepwork (no completed execution on v1.8.36); Application builds with Deepwork (ran on v1.8.35, 3 runs failed in the E2E infrastructure).',
     )
     expect(
       scopeText(releaseOverview, {

@@ -79,7 +79,7 @@ describe('verdict headline', () => {
       '11.1 pts',
       '2 of 4 setups compared · 1 not run on v1.8.36 · 4 runs failed in the E2E infrastructure (Application builds and changes, Application builds with Deepwork) · Also changed: iii 0.24.2-rc.2 → 0.24.3-rc.1 · harness-e2e 0.18.0 → 0.18.1',
       'Compared and left out',
-      'Compared: Core runtime regression, Application builds and changes. Not compared: Application builds with Deepwork (ran, 3 runs failed in the E2E infrastructure); Complete the onboarding tour (not run on v1.8.36).',
+      'Compared: Core runtime regression, Application builds and changes. Not compared: Application builds with Deepwork (ran on v1.8.36, 3 runs failed in the E2E infrastructure); Complete the onboarding tour (not run on v1.8.36).',
     ])
       expect(html).toContain(text)
     // Score and Tests completed moved; the costs did not.
@@ -288,7 +288,7 @@ describe('release panel', () => {
       'Left out: registry_implementation (definition changed); registry_verification (no counted run on v1.8.36)',
       'On v1.8.36: 1 run failed in the E2E infrastructure',
       'No calibrated verdict: One run per test on a side',
-      'Not compared: ran, 3 runs failed in the E2E infrastructure',
+      'Not compared: ran on v1.8.36, 3 runs failed in the E2E infrastructure',
       'Not compared: not run on v1.8.36',
     ])
       expect(html).toContain(text)

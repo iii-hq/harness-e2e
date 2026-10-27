@@ -352,8 +352,11 @@ export function leftOutText(
       )
       return `no completed execution on ${releaseText(missing ?? release)}`
     }
-    case 'all_runs_infra_failed':
-      return `ran, ${plural(item.infra_failed_runs ?? 0, 'run')} failed in the E2E infrastructure`
+    case 'all_runs_infra_failed': {
+      // The release that failed is the one that did not count it.
+      const failed = item.only_in === release ? previous : release
+      return `ran on ${releaseText(failed)}, ${plural(item.infra_failed_runs ?? 0, 'run')} failed in the E2E infrastructure`
+    }
   }
 }
 
