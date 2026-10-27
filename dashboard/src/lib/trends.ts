@@ -83,7 +83,13 @@ export type TrendMeasures = {
   /** The largest root prompt over the window the Harness fit it into, per
    *  run; above 1 the prompt went past it. */
   peak_context_fill_mean: number | null
+  /** The counted runs behind each mean: a run without the value is left
+   *  out of it. Absent from data older than it. */
+  samples?: Partial<Record<TrendMean, number>>
 }
+
+/** The measures that are means over counted runs. */
+export type TrendMean = Extract<keyof TrendMeasures, `${string}_mean`>
 
 export type TrendTestState =
   | 'scored'
@@ -1461,8 +1467,8 @@ export function groupPoints(
   })
 }
 
-/** A group's measures over its counted runs: means weighted by each
- *  execution's counted runs, completed and planned runs per execution (a
+/** A group's measures over its counted runs: each mean weighted by the runs
+ *  behind it in each execution, completed and planned runs per execution (a
  *  sum would grow with the executions), the function calls summed. Its
  *  versions, stack and plan are its last execution's. */
 function consolidate(
@@ -1476,15 +1482,20 @@ function consolidate(
     (member): member is TrendPoint & { measures: TrendMeasures } =>
       counted(member) && member.measures !== null,
   )
-  const weighted = (pick: (measures: TrendMeasures) => number | null) => {
+  // An execution that measured a mean on one of its ten counted runs weighs
+  // one in it, not ten.
+  const samples: Partial<Record<TrendMean, number>> = {}
+  const weighted = (mean: TrendMean) => {
     let sum = 0
     let weight = 0
     for (const member of valid) {
-      const value = pick(member.measures)
+      const value = member.measures[mean]
       if (value === null) continue
-      sum += value * member.counted
-      weight += member.counted
+      const runs = member.measures.samples?.[mean] ?? member.counted
+      sum += value * runs
+      weight += runs
     }
+    if (weight) samples[mean] = weight
     return weight ? sum / weight : null
   }
   const total = (pick: (measures: TrendMeasures) => number | null) => {
@@ -1539,7 +1550,7 @@ function consolidate(
         : `None of its ${members.length} executions has a counted run.`,
     measures: valid.length
       ? {
-          score_mean: weighted((m) => m.score_mean),
+          score_mean: weighted('score_mean'),
           completed: round1(
             valid.reduce((sum, m) => sum + m.measures.completed, 0) /
               valid.length,
@@ -1548,21 +1559,22 @@ function consolidate(
             valid.reduce((sum, m) => sum + m.measures.planned, 0) /
               valid.length,
           ),
-          duration_ms_mean: weighted((m) => m.duration_ms_mean),
-          input_tokens_mean: weighted((m) => m.input_tokens_mean),
-          function_calls_mean: weighted((m) => m.function_calls_mean),
+          duration_ms_mean: weighted('duration_ms_mean'),
+          input_tokens_mean: weighted('input_tokens_mean'),
+          function_calls_mean: weighted('function_calls_mean'),
           function_calls: total((m) => m.function_calls),
           function_call_errors: total((m) => m.function_call_errors),
-          turns_mean: weighted((m) => m.turns_mean),
-          output_tokens_mean: weighted((m) => m.output_tokens_mean),
-          cache_read_tokens_mean: weighted((m) => m.cache_read_tokens_mean),
-          cache_write_tokens_mean: weighted((m) => m.cache_write_tokens_mean),
-          reasoning_tokens_mean: weighted((m) => m.reasoning_tokens_mean),
-          cost_usd_mean: weighted((m) => m.cost_usd_mean),
-          validation_retries_mean: weighted((m) => m.validation_retries_mean),
-          technical_retries_mean: weighted((m) => m.technical_retries_mean),
-          compactions_mean: weighted((m) => m.compactions_mean),
-          peak_context_fill_mean: weighted((m) => m.peak_context_fill_mean),
+          turns_mean: weighted('turns_mean'),
+          output_tokens_mean: weighted('output_tokens_mean'),
+          cache_read_tokens_mean: weighted('cache_read_tokens_mean'),
+          cache_write_tokens_mean: weighted('cache_write_tokens_mean'),
+          reasoning_tokens_mean: weighted('reasoning_tokens_mean'),
+          cost_usd_mean: weighted('cost_usd_mean'),
+          validation_retries_mean: weighted('validation_retries_mean'),
+          technical_retries_mean: weighted('technical_retries_mean'),
+          compactions_mean: weighted('compactions_mean'),
+          peak_context_fill_mean: weighted('peak_context_fill_mean'),
+          samples,
         }
       : null,
     tests,

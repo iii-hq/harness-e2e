@@ -266,8 +266,9 @@ combination and point, and never counts; other CI runs are only counted, as
 **Group by** (`&group=execution|day|release` in the hash; release is the default
 and is named only when asked for) draws one point per day, on the reader's
 clock, or per Harness release, in version order, instead of one per execution. A
-group reads its executions together: means weighted by counted runs, tests
-completed per execution, the function calls summed, its versions its last
+group reads its executions together: each mean weighted by the counted runs
+that measured it (the worker sends them as `samples`; a run without a cost or a
+context peak is left out of that mean), tests completed per execution, the function calls summed, its versions its last
 execution's. Its panel lists its executions and says when they did not all run
 the same versions. An execution with no recorded Harness version
 is in no release, and the page says how many are left out; a local or Docker

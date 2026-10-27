@@ -571,11 +571,44 @@ describe('grouping', () => {
     expect(trendMetric('error_rate').value(grouped)).toBe(5)
     const keys = Object.keys(one.measures as TrendMeasures).sort()
     expect(keys).toHaveLength(18)
-    expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(keys)
+    // The group says how many runs each of its means is over.
+    expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(
+      [...keys, 'samples'].sort(),
+    )
     expect(grouped.measures?.output_tokens_mean).toBe(400)
     expect(grouped.measures?.validation_retries_mean).toBe(1.5)
     // A member without pricing leaves the mean to the priced ones.
     expect(grouped.measures?.cost_usd_mean).toBe(0.25)
+  })
+
+  it('weights each mean by the runs it is over', () => {
+    const [one, two] = all.filter((point) => counted(point)).slice(0, 2)
+    const pair = [
+      {
+        ...one,
+        started_at: '2026-09-22T09:00:00-03:00',
+        counted: 10,
+        measures: {
+          ...(one.measures as TrendMeasures),
+          peak_context_fill_mean: 1,
+          samples: { peak_context_fill_mean: 1 },
+        },
+      },
+      {
+        ...two,
+        started_at: '2026-09-22T10:00:00-03:00',
+        counted: 1,
+        measures: {
+          ...(two.measures as TrendMeasures),
+          peak_context_fill_mean: 0,
+          samples: { peak_context_fill_mean: 1 },
+        },
+      },
+    ]
+    const [grouped] = groupPoints(pair, 'day', NOW)
+    // One of ten counted runs measured its peak: weighed by ten, 90.9%.
+    expect(grouped.measures?.peak_context_fill_mean).toBe(0.5)
+    expect(grouped.measures?.samples?.peak_context_fill_mean).toBe(2)
   })
 
   it('says a day mixed versions, and a day with no counted run has no measures', () => {
