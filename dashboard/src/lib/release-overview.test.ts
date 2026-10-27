@@ -1,216 +1,312 @@
 import { describe, expect, it } from 'vitest'
 import {
-  type Aggregate,
-  aggregateOf,
+  alsoChangedText,
+  type CombinationDelta,
   calibrated,
+  combinationKey,
+  combinationLine,
+  combinationOptions,
   combinationText,
-  type MetricMove,
-  type OverviewPoint,
+  comparedDelta,
+  coverageText,
+  decidingCombination,
+  defaultCombination,
+  latestStep,
   overviewMetric,
   type ReleaseOverview,
+  type ReleaseStep,
   scopeText,
   stepText,
-  timeline,
   uncalibratedText,
-  type Verdict,
-  verdictMoves,
 } from '@/lib/release-overview'
 import {
   axisMarks,
   releaseText,
-  TREND_METRICS,
-  type TrendMeasures,
   type TrendPoint,
   trendMetric,
 } from '@/lib/trends'
 import { cannotTell, releaseOverview } from '@/test-fixtures/release-overview'
 
-const main = TREND_METRICS.filter((metric) => metric.tier === 'main')
-const verdict = releaseOverview.verdict as Verdict
-const regression = verdict.compared[0].combination
-const base = (verdict.previous_aggregate as Aggregate).measures
-const pairs = (moves: MetricMove[]) =>
-  moves.map(({ metric, delta }) => [metric.id, delta])
+const step = latestStep(releaseOverview) as ReleaseStep
+const [core, applications] = step.compared
+const [deepwork, onboarding] = step.left_out
+const label = (combination: { suite_label: string } | null) =>
+  combination?.suite_label
 
 describe('release verdict', () => {
-  it('reads the measures that moved, never as better or worse', () => {
-    const summary = verdictMoves(verdict, main)
-    expect(pairs(summary.moved)).toEqual([
-      ['score', -2.3],
-      ['duration', 6],
-      ['input_tokens', -1.7],
-      ['turns', 8.9],
-    ])
-    expect(summary.same).toEqual(['completed', 'error_rate'])
-  })
-
-  it('says nothing moved when a side has no measures', () => {
-    expect(verdictMoves({ ...verdict, latest_aggregate: null }, main)).toEqual({
-      moved: [],
-      same: [],
-    })
-  })
-
   it('reads better or worse only from a calibrated verdict, and says why there is none', () => {
-    expect(calibrated(verdict)).toEqual([])
-    expect(uncalibratedText(verdict.compared[0])).toMatch(/^One run per test/)
     expect(
-      uncalibratedText({ ...verdict.compared[0], calibrated: undefined }),
-    ).toBe('The worker sent no calibrated verdict for it.')
+      calibrated(step).map((item) => [
+        item.combination.suite_label,
+        item.summary.verdict,
+      ]),
+    ).toEqual([['Core runtime regression', 'cannot_tell']])
+    expect(uncalibratedText(applications)).toMatch(/^One run per test/)
+    expect(uncalibratedText({ ...applications, calibrated: undefined })).toBe(
+      'The worker sent no calibrated verdict for it.',
+    )
     const read = calibrated({
-      ...verdict,
-      compared: [{ ...verdict.compared[0], calibrated: cannotTell }],
+      ...step,
+      compared: [{ ...applications, calibrated: cannotTell }],
     })
     expect(read.map((item) => item.summary.verdict)).toEqual(['cannot_tell'])
   })
 
-  it('reads tests completed and the error rate from the combinations’ shares, never the sums', () => {
-    const point = {
-      measures: {
-        ...base,
-        completed: 6,
-        planned: 8,
-        function_calls: 10,
-        function_call_errors: 5,
-      },
-      aggregate: { measures: base, completed_share: 0.5, error_rate: 0.1 },
-    } as unknown as OverviewPoint
-    const completed = overviewMetric(trendMetric('completed'))
-    expect(completed.value(point)).toEqual(50)
-    expect(overviewMetric(trendMetric('error_rate')).value(point)).toEqual(10)
-    expect(completed.delta).toEqual('percent_points')
-    expect(completed.figure(75, {} as TrendPoint)).toEqual('75.0%')
-    expect(overviewMetric(trendMetric('score'))).toBe(trendMetric('score'))
+  it('offers every setup of the latest step, and opens on the one that decides', () => {
+    expect(combinationOptions(releaseOverview).map(label)).toEqual([
+      'Core runtime regression',
+      'Application builds and changes',
+      'Application builds with Deepwork',
+      'Complete the onboarding tour',
+    ])
+    // Nothing called worse or better: the first compared.
+    expect(label(decidingCombination(releaseOverview))).toEqual(
+      'Core runtime regression',
+    )
+    const worse = structuredClone(releaseOverview)
+    const latest = worse.releases[3].step as ReleaseStep
+    latest.compared[1].calibrated = { ...cannotTell, verdict: 'worse' }
+    expect(label(decidingCombination(worse))).toEqual(
+      'Application builds and changes',
+    )
+    expect(label(defaultCombination(releaseOverview))).toEqual(
+      'Core runtime regression',
+    )
+    // Nothing compared: what the latest release ran, then what was left out.
+    const none = structuredClone(releaseOverview)
+    ;(none.releases[3].step as ReleaseStep).compared = []
+    expect(decidingCombination(none)).toBeNull()
+    expect(label(defaultCombination(none))).toEqual('Core runtime regression')
+    none.releases[3].firsts = []
+    expect(label(defaultCombination(none))).toEqual(
+      'Application builds with Deepwork',
+    )
+  })
+
+  it('says how much compared, what failed and what else changed', () => {
+    expect(coverageText(releaseOverview)).toEqual(
+      '2 of 4 setups compared · 1 not run on v1.8.36 · 4 runs failed in the E2E infrastructure (Application builds and changes, Application builds with Deepwork)',
+    )
+    expect(alsoChangedText(core.also_changed)).toEqual(
+      'Also changed: iii 0.24.2-rc.2 → 0.24.3-rc.1 · harness-e2e 0.18.0 → 0.18.1',
+    )
+    expect(alsoChangedText([])).toBeNull()
+    // A setup left out still counts the latest release's failed runs.
+    const unlike = structuredClone(releaseOverview)
+    const latest = unlike.releases[3].step as ReleaseStep
+    const [apps] = latest.compared.splice(1, 1)
+    latest.left_out.unshift({
+      combination: apps.combination,
+      reason: 'nothing_alike',
+      only_in: null,
+      infra_failed_runs: null,
+    })
+    expect(coverageText(unlike)).toEqual(
+      '1 of 4 setups compared · 1 not run on v1.8.36 · 4 runs failed in the E2E infrastructure (Application builds and changes, Application builds with Deepwork)',
+    )
     expect(
-      aggregateOf({
-        ...base,
-        completed: 6,
-        planned: 8,
-        function_calls: 0,
-        function_call_errors: 0,
+      coverageText({
+        ...releaseOverview,
+        releases: [releaseOverview.releases[0]],
       }),
-    ).toMatchObject({ completed_share: 0.75, error_rate: null })
+    ).toBeNull()
   })
 
   it('names what was compared, what was left out and why', () => {
-    expect(scopeText(verdict)).toEqual('Compared: Regression (ran on both).')
+    expect(scopeText(releaseOverview, releaseOverview.releases[3])).toEqual(
+      'Compared: Core runtime regression, Application builds and changes. Not compared: Application builds with Deepwork (ran on v1.8.36, 3 runs failed in the E2E infrastructure); Complete the onboarding tour (not run on v1.8.36).',
+    )
+    const latest = releaseOverview.releases[3]
     const opus = {
-      ...regression,
+      ...core.combination,
       provider: 'anthropic',
       model: 'claude-opus-5-5',
     }
-    const software = {
-      ...regression,
-      suite: 'software-engineering',
-      suite_label: 'Software engineering',
-    }
-    const onboarding = {
-      ...regression,
-      suite: 'onboarding',
-      suite_label: 'Onboarding',
-    }
     expect(
-      scopeText({
-        ...verdict,
-        left_out: [
-          { combination: opus, only_in: '1.8.35' },
-          { combination: software, only_in: null },
-          { combination: onboarding, only_in: '1.8.36' },
-        ],
+      scopeText(releaseOverview, {
+        ...latest,
+        step: {
+          ...step,
+          left_out: [
+            {
+              combination: opus,
+              reason: 'only_in_one_release',
+              only_in: '1.8.36',
+              infra_failed_runs: null,
+            },
+            { ...onboarding, reason: 'nothing_alike', only_in: null },
+            { ...deepwork, reason: 'no_completed_execution', only_in: null },
+            // Counted on the latest: the release before failed every run.
+            { ...deepwork, only_in: '1.8.36' },
+          ],
+        },
       }),
     ).toEqual(
-      "Compared: Regression (ran on both). Not compared: Onboarding (not run on v1.8.35); Regression · anthropic/claude-opus-5-5 · profile none · stack default (not run on v1.8.36); Software engineering (every test's definition changed).",
+      'Compared: Core runtime regression, Application builds and changes. Not compared: Core runtime regression · anthropic/claude-opus-5-5 · profile none · stack default (only in v1.8.36); Complete the onboarding tour (no test comparable); Application builds with Deepwork (no completed execution on v1.8.36); Application builds with Deepwork (ran on v1.8.35, 3 runs failed in the E2E infrastructure).',
     )
-    expect(scopeText({ ...verdict, compared: [], left_out: [] })).toEqual(
-      'No suite ran on both v1.8.36 and v1.8.35',
-    )
+    expect(
+      scopeText(releaseOverview, {
+        ...latest,
+        step: { ...step, compared: [], left_out: [] },
+      }),
+    ).toEqual('No setup compared between v1.8.36 and v1.8.35.')
   })
 
   it('writes releases with a leading v and a combination in full', () => {
     expect(
       ['1.8.36', 'v1.8.36', '@852b87e*'].map((version) => releaseText(version)),
     ).toEqual(['v1.8.36', 'v1.8.36', '@852b87e*'])
-    expect(combinationText(regression)).toEqual(
-      'Regression · deepseek/deepseek-flash · profile none · stack default',
+    expect(combinationText(core.combination)).toEqual(
+      'Core runtime regression · deepseek/deepseek-flash · profile none · stack default',
     )
+    expect(combinationKey(core.combination)).toEqual(
+      'regression|deepseek|deepseek-flash||default',
+    )
+  })
+
+  it('reads Tests completed over the counted runs, and the worker’s deltas', () => {
+    const completed = overviewMetric(trendMetric('completed'))
+    const point = {
+      counted: 27,
+      measures: { completed: 24 },
+    } as unknown as TrendPoint
+    expect(completed.value(point)).toBeCloseTo(88.89, 2)
+    expect(completed.value({ ...point, counted: 0 })).toBeNull()
+    expect(completed.delta).toEqual('percent_points')
+    expect(completed.figure(75, point)).toEqual('75.0%')
+    expect(overviewMetric(trendMetric('score')).minSpan).toEqual(20)
+    expect(overviewMetric(trendMetric('error_rate'))).toBe(
+      trendMetric('error_rate'),
+    )
+    expect(comparedDelta(trendMetric('score'), core)).toEqual(-3.3)
+    expect(comparedDelta(completed, core)).toEqual(-11.1)
+    // Read from both sides' measures: every run took 1,000 ms.
+    expect(comparedDelta(trendMetric('duration'), core)).toEqual(0)
   })
 })
 
-describe('release timeline', () => {
-  const line = timeline(releaseOverview)
-  const { releases, locals } = releaseOverview
+describe('a setup’s line', () => {
+  const key = combinationKey(core.combination)
+  const line = combinationLine(releaseOverview, key)
 
-  it('puts each local run after the release it ran with, and only measured ones', () => {
+  it('plots each release’s first completed execution, then the setup’s measured local runs', () => {
     expect(line.points.map((point) => point.execution_id)).toEqual([
-      'release:1.8.31',
-      'release:1.8.34',
+      'github-35742568444-1',
+      'github-36010839787-2',
       'local-local-1',
       'local-local-2',
-      'local-local-3',
-      'local-local-4',
-      'local-local-5',
-      'release:1.8.35',
-      'release:1.8.36',
+      'github-36097908502-1',
+      'github-36285373498-1',
     ])
-    expect(line.latest).toEqual(8)
-    expect(line.points[2].source.kind).toEqual('local')
-    expect(line.points[2].label).toEqual(
-      '2 tests, unsaved · ran harness @852b87e*',
-    )
-    expect(line.points[2].aggregate).toEqual(
-      aggregateOf(locals[0].measures as TrendMeasures),
-    )
-    expect(line.points[8].aggregate).toEqual(releases[3].aggregate)
+    expect(line.latest).toEqual(5)
     expect(axisMarks(line.points).map((mark) => mark.text)).toEqual([
       'v1.8.31',
       'v1.8.34',
       '',
       '',
-      '',
-      '',
-      '',
       'v1.8.35',
       'v1.8.36',
     ])
-    expect(line.changes.every((list) => list.length === 0)).toBe(true)
+    const local = line.points[2]
+    expect([local.source.kind, local.release, local.group]).toEqual([
+      'local',
+      null,
+      undefined,
+    ])
+    expect(local.label).toEqual(
+      'Core runtime regression · ran harness @852b87e*',
+    )
+    // A local reads Tests completed over its own counted runs.
+    expect(overviewMetric(trendMetric('completed')).value(local)).toEqual(100)
+    expect(line.steps[2]).toBeNull()
+    expect(line.changes[2]).toEqual([])
   })
 
-  it('marks a combination that joined or left, and says when nothing ran', () => {
-    const overview: ReleaseOverview = structuredClone(releaseOverview)
-    overview.releases[3].joined = [
-      { ...regression, suite: 'onboarding', suite_label: 'Onboarding' },
-    ]
-    overview.locals[0].ran = null
-    const marked = timeline(overview)
-    expect(marked.changes[8]).toEqual([
-      {
-        kind: 'tests',
-        major: true,
-        name: 'Onboarding · deepseek/deepseek-flash · profile none · stack default',
-        text: 'joined',
-        note: null,
-        compare: null,
-      },
-    ])
-    expect(marked.points[2].label).toEqual(
-      '2 tests, unsaved · Harness version not recorded',
+  it('reads each release’s step for the setup', () => {
+    const score = overviewMetric(trendMetric('score'))
+    const completed = overviewMetric(trendMetric('completed'))
+    expect(stepText(releaseOverview, score, line.steps[5])).toEqual(
+      '−3.3 vs v1.8.35',
+    )
+    expect(stepText(releaseOverview, completed, line.steps[5])).toEqual(
+      '−11.1 pts vs v1.8.35',
     )
     expect(
-      timeline({ ...releaseOverview, releases: [], verdict: null, locals: [] }),
-    ).toEqual({ points: [], changes: [], latest: -1 })
+      stepText(releaseOverview, trendMetric('duration'), line.steps[5]),
+    ).toEqual('no change vs v1.8.35')
+    expect(stepText(releaseOverview, score, line.steps[0])).toBeNull()
+    // The release after a local run reads against the release before.
+    expect(line.steps[4]?.previous).toEqual('1.8.34')
+    expect(line.changes[4].map((change) => change.kind)).toEqual(['harness'])
+    // The runner, from the step, after what the two records show.
+    expect(line.changes[5].map((change) => [change.kind, change.name])).toEqual(
+      [
+        ['iii', 'iii'],
+        ['worker', 'context-manager'],
+        ['harness', 'harness'],
+        ['worker', 'harness-e2e'],
+      ],
+    )
   })
 
-  it('reads each release’s step against the release before it', () => {
-    const latest = line.points[8]
-    expect(stepText(trendMetric('score'), latest)).toEqual('−2.3 vs v1.8.35')
-    expect(stepText(trendMetric('duration'), latest)).toEqual(
-      '+6.0% vs v1.8.35',
+  it('marks the tests a step did not count, and names the ones left out', () => {
+    const apps = combinationLine(
+      releaseOverview,
+      combinationKey(applications.combination),
     )
-    expect(stepText(trendMetric('completed'), latest)).toEqual(
-      'no change vs v1.8.35',
+    expect(apps.points.map((point) => point.release)).toEqual([
+      '1.8.35',
+      '1.8.36',
+    ])
+    const changes = apps.changes[1]
+    expect(changes.find((change) => change.kind === 'tests')).toMatchObject({
+      major: true,
+      text: '1 test not counted on v1.8.36',
+    })
+    expect(
+      changes.find((change) => change.kind === 'definition')?.name,
+    ).toEqual('registry_implementation')
+    expect(
+      stepText(
+        releaseOverview,
+        overviewMetric(trendMetric('score')),
+        apps.steps[1],
+      ),
+    ).toEqual('no change vs v1.8.35 · over 5 compared tests, 2 left out')
+  })
+
+  it('says why a setup was left out, and draws nothing where it did not run', () => {
+    const tour = combinationLine(
+      releaseOverview,
+      combinationKey(onboarding.combination),
     )
-    expect(line.points[7].step?.previous).toEqual('1.8.34')
-    expect(stepText(trendMetric('score'), line.points[0])).toBeNull()
-    expect(stepText(trendMetric('score'), line.points[2])).toBeNull()
+    expect(tour.points.map((point) => point.release)).toEqual(['1.8.35'])
+    expect(tour.latest).toEqual(-1)
+    expect(
+      stepText(releaseOverview, trendMetric('score'), tour.steps[0]),
+    ).toEqual('Not compared: only in v1.8.35')
+    expect(combinationLine(releaseOverview, 'nothing')).toEqual({
+      points: [],
+      changes: [],
+      steps: [],
+      latest: -1,
+    })
+  })
+
+  it('reads a runner change on a step as a worker change', () => {
+    const overview: ReleaseOverview = structuredClone(releaseOverview)
+    const latest = overview.releases[3].step as ReleaseStep
+    ;(latest.compared[0] as CombinationDelta).also_changed = [
+      { name: 'harness-e2e', from: '0.18.0', to: '0.18.2' },
+    ]
+    const changes = combinationLine(overview, key).changes[5]
+    expect(changes.find((change) => change.name === 'harness-e2e')).toEqual({
+      kind: 'worker',
+      major: false,
+      name: 'harness-e2e',
+      text: '0.18.0 → 0.18.2',
+      note: 'the E2E runner',
+      compare: null,
+    })
   })
 })

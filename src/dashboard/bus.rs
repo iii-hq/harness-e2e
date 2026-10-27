@@ -734,7 +734,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         RELEASE_OVERVIEW_GET,
-        "Read how each Harness release did in Release Control, newest last: a point per release over its combinations (suite, provider, model, profile, stack), each compared with the one before over what both ran alike (the latest pair is the verdict), local and Docker runs beside their release, and how many CI runs fall outside Release Control.",
+        "Read how each Harness release did in Release Control, newest last: per combination (suite, provider, model, profile, stack), the first completed execution of each release compared with the release before it over the tests both counted under one definition, with coverage, what else changed and, on the latest pair (the verdict), the calibrated verdict; local and Docker runs beside their release, and how many CI runs fall outside Release Control.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
@@ -1568,7 +1568,7 @@ mod response_contract_tests {
 
     #[test]
     fn the_release_overview_answers_with_the_names_the_console_reads() {
-        use super::super::overview::tests::{rc, runs, scored, with};
+        use super::super::overview::tests::{rc, runs, scored, suite, with};
         use super::super::overview::{overview, ReleaseOverview};
         let schema = serde_json::to_value(schemars::schema_for!(ReleaseOverview)).unwrap();
         for field in [
@@ -1583,6 +1583,7 @@ mod response_contract_tests {
         let summaries = [
             rc("p", 1, "1.9.2"),
             rc("l", 2, "1.9.3"),
+            with(rc("o", 2, "1.9.3"), suite("onboarding", "Onboarding")),
             with(rc("local", 3, "1.9.3"), |summary| {
                 summary["source"] = json!({"kind": "local"})
             }),
@@ -1593,6 +1594,7 @@ mod response_contract_tests {
             &runs(vec![
                 ("p", vec![scored("t1", 80.0)]),
                 ("l", vec![scored("t1", 90.0)]),
+                ("o", vec![scored("t9", 50.0)]),
                 ("local", vec![scored("t1", 70.0)]),
             ]),
         ))
@@ -1602,41 +1604,39 @@ mod response_contract_tests {
             "locals,outside_release_control,releases,unversioned,verdict"
         );
         let release = &answer["releases"][1];
+        assert_eq!(keys(release), "combinations,executions,firsts,release,step");
         assert_eq!(
-            keys(release),
-            "aggregate,combinations,engine,executions,first_started_at,joined,left,release,step,tests_not_run,workers"
-        );
-        assert_eq!(
-            keys(&release["aggregate"]),
-            "completed_share,error_rate,measures"
-        );
-        assert_eq!(
-            keys(&release["step"]),
-            "latest_aggregate,previous,previous_aggregate"
+            keys(&release["firsts"][0]),
+            "combination,harness_failed_runs,infra_failed_runs,not_run,point"
         );
         assert_eq!(
             keys(&release["combinations"][0]),
             "model,profile,provider,stack,suite,suite_label"
         );
         assert_eq!(answer["releases"][0]["step"], Value::Null);
-        let verdict = &answer["verdict"];
+        let step = &release["step"];
+        assert_eq!(keys(step), "compared,left_out,previous");
+        let compared = &step["compared"][0];
         assert_eq!(
-            keys(verdict),
-            "compared,latest,latest_aggregate,latest_started_at,left_out,previous,previous_aggregate"
+            keys(compared),
+            "also_changed,calibrated,combination,compared_tests,completed_delta,latest,previous,score_delta,tests_left_out"
         );
+        assert_eq!(keys(&compared["latest"]), "counted_runs,execution,measures");
         assert_eq!(
-            keys(&verdict["compared"][0]),
-            "calibrated,combination,latest,previous,tests_left_out"
-        );
-        assert_eq!(
-            keys(&verdict["compared"][0]["calibrated"]),
+            keys(&compared["calibrated"]),
             "cost,qualifier,quality,reasons,repetitions,rule,unavailable,verdict,warnings"
         );
+        assert_eq!(
+            keys(&step["left_out"][0]),
+            "combination,infra_failed_runs,only_in,reason"
+        );
+        assert_eq!(step["left_out"][0]["reason"], "only_in_one_release");
+        let verdict = &answer["verdict"];
+        assert_eq!(keys(verdict), "latest,latest_started_at,previous");
         assert_eq!(verdict["latest"], "1.9.3");
-        assert_eq!(verdict["left_out"], json!([]));
         assert_eq!(
             keys(&answer["locals"][0]),
-            "execution_id,measures,ran,release,role,started_at,suite_label"
+            "combination,execution_id,point,ran,release,role,started_at,suite_label"
         );
         assert_eq!(answer["locals"][0]["role"], "local");
         assert_eq!(

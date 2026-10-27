@@ -4,11 +4,12 @@ import type { VerdictSummary } from '@/lib/verdict'
 import ciSyncFixture from '@/test-fixtures/ci-sync.json'
 import overviewFixture from '@/test-fixtures/release-overview.json'
 
-/** The release overview of the Trends canvas's regression series (stack
- *  default) in release-overview-get's shape: one step per Harness release,
- *  1.8.36 against 1.8.35 as the verdict. Only the verdict's score drops
- *  contention_ledger, the test whose definition changed; the new measures,
- *  the early steps and the outside count are made up. */
+/** The release overview the worker answers for a scenario of hand-made runs:
+ *  written by `the_dashboard_fixture_is_this_overview` in
+ *  src/dashboard/overview.rs; regenerate with `UPDATE_DASHBOARD_FIXTURE=1
+ *  cargo test --locked --lib the_dashboard_fixture_is_this_overview`, then
+ *  `pnpm --dir dashboard exec biome format --write
+ *  src/test-fixtures/release-overview.json`. */
 export const releaseOverview = overviewFixture as unknown as ReleaseOverview
 
 /** CI sync's status in each state, as ci-sync-status-get answers it. */

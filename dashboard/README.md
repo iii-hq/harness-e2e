@@ -153,26 +153,31 @@ load says so and the rest of the page stays.
 
 **Trends** opens on the release overview. Under **Harness evolution**, the
 verdict names the latest Harness release against the previous one with the
-calibrated verdict of each combination it compared, or says there is none and
-why (one run per test on a side); the main measures that moved follow, untoned,
-never called better or worse ("No measure moved." only when some were
-compared), then what it compared. The line below
-plots one measure (six tabs, the rest under More), one point per release with
-Release Control results, oldest first. Each step reads against the release
-before it, over the combinations of suite, model, profile and stack both ran
-and, within them, the tests both planned whose definition did not change; a
-test one release planned but never ran counts as not completed there. Every
-combination weighs the same, the Completed share and the error rate included,
-and each measure reads the combinations both releases have it for; a count
-such as "41 of 48" is a sum. A point's label and panel give its step, and the callout
-beside the line gives the latest one on every main measure, or says there is
-nothing to compare; **What changed**
-opens the latest release's panel: its versions against the previous release and
-each combination the verdict compared. A hollow ring is a local or Docker
-execution, beside the release it ran with; the line leaves it out and it never
-counts. A diamond over a release marks a combination that joined or left. A
-strip counts the **CI runs outside Release Control** and links to them in the
-Executions list.
+calibrated verdict of each setup (suite, model, profile and stack) it compared,
+or says there is none and why (one run per test on a side); a setup's name
+opens the latest release's panel on it. The next line gives what moved in the
+setup that decides (the first the calibrated verdict calls worse, else better,
+else the first compared), untoned, never called better or worse; the last says
+how much compared ("2 of 4 setups compared · 1 not run on v1.8.36 · 4 runs
+failed in the E2E infrastructure (…)") and what else changed between the two
+executions (the iii engine, the runner), with what was compared and left out,
+and why, under **Compared and left out**. The **Setup** picker beside the
+measure tabs (six, the rest under More) chooses the setup the line, the callout
+and the panel show: one point per release, that setup's first completed
+Release Control execution of it, oldest first; a release that did not run it
+has no point. A point's label and panel give its step: the worker's change in
+score and in Tests completed (completed runs over counted runs), and the rest
+read from both sides, with how many tests compared and how many were left out.
+The callout beside the line gives the latest step on every main measure, or
+why the setup was left out; **What changed** opens the latest release's panel:
+what changed since the previous release, the execution's coverage and, on the
+verdict's release, each setup of the step with what each side counted, the
+tests left out by reason and links to both executions. A hollow ring is a local
+or Docker run of the setup, beside the release it ran with; the line leaves it
+out and it never counts. A diamond marks only a step that left tests out; the
+Harness, the engine and the workers change at nearly every release, so the
+panel lists them instead. A strip counts the **CI runs outside Release Control** and links to
+them in the Executions list.
 
 The overview is the page's address (`#/`): a link to it names no series, and
 `&metric=<id>` keeps the measure in front across a reload. **More options**
@@ -183,7 +188,8 @@ over one series, and a choice left open prefers a series Release Control ran. **
 puts every one of those controls back where the first screen starts and keeps
 the measure. **Details** holds what sits behind the chart: the latest release's
 executions on the overview, the by-test grid and the executions table on a
-series. Beside **Harness evolution**, one line follows CI sync. **Download CI
+series. Beside **Harness evolution**, and beside **Back to release overview** in
+the series view, which has no verdict, one line follows CI sync. **Download CI
 results** turns it on (`e2e::dashboard::ci-sync-set`); the line then reads its
 phase (the newest runs first, then older ones, with *Verdict ready* once the
 page has a verdict, then the time of the last check), the imports that failed
@@ -232,20 +238,30 @@ first screen: how each Harness release did in Release Control, over every
 execution listed whatever the filters. Only a Release Control execution that
 completed or was interrupted with counted runs enters. Each plain-semver release
 is a point, newest last (an execution whose Harness is a commit, builds joined
-by a comma or none recorded is `unversioned` and counted as such), pooled per
-combination of suite, provider, model, profile and stack; a re-run id counts
-its latest attempt. Each point is read against the one before it (the latest
-pair is the `verdict`) over the combinations both ran and, within them, the
-tests both planned or ran whose `behavior_sha256` does not differ: a test one
-release counted no run of stays planned there, lowering its Completed share
-without entering its means. A test only one release planned, or whose
-definition changed or is unknown, is in `tests_left_out`; a combination one ran
-and the other did not is listed as joined, left or left out. Means, the
-Completed share and the error rate give every combination the same weight
-however often it ran, each over the combinations both releases have it for;
-counts are summed. A local or Docker execution sits beside its release (the Harness it
-ran, else the release current when it started) and never counts; other CI runs
-are only counted, as `outside_release_control`.
+by a comma or none recorded is `unversioned` and counted as such); a re-run id
+counts its latest attempt. Per combination of suite, provider, model, profile
+and stack, a release's side is its first completed execution (`firsts`, with
+its point and coverage: runs that failed in the E2E infrastructure, runs the
+harness failed and planned runs not run); a later night of the release never
+moves it, and an interrupted execution makes the release exist but is never a
+side. Each release's `step` reads it against the release before it, the latest
+pair being the `verdict`, combination by combination, and never averages
+across them. A test compares when both sides counted a run of it under one
+`behavior_sha256`; every other is in `tests_left_out` with why
+(`only_latest`, `only_previous`, `not_counted_latest`, `not_counted_previous`,
+`redefined`). A run the harness failed counts, as not completed (by its cause;
+one written before causes by its status); a run the E2E infrastructure failed
+does not, and only the coverage says it. Each compared combination carries
+both sides' measures over the compared tests, their counted runs,
+`score_delta` and `completed_delta` (completed over counted runs, in
+percentage points), each rounded to 0.1, `also_changed` (the iii engine and the
+runner between the two executions) and, on the latest step only, its
+`calibrated` verdict. A combination left out says why: `only_in_one_release`,
+`nothing_alike`, `no_completed_execution`, or `all_runs_infra_failed` with the
+other release's runs of it. A local or Docker execution sits beside its release
+(the Harness it ran, else the release current when it started) with its
+combination and point, and never counts; other CI runs are only counted, as
+`outside_release_control`.
 
 **Group by** (`&group=execution|day|release` in the hash; release is the default
 and is named only when asked for) draws one point per day, on the reader's
