@@ -25,6 +25,24 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         self.assertTrue(all(count == 100 for count in result["replays"].values()))
         self.assertGreaterEqual(result["actual503Responses"], 1200)
 
+    def test_the_probe_runs_when_node_reads_it_on_stdin(self):
+        # validate.py pipes the probe into `node -`, where require.main is
+        # undefined: a guard on require.main === module alone ran nothing,
+        # exited 0 and wrote no feature.json. With nothing to reach, the probe
+        # still runs and records why.
+        output = Path("/tmp/registry-validation/feature.json")
+        output.unlink(missing_ok=True)
+        try:
+            result = subprocess.run(
+                ["node", "-"], input=SCRIPT.read_text(), cwd=ROOT, text=True, capture_output=True,
+                timeout=120, env={**os.environ, "TEST_API_URL": "http://127.0.0.1:9",
+                                  "E2E_APP_URL": "http://127.0.0.1:9"},
+            )
+            self.assertTrue(output.is_file(), result.stderr)
+            self.assertIn("observations", json.loads(output.read_text()))
+        finally:
+            output.unlink(missing_ok=True)
+
     def test_probe_ids_are_known_test_two_metrics(self):
         source = SCRIPT.read_text()
         catalog = json.loads(METRICS.read_text())

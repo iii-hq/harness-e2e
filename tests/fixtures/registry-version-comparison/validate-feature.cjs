@@ -263,7 +263,9 @@ async function main() {
 }
 
 module.exports = { comparisonFailure };
-if (require.main === module) main().catch(async error => {
+// Run as the probe on stdin (`node -`, which has no main module) or as a script;
+// a test that requires it for comparisonFailure, from ESM too, runs nothing.
+if (module.id === '[stdin]' || require.main === module) main().catch(async error => {
   await fs.mkdir(output, { recursive: true });
   await fs.writeFile(`${output}/feature.json`, `${JSON.stringify({ api_url: api, app_url: app, infrastructure_error: String(error), observations, cases }, null, 2)}\n`);
   console.error(error); process.exitCode = 1;
