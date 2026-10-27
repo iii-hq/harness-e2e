@@ -615,9 +615,11 @@ no compaction, all 48 documents read in one turn, and still scored 100. Its
 `charter_preserved` gate now also needs every root step's billed prompt within
 the usable window (within the 10% the window's estimate may miss by), so such a
 run is incomplete: the charter survived the provider's window, not the context
-manager. A run without a context snapshot is not held to a window; on
-`default`, where `context_pressure` peaks near 255,000 of 596,000, nothing
-changes.
+manager. The peak is the one the efficiency report measures. A run without a
+context snapshot, or whose root steps' usage does not add up to the root
+session's totals (a step reported none), is not held to a window and says the
+peak is unmeasured. On `default`, where `context_pressure` peaks near 255,000
+of 596,000, nothing changes.
 
 Projection, not a measurement (the usage of each step of recorded
 `deepseek-flash` sessions, assuming the session goes on the same until it

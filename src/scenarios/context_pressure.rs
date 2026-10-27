@@ -489,17 +489,13 @@ fn case_segments(case: &ScenarioCase) -> anyhow::Result<u32> {
 /// Harness fit the root session into. Either is None when not reported, and
 /// the window is then not checked.
 fn root_window(observation: &ScenarioObservation) -> (Option<u64>, Option<u64>) {
+    // The efficiency report's peak: a step that reported no usage leaves it
+    // unmeasured rather than smaller.
     let peak = observation
         .transcript
         .get("messages")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("message"))
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .filter_map(|message| message.get("usage"))
-        .map(crate::report::step_prompt)
-        .max();
+        .and_then(|messages| crate::report::root_peak_prompt(&observation.metrics, messages));
     let usable = observation
         .metrics
         .by_session
@@ -549,7 +545,7 @@ fn evaluate_rung(
                 ingestion.charter_before_documents,
                 ingestion.charter_calls,
                 report.charter_preserved,
-                peak.map_or("unreported".into(), |tokens| tokens.to_string()),
+                peak.map_or("unmeasured".into(), |tokens| tokens.to_string()),
                 usable.map_or("unreported".into(), |tokens| tokens.to_string()),
             ),
         ),
@@ -854,14 +850,29 @@ pub(crate) mod tests {
             })
             .collect::<Vec<_>>();
         let report = full_report(run_id, RUNG.segments);
-        let completion = |peak: u64, usable: Option<u64>| {
+        // Root steps' billed prompts (`None`: the step reported no usage) and
+        // the root session's prompt total.
+        let observe = |steps: &[Option<u64>], session_prompt: u64, usable: Option<u64>| {
+            let messages = steps
+                .iter()
+                .enumerate()
+                .map(|(index, prompt)| {
+                    let content = if index == 0 {
+                        blocks.clone()
+                    } else {
+                        Vec::new()
+                    };
+                    let mut message = json!({ "role": "assistant", "content": content });
+                    if let Some(prompt) = prompt {
+                        message["usage"] = json!({ "input": 5_000, "cache_read": prompt - 5_000 });
+                    }
+                    json!({ "message": message })
+                })
+                .collect::<Vec<_>>();
             let mut observation = ScenarioObservation::for_test(
                 crate::scenarios::ScenarioId::ContextPressure,
                 run_id,
-                json!({ "messages": [{ "message": {
-                    "role": "assistant", "content": blocks,
-                    "usage": { "input": 5_000, "cache_read": peak - 5_000 },
-                } }] }),
+                json!({ "messages": messages }),
                 &report,
                 Vec::new(),
             );
@@ -880,7 +891,7 @@ pub(crate) mod tests {
                         validation_retries: None,
                         transient_resumes: None,
                         wake_resumes: None,
-                        input_tokens: None,
+                        input_tokens: Some(session_prompt),
                         output_tokens: None,
                         cache_read_tokens: None,
                         cache_write_tokens: None,
@@ -891,26 +902,33 @@ pub(crate) mod tests {
                     traces: None,
                 },
             );
-            assessment::completion(ASSESSMENTS, &evaluate_rung(&observation, run_id).unwrap())
+            observation
         };
+        let completion = |observation: &ScenarioObservation| {
+            assessment::completion(ASSESSMENTS, &evaluate_rung(observation, run_id).unwrap())
+        };
+        let single =
+            |peak: u64, usable: Option<u64>| completion(&observe(&[Some(peak)], peak, usable));
 
         // The context-capacity lane on 2026-10-26: 256k sent into 128k.
         assert_eq!(
-            completion(256_135, Some(128_000)),
+            single(256_135, Some(128_000)),
             CompletionState::TaskIncomplete
         );
-        assert_eq!(
-            completion(120_000, Some(128_000)),
-            CompletionState::Completed
-        );
+        assert_eq!(single(120_000, Some(128_000)), CompletionState::Completed);
         // The window is fit from an estimate: a billed prompt within its
         // tolerance still fits.
-        assert_eq!(
-            completion(135_000, Some(128_000)),
-            CompletionState::Completed
-        );
+        assert_eq!(single(135_000, Some(128_000)), CompletionState::Completed);
         // No snapshot, no window to hold the prompt to.
-        assert_eq!(completion(256_135, None), CompletionState::Completed);
+        assert_eq!(single(256_135, None), CompletionState::Completed);
+        // The 256k step reported no usage: the 120k step is not the peak, and
+        // the window goes unmeasured instead of passing as within it.
+        let unreported = observe(&[Some(120_000), None], 376_135, Some(128_000));
+        assert_eq!(root_window(&unreported), (None, Some(128_000)));
+        // Every step accounted for, the largest is the peak.
+        let reported = observe(&[Some(120_000), Some(256_135)], 376_135, Some(128_000));
+        assert_eq!(root_window(&reported), (Some(256_135), Some(128_000)));
+        assert_eq!(completion(&reported), CompletionState::TaskIncomplete);
     }
 
     #[test]

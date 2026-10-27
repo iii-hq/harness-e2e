@@ -1814,6 +1814,23 @@ fn context_usage(
             "the transcript records no custom entries and no snapshot says compacted".into(),
         );
     }
+    usage.peak_context_tokens = root_peak_prompt(metrics, messages);
+    if usage.peak_context_tokens.is_none() {
+        unavailable.insert(
+            "peak_context_tokens".into(),
+            "the transcript's per-step usage does not add up to the root session's totals".into(),
+        );
+    }
+    usage
+}
+
+/// The largest prompt a root step sent, only when the transcript's per-step
+/// usage adds up to the root session's totals: a step without usage could be
+/// the largest.
+pub(crate) fn root_peak_prompt(
+    metrics: &SessionMetricsResponse,
+    messages: &[Value],
+) -> Option<u64> {
     let steps = messages
         .iter()
         .filter_map(|entry| entry.get("message"))
@@ -1821,29 +1838,19 @@ fn context_usage(
         .filter_map(|message| message.get("usage"))
         .map(step_prompt)
         .collect::<Vec<_>>();
-    let session_prompt = root.and_then(|session| {
-        session.input_tokens.map(|input| {
-            input
-                .saturating_add(session.cache_read_tokens.unwrap_or(0))
-                .saturating_add(session.cache_write_tokens.unwrap_or(0))
-        })
-    });
+    let root = metrics
+        .by_session
+        .iter()
+        .find(|session| session.depth == 0)?;
+    let total = root.input_tokens.map(|input| {
+        input
+            .saturating_add(root.cache_read_tokens.unwrap_or(0))
+            .saturating_add(root.cache_write_tokens.unwrap_or(0))
+    })?;
     let step_sum = steps.iter().copied().fold(0, u64::saturating_add);
-    match session_prompt {
-        Some(total)
-            if !steps.is_empty() && step_sum.abs_diff(total) as f64 <= 0.01 * total as f64 =>
-        {
-            usage.peak_context_tokens = steps.iter().copied().max();
-        }
-        _ => {
-            unavailable.insert(
-                "peak_context_tokens".into(),
-                "the transcript's per-step usage does not add up to the root session's totals"
-                    .into(),
-            );
-        }
-    }
-    usage
+    (step_sum.abs_diff(total) as f64 <= 0.01 * total as f64)
+        .then(|| steps.iter().copied().max())
+        .flatten()
 }
 
 fn sum_optional(
