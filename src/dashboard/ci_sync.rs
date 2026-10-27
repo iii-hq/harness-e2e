@@ -228,13 +228,15 @@ async fn pass(
     let mut seen = HashSet::new();
     let (rows, next, wait) = match phase {
         CiSyncPhase::Off => return Ok(interval),
-        // Release Control runs a day at a time, until the two newest Harness
-        // releases each have one; then the newest other runs listed, so the
-        // strip outside Release Control has a count.
+        // Release Control runs a day at a time, newest first, until three
+        // Harness releases each have one: the verdict compares each
+        // release's first night, and with only two the previous release may
+        // have only its last nights in yet. Then the newest other runs
+        // listed, so the strip outside Release Control has a count.
         CiSyncPhase::Quick => {
             let mut others = Vec::new();
             for n in 0..=WINDOW_DAYS {
-                if controller.release_overview().await?.verdict.is_some() {
+                if controller.release_overview().await?.releases.len() >= 3 {
                     break;
                 }
                 let (rows, other): (Vec<_>, Vec<_>) = window(controller, n, n, &mut seen)

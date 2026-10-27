@@ -145,6 +145,7 @@ export function PointPanel({
   subtitle,
   metrics = TREND_METRICS,
   versions = true,
+  notRunText = 'They count as not completed.',
   children,
 }: {
   points: TrendPoint[]
@@ -168,6 +169,8 @@ export function PointPanel({
   /** Its versions and stack at the foot; off for a release, which no one
    *  execution's stack or lock speaks for. */
   versions?: boolean
+  /** What the planned tests that did not run do to the measures. */
+  notRunText?: string
   /** After the measures. */
   children?: ReactNode
 }) {
@@ -263,8 +266,7 @@ export function PointPanel({
       ) : null}
       {counted(point) && missing.length > 0 ? (
         <p role="status" className="tr-note" data-tone="warn">
-          Planned but not run: {missing.join(', ')}. They count as not
-          completed.
+          Planned but not run: {missing.join(', ')}. {notRunText}
         </p>
       ) : null}
       {changes === null ? null : (

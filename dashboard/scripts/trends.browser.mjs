@@ -185,9 +185,10 @@ try {
   assert.ok(requests('release-overview-get').length >= 2)
   await verdictMatches()
 
-  // Five local runs as rings beside the releases, none as a filled dot.
+  // This setup's two local runs as rings beside the releases, none as a
+  // filled dot.
   const chart = page.locator('[data-trend-chart]')
-  assert.equal(await chart.locator('.tr-point[data-source="local"]').count(), 5)
+  assert.equal(await chart.locator('.tr-point[data-source="local"]').count(), 2)
   assert.equal(
     await page.locator('circle.tr-dot[data-source="local"]').count(),
     0,
@@ -200,6 +201,32 @@ try {
     .getByRole('button', { name: 'Close' })
     .click()
   assert.equal(await page.locator('[data-trend-panel]').count(), 0)
+  // Another setup from the Setup menu, with its own line and step; one left
+  // out says why; back to the one that decides.
+  const setupPicker = page.locator('[data-picker="setup"]')
+  await setupPicker.click()
+  await page
+    .getByRole('menuitemradio', { name: /^Application builds and changes/ })
+    .click()
+  assert.equal(await chart.locator('.tr-point[data-source="local"]').count(), 0)
+  assert.equal(await chart.locator('.tr-point').count(), 2)
+  await page
+    .locator('.tr-callout')
+    .getByText('Tests completed', { exact: true })
+    .waitFor()
+  await setupPicker.click()
+  await page
+    .getByRole('menuitemradio', { name: /^Complete the onboarding tour/ })
+    .click()
+  await page
+    .locator('.tr-callout')
+    .getByText('Not compared: not run on v1.8.36')
+    .waitFor()
+  await setupPicker.click()
+  await page
+    .getByRole('menuitemradio', { name: /^Core runtime regression/ })
+    .click()
+  assert.equal(await chart.locator('.tr-point[data-source="local"]').count(), 2)
   // The CI runs outside Release Control, and the executions that are them.
   const outside = page.locator('[data-outside]')
   await outside
@@ -252,8 +279,9 @@ try {
   await moreOptions.click()
   await page.locator('[data-picker="suite"]').waitFor()
   assert.doesNotMatch(await hash(), /suite=/)
-  // A suite opens its series under the same verdict. This one recorded no
-  // Harness release, so each execution is drawn, and said.
+  // A suite opens its series, without the verdict: the sync line moves
+  // beside the way back. This one recorded no Harness release, so each
+  // execution is drawn, and said.
   const suite = page.locator('[data-picker="suite"]')
   await suite.click()
   await page
@@ -275,7 +303,11 @@ try {
     .locator('summary', { hasText: 'Details' })
     .getByText('by test · executions')
     .waitFor()
-  await verdictMatches()
+  assert.equal(await verdictLine.count(), 0)
+  await page
+    .locator('.tr-back-row')
+    .getByRole('button', { name: 'Download CI results' })
+    .waitFor()
   assert.ok((await chart.locator('.tr-point').count()) > 0)
   // Back to the release overview, every series control where it started.
   const beforeBack = requests('trends-get').length
@@ -1000,7 +1032,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: the release overview first (a failed load retried, the verdict line, five local runs as rings, What changed at the latest release, the CI runs outside Release Control linking to the executions, the measure kept in the hash and across a reload, Download CI results through Check now, a sign-in to fix and Turn off sync, a suite opened under More options drawn per execution with its note, Back to release overview), a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over on the release overview, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, grouped by day (a day’s panel on its executions, a day as the baseline kept on its last execution) and by Harness release (unrecorded ones said and left out, the releases in version order), a model of a suite and the empty state’s Run again, narrow pane with Details open and the Baseline picker, the five local runs of this harness as rings.',
+    'Trends browser flow passed: the release overview first (a failed load retried, the verdict line, two local runs of the setup as rings, What changed at the latest release, another setup from the Setup menu and back, the CI runs outside Release Control linking to the executions, the measure kept in the hash and across a reload, Download CI results through Check now, a sign-in to fix and Turn off sync, a suite opened under More options drawn per execution with its note, the sync line beside Back to release overview), a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over on the release overview, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, grouped by day (a day’s panel on its executions, a day as the baseline kept on its last execution) and by Harness release (unrecorded ones said and left out, the releases in version order), a model of a suite and the empty state’s Run again, narrow pane with Details open and the Baseline picker, the five local runs of this harness as rings.',
   )
 } finally {
   await browser.close()

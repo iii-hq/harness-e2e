@@ -468,6 +468,20 @@ struct RunMetrics {
     peak_context_fill: Option<f64>,
 }
 
+impl RunMetrics {
+    /// By cause: a failure of the subject, which counts; one of anything
+    /// else is infrastructure. A run written before causes keeps its status.
+    fn harness_failed(&self) -> bool {
+        match self.cause {
+            Some(cause) => cause.counted() && cause != RunCause::Evaluated,
+            None => matches!(
+                self.status,
+                RunStatus::SubjectError | RunStatus::ResourceLimit
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Observation {
     execution_id: String,
@@ -1220,6 +1234,7 @@ impl DashboardReadModel {
                         counted: run
                             .technical
                             .map_or(run.score.is_some(), |t| t == TechnicalState::Valid),
+                        harness_failed: run.harness_failed(),
                         completed: run.completion == CompletionState::Completed,
                         score: run.score,
                         duration_ms: run.duration_seconds.map(|seconds| seconds * 1_000.0),
@@ -1823,18 +1838,7 @@ fn side_summary(
             .iter()
             .filter(|run| run.status == RunStatus::HardGateFailed)
             .count(),
-        // By cause: a failure of the subject counts, one of anything else is
-        // infrastructure. A run written before causes keeps its status.
-        technical_failed: runs
-            .iter()
-            .filter(|run| match run.cause {
-                Some(cause) => cause.counted() && cause != RunCause::Evaluated,
-                None => matches!(
-                    run.status,
-                    RunStatus::SubjectError | RunStatus::ResourceLimit
-                ),
-            })
-            .count(),
+        technical_failed: runs.iter().filter(|run| run.harness_failed()).count(),
         infra_failed: runs
             .iter()
             .filter(|run| match run.cause {

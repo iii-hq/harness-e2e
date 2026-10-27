@@ -21,7 +21,6 @@ import { ReleaseOverview } from '@/components/trends/ReleaseOverview'
 import { SyncStatusLine } from '@/components/trends/SyncStatusLine'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
-import { VerdictHeadline } from '@/components/trends/VerdictHeadline'
 import { buttonClassName, EmptyState } from '@/design-system'
 import { useCiSync } from '@/hooks/use-ci-sync'
 import {
@@ -605,12 +604,13 @@ function Legend({ mixed, unit }: { mixed: boolean; unit: string }) {
   )
 }
 
-/** The first screen's shape while it loads: the verdict and its scope, the
+/** The first screen's shape while it loads: the verdict's three lines, the
  *  metric tabs, the release line, then More options and Details. */
 export function TrendsSkeleton() {
   return (
     <div className="tr-loading" role="status" aria-busy="true">
       <span className="ds-visually-hidden">Loading the release overview</span>
+      <Skeleton className="tr-skel tr-skel-line" />
       <Skeleton className="tr-skel tr-skel-line" />
       <Skeleton className="tr-skel tr-skel-line" />
       <div className="tr-tabs">
@@ -1172,10 +1172,8 @@ export function TrendsPage({
         <h1 id="trends-title">Trends</h1>
         <p>
           Whether the latest Harness release did better or worse than the one
-          before, from the runs Release Control dispatched on CI. A hollow ring
-          is a run on this harness or in Docker, shown beside the release it ran
-          with; it never counts. More options follows one suite on one model and
-          profile over time.
+          before, from the runs Release Control dispatched on CI. More options
+          follows one suite on one model and profile over time.
         </p>
       </header>
 
@@ -1208,19 +1206,8 @@ export function TrendsPage({
         <TrendsSkeleton />
       ) : (
         <>
-          {overview ? (
-            <VerdictHeadline
-              overview={overview}
-              status={offer ? undefined : syncLine(false)}
-            />
-          ) : !overviewSettled ? (
-            <div className="tr-loading" role="status" aria-busy="true">
-              <span className="ds-visually-hidden">
-                Loading the release overview
-              </span>
-              <Skeleton className="tr-skel tr-skel-line" />
-            </div>
-          ) : (
+          {/* Settled in overview mode: answered, or failed. */}
+          {mode === 'series' || overview ? null : (
             <section className="tr-verdict" aria-labelledby="tr-verdict">
               <div className="tr-verdict-head">
                 <h2 id="tr-verdict" className="tr-h2">
@@ -1238,17 +1225,19 @@ export function TrendsPage({
           )}
           {mode === 'series' ? (
             <>
-              <button
-                type="button"
-                className={buttonClassName({
-                  variant: 'quiet',
-                  size: 'compact',
-                  className: 'tr-back',
-                })}
-                onClick={backToOverview}
-              >
-                Back to release overview
-              </button>
+              <div className="tr-back-row">
+                <button
+                  type="button"
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  onClick={backToOverview}
+                >
+                  Back to release overview
+                </button>
+                {syncLine(false)}
+              </div>
               {chart}
               {moreOptions}
               {details}
@@ -1261,6 +1250,7 @@ export function TrendsPage({
               bridge={bridge}
               narrow={narrow}
               options={moreOptions}
+              status={offer ? undefined : syncLine(false)}
               empty={
                 <EmptyState
                   icon={<ChartLine size={24} />}

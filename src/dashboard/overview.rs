@@ -1,6 +1,7 @@
 //! The Trends first screen, over every execution the Console lists. Only the
 //! Release Control executions that counted make releases: a point per
-//! Harness release, each compared with the one before it over what both ran
+//! Harness release and combination, its first completed execution, each
+//! release compared with the one before it over the tests both counted
 //! alike, the latest pair being the verdict. Local and Docker executions sit
 //! beside a release; other CI runs are only counted.
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,9 +11,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::trends::{
-    execution, instant, mean, measures, natives, point, semver_key, source, suite_label, sum,
+    execution, identity, instant, measures, natives, point, semver_key, source, suite_label,
     Execution, TrendMeasures, TrendPoint, TrendRole, TrendRun, TrendSeriesKey, TrendStack, HARNESS,
-    NOT_RECORDED,
+    NOT_RECORDED, RUNNER,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -34,82 +35,138 @@ pub(super) struct ReleaseOverview {
 pub(super) struct ReleasePoint {
     /// One plain semver, without a leading `v`.
     pub release: String,
-    pub first_started_at: String,
     /// Oldest first; a Release Control id run again counts its latest attempt.
     pub executions: Vec<String>,
     pub combinations: Vec<Combination>,
-    /// Over every combination it ran.
-    pub aggregate: Option<Aggregate>,
-    /// Combinations the release before it did not run.
-    pub joined: Vec<Combination>,
-    /// Combinations the release before it ran and this one did not.
-    pub left: Vec<Combination>,
-    /// Planned tests its executions never ran.
-    pub tests_not_run: usize,
-    /// Of its newest execution.
-    pub engine: Option<String>,
-    /// Of its newest execution.
-    pub workers: Option<BTreeMap<String, String>>,
+    /// Each combination's first completed execution, in combination order; a
+    /// combination with only interrupted executions has none.
+    pub firsts: Vec<CombinationPoint>,
     /// Against the release before it; null for the first.
     pub step: Option<ReleaseStep>,
 }
 
+/// A combination's first completed execution of a release: what its chart
+/// plots and its step compares.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub(super) struct CombinationPoint {
+    pub combination: Combination,
+    pub point: TrendPoint,
+    /// Runs that did not count and that the subject did not fail: the E2E
+    /// infrastructure's.
+    pub infra_failed_runs: usize,
+    /// Runs the subject failed: the Harness, its provider request or a
+    /// budget.
+    pub harness_failed_runs: usize,
+    /// Planned runs that never ran.
+    pub not_run: usize,
+}
+
+/// A release against the one before it, combination by combination.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct ReleaseStep {
     pub previous: String,
-    /// Over what both releases ran alike; null when nothing was.
-    pub latest_aggregate: Option<Aggregate>,
-    pub previous_aggregate: Option<Aggregate>,
+    /// The combinations both releases first completed, over the tests both
+    /// counted alike; in combination order.
+    pub compared: Vec<CombinationDelta>,
+    /// Every other combination either release ran, with why.
+    pub left_out: Vec<LeftOutCombination>,
 }
 
-/// Combinations, each weighing the same however often it ran.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
-pub(super) struct Aggregate {
-    /// The mean of their means; `completed`, `planned`, `function_calls`
-    /// and `function_call_errors` added up.
-    pub measures: TrendMeasures,
-    /// The mean of their `completed / planned`.
-    pub completed_share: Option<f64>,
-    /// The mean of their `function_call_errors / function_calls`, those
-    /// without a call left out.
-    pub error_rate: Option<f64>,
-}
-
+/// The latest release against the previous one: the latest release's step.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct Verdict {
     pub latest: String,
     pub previous: String,
     /// When the latest release's newest execution started.
     pub latest_started_at: String,
-    /// Over `compared`; null when it is empty.
-    pub latest_aggregate: Option<Aggregate>,
-    pub previous_aggregate: Option<Aggregate>,
-    /// The combinations both releases ran, over the tests both planned alike.
-    pub compared: Vec<CombinationDelta>,
-    pub left_out: Vec<LeftOutCombination>,
+}
+
+/// One side of a combination's step: its first completed execution, over
+/// the tests compared.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub(super) struct Side {
+    pub execution: String,
+    /// Over the compared tests' runs; `planned` is their planned runs.
+    pub measures: TrendMeasures,
+    /// The compared tests' counted runs: what Tests completed divides by.
+    pub counted_runs: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct CombinationDelta {
     pub combination: Combination,
-    pub latest: TrendMeasures,
-    pub previous: TrendMeasures,
-    /// Tests that do not compare: their definition changed (or is unknown),
-    /// or only one release planned or ran them. A test both planned that one
-    /// release never ran compares, as not completed there.
-    pub tests_left_out: Vec<String>,
+    pub latest: Side,
+    pub previous: Side,
+    /// Tests both sides counted under one definition.
+    pub compared_tests: usize,
+    /// The change in mean score, in points, rounded to 0.1; null when a side
+    /// scored nothing.
+    pub score_delta: Option<f64>,
+    /// The change in completed runs over counted runs, in percentage points,
+    /// rounded to 0.1.
+    pub completed_delta: f64,
+    /// The iii engine and the runner, when they changed between the two
+    /// executions.
+    pub also_changed: Vec<VersionChange>,
+    pub tests_left_out: Vec<LeftOutTest>,
     /// The latest against the previous over the tests compared, as
     /// `harness-e2e compare` reads them; without a verdict when a side ran
-    /// one run per test. Only the latest pair has one.
+    /// one run per test. Only the latest release's step has one.
     pub calibrated: Option<crate::verdict::Summary>,
 }
 
-/// `only_in: None`: ran on both, but no test kept its `behavior_sha256`.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub(super) struct VersionChange {
+    /// `iii` or `harness-e2e`.
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub(super) struct LeftOutTest {
+    pub test: String,
+    pub reason: TestLeftOut,
+}
+
+/// Why a test does not compare; the first that applies.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TestLeftOut {
+    /// Planned or run on the latest side only.
+    OnlyLatest,
+    OnlyPrevious,
+    /// Both planned or ran it, and no run of it counted on the latest side
+    /// (or on neither): it never ran, or the E2E infrastructure failed it.
+    NotCountedLatest,
+    NotCountedPrevious,
+    /// Its definition differs between the sides, or is unknown or mixed.
+    Redefined,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct LeftOutCombination {
     pub combination: Combination,
-    /// The only release of the two that ran it.
+    pub reason: CombinationLeftOut,
+    /// The only release of the two that counted a run of it.
     pub only_in: Option<String>,
+    /// With `all_runs_infra_failed`: the other release's runs of it, none of
+    /// which counted.
+    pub infra_failed_runs: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CombinationLeftOut {
+    /// Only one release ran it.
+    OnlyInOneRelease,
+    /// Both first completed it, and no test compares.
+    NothingAlike,
+    /// Both counted it, and one has only interrupted executions of it.
+    NoCompletedExecution,
+    /// The other release ran it, and every run failed in the E2E
+    /// infrastructure.
+    AllRunsInfraFailed,
 }
 
 /// What the verdict compares like with like: a series and its stack.
@@ -138,7 +195,10 @@ pub(super) struct LocalMark {
     /// The Harness it recorded (`@sha7`, a version); null: not recorded.
     pub ran: Option<String>,
     pub suite_label: String,
-    pub measures: Option<TrendMeasures>,
+    /// The combination whose chart it sits on.
+    pub combination: Combination,
+    /// `measures` is null when nothing counted.
+    pub point: TrendPoint,
 }
 
 /// GitHub executions without a Release Control id, whatever their state.
@@ -158,11 +218,12 @@ struct Ran<'a> {
 /// A series and its stack name.
 type Key = (TrendSeriesKey, String);
 
-/// A release's kept executions, oldest first, and by combination.
+/// A release's kept executions, oldest first, and by combination its first
+/// completed one.
 struct Line<'a> {
     release: &'a str,
     kept: Vec<&'a Ran<'a>>,
-    combinations: BTreeMap<Key, (Combination, Vec<&'a Ran<'a>>)>,
+    combinations: BTreeMap<Key, (Combination, Option<&'a Ran<'a>>)>,
 }
 
 pub(super) fn overview(
@@ -200,13 +261,23 @@ pub(super) fn overview(
 
     let mut unversioned = 0;
     let mut releases = BTreeMap::<&str, BTreeMap<(&str, Key), &Ran>>::new();
+    // A combination that ran and failed is not one that did not run: the
+    // runs of executions where nothing counted, by release and combination.
+    let mut invalid_only = BTreeMap::<(&str, Key), usize>::new();
     for ran in &executions {
         let finished = matches!(
             ran.execution.summary["state"].as_str(),
             Some("completed" | "interrupted")
         );
-        if ran.point.source.role != TrendRole::ReleaseControl || !finished || ran.point.counted == 0
-        {
+        if ran.point.source.role != TrendRole::ReleaseControl || !finished {
+            continue;
+        }
+        if ran.point.counted == 0 {
+            if let Some(release) = ran.point.release.as_deref().filter(|_| ran.point.runs > 0) {
+                *invalid_only
+                    .entry((release, combination_key(ran)))
+                    .or_default() += ran.point.runs;
+            }
             continue;
         }
         let Some(release) = &ran.point.release else {
@@ -227,19 +298,12 @@ pub(super) fn overview(
         .collect::<Vec<_>>();
     lines.sort_by_key(|line| semver_key(line.release));
 
-    let mut points = Vec::<ReleasePoint>::new();
-    for (index, line) in lines.iter().enumerate() {
-        let before = index.checked_sub(1).map(|before| &lines[before]);
-        let newest = line.kept[line.kept.len() - 1];
-        let measured = line
-            .combinations
-            .values()
-            .filter_map(|(_, group)| measured(group, |_| true))
-            .collect::<Vec<_>>();
-        let measured = measured.iter().collect::<Vec<_>>();
-        points.push(ReleasePoint {
+    let last = lines.len().saturating_sub(1);
+    let points = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| ReleasePoint {
             release: line.release.to_owned(),
-            first_started_at: line.kept[0].execution.started_at.to_owned(),
             executions: line
                 .kept
                 .iter()
@@ -250,49 +314,27 @@ pub(super) fn overview(
                 .values()
                 .map(|(combination, _)| combination.clone())
                 .collect(),
-            aggregate: aggregate(&measured, &measured),
-            joined: before
-                .map(|before| missing(line, before))
-                .unwrap_or_default(),
-            left: before
-                .map(|before| missing(before, line))
-                .unwrap_or_default(),
-            tests_not_run: line
-                .kept
-                .iter()
-                .flat_map(|ran| &ran.point.tests)
-                .filter(|test| test.state == "not_run")
-                .count(),
-            engine: newest.point.engine.clone(),
-            workers: newest.point.workers.clone(),
-            step: before.map(|before| {
-                let (latest_aggregate, previous_aggregate) =
-                    aggregates(&compare(line, before, false).0);
-                ReleaseStep {
-                    previous: before.release.to_owned(),
-                    latest_aggregate,
-                    previous_aggregate,
-                }
-            }),
-        });
-    }
+            firsts: line
+                .combinations
+                .values()
+                .filter_map(|(combination, first)| Some(first_point(combination, (*first)?)))
+                .collect(),
+            // Only the verdict's step reads the calibrated verdict, which
+            // permutes every run.
+            step: index
+                .checked_sub(1)
+                .map(|before| compare(line, &lines[before], &invalid_only, index == last)),
+        })
+        .collect();
     let verdict = match lines.as_slice() {
-        [.., previous, latest] => {
-            let (compared, left_out) = compare(latest, previous, true);
-            let (latest_aggregate, previous_aggregate) = aggregates(&compared);
-            Some(Verdict {
-                latest: latest.release.to_owned(),
-                previous: previous.release.to_owned(),
-                latest_started_at: latest.kept[latest.kept.len() - 1]
-                    .execution
-                    .started_at
-                    .to_owned(),
-                latest_aggregate,
-                previous_aggregate,
-                compared,
-                left_out,
-            })
-        }
+        [.., previous, latest] => Some(Verdict {
+            latest: latest.release.to_owned(),
+            previous: previous.release.to_owned(),
+            latest_started_at: latest.kept[latest.kept.len() - 1]
+                .execution
+                .started_at
+                .to_owned(),
+        }),
         _ => None,
     };
 
@@ -325,7 +367,8 @@ pub(super) fn overview(
                     .and_then(|w| w.get(HARNESS))
                     .cloned(),
                 suite_label: suite_label(&ran.execution),
-                measures: ran.point.measures.clone(),
+                combination: combination(&combination_key(ran), ran),
+                point: ran.point.clone(),
             })
         })
         .collect();
@@ -365,6 +408,18 @@ fn combination_key(ran: &Ran) -> Key {
     )
 }
 
+/// The combination `key` names, its suite labelled as `ran` labels it.
+fn combination((series, stack): &Key, ran: &Ran) -> Combination {
+    Combination {
+        suite: series.suite.clone(),
+        suite_label: suite_label(&ran.execution),
+        provider: series.provider.clone(),
+        model: series.model.clone(),
+        profile: series.profile.clone(),
+        stack: stack.clone(),
+    }
+}
+
 /// A release's kept executions, oldest first, grouped by combination.
 fn line<'a>(release: &'a str, mut kept: Vec<&'a Ran<'a>>) -> Line<'a> {
     kept.sort_by(|left, right| {
@@ -377,16 +432,11 @@ fn line<'a>(release: &'a str, mut kept: Vec<&'a Ran<'a>>) -> Line<'a> {
     let combinations = groups
         .into_iter()
         .map(|(key, group)| {
-            let (series, stack) = key.clone();
-            let combination = Combination {
-                suite: series.suite,
-                suite_label: suite_label(&group[group.len() - 1].execution),
-                provider: series.provider,
-                model: series.model,
-                profile: series.profile,
-                stack,
-            };
-            (key, (combination, group))
+            let combination = combination(&key, group[group.len() - 1]);
+            let first = group
+                .into_iter()
+                .find(|ran| ran.execution.summary["state"].as_str() == Some("completed"));
+            (key, (combination, first))
         })
         .collect();
     Line {
@@ -396,100 +446,169 @@ fn line<'a>(release: &'a str, mut kept: Vec<&'a Ran<'a>>) -> Line<'a> {
     }
 }
 
-/// The combinations `line` ran and `other` did not.
-fn missing(line: &Line, other: &Line) -> Vec<Combination> {
-    line.combinations
+/// A first completed execution as the chart plots it, with what it did not
+/// measure.
+fn first_point(combination: &Combination, ran: &Ran) -> CombinationPoint {
+    let parameters = &ran.execution.parameters;
+    let not_run = parameters
+        .scenarios
         .iter()
-        .filter(|(key, _)| !other.combinations.contains_key(*key))
-        .map(|(_, (combination, _))| combination.clone())
-        .collect()
+        .map(|test| {
+            let ran = ran.runs.iter().filter(|run| run.test == *test).count();
+            (parameters.runs.max(1) as usize).saturating_sub(ran)
+        })
+        .sum();
+    CombinationPoint {
+        combination: combination.clone(),
+        point: ran.point.clone(),
+        infra_failed_runs: ran
+            .runs
+            .iter()
+            .filter(|run| !run.counted && !run.harness_failed)
+            .count(),
+        harness_failed_runs: ran.runs.iter().filter(|run| run.harness_failed).count(),
+        not_run,
+    }
 }
 
-/// A release against an earlier one: each combination both ran, over the
-/// tests both ran alike; every other combination is left out. `calibrate`
-/// also reads each combination's calibrated verdict.
+/// A release against an earlier one: each combination both first completed,
+/// over the tests both counted alike; every other combination either ran is
+/// left out with why. `calibrate` also reads each compared combination's
+/// calibrated verdict.
 fn compare(
     latest: &Line,
     previous: &Line,
+    invalid_only: &BTreeMap<(&str, Key), usize>,
     calibrate: bool,
-) -> (Vec<CombinationDelta>, Vec<LeftOutCombination>) {
+) -> ReleaseStep {
     let (mut compared, mut left_out) = (Vec::new(), Vec::new());
     let keys = latest
         .combinations
         .keys()
         .chain(previous.combinations.keys())
         .collect::<BTreeSet<_>>();
-    let left = |combination: &Combination, only_in: Option<&str>| LeftOutCombination {
+    let left = |combination: &Combination,
+                reason: CombinationLeftOut,
+                only_in: Option<&str>,
+                infra_failed_runs: Option<usize>| LeftOutCombination {
         combination: combination.clone(),
+        reason,
         only_in: only_in.map(str::to_owned),
+        infra_failed_runs,
     };
+    // Only `line` counted it: whether `other` ran it and every run failed.
+    let one_side =
+        |combination: &Combination, line: &Line, other: &Line, key: &Key| match invalid_only
+            .get(&(other.release, key.clone()))
+        {
+            Some(&runs) => left(
+                combination,
+                CombinationLeftOut::AllRunsInfraFailed,
+                Some(line.release),
+                Some(runs),
+            ),
+            None => left(
+                combination,
+                CombinationLeftOut::OnlyInOneRelease,
+                Some(line.release),
+                None,
+            ),
+        };
     for key in keys {
         match (latest.combinations.get(key), previous.combinations.get(key)) {
-            (Some((combination, ran)), Some((_, ran_before))) => {
-                match delta(combination, ran, ran_before, calibrate) {
+            (Some((combination, Some(first))), Some((_, Some(before)))) => {
+                match delta(combination, first, before, calibrate) {
                     Some(delta) => compared.push(delta),
-                    None => left_out.push(left(combination, None)),
+                    None => left_out.push(left(
+                        combination,
+                        CombinationLeftOut::NothingAlike,
+                        None,
+                        None,
+                    )),
                 }
             }
+            (Some((combination, _)), Some(_)) => left_out.push(left(
+                combination,
+                CombinationLeftOut::NoCompletedExecution,
+                None,
+                None,
+            )),
             (Some((combination, _)), None) => {
-                left_out.push(left(combination, Some(latest.release)))
+                left_out.push(one_side(combination, latest, previous, key))
             }
             (None, Some((combination, _))) => {
-                left_out.push(left(combination, Some(previous.release)))
+                left_out.push(one_side(combination, previous, latest, key))
             }
             (None, None) => {}
         }
     }
-    (compared, left_out)
+    ReleaseStep {
+        previous: previous.release.to_owned(),
+        compared,
+        left_out,
+    }
 }
 
-/// A combination both releases ran, measured over the tests both planned
-/// or ran under one same definition; none when no test was. A release that
-/// counted no run of such a test keeps it planned: it adds nothing to the
-/// means and lowers Completed.
+/// A combination both releases first completed, over the tests both counted
+/// under one same definition; none when no test was. Every other test is
+/// left out with why.
 fn delta(
     combination: &Combination,
-    latest: &[&Ran],
-    previous: &[&Ran],
+    latest: &Ran,
+    previous: &Ran,
     calibrate: bool,
 ) -> Option<CombinationDelta> {
-    let (latest_counted, previous_counted) = (counted(latest), counted(previous));
     let (latest_tests, previous_tests) = (tests(latest), tests(previous));
-    let alike = latest_tests
-        .intersection(&previous_tests)
-        .copied()
-        .filter(|test| {
+    let (latest_counted, previous_counted) = (counted(latest), counted(previous));
+    let (mut alike, mut tests_left_out) = (BTreeSet::new(), Vec::new());
+    for test in latest_tests.union(&previous_tests).copied() {
+        let reason = if !previous_tests.contains(test) {
+            Some(TestLeftOut::OnlyLatest)
+        } else if !latest_tests.contains(test) {
+            Some(TestLeftOut::OnlyPrevious)
+        } else {
             match (
                 definition(&latest_counted, test),
                 definition(&previous_counted, test),
             ) {
-                (Some(Some(latest)), Some(Some(previous))) => latest == previous,
-                (Some(None), _) | (_, Some(None)) => false,
-                _ => true,
+                (None, _) => Some(TestLeftOut::NotCountedLatest),
+                (_, None) => Some(TestLeftOut::NotCountedPrevious),
+                (Some(Some(latest)), Some(Some(previous))) if latest == previous => None,
+                _ => Some(TestLeftOut::Redefined),
             }
-        })
-        .collect::<BTreeSet<_>>();
-    let tests = latest_tests
-        .union(&previous_tests)
-        .copied()
-        .collect::<BTreeSet<_>>();
+        };
+        match reason {
+            Some(reason) => tests_left_out.push(LeftOutTest {
+                test: test.to_owned(),
+                reason,
+            }),
+            None => {
+                alike.insert(test);
+            }
+        }
+    }
     let keep = |test: &str| alike.contains(test);
-    let runs = |group: &[&Ran]| {
-        group
+    let (latest_side, previous_side) = (side(latest, keep)?, side(previous, keep)?);
+    let share = |side: &Side| 100.0 * side.measures.completed as f64 / side.counted_runs as f64;
+    let runs = |ran: &Ran| {
+        ran.runs
             .iter()
-            .flat_map(|ran| ran.runs.iter().copied())
+            .copied()
             .filter(|run| keep(&run.test))
             .map(verdict_run)
             .collect::<Vec<_>>()
     };
     Some(CombinationDelta {
         combination: combination.clone(),
-        latest: measured(latest, keep)?,
-        previous: measured(previous, keep)?,
-        tests_left_out: tests
-            .difference(&alike)
-            .map(|test| (*test).to_owned())
-            .collect(),
+        compared_tests: alike.len(),
+        score_delta: latest_side
+            .measures
+            .score_mean
+            .zip(previous_side.measures.score_mean)
+            .map(|(latest, previous)| round1(latest - previous)),
+        completed_delta: round1(share(&latest_side) - share(&previous_side)),
+        also_changed: also_changed(latest, previous),
+        tests_left_out,
         calibrated: calibrate.then(|| {
             crate::verdict::compare(
                 &runs(previous),
@@ -498,7 +617,59 @@ fn delta(
             )
             .summary()
         }),
+        latest: latest_side,
+        previous: previous_side,
     })
+}
+
+/// An execution over the tests kept; none when none of their runs counted.
+fn side(ran: &Ran, keep: impl Fn(&str) -> bool) -> Option<Side> {
+    let runs = ran
+        .runs
+        .iter()
+        .copied()
+        .filter(|run| keep(&run.test))
+        .collect::<Vec<_>>();
+    Some(Side {
+        execution: ran.execution.id.to_owned(),
+        measures: measures(&runs, planned(&ran.execution, &ran.runs, &keep))?,
+        counted_runs: runs.iter().filter(|run| run.counted).count(),
+    })
+}
+
+/// What else changed between two executions: the iii engine and the runner.
+fn also_changed(latest: &Ran, previous: &Ran) -> Vec<VersionChange> {
+    let runner = |ran: &Ran| {
+        let row = ran
+            .execution
+            .workers
+            .iter()
+            .find(|row| row.name == RUNNER)?;
+        identity(row, false)
+    };
+    [
+        (
+            "iii",
+            previous.point.engine.clone(),
+            latest.point.engine.clone(),
+        ),
+        (RUNNER, runner(previous), runner(latest)),
+    ]
+    .into_iter()
+    .filter_map(|(name, from, to)| match (from, to) {
+        (Some(from), Some(to)) if from != to => Some(VersionChange {
+            name: name.to_owned(),
+            from,
+            to,
+        }),
+        _ => None,
+    })
+    .collect()
+}
+
+/// Rounded to 0.1, halves away from zero.
+fn round1(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
 }
 
 /// A run as the verdict reads it; the read model keeps whether it counted,
@@ -518,25 +689,17 @@ fn verdict_run(run: &TrendRun) -> crate::verdict::Run {
     }
 }
 
-/// The tests a release's executions of a combination planned or ran.
-fn tests<'a>(group: &[&'a Ran]) -> BTreeSet<&'a str> {
-    group
-        .iter()
-        .flat_map(|ran| {
-            let planned = ran.execution.parameters.scenarios.iter();
-            planned
-                .map(String::as_str)
-                .chain(ran.runs.iter().map(|run| run.test.as_str()))
-        })
+/// The tests an execution planned or ran.
+fn tests<'a>(ran: &'a Ran) -> BTreeSet<&'a str> {
+    let planned = ran.execution.parameters.scenarios.iter();
+    planned
+        .map(String::as_str)
+        .chain(ran.runs.iter().map(|run| run.test.as_str()))
         .collect()
 }
 
-fn counted<'a>(group: &[&Ran<'a>]) -> Vec<&'a TrendRun> {
-    group
-        .iter()
-        .flat_map(|ran| ran.runs.iter().copied())
-        .filter(|run| run.counted)
-        .collect()
+fn counted<'a>(ran: &Ran<'a>) -> Vec<&'a TrendRun> {
+    ran.runs.iter().copied().filter(|run| run.counted).collect()
 }
 
 /// The one `behavior_sha256` all of a test's counted runs carry:
@@ -549,21 +712,6 @@ fn definition<'a>(counted: &[&'a TrendRun], test: &str) -> Option<Option<&'a str
         .map(|run| run.behavior_sha256.as_deref());
     let first = definitions.next()?;
     Some(first.filter(|_| definitions.all(|definition| definition == first)))
-}
-
-/// A combination's executions pooled: the runs of the tests kept, against
-/// the runs planned for them.
-fn measured(group: &[&Ran], keep: impl Fn(&str) -> bool) -> Option<TrendMeasures> {
-    let runs = group
-        .iter()
-        .flat_map(|ran| ran.runs.iter().copied())
-        .filter(|run| keep(&run.test))
-        .collect::<Vec<_>>();
-    let planned = group
-        .iter()
-        .map(|ran| planned(&ran.execution, &ran.runs, &keep))
-        .sum();
-    measures(&runs, planned)
 }
 
 /// The runs planned for the tests kept (tests × runs per test), else the
@@ -580,59 +728,6 @@ fn planned(execution: &Execution, runs: &[&TrendRun], keep: impl Fn(&str) -> boo
             .count();
         tests * parameters.runs.max(1) as usize
     }
-}
-
-/// Each delta's latest and previous measures, aggregated: each measure over
-/// the combinations both releases have it for.
-fn aggregates(compared: &[CombinationDelta]) -> (Option<Aggregate>, Option<Aggregate>) {
-    let latest = compared
-        .iter()
-        .map(|delta| &delta.latest)
-        .collect::<Vec<_>>();
-    let previous = compared
-        .iter()
-        .map(|delta| &delta.previous)
-        .collect::<Vec<_>>();
-    (aggregate(&latest, &previous), aggregate(&previous, &latest))
-}
-
-/// Combinations weighing the same: the mean of their means and of their
-/// shares, each over the combinations `other` (one per combination, in the
-/// same order) has it for too; their counts added up, to show, never to
-/// divide.
-fn aggregate(all: &[&TrendMeasures], other: &[&TrendMeasures]) -> Option<Aggregate> {
-    let mean_of = |of: fn(&TrendMeasures) -> Option<f64>| {
-        mean(all.iter().zip(other).map(|(m, o)| of(o).and(of(m))))
-    };
-    (!all.is_empty()).then(|| Aggregate {
-        measures: TrendMeasures {
-            score_mean: mean_of(|m| m.score_mean),
-            completed: all.iter().map(|m| m.completed).sum(),
-            planned: all.iter().map(|m| m.planned).sum(),
-            duration_ms_mean: mean_of(|m| m.duration_ms_mean),
-            input_tokens_mean: mean_of(|m| m.input_tokens_mean),
-            function_calls_mean: mean_of(|m| m.function_calls_mean),
-            function_calls: sum(all.iter().map(|m| m.function_calls)),
-            function_call_errors: sum(all.iter().map(|m| m.function_call_errors)),
-            turns_mean: mean_of(|m| m.turns_mean),
-            cost_usd_mean: mean_of(|m| m.cost_usd_mean),
-            output_tokens_mean: mean_of(|m| m.output_tokens_mean),
-            cache_read_tokens_mean: mean_of(|m| m.cache_read_tokens_mean),
-            cache_write_tokens_mean: mean_of(|m| m.cache_write_tokens_mean),
-            reasoning_tokens_mean: mean_of(|m| m.reasoning_tokens_mean),
-            validation_retries_mean: mean_of(|m| m.validation_retries_mean),
-            technical_retries_mean: mean_of(|m| m.technical_retries_mean),
-            compactions_mean: mean_of(|m| m.compactions_mean),
-            peak_context_fill_mean: mean_of(|m| m.peak_context_fill_mean),
-        },
-        completed_share: mean_of(|m| {
-            (m.planned > 0).then(|| m.completed as f64 / m.planned as f64)
-        }),
-        error_rate: mean_of(|m| match (m.function_call_errors, m.function_calls) {
-            (Some(errors), Some(calls)) if calls > 0.0 => Some(errors / calls),
-            _ => None,
-        }),
-    })
 }
 
 #[cfg(test)]
@@ -681,9 +776,31 @@ pub(super) mod tests {
         run(test, true, true, Some(score))
     }
 
-    fn suite(id: &str, label: &str) -> impl FnOnce(&mut Value) {
+    /// A run the E2E infrastructure failed: it does not count.
+    fn infra_failed(test: &str) -> TrendRun {
+        run(test, false, false, None)
+    }
+
+    /// A run the subject failed: it counts, not completed.
+    fn harness_failed(test: &str) -> TrendRun {
+        TrendRun {
+            harness_failed: true,
+            ..run(test, true, false, None)
+        }
+    }
+
+    pub(in crate::dashboard) fn suite(id: &str, label: &str) -> impl FnOnce(&mut Value) {
         let suite = json!({"id": id, "label": label, "sha256": format!("sha256:{id}")});
         move |summary| summary["parameters"]["suite"] = suite
+    }
+
+    /// The tests planned, each `runs` times.
+    fn planning(tests: &[&str], runs: u32) -> impl FnOnce(&mut Value) {
+        let tests = json!(tests);
+        move |summary| {
+            summary["parameters"]["scenarios"] = tests;
+            summary["parameters"]["runs"] = json!(runs);
+        }
     }
 
     /// The same test, its definition changed.
@@ -714,8 +831,30 @@ pub(super) mod tests {
         }
     }
 
-    fn score(aggregate: &Option<Aggregate>) -> Option<f64> {
-        aggregate.as_ref()?.measures.score_mean
+    fn left(
+        combination: Combination,
+        reason: CombinationLeftOut,
+        only_in: Option<&str>,
+        infra_failed_runs: Option<usize>,
+    ) -> LeftOutCombination {
+        LeftOutCombination {
+            combination,
+            reason,
+            only_in: only_in.map(str::to_owned),
+            infra_failed_runs,
+        }
+    }
+
+    fn left_test(test: &str, reason: TestLeftOut) -> LeftOutTest {
+        LeftOutTest {
+            test: test.into(),
+            reason,
+        }
+    }
+
+    /// The latest release's step.
+    fn latest_step(overview: &ReleaseOverview) -> &ReleaseStep {
+        overview.releases.last().unwrap().step.as_ref().unwrap()
     }
 
     fn names(overview: &ReleaseOverview) -> Vec<Vec<&str>> {
@@ -731,7 +870,7 @@ pub(super) mod tests {
         let summaries = [rc("p", 1, "1.9.2"), rc("l", 3, "1.9.3")].concat();
         let calibrated = |previous: Vec<TrendRun>, latest: Vec<TrendRun>| {
             let overview = overview(&summaries, &runs(vec![("p", previous), ("l", latest)]));
-            overview.verdict.unwrap().compared[0]
+            latest_step(&overview).compared[0]
                 .calibrated
                 .clone()
                 .unwrap()
@@ -791,7 +930,7 @@ pub(super) mod tests {
             &runs(vec![
                 ("p", vec![scored("t1", 80.0), scored("t2", 10.0)]),
                 ("l", vec![scored("t1", 90.0), redefined(scored("t2", 70.0))]),
-                ("l2", vec![scored("t1", 90.0)]),
+                ("l2", vec![scored("t1", 30.0)]),
                 ("o", vec![scored("t9", 50.0)]),
                 ("ps", vec![scored("s1", 10.0)]),
                 ("ls", vec![redefined(scored("s1", 20.0))]),
@@ -804,40 +943,67 @@ pub(super) mod tests {
         );
         // The newest execution of the release, not its first.
         assert_eq!(verdict.latest_started_at, at(4));
-        assert_eq!(overview.releases[1].first_started_at, at(3));
-        let [delta] = verdict.compared.as_slice() else {
-            panic!("one delta: {:?}", verdict.compared);
+        let step = latest_step(&overview);
+        assert_eq!(step.previous, "1.9.2");
+        let [delta] = step.compared.as_slice() else {
+            panic!("one delta: {:?}", step.compared);
         };
         assert_eq!(
             delta.combination,
             combination("regression", "Regression", "flash")
         );
-        // t2 changed its definition: only t1 compares, run by l and l2.
-        assert_eq!(delta.tests_left_out, ["t2"]);
+        // t2 changed its definition: only t1 compares, run by l, the first
+        // completed execution; l2 ran later.
         assert_eq!(
-            (delta.latest.score_mean, delta.previous.score_mean),
-            (Some(90.0), Some(80.0))
-        );
-        assert_eq!((delta.latest.completed, delta.latest.planned), (2, 2));
-        assert_eq!(
-            verdict.left_out,
-            [
-                LeftOutCombination {
-                    combination: combination("onboarding", "Onboarding", "flash"),
-                    only_in: Some("1.9.3".into()),
-                },
-                LeftOutCombination {
-                    combination: combination("se", "SE", "flash"),
-                    only_in: None,
-                },
-            ]
+            delta.tests_left_out,
+            [left_test("t2", TestLeftOut::Redefined)]
         );
         assert_eq!(
             (
-                score(&verdict.latest_aggregate),
-                score(&verdict.previous_aggregate)
+                delta.latest.execution.as_str(),
+                delta.previous.execution.as_str()
+            ),
+            ("l", "p")
+        );
+        assert_eq!(
+            (
+                delta.latest.measures.score_mean,
+                delta.previous.measures.score_mean
             ),
             (Some(90.0), Some(80.0))
+        );
+        assert_eq!(
+            (
+                delta.latest.measures.completed,
+                delta.latest.measures.planned,
+                delta.latest.counted_runs
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            (
+                delta.compared_tests,
+                delta.score_delta,
+                delta.completed_delta
+            ),
+            (1, Some(10.0), 0.0)
+        );
+        assert_eq!(
+            step.left_out,
+            [
+                left(
+                    combination("onboarding", "Onboarding", "flash"),
+                    CombinationLeftOut::OnlyInOneRelease,
+                    Some("1.9.3"),
+                    None
+                ),
+                left(
+                    combination("se", "SE", "flash"),
+                    CombinationLeftOut::NothingAlike,
+                    None,
+                    None
+                ),
+            ]
         );
         assert_eq!(overview.releases[0].step, None);
     }
@@ -867,7 +1033,10 @@ pub(super) mod tests {
         );
         assert_eq!(names(&overview), [["p"], ["l"]]);
         assert_eq!(
-            score(&overview.verdict.as_ref().unwrap().latest_aggregate),
+            latest_step(&overview).compared[0]
+                .latest
+                .measures
+                .score_mean,
             Some(90.0)
         );
         assert_eq!(
@@ -893,7 +1062,12 @@ pub(super) mod tests {
             (mark.suite_label.as_str(), mark.started_at.clone()),
             ("Regression", at(5))
         );
-        assert_eq!(mark.measures.as_ref().unwrap().score_mean, Some(0.0));
+        // On the chart of the combination it ran.
+        assert_eq!(
+            mark.combination,
+            combination("regression", "Regression", "flash")
+        );
+        assert_eq!(mark.point.measures.as_ref().unwrap().score_mean, Some(0.0));
         assert_eq!(overview.unversioned, 0);
     }
 
@@ -943,7 +1117,7 @@ pub(super) mod tests {
                 ("pinned", TrendRole::Local, "1.9.3", Some("1.9.9")),
             ]
         );
-        assert_eq!(overview.locals[0].measures, None);
+        assert_eq!(overview.locals[0].point.measures, None);
     }
 
     #[test]
@@ -980,103 +1154,226 @@ pub(super) mod tests {
             ["1.9.2", "1.9.3"]
         );
         let latest = &overview.releases[1];
+        // The release exists, but an interrupted execution is never a side.
+        assert_eq!(latest.executions, ["l"]);
+        assert!(latest.firsts.is_empty());
+        let step = latest_step(&overview);
+        assert!(step.compared.is_empty());
         assert_eq!(
-            (latest.executions.as_slice(), latest.tests_not_run),
-            (&["l".to_owned()][..], 1)
-        );
-        let measures = &latest.aggregate.as_ref().unwrap().measures;
-        assert_eq!(
-            (measures.completed, measures.planned, measures.score_mean),
-            (1, 2, Some(90.0))
+            step.left_out,
+            [left(
+                combination("regression", "Regression", "flash"),
+                CombinationLeftOut::NoCompletedExecution,
+                None,
+                None
+            )]
         );
         assert_eq!(overview.verdict.unwrap().latest, "1.9.3");
     }
 
     #[test]
-    fn a_test_both_releases_planned_that_the_latest_never_ran_lowers_its_completed_share() {
+    fn a_test_one_side_never_counted_is_left_out_not_failed() {
         let summaries = [
-            rc("p", 1, "1.9.2"),
-            with(rc("l", 2, "1.9.3"), |summary| {
-                summary["state"] = json!("interrupted");
-                summary["parameters"]["scenarios"] = json!(["t1", "t2", "t3"]);
-            }),
+            with(
+                rc("p", 1, "1.9.2"),
+                planning(&["t1", "t2", "t4", "t5", "t6"], 1),
+            ),
+            with(
+                rc("l", 2, "1.9.3"),
+                planning(&["t1", "t2", "t3", "t4", "t6"], 1),
+            ),
         ]
         .concat();
         let overview = overview(
             &summaries,
             &runs(vec![
-                ("p", vec![scored("t1", 80.0), scored("t2", 60.0)]),
-                ("l", vec![scored("t1", 90.0)]),
+                (
+                    "p",
+                    vec![
+                        scored("t1", 80.0),
+                        scored("t2", 60.0),
+                        infra_failed("t4"),
+                        scored("t5", 70.0),
+                    ],
+                ),
+                (
+                    "l",
+                    // t2 failed in the E2E infrastructure under a new
+                    // definition: not counted comes first.
+                    vec![
+                        scored("t1", 90.0),
+                        redefined(infra_failed("t2")),
+                        scored("t4", 50.0),
+                    ],
+                ),
             ]),
         );
-        let verdict = overview.verdict.as_ref().unwrap();
-        let [delta] = verdict.compared.as_slice() else {
-            panic!("one delta: {:?}", verdict.compared);
+        let [delta] = latest_step(&overview).compared.as_slice() else {
+            panic!("one delta: {:?}", latest_step(&overview).compared);
         };
-        // t2 stays planned on both sides; only the latest planned t3.
-        assert_eq!(delta.tests_left_out, ["t3"]);
-        assert_eq!((delta.latest.completed, delta.latest.planned), (1, 2));
-        assert_eq!((delta.previous.completed, delta.previous.planned), (2, 2));
-        let share = |aggregate: &Option<Aggregate>| aggregate.as_ref()?.completed_share;
+        // t6 never ran on either side.
+        assert_eq!(
+            delta.tests_left_out,
+            [
+                left_test("t2", TestLeftOut::NotCountedLatest),
+                left_test("t3", TestLeftOut::OnlyLatest),
+                left_test("t4", TestLeftOut::NotCountedPrevious),
+                left_test("t5", TestLeftOut::OnlyPrevious),
+                left_test("t6", TestLeftOut::NotCountedLatest),
+            ]
+        );
+        // Only t1 compares: what never counted lowers nothing.
         assert_eq!(
             (
-                share(&verdict.latest_aggregate),
-                share(&verdict.previous_aggregate)
+                delta.compared_tests,
+                delta.score_delta,
+                delta.completed_delta
             ),
-            (Some(0.5), Some(1.0))
+            (1, Some(10.0), 0.0)
         );
-        let step = overview.releases[1].step.as_ref().unwrap();
-        assert_eq!(share(&step.latest_aggregate), Some(0.5));
+        assert_eq!(
+            (delta.latest.measures.planned, delta.latest.counted_runs),
+            (1, 1)
+        );
     }
 
     #[test]
-    fn each_measure_compares_only_the_combinations_both_releases_measured() {
-        let priced = |cost: Option<f64>, run: TrendRun| TrendRun {
-            cost_usd: cost,
-            ..run
-        };
+    fn tests_completed_reads_the_counted_runs_and_coverage_counts_what_did_not() {
         let summaries = [
-            rc("p1", 1, "1.9.2"),
-            with(rc("p2", 1, "1.9.2"), suite("onboarding", "Onboarding")),
-            rc("l1", 2, "1.9.3"),
-            with(rc("l2", 2, "1.9.3"), suite("onboarding", "Onboarding")),
+            with(rc("p", 1, "1.9.2"), planning(&["t1", "t2"], 2)),
+            with(rc("l", 2, "1.9.3"), planning(&["t1", "t2"], 2)),
         ]
         .concat();
         let overview = overview(
             &summaries,
             &runs(vec![
-                ("p1", vec![priced(Some(0.25), scored("t1", 80.0))]),
-                ("p2", vec![priced(Some(1.0), scored("t9", 40.0))]),
-                ("l1", vec![priced(Some(0.5), scored("t1", 90.0))]),
-                // Onboarding's model has no price on the latest release.
-                ("l2", vec![priced(None, scored("t9", 60.0))]),
+                (
+                    "p",
+                    vec![
+                        scored("t1", 100.0),
+                        scored("t1", 100.0),
+                        scored("t2", 100.0),
+                        scored("t2", 100.0),
+                    ],
+                ),
+                (
+                    "l",
+                    // t2's second run never ran.
+                    vec![
+                        scored("t1", 100.0),
+                        infra_failed("t1"),
+                        harness_failed("t2"),
+                    ],
+                ),
             ]),
         );
-        let verdict = overview.verdict.as_ref().unwrap();
-        let measures = |aggregate: &Option<Aggregate>| aggregate.as_ref().unwrap().measures.clone();
-        let (latest, previous) = (
-            measures(&verdict.latest_aggregate),
-            measures(&verdict.previous_aggregate),
-        );
-        // The cost over regression alone on both sides; the score over both.
+        let [delta] = latest_step(&overview).compared.as_slice() else {
+            panic!("one delta: {:?}", latest_step(&overview).compared);
+        };
+        // The infrastructure's failure leaves the denominator; the Harness's
+        // stays in it, not completed: 1 of 2 against 4 of 4.
         assert_eq!(
-            (latest.cost_usd_mean, previous.cost_usd_mean),
-            (Some(0.5), Some(0.25))
+            (delta.latest.counted_runs, delta.latest.measures.completed),
+            (2, 1)
         );
+        assert_eq!(delta.latest.measures.planned, 4);
         assert_eq!(
-            (latest.score_mean, previous.score_mean),
-            (Some(75.0), Some(60.0))
+            (delta.score_delta, delta.completed_delta),
+            (Some(0.0), -50.0)
         );
-        // A release's own point still reads every combination it measured.
+        let first = &overview.releases[1].firsts[0];
+        assert_eq!(first.point.execution_id, "l");
         assert_eq!(
-            overview.releases[0]
-                .aggregate
-                .as_ref()
-                .unwrap()
-                .measures
-                .cost_usd_mean,
-            Some(0.625)
+            (
+                first.infra_failed_runs,
+                first.harness_failed_runs,
+                first.not_run
+            ),
+            (1, 1, 1)
         );
+        assert_eq!(first.point.counted, 2);
+    }
+
+    #[test]
+    fn a_combination_whose_runs_all_failed_is_left_out_with_its_runs() {
+        let onboarding = || suite("onboarding", "Onboarding");
+        let summaries = [
+            rc("p", 1, "1.9.2"),
+            with(rc("po", 1, "1.9.2"), onboarding()),
+            rc("l", 2, "1.9.3"),
+            with(rc("lo", 2, "1.9.3"), onboarding()),
+        ]
+        .concat();
+        let overview = overview(
+            &summaries,
+            &runs(vec![
+                ("p", vec![scored("t1", 80.0)]),
+                ("po", vec![scored("t9", 50.0)]),
+                ("l", vec![scored("t1", 90.0)]),
+                ("lo", vec![infra_failed("t9"); 3]),
+            ]),
+        );
+        // It makes no point of the latest release, and is not "not run".
+        assert_eq!(overview.releases[1].combinations.len(), 1);
+        assert_eq!(
+            latest_step(&overview).left_out,
+            [left(
+                combination("onboarding", "Onboarding", "flash"),
+                CombinationLeftOut::AllRunsInfraFailed,
+                Some("1.9.2"),
+                Some(3)
+            )]
+        );
+    }
+
+    #[test]
+    fn a_step_names_the_engine_and_the_runner_when_they_moved() {
+        let runner = |version: &'static str| {
+            move |summary: &mut Value| {
+                summary["stack"].as_array_mut().unwrap().push(json!(worker(
+                    RUNNER,
+                    Some(version),
+                    None
+                )))
+            }
+        };
+        let mut latest = with(rc("l", 2, "1.9.3"), runner("0.22.1"));
+        latest[1]["engine_version"] = json!("0.24.4");
+        let summaries = [
+            with(rc("p", 1, "1.9.2"), runner("0.22.0")),
+            latest,
+            // A runner recorded on one side only is no change.
+            with(rc("n", 3, "1.9.4"), runner("0.22.1")),
+            rc("m", 4, "1.9.5"),
+        ]
+        .concat();
+        let overview = overview(
+            &summaries,
+            &runs(
+                ["p", "l", "n", "m"]
+                    .map(|id| (id, vec![scored("t1", 80.0)]))
+                    .to_vec(),
+            ),
+        );
+        let changes = |release: usize| {
+            overview.releases[release].step.as_ref().unwrap().compared[0]
+                .also_changed
+                .clone()
+        };
+        let change = |name: &str, from: &str, to: &str| VersionChange {
+            name: name.into(),
+            from: from.into(),
+            to: to.into(),
+        };
+        assert_eq!(
+            changes(1),
+            [
+                change("iii", "0.24.3", "0.24.4"),
+                change("harness-e2e", "0.22.0", "0.22.1"),
+            ]
+        );
+        assert_eq!(changes(2), [change("iii", "0.24.4", "0.24.3")]);
+        assert!(changes(3).is_empty());
     }
 
     #[test]
@@ -1093,7 +1390,10 @@ pub(super) mod tests {
             overview
                 .releases
                 .iter()
-                .map(|release| (release.release.as_str(), release.first_started_at.clone()))
+                .map(|release| (
+                    release.release.as_str(),
+                    release.firsts[0].point.started_at.clone()
+                ))
                 .collect::<Vec<_>>(),
             [("1.9.3", at(2)), ("1.10.0", at(1))]
         );
@@ -1105,7 +1405,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn with_no_shared_combination_the_verdict_compares_nothing_and_the_line_says_what_changed() {
+    fn with_no_shared_combination_the_verdict_compares_nothing_and_the_step_says_why() {
         let summaries = [
             with(rc("p", 1, "1.9.2"), |summary| {
                 summary["parameters"]["model"] = json!("pro")
@@ -1120,166 +1420,31 @@ pub(super) mod tests {
                 ("l", vec![scored("t1", 90.0)]),
             ]),
         );
-        let verdict = overview.verdict.as_ref().unwrap();
-        assert!(verdict.compared.is_empty());
+        // A verdict still, over nothing.
+        assert!(overview.verdict.is_some());
+        let step = latest_step(&overview);
+        assert!(step.compared.is_empty());
         assert_eq!(
-            (&verdict.latest_aggregate, &verdict.previous_aggregate),
-            (&None, &None)
-        );
-        let (flash, pro) = (
-            combination("regression", "Regression", "flash"),
-            combination("regression", "Regression", "pro"),
-        );
-        assert_eq!(
-            verdict.left_out,
+            step.left_out,
             [
-                LeftOutCombination {
-                    combination: flash.clone(),
-                    only_in: Some("1.9.3".into()),
-                },
-                LeftOutCombination {
-                    combination: pro.clone(),
-                    only_in: Some("1.9.2".into()),
-                },
+                left(
+                    combination("regression", "Regression", "flash"),
+                    CombinationLeftOut::OnlyInOneRelease,
+                    Some("1.9.3"),
+                    None
+                ),
+                left(
+                    combination("regression", "Regression", "pro"),
+                    CombinationLeftOut::OnlyInOneRelease,
+                    Some("1.9.2"),
+                    None
+                ),
             ]
         );
-        let (first, latest) = (&overview.releases[0], &overview.releases[1]);
-        assert!(first.joined.is_empty() && first.left.is_empty());
-        assert_eq!(
-            (latest.joined.clone(), latest.left.clone()),
-            (vec![flash], vec![pro])
-        );
-        assert_eq!(
-            latest.step,
-            Some(ReleaseStep {
-                previous: "1.9.2".into(),
-                latest_aggregate: None,
-                previous_aggregate: None,
-            })
-        );
     }
 
     #[test]
-    fn each_shared_combination_weighs_the_same_and_runs_pool_within_a_release() {
-        let summaries = [
-            rc("p1", 1, "1.9.2"),
-            with(rc("p2", 1, "1.9.2"), suite("onboarding", "Onboarding")),
-            rc("l1", 2, "1.9.3"),
-            rc("l2", 3, "1.9.3"),
-            with(rc("l3", 3, "1.9.3"), suite("onboarding", "Onboarding")),
-        ]
-        .concat();
-        let overview = overview(
-            &summaries,
-            &runs(vec![
-                ("p1", vec![scored("t1", 50.0)]),
-                ("p2", vec![scored("t9", 30.0)]),
-                ("l1", vec![scored("t1", 100.0)]),
-                ("l2", vec![scored("t1", 60.0); 3]),
-                ("l3", vec![scored("t9", 30.0)]),
-            ]),
-        );
-        let verdict = overview.verdict.as_ref().unwrap();
-        // Regression pools l1 and l2: (100 + 3 × 60) / 4.
-        assert_eq!(
-            verdict
-                .compared
-                .iter()
-                .map(|delta| (delta.combination.suite.as_str(), delta.latest.score_mean))
-                .collect::<Vec<_>>(),
-            [("onboarding", Some(30.0)), ("regression", Some(70.0))]
-        );
-        assert_eq!(
-            (
-                score(&verdict.latest_aggregate),
-                score(&verdict.previous_aggregate)
-            ),
-            (Some(50.0), Some(40.0))
-        );
-        let latest = &verdict.latest_aggregate.as_ref().unwrap().measures;
-        assert_eq!(
-            (latest.completed, latest.planned, latest.function_calls),
-            (5, 5, Some(50.0))
-        );
-        assert_eq!(latest.duration_ms_mean, Some(1_000.0));
-        assert_eq!(score(&overview.releases[1].aggregate), Some(50.0));
-    }
-
-    #[test]
-    fn completed_share_and_error_rate_weigh_each_combination_the_same_however_often_it_ran() {
-        let regression = || {
-            vec![
-                scored("t1", 80.0),
-                TrendRun {
-                    completed: false,
-                    ..scored("t2", 0.0)
-                },
-            ]
-        };
-        let onboarding = || {
-            ["t8", "t9"]
-                .map(|test| TrendRun {
-                    function_call_errors: Some(0.0),
-                    ..scored(test, 50.0)
-                })
-                .to_vec()
-        };
-        let summaries = [
-            rc("p1", 1, "1.9.2"),
-            with(rc("p2", 1, "1.9.2"), suite("onboarding", "Onboarding")),
-            rc("l1", 2, "1.9.3"),
-            rc("l2", 2, "1.9.3"),
-            rc("l3", 2, "1.9.3"),
-            with(rc("l4", 2, "1.9.3"), suite("onboarding", "Onboarding")),
-        ]
-        .concat();
-        let overview = overview(
-            &summaries,
-            &runs(vec![
-                ("p1", regression()),
-                ("p2", onboarding()),
-                ("l1", regression()),
-                ("l2", regression()),
-                ("l3", regression()),
-                ("l4", onboarding()),
-            ]),
-        );
-        let verdict = overview.verdict.as_ref().unwrap();
-        // Regression completes 1 run in 2 with 1 error in 10 calls however
-        // often it ran; onboarding completes all with none.
-        for aggregate in [
-            &verdict.latest_aggregate,
-            &verdict.previous_aggregate,
-            &overview.releases[0].aggregate,
-            &overview.releases[1].aggregate,
-        ] {
-            let aggregate = aggregate.as_ref().unwrap();
-            assert_eq!(
-                (aggregate.completed_share, aggregate.error_rate),
-                (Some(0.75), Some(0.05))
-            );
-        }
-        let counts = |aggregate: &Option<Aggregate>| {
-            let measures = &aggregate.as_ref().unwrap().measures;
-            (
-                measures.completed,
-                measures.planned,
-                measures.function_calls,
-                measures.function_call_errors,
-            )
-        };
-        assert_eq!(
-            counts(&verdict.latest_aggregate),
-            (5, 8, Some(80.0), Some(6.0))
-        );
-        assert_eq!(
-            counts(&verdict.previous_aggregate),
-            (3, 4, Some(40.0), Some(2.0))
-        );
-    }
-
-    #[test]
-    fn every_release_steps_from_the_release_before_it() {
+    fn every_release_steps_from_its_first_completed_execution_against_the_release_before() {
         let state = |version: &'static str| {
             move |summary: &mut Value| {
                 summary["stack"].as_array_mut().unwrap().push(json!(worker(
@@ -1302,7 +1467,8 @@ pub(super) mod tests {
                 ("a", vec![scored("t1", 50.0)]),
                 ("b", vec![scored("t1", 70.0)]),
                 ("c1", vec![scored("t1", 90.0)]),
-                ("c2", vec![scored("t1", 90.0)]),
+                // A later night of the release does not move its step.
+                ("c2", vec![scored("t1", 10.0)]),
             ]),
         );
         let steps = overview
@@ -1310,39 +1476,35 @@ pub(super) mod tests {
             .iter()
             .map(|release| {
                 let step = release.step.as_ref()?;
+                let delta = &step.compared[0];
                 Some((
                     step.previous.as_str(),
-                    score(&step.latest_aggregate),
-                    score(&step.previous_aggregate),
+                    delta.latest.measures.score_mean,
+                    delta.previous.measures.score_mean,
+                    delta.calibrated.is_some(),
                 ))
             })
             .collect::<Vec<_>>();
+        // Only the verdict's step reads the calibrated verdict.
         assert_eq!(
             steps,
             [
                 None,
-                Some(("1.9.1", Some(70.0), Some(50.0))),
-                Some(("1.9.2", Some(90.0), Some(70.0))),
+                Some(("1.9.1", Some(70.0), Some(50.0), false)),
+                Some(("1.9.2", Some(90.0), Some(70.0), true)),
             ]
         );
-        let verdict = overview.verdict.as_ref().unwrap();
         let latest = &overview.releases[2];
+        assert_eq!(latest.executions, ["c1", "c2"]);
+        // The first completed execution's versions.
+        let first = &latest.firsts[0].point;
         assert_eq!(
-            latest.step,
-            Some(ReleaseStep {
-                previous: verdict.previous.clone(),
-                latest_aggregate: verdict.latest_aggregate.clone(),
-                previous_aggregate: verdict.previous_aggregate.clone(),
-            })
-        );
-        // The newest execution's versions.
-        assert_eq!(
-            (latest.engine.as_deref(), latest.workers.clone()),
+            (first.engine.as_deref(), first.workers.clone()),
             (
                 Some("0.24.3"),
                 Some(BTreeMap::from([
                     ("harness".to_owned(), "1.9.3".to_owned()),
-                    ("state".to_owned(), "2.0.1".to_owned()),
+                    ("state".to_owned(), "2.0.0".to_owned()),
                 ]))
             )
         );
@@ -1369,8 +1531,14 @@ pub(super) mod tests {
         );
         let latest = &overview.releases[1];
         assert_eq!(latest.executions, ["second"]);
-        assert_eq!(latest.first_started_at, at(3));
-        assert_eq!(score(&latest.aggregate), Some(90.0));
+        let first = &latest.firsts[0].point;
+        assert_eq!(
+            (
+                first.execution_id.as_str(),
+                first.measures.as_ref().unwrap().score_mean
+            ),
+            ("second", Some(90.0))
+        );
     }
 
     #[test]
@@ -1398,6 +1566,7 @@ pub(super) mod tests {
         let latest = &overview.releases[1];
         assert_eq!(latest.executions, ["regression", "onboarding"]);
         assert_eq!(latest.combinations.len(), 2);
+        assert_eq!(latest.firsts.len(), 2);
     }
 
     #[test]
@@ -1451,6 +1620,342 @@ pub(super) mod tests {
                 executions: 0,
                 latest_at: None,
             }
+        );
+    }
+
+    const CORE: [&str; 9] = [
+        "persistent_state",
+        "tool_contract_recovery",
+        "timer_wake",
+        "shell_coder_sandbox",
+        "database_migration_recovery",
+        "contention_ledger",
+        "validation_self_repair",
+        "context_pressure",
+        "prompt_injection_resilience",
+    ];
+    const APPLICATIONS: [&str; 7] = [
+        "registry_implementation",
+        "registry_verification",
+        "trending_topics_build",
+        "alertmanager_route_match",
+        "chess_engine_build",
+        "form_flow_build",
+        "state_machine_canvas_build",
+    ];
+    const DEEPWORK: [&str; 3] = [
+        "chess_engine_build",
+        "form_flow_build",
+        "state_machine_canvas_build",
+    ];
+
+    /// A Release Control execution of the dashboard's fixture on
+    /// deepseek-flash and the `default` stack: Harness `harness`, the
+    /// engine, runner and context manager given, each test of `suite`
+    /// planned `runs` times.
+    fn nightly(
+        id: &str,
+        started_at: &str,
+        harness: &str,
+        versions: [&str; 3],
+        suite: (&str, &str, &[&str]),
+        runs: u32,
+    ) -> Vec<Value> {
+        let [engine, runner, context_manager] = versions;
+        let mut summary = listed(id, started_at, Some("default"), &[HARNESS]);
+        summary["state"] = json!("completed");
+        let run_id = id.split('-').nth(1).unwrap_or_default();
+        summary["source"] = json!({
+            "kind": "github", "repository": "iii-hq/harness-e2e",
+            "run_id": run_id.parse::<u64>().unwrap_or_default(), "run_attempt": 1,
+            "url": format!("https://github.com/iii-hq/harness-e2e/actions/runs/{run_id}"),
+            "release_control_execution_id": format!("rc-{id}"),
+        });
+        summary["stack"] = json!([
+            worker(HARNESS, Some(harness), None),
+            worker("context-manager", Some(context_manager), None),
+            worker(RUNNER, Some(runner), None),
+        ]);
+        let (suite_id, label, tests) = suite;
+        summary["parameters"]["suite"] =
+            json!({"id": suite_id, "label": label, "sha256": format!("sha256:{suite_id}")});
+        summary["parameters"]["model"] = json!("deepseek-flash");
+        summary["parameters"]["scenarios"] = json!(tests);
+        summary["parameters"]["runs"] = json!(runs);
+        let mut native = native(&format!("n-{id}"), id);
+        native["engine_version"] = json!(engine);
+        vec![summary, native]
+    }
+
+    /// Each test of `tests` `runs` times, as `run` makes it.
+    fn every(tests: &[&str], runs: usize, run: impl Fn(&str) -> TrendRun) -> Vec<TrendRun> {
+        tests
+            .iter()
+            .flat_map(|test| std::iter::repeat_with(|| run(test)).take(runs))
+            .collect()
+    }
+
+    /// What the dashboard's tests read (`release-overview.json`): Core
+    /// runtime regression on four releases, 1.8.36 dropping
+    /// contention_ledger against 1.8.35; Application builds and changes
+    /// with a test redefined and one failed in the E2E infrastructure;
+    /// Application builds with Deepwork whose every run failed on 1.8.36;
+    /// the onboarding tour on 1.8.35 only; three local runs of the Core
+    /// setup; three other CI runs and four unversioned ones.
+    fn dashboard_fixture() -> ReleaseOverview {
+        let core = ("regression", "Core runtime regression", &CORE[..]);
+        let applications = (
+            "software-engineering",
+            "Application builds and changes",
+            &APPLICATIONS[..],
+        );
+        let deepwork = (
+            "deepwork",
+            "Application builds with Deepwork",
+            &DEEPWORK[..],
+        );
+        let onboarding = (
+            "onboarding",
+            "Complete the onboarding tour",
+            &["onboarding_tour"][..],
+        );
+        let before = ["0.24.2-rc.2", "0.18.0", "1.1.14"];
+        let after = ["0.24.3-rc.1", "0.18.1", "1.1.15"];
+        let local = |id: &str, started_at: &str| {
+            let mut summary = listed(id, started_at, Some("default"), &[HARNESS]);
+            summary["stack"][0]["commit"] = json!(format!("852b87e{}", "0".repeat(33)));
+            summary["stack"][0]["dirty"] = json!(true);
+            summary["parameters"]["suite"] = json!({"id": "regression", "label": "Core runtime regression", "sha256": "sha256:regression"});
+            summary["parameters"]["model"] = json!("deepseek-flash");
+            summary["parameters"]["scenarios"] = json!(["contention_ledger", "timer_wake"]);
+            vec![summary, native(&format!("n-{id}"), id)]
+        };
+        let other_ci = |id: &str, started_at: &str| {
+            with(
+                nightly(id, started_at, "1.8.36", after, core, 3),
+                |summary| summary["source"]["release_control_execution_id"] = json!(null),
+            )
+        };
+        let unversioned = |id: &str, started_at: &str| {
+            with(nightly(id, started_at, "1.8.34", before, core, 3), built)
+        };
+        let summaries = [
+            nightly(
+                "github-35742568444-1",
+                "2026-09-20T02:17:00-03:00",
+                "1.8.31",
+                before,
+                core,
+                3,
+            ),
+            unversioned("github-35767230299-1", "2026-09-21T02:17:00-03:00"),
+            unversioned("github-35821773226-2", "2026-09-22T02:17:00-03:00"),
+            nightly(
+                "github-36010839787-2",
+                "2026-09-23T02:17:00-03:00",
+                "1.8.34",
+                before,
+                core,
+                3,
+            ),
+            unversioned("github-35959254741-1", "2026-09-23T09:10:00-03:00"),
+            unversioned("github-35959254742-1", "2026-09-23T10:40:00-03:00"),
+            local("local-local-1", "2026-09-24T15:11:00-03:00"),
+            local("local-local-2", "2026-09-24T15:56:00-03:00"),
+            local("local-local-3", "2026-09-24T17:58:00-03:00"),
+            with(
+                nightly(
+                    "github-36097908501-1",
+                    "2026-09-25T00:17:00-03:00",
+                    "1.8.35",
+                    before,
+                    core,
+                    3,
+                ),
+                |summary| summary["state"] = json!("interrupted"),
+            ),
+            nightly(
+                "github-36097908502-1",
+                "2026-09-25T02:17:00-03:00",
+                "1.8.35",
+                before,
+                core,
+                3,
+            ),
+            nightly(
+                "github-36097908503-1",
+                "2026-09-25T02:47:00-03:00",
+                "1.8.35",
+                before,
+                applications,
+                1,
+            ),
+            nightly(
+                "github-36097908504-1",
+                "2026-09-25T03:17:00-03:00",
+                "1.8.35",
+                before,
+                deepwork,
+                1,
+            ),
+            nightly(
+                "github-36097908505-1",
+                "2026-09-25T03:47:00-03:00",
+                "1.8.35",
+                before,
+                onboarding,
+                1,
+            ),
+            other_ci("github-36200000001-1", "2026-09-26T09:40:00-03:00"),
+            nightly(
+                "github-36285373498-1",
+                "2026-09-27T02:17:00-03:00",
+                "1.8.36",
+                after,
+                core,
+                3,
+            ),
+            nightly(
+                "github-36285373499-1",
+                "2026-09-27T02:47:00-03:00",
+                "1.8.36",
+                after,
+                applications,
+                1,
+            ),
+            nightly(
+                "github-36285373500-1",
+                "2026-09-27T03:17:00-03:00",
+                "1.8.36",
+                after,
+                deepwork,
+                1,
+            ),
+            other_ci("github-36200000002-1", "2026-09-27T09:40:00-03:00"),
+            nightly(
+                "github-36381232467-1",
+                "2026-09-28T02:17:00-03:00",
+                "1.8.36",
+                after,
+                core,
+                3,
+            ),
+            other_ci("github-36200000003-1", "2026-09-28T09:40:00-03:00"),
+        ]
+        .concat();
+        let passing = |test: &str| scored(test, 100.0);
+        // Counted, not completed, scoring 70.
+        let dropping = |test: &str| {
+            if test == "contention_ledger" {
+                run(test, true, false, Some(70.0))
+            } else {
+                passing(test)
+            }
+        };
+        let applications_scored = |test: &str| {
+            let score = 60.0 + 5.0 * APPLICATIONS.iter().position(|t| *t == test).unwrap() as f64;
+            scored(test, score)
+        };
+        overview(
+            &summaries,
+            &runs(vec![
+                ("github-35742568444-1", every(&CORE, 3, dropping)),
+                ("github-35767230299-1", every(&CORE, 3, passing)),
+                ("github-35821773226-2", every(&CORE, 3, passing)),
+                ("github-36010839787-2", every(&CORE, 3, passing)),
+                ("github-35959254741-1", every(&CORE, 3, passing)),
+                ("github-35959254742-1", every(&CORE, 3, passing)),
+                (
+                    "local-local-1",
+                    vec![scored("contention_ledger", 70.0), passing("timer_wake")],
+                ),
+                (
+                    "local-local-2",
+                    vec![passing("contention_ledger"), passing("timer_wake")],
+                ),
+                (
+                    "local-local-3",
+                    vec![
+                        infra_failed("contention_ledger"),
+                        infra_failed("timer_wake"),
+                    ],
+                ),
+                ("github-36097908501-1", every(&CORE[..4], 3, passing)),
+                ("github-36097908502-1", every(&CORE, 3, passing)),
+                (
+                    "github-36097908503-1",
+                    every(&APPLICATIONS, 1, applications_scored),
+                ),
+                (
+                    "github-36097908504-1",
+                    every(&DEEPWORK, 1, |test| scored(test, 85.0)),
+                ),
+                (
+                    "github-36097908505-1",
+                    vec![scored("onboarding_tour", 90.0)],
+                ),
+                ("github-36200000001-1", every(&CORE, 3, passing)),
+                ("github-36285373498-1", every(&CORE, 3, dropping)),
+                (
+                    "github-36285373499-1",
+                    every(&APPLICATIONS, 1, |test| match test {
+                        "registry_implementation" => redefined(applications_scored(test)),
+                        "registry_verification" => infra_failed(test),
+                        _ => applications_scored(test),
+                    }),
+                ),
+                ("github-36285373500-1", every(&DEEPWORK, 1, infra_failed)),
+                ("github-36200000002-1", every(&CORE, 3, passing)),
+                ("github-36381232467-1", every(&CORE, 3, passing)),
+                ("github-36200000003-1", every(&CORE, 3, passing)),
+            ]),
+        )
+    }
+
+    #[test]
+    fn the_dashboard_fixture_is_this_overview() {
+        let fixture = dashboard_fixture();
+        let step = latest_step(&fixture);
+        let [core, applications] = step.compared.as_slice() else {
+            panic!("two compared: {:?}", step.compared);
+        };
+        // The first completed execution of 1.8.36, not its newest.
+        assert_eq!(core.latest.execution, "github-36285373498-1");
+        assert_eq!(
+            (core.score_delta, core.completed_delta),
+            (Some(-3.3), -11.1)
+        );
+        assert_eq!(
+            applications.tests_left_out,
+            [
+                left_test("registry_implementation", TestLeftOut::Redefined),
+                left_test("registry_verification", TestLeftOut::NotCountedLatest),
+            ]
+        );
+        assert_eq!(
+            step.left_out
+                .iter()
+                .map(|left| (left.combination.suite.as_str(), left.reason))
+                .collect::<Vec<_>>(),
+            [
+                ("deepwork", CombinationLeftOut::AllRunsInfraFailed),
+                ("onboarding", CombinationLeftOut::OnlyInOneRelease),
+            ]
+        );
+
+        let value = serde_json::to_value(&fixture).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("dashboard/src/test-fixtures/release-overview.json");
+        if std::env::var_os("UPDATE_DASHBOARD_FIXTURE").is_some() {
+            std::fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&value).unwrap()),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+            value
         );
     }
 }

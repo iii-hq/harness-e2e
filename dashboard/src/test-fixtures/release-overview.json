@@ -1,717 +1,1686 @@
 {
-  "releases": [
-    {
-      "release": "1.8.31",
-      "first_started_at": "2026-09-22T11:45:00-03:00",
-      "executions": [
-        "github-35742568444-1",
-        "github-35767230299-1",
-        "github-35821773226-2",
-        "github-35959254741-1"
-      ],
-      "combinations": [
-        {
-          "suite": "regression",
-          "suite_label": "Regression",
-          "provider": "deepseek",
-          "model": "deepseek-flash",
-          "profile": null,
-          "stack": "default"
-        }
-      ],
-      "aggregate": {
-        "measures": {
-          "score_mean": 90.65,
-          "completed": 36,
-          "planned": 36,
-          "duration_ms_mean": 32050,
-          "input_tokens_mean": 18006.25,
-          "function_calls_mean": 15.375,
-          "function_calls": 553,
-          "function_call_errors": 0,
-          "turns_mean": 9.35,
-          "output_tokens_mean": null,
-          "cache_read_tokens_mean": null,
-          "cache_write_tokens_mean": null,
-          "reasoning_tokens_mean": null,
-          "cost_usd_mean": null,
-          "validation_retries_mean": null,
-          "technical_retries_mean": null,
-          "compactions_mean": null,
-          "peak_context_fill_mean": null
-        },
-        "completed_share": 1,
-        "error_rate": 0
-      },
-      "joined": [],
-      "left": [],
-      "tests_not_run": 0,
-      "engine": "0.24.2-rc.2",
-      "workers": {
-        "ade": "1.9.41",
-        "browser": "0.2.23",
-        "context-manager": "1.1.14",
-        "cron": "0.21.25",
-        "database": "0.5.20",
-        "fp": "0.2.20",
-        "harness": "1.8.31",
-        "ide": "0.12.18",
-        "iii-directory": "1.2.29",
-        "llm-router": "1.4.27",
-        "provider-anthropic": "1.2.21",
-        "provider-deepseek": "0.1.16",
-        "provider-openai": "1.2.16",
-        "provider-openai-codex": "0.4.17",
-        "provider-zai": "0.5.13",
-        "queue": "0.21.17",
-        "session-manager": "1.0.25",
-        "state": "0.22.17",
-        "storage": "0.1.23"
-      },
-      "step": null
-    },
-    {
-      "release": "1.8.34",
-      "first_started_at": "2026-09-24T11:10:00-03:00",
-      "executions": ["github-36010839787-2"],
-      "combinations": [
-        {
-          "suite": "regression",
-          "suite_label": "Regression",
-          "provider": "deepseek",
-          "model": "deepseek-flash",
-          "profile": null,
-          "stack": "default"
-        }
-      ],
-      "aggregate": {
-        "measures": {
-          "score_mean": 97.4,
-          "completed": 9,
-          "planned": 9,
-          "duration_ms_mean": 30400,
-          "input_tokens_mean": 36689,
-          "function_calls_mean": 17.4,
-          "function_calls": 157,
-          "function_call_errors": 0,
-          "turns_mean": 9.3,
-          "output_tokens_mean": 3669,
-          "cache_read_tokens_mean": 146756,
-          "cache_write_tokens_mean": 7338,
-          "reasoning_tokens_mean": 1834,
-          "cost_usd_mean": 0.055,
-          "validation_retries_mean": 0.9,
-          "technical_retries_mean": 0,
-          "compactions_mean": null,
-          "peak_context_fill_mean": null
-        },
-        "completed_share": 1,
-        "error_rate": 0
-      },
-      "joined": [],
-      "left": [],
-      "tests_not_run": 0,
-      "engine": "0.24.2-rc.2",
-      "workers": {
-        "ade": "1.9.42",
-        "browser": "0.2.23",
-        "context-manager": "1.1.14",
-        "cron": "0.21.25",
-        "database": "0.5.20",
-        "fp": "0.2.20",
-        "harness": "1.8.34",
-        "ide": "0.12.18",
-        "iii-directory": "1.2.30",
-        "llm-router": "1.4.27",
-        "provider-anthropic": "1.2.21",
-        "provider-deepseek": "0.1.16",
-        "provider-openai": "1.2.16",
-        "provider-openai-codex": "0.4.17",
-        "provider-zai": "0.5.13",
-        "queue": "0.21.17",
-        "session-manager": "1.0.25",
-        "state": "0.22.17",
-        "storage": "0.1.23"
-      },
-      "step": {
-        "previous": "1.8.31",
-        "latest_aggregate": {
-          "measures": {
-            "score_mean": 97.4,
-            "completed": 9,
-            "planned": 9,
-            "duration_ms_mean": 30400,
-            "input_tokens_mean": 36689,
-            "function_calls_mean": 17.4,
-            "function_calls": 157,
-            "function_call_errors": 0,
-            "turns_mean": 9.3,
-            "output_tokens_mean": 3669,
-            "cache_read_tokens_mean": 146756,
-            "cache_write_tokens_mean": 7338,
-            "reasoning_tokens_mean": 1834,
-            "cost_usd_mean": 0.055,
-            "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0,
-            "compactions_mean": null,
-            "peak_context_fill_mean": null
-          },
-          "completed_share": 1,
-          "error_rate": 0
-        },
-        "previous_aggregate": {
-          "measures": {
-            "score_mean": 90.65,
-            "completed": 36,
-            "planned": 36,
-            "duration_ms_mean": 32050,
-            "input_tokens_mean": 18006.25,
-            "function_calls_mean": 15.375,
-            "function_calls": 553,
-            "function_call_errors": 0,
-            "turns_mean": 9.35,
-            "output_tokens_mean": null,
-            "cache_read_tokens_mean": null,
-            "cache_write_tokens_mean": null,
-            "reasoning_tokens_mean": null,
-            "cost_usd_mean": null,
-            "validation_retries_mean": null,
-            "technical_retries_mean": null,
-            "compactions_mean": null,
-            "peak_context_fill_mean": null
-          },
-          "completed_share": 1,
-          "error_rate": 0
-        }
-      }
-    },
-    {
-      "release": "1.8.35",
-      "first_started_at": "2026-09-25T02:17:00-03:00",
-      "executions": ["github-36097908502-1"],
-      "combinations": [
-        {
-          "suite": "regression",
-          "suite_label": "Regression",
-          "provider": "deepseek",
-          "model": "deepseek-flash",
-          "profile": null,
-          "stack": "default"
-        }
-      ],
-      "aggregate": {
-        "measures": {
-          "score_mean": 96.9,
-          "completed": 9,
-          "planned": 9,
-          "duration_ms_mean": 30100,
-          "input_tokens_mean": 35769,
-          "function_calls_mean": 16.6,
-          "function_calls": 149,
-          "function_call_errors": 0,
-          "turns_mean": 7.9,
-          "output_tokens_mean": 2410,
-          "cache_read_tokens_mean": 18200,
-          "cache_write_tokens_mean": 3100,
-          "reasoning_tokens_mean": 820,
-          "cost_usd_mean": 0.0123,
-          "validation_retries_mean": 0.1,
-          "technical_retries_mean": 0,
-          "compactions_mean": null,
-          "peak_context_fill_mean": null
-        },
-        "completed_share": 1,
-        "error_rate": 0
-      },
-      "joined": [],
-      "left": [],
-      "tests_not_run": 0,
-      "engine": "0.24.2-rc.2",
-      "workers": {
-        "ade": "1.9.43",
-        "browser": "0.2.23",
-        "context-manager": "1.1.14",
-        "cron": "0.21.25",
-        "database": "0.5.20",
-        "fp": "0.2.20",
-        "harness": "1.8.35",
-        "ide": "0.12.18",
-        "iii-directory": "1.2.30",
-        "judge": "0.2.1",
-        "judge-typesafe": "0.2.1",
-        "llm-router": "1.4.27",
-        "provider-anthropic": "1.2.22",
-        "provider-deepseek": "0.1.16",
-        "provider-openai": "1.2.19",
-        "provider-openai-codex": "0.4.17",
-        "provider-zai": "0.5.13",
-        "queue": "0.21.17",
-        "session-manager": "1.0.25",
-        "state": "0.22.17",
-        "storage": "0.1.23"
-      },
-      "step": {
-        "previous": "1.8.34",
-        "latest_aggregate": {
-          "measures": {
-            "score_mean": 96.9,
-            "completed": 9,
-            "planned": 9,
-            "duration_ms_mean": 30100,
-            "input_tokens_mean": 35769,
-            "function_calls_mean": 16.6,
-            "function_calls": 149,
-            "function_call_errors": 0,
-            "turns_mean": 7.9,
-            "output_tokens_mean": 2410,
-            "cache_read_tokens_mean": 18200,
-            "cache_write_tokens_mean": 3100,
-            "reasoning_tokens_mean": 820,
-            "cost_usd_mean": 0.0123,
-            "validation_retries_mean": 0.1,
-            "technical_retries_mean": 0,
-            "compactions_mean": null,
-            "peak_context_fill_mean": null
-          },
-          "completed_share": 1,
-          "error_rate": 0
-        },
-        "previous_aggregate": {
-          "measures": {
-            "score_mean": 97.4,
-            "completed": 9,
-            "planned": 9,
-            "duration_ms_mean": 30400,
-            "input_tokens_mean": 36689,
-            "function_calls_mean": 17.4,
-            "function_calls": 157,
-            "function_call_errors": 0,
-            "turns_mean": 9.3,
-            "output_tokens_mean": 3669,
-            "cache_read_tokens_mean": 146756,
-            "cache_write_tokens_mean": 7338,
-            "reasoning_tokens_mean": 1834,
-            "cost_usd_mean": 0.055,
-            "validation_retries_mean": 0.9,
-            "technical_retries_mean": 0,
-            "compactions_mean": null,
-            "peak_context_fill_mean": null
-          },
-          "completed_share": 1,
-          "error_rate": 0
-        }
-      }
-    },
-    {
-      "release": "1.8.36",
-      "first_started_at": "2026-09-26T22:23:00-03:00",
-      "executions": [
-        "github-36285373498-1",
-        "github-36296751640-1",
-        "github-36381232467-1"
-      ],
-      "combinations": [
-        {
-          "suite": "regression",
-          "suite_label": "Regression",
-          "provider": "deepseek",
-          "model": "deepseek-flash",
-          "profile": null,
-          "stack": "default"
-        }
-      ],
-      "aggregate": {
-        "measures": {
-          "score_mean": 94.83,
-          "completed": 27,
-          "planned": 27,
-          "duration_ms_mean": 31933.33,
-          "input_tokens_mean": 35166.67,
-          "function_calls_mean": 17.4,
-          "function_calls": 470,
-          "function_call_errors": 0,
-          "turns_mean": 8.6,
-          "output_tokens_mean": 2290,
-          "cache_read_tokens_mean": 17400,
-          "cache_write_tokens_mean": 2950,
-          "reasoning_tokens_mean": 760,
-          "cost_usd_mean": 0.0118,
-          "validation_retries_mean": 0.2,
-          "technical_retries_mean": 0,
-          "compactions_mean": null,
-          "peak_context_fill_mean": null
-        },
-        "completed_share": 1,
-        "error_rate": 0
-      },
-      "joined": [],
-      "left": [],
-      "tests_not_run": 0,
-      "engine": "0.24.3-rc.1",
-      "workers": {
-        "ade": "1.9.44",
-        "browser": "0.2.24",
-        "context-manager": "1.1.15",
-        "cron": "0.21.25",
-        "database": "0.5.20",
-        "fp": "0.2.20",
-        "harness": "1.8.36",
-        "ide": "0.12.20",
-        "iii-directory": "1.2.31",
-        "judge": "0.2.2",
-        "judge-typesafe": "0.2.1",
-        "llm-router": "1.4.27",
-        "provider-anthropic": "1.2.22",
-        "provider-deepseek": "0.1.16",
-        "provider-openai": "1.2.19",
-        "provider-openai-codex": "0.4.17",
-        "provider-zai": "0.5.13",
-        "queue": "0.21.17",
-        "session-manager": "1.0.26",
-        "state": "0.22.17",
-        "storage": "0.1.23"
-      },
-      "step": {
-        "previous": "1.8.35",
-        "latest_aggregate": {
-          "measures": {
-            "score_mean": 94.2,
-            "completed": 24,
-            "planned": 24,
-            "duration_ms_mean": 31900,
-            "input_tokens_mean": 35170,
-            "function_calls_mean": 17.4,
-            "function_calls": 418,
-            "function_call_errors": 0,
-            "turns_mean": 8.6,
-            "output_tokens_mean": 2290,
-            "cache_read_tokens_mean": 17400,
-            "cache_write_tokens_mean": 2950,
-            "reasoning_tokens_mean": 760,
-            "cost_usd_mean": 0.0118,
-            "validation_retries_mean": 0.2,
-            "technical_retries_mean": 0,
-            "compactions_mean": null,
-            "peak_context_fill_mean": null
-          },
-          "completed_share": 1,
-          "error_rate": 0
-        },
-        "previous_aggregate": {
-          "measures": {
-            "score_mean": 96.5,
-            "completed": 8,
-            "planned": 8,
-            "duration_ms_mean": 30100,
-            "input_tokens_mean": 35769,
-            "function_calls_mean": 16.6,
-            "function_calls": 132,
-            "function_call_errors": 0,
-            "turns_mean": 7.9,
-            "output_tokens_mean": 2410,
-            "cache_read_tokens_mean": 18200,
-            "cache_write_tokens_mean": 3100,
-            "reasoning_tokens_mean": 820,
-            "cost_usd_mean": 0.0123,
-            "validation_retries_mean": 0.1,
-            "technical_retries_mean": 0,
-            "compactions_mean": null,
-            "peak_context_fill_mean": null
-          },
-          "completed_share": 1,
-          "error_rate": 0
-        }
-      }
-    }
-  ],
-  "verdict": {
-    "latest": "1.8.36",
-    "previous": "1.8.35",
-    "latest_started_at": "2026-09-28T02:17:00-03:00",
-    "latest_aggregate": {
-      "measures": {
-        "score_mean": 94.2,
-        "completed": 24,
-        "planned": 24,
-        "duration_ms_mean": 31900,
-        "input_tokens_mean": 35170,
-        "function_calls_mean": 17.4,
-        "function_calls": 418,
-        "function_call_errors": 0,
-        "turns_mean": 8.6,
-        "output_tokens_mean": 2290,
-        "cache_read_tokens_mean": 17400,
-        "cache_write_tokens_mean": 2950,
-        "reasoning_tokens_mean": 760,
-        "cost_usd_mean": 0.0118,
-        "validation_retries_mean": 0.2,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      },
-      "completed_share": 1,
-      "error_rate": 0
-    },
-    "previous_aggregate": {
-      "measures": {
-        "score_mean": 96.5,
-        "completed": 8,
-        "planned": 8,
-        "duration_ms_mean": 30100,
-        "input_tokens_mean": 35769,
-        "function_calls_mean": 16.6,
-        "function_calls": 132,
-        "function_call_errors": 0,
-        "turns_mean": 7.9,
-        "output_tokens_mean": 2410,
-        "cache_read_tokens_mean": 18200,
-        "cache_write_tokens_mean": 3100,
-        "reasoning_tokens_mean": 820,
-        "cost_usd_mean": 0.0123,
-        "validation_retries_mean": 0.1,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      },
-      "completed_share": 1,
-      "error_rate": 0
-    },
-    "compared": [
-      {
-        "combination": {
-          "suite": "regression",
-          "suite_label": "Regression",
-          "provider": "deepseek",
-          "model": "deepseek-flash",
-          "profile": null,
-          "stack": "default"
-        },
-        "latest": {
-          "score_mean": 94.2,
-          "completed": 24,
-          "planned": 24,
-          "duration_ms_mean": 31900,
-          "input_tokens_mean": 35170,
-          "function_calls_mean": 17.4,
-          "function_calls": 418,
-          "function_call_errors": 0,
-          "turns_mean": 8.6,
-          "output_tokens_mean": 2290,
-          "cache_read_tokens_mean": 17400,
-          "cache_write_tokens_mean": 2950,
-          "reasoning_tokens_mean": 760,
-          "cost_usd_mean": 0.0118,
-          "validation_retries_mean": 0.2,
-          "technical_retries_mean": 0,
-          "compactions_mean": null,
-          "peak_context_fill_mean": null
-        },
-        "previous": {
-          "score_mean": 96.5,
-          "completed": 8,
-          "planned": 8,
-          "duration_ms_mean": 30100,
-          "input_tokens_mean": 35769,
-          "function_calls_mean": 16.6,
-          "function_calls": 132,
-          "function_call_errors": 0,
-          "turns_mean": 7.9,
-          "output_tokens_mean": 2410,
-          "cache_read_tokens_mean": 18200,
-          "cache_write_tokens_mean": 3100,
-          "reasoning_tokens_mean": 820,
-          "cost_usd_mean": 0.0123,
-          "validation_retries_mean": 0.1,
-          "technical_retries_mean": 0,
-          "compactions_mean": null,
-          "peak_context_fill_mean": null
-        },
-        "tests_left_out": ["contention_ledger"],
-        "calibrated": {
-          "verdict": null,
-          "qualifier": null,
-          "unavailable": "One run per test on a side: no noise to read the difference against.",
-          "reasons": [],
-          "rule": {
-            "margin": 5,
-            "equivalence": 0.05,
-            "alpha": 0.025,
-            "permutations": 10000,
-            "seed": 0
-          },
-          "quality": null,
-          "cost": null,
-          "repetitions": {
-            "have": { "a": 1, "b": 1 },
-            "sigma": null,
-            "needed": null,
-            "missing": null,
-            "more_than": null,
-            "settles": [],
-            "note": null
-          },
-          "warnings": [
-            "16 runs carry no cause (from a report older than causes, or read where causes are not kept) and were classified by the earlier rule: every subject error left the mean, and a failure of the evaluator itself could count as a valid zero."
-          ]
-        }
-      }
-    ],
-    "left_out": []
-  },
   "locals": [
     {
+      "combination": {
+        "model": "deepseek-flash",
+        "profile": null,
+        "provider": "deepseek",
+        "stack": "default",
+        "suite": "regression",
+        "suite_label": "Core runtime regression"
+      },
       "execution_id": "local-local-1",
+      "point": {
+        "counted": 2,
+        "engine": "0.24.3",
+        "execution_id": "local-local-1",
+        "label": null,
+        "measures": {
+          "cache_read_tokens_mean": 500.0,
+          "cache_write_tokens_mean": 30.0,
+          "compactions_mean": 2.0,
+          "completed": 2,
+          "cost_usd_mean": 0.25,
+          "duration_ms_mean": 1000.0,
+          "function_call_errors": 2.0,
+          "function_calls": 20.0,
+          "function_calls_mean": 10.0,
+          "input_tokens_mean": 100.0,
+          "output_tokens_mean": 40.0,
+          "peak_context_fill_mean": 0.5,
+          "planned": 2,
+          "reasoning_tokens_mean": 8.0,
+          "score_mean": 85.0,
+          "technical_retries_mean": 0.0,
+          "turns_mean": 5.0,
+          "validation_retries_mean": 1.0
+        },
+        "model": "deepseek-flash",
+        "planned": ["contention_ledger", "timer_wake"],
+        "profile": null,
+        "provider": "deepseek",
+        "reason": null,
+        "release": null,
+        "runs": 2,
+        "source": {
+          "kind": "local",
+          "role": "local"
+        },
+        "stack": {
+          "matched_by_workers": false,
+          "name": "default"
+        },
+        "started_at": "2026-09-24T15:11:00-03:00",
+        "tests": [
+          {
+            "behavior_sha256": "sha256:contention_ledger",
+            "id": "contention_ledger",
+            "score": 70.0,
+            "state": "scored"
+          },
+          {
+            "behavior_sha256": "sha256:timer_wake",
+            "id": "timer_wake",
+            "score": 100.0,
+            "state": "scored"
+          }
+        ],
+        "workers": {
+          "harness": "@852b87e*"
+        }
+      },
+      "ran": "@852b87e*",
+      "release": "1.8.34",
       "role": "local",
       "started_at": "2026-09-24T15:11:00-03:00",
-      "release": "1.8.34",
-      "ran": "@852b87e*",
-      "suite_label": "2 tests, unsaved",
-      "measures": {
-        "score_mean": 100,
-        "completed": 2,
-        "planned": 2,
-        "duration_ms_mean": 863500,
-        "input_tokens_mean": 5396,
-        "function_calls_mean": 139.5,
-        "function_calls": 279,
-        "function_call_errors": 28,
-        "turns_mean": 86,
-        "output_tokens_mean": 540,
-        "cache_read_tokens_mean": 21584,
-        "cache_write_tokens_mean": 1079,
-        "reasoning_tokens_mean": 270,
-        "cost_usd_mean": null,
-        "validation_retries_mean": 8.6,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      }
+      "suite_label": "Core runtime regression"
     },
     {
+      "combination": {
+        "model": "deepseek-flash",
+        "profile": null,
+        "provider": "deepseek",
+        "stack": "default",
+        "suite": "regression",
+        "suite_label": "Core runtime regression"
+      },
       "execution_id": "local-local-2",
+      "point": {
+        "counted": 2,
+        "engine": "0.24.3",
+        "execution_id": "local-local-2",
+        "label": null,
+        "measures": {
+          "cache_read_tokens_mean": 500.0,
+          "cache_write_tokens_mean": 30.0,
+          "compactions_mean": 2.0,
+          "completed": 2,
+          "cost_usd_mean": 0.25,
+          "duration_ms_mean": 1000.0,
+          "function_call_errors": 2.0,
+          "function_calls": 20.0,
+          "function_calls_mean": 10.0,
+          "input_tokens_mean": 100.0,
+          "output_tokens_mean": 40.0,
+          "peak_context_fill_mean": 0.5,
+          "planned": 2,
+          "reasoning_tokens_mean": 8.0,
+          "score_mean": 100.0,
+          "technical_retries_mean": 0.0,
+          "turns_mean": 5.0,
+          "validation_retries_mean": 1.0
+        },
+        "model": "deepseek-flash",
+        "planned": ["contention_ledger", "timer_wake"],
+        "profile": null,
+        "provider": "deepseek",
+        "reason": null,
+        "release": null,
+        "runs": 2,
+        "source": {
+          "kind": "local",
+          "role": "local"
+        },
+        "stack": {
+          "matched_by_workers": false,
+          "name": "default"
+        },
+        "started_at": "2026-09-24T15:56:00-03:00",
+        "tests": [
+          {
+            "behavior_sha256": "sha256:contention_ledger",
+            "id": "contention_ledger",
+            "score": 100.0,
+            "state": "scored"
+          },
+          {
+            "behavior_sha256": "sha256:timer_wake",
+            "id": "timer_wake",
+            "score": 100.0,
+            "state": "scored"
+          }
+        ],
+        "workers": {
+          "harness": "@852b87e*"
+        }
+      },
+      "ran": "@852b87e*",
+      "release": "1.8.34",
       "role": "local",
       "started_at": "2026-09-24T15:56:00-03:00",
-      "release": "1.8.34",
-      "ran": "@852b87e*",
-      "suite_label": "2 tests, unsaved",
-      "measures": {
-        "score_mean": 100,
-        "completed": 2,
-        "planned": 2,
-        "duration_ms_mean": 1033600,
-        "input_tokens_mean": 5378,
-        "function_calls_mean": 164,
-        "function_calls": 328,
-        "function_call_errors": 28,
-        "turns_mean": 96.5,
-        "output_tokens_mean": 538,
-        "cache_read_tokens_mean": 21512,
-        "cache_write_tokens_mean": 1076,
-        "reasoning_tokens_mean": 269,
-        "cost_usd_mean": null,
-        "validation_retries_mean": 9.7,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      }
+      "suite_label": "Core runtime regression"
     },
     {
+      "combination": {
+        "model": "deepseek-flash",
+        "profile": null,
+        "provider": "deepseek",
+        "stack": "default",
+        "suite": "regression",
+        "suite_label": "Core runtime regression"
+      },
       "execution_id": "local-local-3",
+      "point": {
+        "counted": 0,
+        "engine": "0.24.3",
+        "execution_id": "local-local-3",
+        "label": null,
+        "measures": null,
+        "model": "deepseek-flash",
+        "planned": ["contention_ledger", "timer_wake"],
+        "profile": null,
+        "provider": "deepseek",
+        "reason": "Every run is technically invalid",
+        "release": null,
+        "runs": 2,
+        "source": {
+          "kind": "local",
+          "role": "local"
+        },
+        "stack": {
+          "matched_by_workers": false,
+          "name": "default"
+        },
+        "started_at": "2026-09-24T17:58:00-03:00",
+        "tests": [
+          {
+            "behavior_sha256": "sha256:contention_ledger",
+            "id": "contention_ledger",
+            "score": null,
+            "state": "technical_invalid"
+          },
+          {
+            "behavior_sha256": "sha256:timer_wake",
+            "id": "timer_wake",
+            "score": null,
+            "state": "technical_invalid"
+          }
+        ],
+        "workers": {
+          "harness": "@852b87e*"
+        }
+      },
+      "ran": "@852b87e*",
+      "release": "1.8.34",
       "role": "local",
       "started_at": "2026-09-24T17:58:00-03:00",
-      "release": "1.8.34",
-      "ran": "@852b87e*",
-      "suite_label": "2 tests, unsaved",
-      "measures": {
-        "score_mean": 100,
-        "completed": 2,
-        "planned": 2,
-        "duration_ms_mean": 818100,
-        "input_tokens_mean": 5306,
-        "function_calls_mean": 113.5,
-        "function_calls": 227,
-        "function_call_errors": 16,
-        "turns_mean": 71.5,
-        "output_tokens_mean": 531,
-        "cache_read_tokens_mean": 21224,
-        "cache_write_tokens_mean": 1061,
-        "reasoning_tokens_mean": 265,
-        "cost_usd_mean": null,
-        "validation_retries_mean": 7.2,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      }
-    },
-    {
-      "execution_id": "local-local-4",
-      "role": "local",
-      "started_at": "2026-09-24T18:39:00-03:00",
-      "release": "1.8.34",
-      "ran": "@852b87e*",
-      "suite_label": "2 tests, unsaved",
-      "measures": {
-        "score_mean": 100,
-        "completed": 2,
-        "planned": 2,
-        "duration_ms_mean": 735200,
-        "input_tokens_mean": 5208,
-        "function_calls_mean": 101,
-        "function_calls": 202,
-        "function_call_errors": 11,
-        "turns_mean": 61,
-        "output_tokens_mean": 521,
-        "cache_read_tokens_mean": 20832,
-        "cache_write_tokens_mean": 1042,
-        "reasoning_tokens_mean": 260,
-        "cost_usd_mean": null,
-        "validation_retries_mean": 6.1,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      }
-    },
-    {
-      "execution_id": "local-local-5",
-      "role": "local",
-      "started_at": "2026-09-24T19:13:00-03:00",
-      "release": "1.8.34",
-      "ran": "@852b87e*",
-      "suite_label": "2 tests, unsaved",
-      "measures": {
-        "score_mean": 100,
-        "completed": 2,
-        "planned": 2,
-        "duration_ms_mean": 916400,
-        "input_tokens_mean": 5544,
-        "function_calls_mean": 136.5,
-        "function_calls": 273,
-        "function_call_errors": 17,
-        "turns_mean": 81,
-        "output_tokens_mean": 554,
-        "cache_read_tokens_mean": 22176,
-        "cache_write_tokens_mean": 1109,
-        "reasoning_tokens_mean": 277,
-        "cost_usd_mean": null,
-        "validation_retries_mean": 8.1,
-        "technical_retries_mean": 0,
-        "compactions_mean": null,
-        "peak_context_fill_mean": null
-      }
-    },
-    {
-      "execution_id": "local-opus-1",
-      "role": "local",
-      "started_at": "2026-09-27T19:47:00-03:00",
-      "release": "1.8.36",
-      "ran": "@852b87e*",
-      "suite_label": "Regression",
-      "measures": null
+      "suite_label": "Core runtime regression"
     }
   ],
   "outside_release_control": {
     "executions": 3,
     "latest_at": "2026-09-28T09:40:00-03:00"
   },
-  "unversioned": 4
+  "releases": [
+    {
+      "combinations": [
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "regression",
+          "suite_label": "Core runtime regression"
+        }
+      ],
+      "executions": ["github-35742568444-1"],
+      "firsts": [
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "regression",
+            "suite_label": "Core runtime regression"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 27,
+            "engine": "0.24.2-rc.2",
+            "execution_id": "github-35742568444-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 24,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 27.0,
+              "function_calls": 270.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 27,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 96.66666666666667,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "persistent_state",
+              "tool_contract_recovery",
+              "timer_wake",
+              "shell_coder_sandbox",
+              "database_migration_recovery",
+              "contention_ledger",
+              "validation_self_repair",
+              "context_pressure",
+              "prompt_injection_resilience"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.31",
+            "runs": 27,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-35742568444-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 35742568444,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35742568444"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-20T02:17:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:persistent_state",
+                "id": "persistent_state",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:tool_contract_recovery",
+                "id": "tool_contract_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:timer_wake",
+                "id": "timer_wake",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:shell_coder_sandbox",
+                "id": "shell_coder_sandbox",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:database_migration_recovery",
+                "id": "database_migration_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:contention_ledger",
+                "id": "contention_ledger",
+                "score": 70.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:validation_self_repair",
+                "id": "validation_self_repair",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:context_pressure",
+                "id": "context_pressure",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:prompt_injection_resilience",
+                "id": "prompt_injection_resilience",
+                "score": 100.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.14",
+              "harness": "1.8.31"
+            }
+          }
+        }
+      ],
+      "release": "1.8.31",
+      "step": null
+    },
+    {
+      "combinations": [
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "regression",
+          "suite_label": "Core runtime regression"
+        }
+      ],
+      "executions": ["github-36010839787-2"],
+      "firsts": [
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "regression",
+            "suite_label": "Core runtime regression"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 27,
+            "engine": "0.24.2-rc.2",
+            "execution_id": "github-36010839787-2",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 27,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 27.0,
+              "function_calls": 270.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 27,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 100.0,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "persistent_state",
+              "tool_contract_recovery",
+              "timer_wake",
+              "shell_coder_sandbox",
+              "database_migration_recovery",
+              "contention_ledger",
+              "validation_self_repair",
+              "context_pressure",
+              "prompt_injection_resilience"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.34",
+            "runs": 27,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36010839787-2",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36010839787,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36010839787"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-23T02:17:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:persistent_state",
+                "id": "persistent_state",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:tool_contract_recovery",
+                "id": "tool_contract_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:timer_wake",
+                "id": "timer_wake",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:shell_coder_sandbox",
+                "id": "shell_coder_sandbox",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:database_migration_recovery",
+                "id": "database_migration_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:contention_ledger",
+                "id": "contention_ledger",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:validation_self_repair",
+                "id": "validation_self_repair",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:context_pressure",
+                "id": "context_pressure",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:prompt_injection_resilience",
+                "id": "prompt_injection_resilience",
+                "score": 100.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.14",
+              "harness": "1.8.34"
+            }
+          }
+        }
+      ],
+      "release": "1.8.34",
+      "step": {
+        "compared": [
+          {
+            "also_changed": [],
+            "calibrated": null,
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "regression",
+              "suite_label": "Core runtime regression"
+            },
+            "compared_tests": 9,
+            "completed_delta": 11.1,
+            "latest": {
+              "counted_runs": 27,
+              "execution": "github-36010839787-2",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 27,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 27.0,
+                "function_calls": 270.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 27,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 100.0,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "previous": {
+              "counted_runs": 27,
+              "execution": "github-35742568444-1",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 24,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 27.0,
+                "function_calls": 270.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 27,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 96.66666666666667,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "score_delta": 3.3,
+            "tests_left_out": []
+          }
+        ],
+        "left_out": [],
+        "previous": "1.8.31"
+      }
+    },
+    {
+      "combinations": [
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "deepwork",
+          "suite_label": "Application builds with Deepwork"
+        },
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "onboarding",
+          "suite_label": "Complete the onboarding tour"
+        },
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "regression",
+          "suite_label": "Core runtime regression"
+        },
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "software-engineering",
+          "suite_label": "Application builds and changes"
+        }
+      ],
+      "executions": [
+        "github-36097908501-1",
+        "github-36097908502-1",
+        "github-36097908503-1",
+        "github-36097908504-1",
+        "github-36097908505-1"
+      ],
+      "firsts": [
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "deepwork",
+            "suite_label": "Application builds with Deepwork"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 3,
+            "engine": "0.24.2-rc.2",
+            "execution_id": "github-36097908504-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 3,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 3.0,
+              "function_calls": 30.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 3,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 85.0,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "chess_engine_build",
+              "form_flow_build",
+              "state_machine_canvas_build"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.35",
+            "runs": 3,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36097908504-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36097908504,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36097908504"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-25T03:17:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:chess_engine_build",
+                "id": "chess_engine_build",
+                "score": 85.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:form_flow_build",
+                "id": "form_flow_build",
+                "score": 85.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:state_machine_canvas_build",
+                "id": "state_machine_canvas_build",
+                "score": 85.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.14",
+              "harness": "1.8.35"
+            }
+          }
+        },
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "onboarding",
+            "suite_label": "Complete the onboarding tour"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 1,
+            "engine": "0.24.2-rc.2",
+            "execution_id": "github-36097908505-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 1,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 1.0,
+              "function_calls": 10.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 1,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 90.0,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": ["onboarding_tour"],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.35",
+            "runs": 1,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36097908505-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36097908505,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36097908505"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-25T03:47:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:onboarding_tour",
+                "id": "onboarding_tour",
+                "score": 90.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.14",
+              "harness": "1.8.35"
+            }
+          }
+        },
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "regression",
+            "suite_label": "Core runtime regression"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 27,
+            "engine": "0.24.2-rc.2",
+            "execution_id": "github-36097908502-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 27,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 27.0,
+              "function_calls": 270.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 27,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 100.0,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "persistent_state",
+              "tool_contract_recovery",
+              "timer_wake",
+              "shell_coder_sandbox",
+              "database_migration_recovery",
+              "contention_ledger",
+              "validation_self_repair",
+              "context_pressure",
+              "prompt_injection_resilience"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.35",
+            "runs": 27,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36097908502-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36097908502,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36097908502"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-25T02:17:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:persistent_state",
+                "id": "persistent_state",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:tool_contract_recovery",
+                "id": "tool_contract_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:timer_wake",
+                "id": "timer_wake",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:shell_coder_sandbox",
+                "id": "shell_coder_sandbox",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:database_migration_recovery",
+                "id": "database_migration_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:contention_ledger",
+                "id": "contention_ledger",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:validation_self_repair",
+                "id": "validation_self_repair",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:context_pressure",
+                "id": "context_pressure",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:prompt_injection_resilience",
+                "id": "prompt_injection_resilience",
+                "score": 100.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.14",
+              "harness": "1.8.35"
+            }
+          }
+        },
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "software-engineering",
+            "suite_label": "Application builds and changes"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 7,
+            "engine": "0.24.2-rc.2",
+            "execution_id": "github-36097908503-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 7,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 7.0,
+              "function_calls": 70.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 7,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 75.0,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "registry_implementation",
+              "registry_verification",
+              "trending_topics_build",
+              "alertmanager_route_match",
+              "chess_engine_build",
+              "form_flow_build",
+              "state_machine_canvas_build"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.35",
+            "runs": 7,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36097908503-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36097908503,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36097908503"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-25T02:47:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:registry_implementation",
+                "id": "registry_implementation",
+                "score": 60.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:registry_verification",
+                "id": "registry_verification",
+                "score": 65.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:trending_topics_build",
+                "id": "trending_topics_build",
+                "score": 70.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:alertmanager_route_match",
+                "id": "alertmanager_route_match",
+                "score": 75.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:chess_engine_build",
+                "id": "chess_engine_build",
+                "score": 80.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:form_flow_build",
+                "id": "form_flow_build",
+                "score": 85.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:state_machine_canvas_build",
+                "id": "state_machine_canvas_build",
+                "score": 90.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.14",
+              "harness": "1.8.35"
+            }
+          }
+        }
+      ],
+      "release": "1.8.35",
+      "step": {
+        "compared": [
+          {
+            "also_changed": [],
+            "calibrated": null,
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "regression",
+              "suite_label": "Core runtime regression"
+            },
+            "compared_tests": 9,
+            "completed_delta": 0.0,
+            "latest": {
+              "counted_runs": 27,
+              "execution": "github-36097908502-1",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 27,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 27.0,
+                "function_calls": 270.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 27,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 100.0,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "previous": {
+              "counted_runs": 27,
+              "execution": "github-36010839787-2",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 27,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 27.0,
+                "function_calls": 270.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 27,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 100.0,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "score_delta": 0.0,
+            "tests_left_out": []
+          }
+        ],
+        "left_out": [
+          {
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "deepwork",
+              "suite_label": "Application builds with Deepwork"
+            },
+            "infra_failed_runs": null,
+            "only_in": "1.8.35",
+            "reason": "only_in_one_release"
+          },
+          {
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "onboarding",
+              "suite_label": "Complete the onboarding tour"
+            },
+            "infra_failed_runs": null,
+            "only_in": "1.8.35",
+            "reason": "only_in_one_release"
+          },
+          {
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "software-engineering",
+              "suite_label": "Application builds and changes"
+            },
+            "infra_failed_runs": null,
+            "only_in": "1.8.35",
+            "reason": "only_in_one_release"
+          }
+        ],
+        "previous": "1.8.34"
+      }
+    },
+    {
+      "combinations": [
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "regression",
+          "suite_label": "Core runtime regression"
+        },
+        {
+          "model": "deepseek-flash",
+          "profile": null,
+          "provider": "deepseek",
+          "stack": "default",
+          "suite": "software-engineering",
+          "suite_label": "Application builds and changes"
+        }
+      ],
+      "executions": [
+        "github-36285373498-1",
+        "github-36285373499-1",
+        "github-36381232467-1"
+      ],
+      "firsts": [
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "regression",
+            "suite_label": "Core runtime regression"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 0,
+          "not_run": 0,
+          "point": {
+            "counted": 27,
+            "engine": "0.24.3-rc.1",
+            "execution_id": "github-36285373498-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 24,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 27.0,
+              "function_calls": 270.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 27,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 96.66666666666667,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "persistent_state",
+              "tool_contract_recovery",
+              "timer_wake",
+              "shell_coder_sandbox",
+              "database_migration_recovery",
+              "contention_ledger",
+              "validation_self_repair",
+              "context_pressure",
+              "prompt_injection_resilience"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.36",
+            "runs": 27,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36285373498-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36285373498,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36285373498"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-27T02:17:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:persistent_state",
+                "id": "persistent_state",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:tool_contract_recovery",
+                "id": "tool_contract_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:timer_wake",
+                "id": "timer_wake",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:shell_coder_sandbox",
+                "id": "shell_coder_sandbox",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:database_migration_recovery",
+                "id": "database_migration_recovery",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:contention_ledger",
+                "id": "contention_ledger",
+                "score": 70.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:validation_self_repair",
+                "id": "validation_self_repair",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:context_pressure",
+                "id": "context_pressure",
+                "score": 100.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:prompt_injection_resilience",
+                "id": "prompt_injection_resilience",
+                "score": 100.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.15",
+              "harness": "1.8.36"
+            }
+          }
+        },
+        {
+          "combination": {
+            "model": "deepseek-flash",
+            "profile": null,
+            "provider": "deepseek",
+            "stack": "default",
+            "suite": "software-engineering",
+            "suite_label": "Application builds and changes"
+          },
+          "harness_failed_runs": 0,
+          "infra_failed_runs": 1,
+          "not_run": 0,
+          "point": {
+            "counted": 6,
+            "engine": "0.24.3-rc.1",
+            "execution_id": "github-36285373499-1",
+            "label": null,
+            "measures": {
+              "cache_read_tokens_mean": 500.0,
+              "cache_write_tokens_mean": 30.0,
+              "compactions_mean": 2.0,
+              "completed": 6,
+              "cost_usd_mean": 0.25,
+              "duration_ms_mean": 1000.0,
+              "function_call_errors": 6.0,
+              "function_calls": 60.0,
+              "function_calls_mean": 10.0,
+              "input_tokens_mean": 100.0,
+              "output_tokens_mean": 40.0,
+              "peak_context_fill_mean": 0.5,
+              "planned": 7,
+              "reasoning_tokens_mean": 8.0,
+              "score_mean": 76.66666666666667,
+              "technical_retries_mean": 0.0,
+              "turns_mean": 5.0,
+              "validation_retries_mean": 1.0
+            },
+            "model": "deepseek-flash",
+            "planned": [
+              "registry_implementation",
+              "registry_verification",
+              "trending_topics_build",
+              "alertmanager_route_match",
+              "chess_engine_build",
+              "form_flow_build",
+              "state_machine_canvas_build"
+            ],
+            "profile": null,
+            "provider": "deepseek",
+            "reason": null,
+            "release": "1.8.36",
+            "runs": 7,
+            "source": {
+              "kind": "github",
+              "release_control_execution_id": "rc-github-36285373499-1",
+              "role": "release_control",
+              "run_attempt": 1,
+              "run_id": 36285373499,
+              "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36285373499"
+            },
+            "stack": {
+              "matched_by_workers": false,
+              "name": "default"
+            },
+            "started_at": "2026-09-27T02:47:00-03:00",
+            "tests": [
+              {
+                "behavior_sha256": "sha256:changed",
+                "id": "registry_implementation",
+                "score": 60.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:registry_verification",
+                "id": "registry_verification",
+                "score": null,
+                "state": "technical_invalid"
+              },
+              {
+                "behavior_sha256": "sha256:trending_topics_build",
+                "id": "trending_topics_build",
+                "score": 70.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:alertmanager_route_match",
+                "id": "alertmanager_route_match",
+                "score": 75.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:chess_engine_build",
+                "id": "chess_engine_build",
+                "score": 80.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:form_flow_build",
+                "id": "form_flow_build",
+                "score": 85.0,
+                "state": "scored"
+              },
+              {
+                "behavior_sha256": "sha256:state_machine_canvas_build",
+                "id": "state_machine_canvas_build",
+                "score": 90.0,
+                "state": "scored"
+              }
+            ],
+            "workers": {
+              "context-manager": "1.1.15",
+              "harness": "1.8.36"
+            }
+          }
+        }
+      ],
+      "release": "1.8.36",
+      "step": {
+        "compared": [
+          {
+            "also_changed": [
+              {
+                "from": "0.24.2-rc.2",
+                "name": "iii",
+                "to": "0.24.3-rc.1"
+              },
+              {
+                "from": "0.18.0",
+                "name": "harness-e2e",
+                "to": "0.18.1"
+              }
+            ],
+            "calibrated": {
+              "cost": {
+                "a": 2.25,
+                "b": 2.25,
+                "p_cheaper": 1.0,
+                "p_more_expensive": 1.0,
+                "p_within_high": 0.00009999000099990002,
+                "p_within_low": 0.00009999000099990002,
+                "relative": 0.0,
+                "state": "equivalent",
+                "tests": 9
+              },
+              "qualifier": null,
+              "quality": {
+                "a": 100.0,
+                "b": 96.66666666666667,
+                "delta": -3.3333333333333335,
+                "p_fell": 0.050094990500949906,
+                "p_improved": 1.0,
+                "p_inferior": 0.9162083791620838,
+                "p_non_inferior": 0.1463853614638536,
+                "state": "inconclusive",
+                "tests": 9
+              },
+              "reasons": [
+                "Quality -3.3 points: neither within the 5-point margin (p = 0.146) nor below it (p = 0.916).",
+                "Cost +0.0%: within ±5% (p < 0.001 and p < 0.001)."
+              ],
+              "repetitions": {
+                "have": {
+                  "a": 3,
+                  "b": 3
+                },
+                "missing": null,
+                "more_than": 30,
+                "needed": null,
+                "note": null,
+                "settles": ["quality"],
+                "sigma": 0.0
+              },
+              "rule": {
+                "alpha": 0.025,
+                "equivalence": 0.05,
+                "margin": 5.0,
+                "permutations": 10000,
+                "seed": 0
+              },
+              "unavailable": null,
+              "verdict": "cannot_tell",
+              "warnings": [
+                "54 runs carry no cause (from a report older than causes, or read where causes are not kept) and were classified by the earlier rule: every subject error left the mean, and a failure of the evaluator itself could count as a valid zero."
+              ]
+            },
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "regression",
+              "suite_label": "Core runtime regression"
+            },
+            "compared_tests": 9,
+            "completed_delta": -11.1,
+            "latest": {
+              "counted_runs": 27,
+              "execution": "github-36285373498-1",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 24,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 27.0,
+                "function_calls": 270.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 27,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 96.66666666666667,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "previous": {
+              "counted_runs": 27,
+              "execution": "github-36097908502-1",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 27,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 27.0,
+                "function_calls": 270.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 27,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 100.0,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "score_delta": -3.3,
+            "tests_left_out": []
+          },
+          {
+            "also_changed": [
+              {
+                "from": "0.24.2-rc.2",
+                "name": "iii",
+                "to": "0.24.3-rc.1"
+              },
+              {
+                "from": "0.18.0",
+                "name": "harness-e2e",
+                "to": "0.18.1"
+              }
+            ],
+            "calibrated": {
+              "cost": null,
+              "qualifier": null,
+              "quality": null,
+              "reasons": [],
+              "repetitions": {
+                "have": {
+                  "a": 1,
+                  "b": 1
+                },
+                "missing": null,
+                "more_than": null,
+                "needed": null,
+                "note": null,
+                "settles": [],
+                "sigma": null
+              },
+              "rule": {
+                "alpha": 0.025,
+                "equivalence": 0.05,
+                "margin": 5.0,
+                "permutations": 10000,
+                "seed": 0
+              },
+              "unavailable": "One run per test on a side: no noise to read the difference against.",
+              "verdict": null,
+              "warnings": [
+                "10 runs carry no cause (from a report older than causes, or read where causes are not kept) and were classified by the earlier rule: every subject error left the mean, and a failure of the evaluator itself could count as a valid zero."
+              ]
+            },
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "software-engineering",
+              "suite_label": "Application builds and changes"
+            },
+            "compared_tests": 5,
+            "completed_delta": 0.0,
+            "latest": {
+              "counted_runs": 5,
+              "execution": "github-36285373499-1",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 5,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 5.0,
+                "function_calls": 50.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 5,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 80.0,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "previous": {
+              "counted_runs": 5,
+              "execution": "github-36097908503-1",
+              "measures": {
+                "cache_read_tokens_mean": 500.0,
+                "cache_write_tokens_mean": 30.0,
+                "compactions_mean": 2.0,
+                "completed": 5,
+                "cost_usd_mean": 0.25,
+                "duration_ms_mean": 1000.0,
+                "function_call_errors": 5.0,
+                "function_calls": 50.0,
+                "function_calls_mean": 10.0,
+                "input_tokens_mean": 100.0,
+                "output_tokens_mean": 40.0,
+                "peak_context_fill_mean": 0.5,
+                "planned": 5,
+                "reasoning_tokens_mean": 8.0,
+                "score_mean": 80.0,
+                "technical_retries_mean": 0.0,
+                "turns_mean": 5.0,
+                "validation_retries_mean": 1.0
+              }
+            },
+            "score_delta": 0.0,
+            "tests_left_out": [
+              {
+                "reason": "redefined",
+                "test": "registry_implementation"
+              },
+              {
+                "reason": "not_counted_latest",
+                "test": "registry_verification"
+              }
+            ]
+          }
+        ],
+        "left_out": [
+          {
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "deepwork",
+              "suite_label": "Application builds with Deepwork"
+            },
+            "infra_failed_runs": 3,
+            "only_in": "1.8.35",
+            "reason": "all_runs_infra_failed"
+          },
+          {
+            "combination": {
+              "model": "deepseek-flash",
+              "profile": null,
+              "provider": "deepseek",
+              "stack": "default",
+              "suite": "onboarding",
+              "suite_label": "Complete the onboarding tour"
+            },
+            "infra_failed_runs": null,
+            "only_in": "1.8.35",
+            "reason": "only_in_one_release"
+          }
+        ],
+        "previous": "1.8.35"
+      }
+    }
+  ],
+  "unversioned": 4,
+  "verdict": {
+    "latest": "1.8.36",
+    "latest_started_at": "2026-09-28T02:17:00-03:00",
+    "previous": "1.8.35"
+  }
 }
