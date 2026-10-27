@@ -758,6 +758,8 @@ export type TrendMetric = {
   /** How a difference reads: score points, tests, percentage points or a
    *  share of the earlier value. */
   delta: 'points' | 'tests' | 'percent_points' | 'percent'
+  /** The least span of the score axis; 4 points without it. */
+  minSpan?: number
 }
 
 const round1 = (value: number) => Math.round(value * 10) / 10
@@ -1080,7 +1082,10 @@ export function domain(
   if (metric.id === 'score') {
     lo = Math.max(0, Math.floor(lo - 2))
     hi = Math.min(100, Math.ceil(hi + 2))
-    if (hi - lo < 4) lo = Math.max(0, hi - 4)
+    const span = metric.minSpan ?? 4
+    if (hi - lo < span) lo = Math.max(0, hi - span)
+    // Near 0, lowering cannot widen it enough.
+    if (hi - lo < span) hi = Math.min(100, lo + span)
   } else if (metric.id === 'completed') {
     // `planned` counts runs (planned tests × runs per test), as `completed`
     // does; the plan's test list does not. A share runs to 100.

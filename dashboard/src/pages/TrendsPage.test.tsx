@@ -190,7 +190,7 @@ describe('trends page parts', () => {
   it('loads in the shape of the page', () => {
     const html = renderToStaticMarkup(<TrendsSkeleton />)
     expect(html).toContain('role="status" aria-busy="true"')
-    expect(html.match(/tr-skel-line/g)).toHaveLength(2)
+    expect(html.match(/tr-skel-line/g)).toHaveLength(3)
     expect(html.match(/tr-skel-tab/g)).toHaveLength(6)
     expect(html.match(/tr-skel-big/g)).toHaveLength(1)
     expect(html.match(/tr-skel-row/g)).toHaveLength(2)

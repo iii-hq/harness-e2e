@@ -329,9 +329,12 @@
   height: calc(var(--spacing) * 12);
 }
 
-/* The series view's way back, at its own width. */
-.tr-back {
-  align-self: flex-start;
+/* The series view's way back, with CI sync's status beside it. */
+.tr-back-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
 }
 
 /* What More options and Details hold, spaced like the page. */
@@ -438,6 +441,17 @@
   display: inline-flex;
   align-items: center;
   gap: calc(var(--spacing) * 1.5);
+}
+
+/* A setup the verdict names: it opens the latest release's panel on it. */
+.tr-name-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .tr-control[data-active] {

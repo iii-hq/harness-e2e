@@ -1065,6 +1065,48 @@ pub(super) mod tests {
         })
     }
 
+    /// The release overview of a frozen control database: `REPLAY_DIR` holds
+    /// `executions.json` and `saved.json`, `sqlite3 -json` exports of its
+    /// two tables, and gets `overview.json`. Run it with `--ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn replay_release_overview() {
+        let Some(dir) = std::env::var_os("REPLAY_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let database = crate::plans::store::tests::database(root);
+        for (file, table) in [
+            ("executions.json", "executions"),
+            ("saved.json", "saved_plan_executions"),
+        ] {
+            let rows: Vec<Value> =
+                serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
+            for row in rows {
+                database.insert(table, row);
+            }
+        }
+        let store = manager(root, Arc::new(FakeRunner::new(root.into())));
+        let model = DashboardReadModel::from_records(
+            database.persistence().executions().await.unwrap(),
+            &store.previous_attempts().await.unwrap(),
+        )
+        .unwrap();
+        // Not `release_overview()`: without a control plane it reads the
+        // runs directory, not these rows.
+        let summaries = without_control_plane(store, root)
+            .merge_summaries(&model)
+            .await
+            .unwrap();
+        let overview = crate::dashboard::overview::overview(&summaries, &model.trend_runs());
+        std::fs::write(
+            dir.join("overview.json"),
+            serde_json::to_vec_pretty(&overview).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn a_slot_refuses_a_model_built_before_it_changed() {
         let model =

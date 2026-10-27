@@ -741,6 +741,13 @@ describe('axes', () => {
       ] as unknown as TrendPoint[]),
     ).toEqual([0, 100])
   })
+
+  it('spans the overview’s score axis over 20 points, raising it near 0', () => {
+    const score = overviewMetric(trendMetric('score'))
+    expect(domain(score, [96.7, 100], [])).toEqual([80, 100])
+    expect(domain(score, [1, 3], [])).toEqual([0, 20])
+    expect(domain(score, [40, 90], [])).toEqual([38, 92])
+  })
 })
 
 describe('by test', () => {

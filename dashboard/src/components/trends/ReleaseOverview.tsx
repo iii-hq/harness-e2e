@@ -19,20 +19,28 @@ import {
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { formatDateTime, plural } from '@/lib/format'
 import {
-  type Aggregate,
-  aggregateDelta,
+  alsoChangedText,
+  type CombinationLine,
+  type CombinationPoint,
+  combinationKey,
+  combinationLine,
+  combinationOptions,
   combinationText,
+  comparedDelta,
+  defaultCombination,
+  isCompared,
+  leftOutText,
+  MAIN_METRICS,
   type ReleaseOverview as Overview,
-  type OverviewPoint,
   overviewMetric,
+  type ReleasePoint,
+  stepItem,
   stepText,
-  type Timeline,
-  timeline,
+  testReasonText,
   uncalibratedText,
-  type Verdict,
+  VERDICT_METRICS,
 } from '@/lib/release-overview'
 import {
-  changesAt,
   releaseText,
   TREND_METRICS,
   type TrendMetricId,
@@ -41,31 +49,69 @@ import {
 import { repetitionsText, verdictHeadline, verdictTone } from '@/lib/verdict'
 import { PointPanel } from './PointPanel'
 import { DeltaPill, Direction, Plot } from './TrendsChart'
-import { MAIN_METRICS } from './VerdictHeadline'
+import { VerdictHeadline } from './VerdictHeadline'
 
 const MORE_METRICS = TREND_METRICS.filter((metric) => metric.tier === 'more')
 const PANEL_METRICS = TREND_METRICS.map(overviewMetric)
 
-/** The release a point of the line stands for; none for a local run. */
-function releaseOf(overview: Overview, point: OverviewPoint | undefined) {
-  return overview.releases.find(
-    (release) => `release:${release.release}` === point?.execution_id,
-  )
+/** What a first execution did not measure: `3 runs failed in the E2E
+ *  infrastructure · 1 run where the harness failed · …`, each left out at
+ *  0. */
+function coverageParts(first: CombinationPoint | undefined) {
+  if (!first) return []
+  return [
+    first.infra_failed_runs > 0
+      ? `${plural(first.infra_failed_runs, 'run')} failed in the E2E infrastructure`
+      : null,
+    first.harness_failed_runs > 0
+      ? `${plural(first.harness_failed_runs, 'run')} where the harness failed`
+      : null,
+    first.not_run > 0
+      ? `${plural(first.not_run, 'planned run')} not run`
+      : null,
+  ].filter((part): part is string => part !== null)
 }
 
-/** The verdict's combinations one by one: the calibrated verdict of each,
- *  or why it has none, and the tests left out of it. */
-function Combinations({ verdict }: { verdict: Verdict }) {
+const firstOf = (release: ReleasePoint, key: string) =>
+  release.firsts.find((first) => combinationKey(first.combination) === key)
+
+/** The verdict's step setup by setup: its calibrated verdict or why there
+ *  is none, the deltas, what each side counted, what was left out and why,
+ *  and both executions; then the setups left out. */
+function Combinations({
+  overview,
+  release,
+}: {
+  overview: Overview
+  release: ReleasePoint
+}) {
+  const step = release.step
+  if (!step) return null
+  const latest = releaseText(release.release)
+  const previous = releaseText(step.previous)
   return (
     <section className="tr-panel-section" aria-labelledby="tr-cb">
       <h3 id="tr-cb" className="tr-h3">
         By suite, model, profile and stack
       </h3>
       <ul className="tr-changes">
-        {verdict.compared.map((item) => {
+        {step.compared.map((item) => {
           const summary = item.calibrated
+          const reasons = new Map<string, string[]>()
+          for (const test of item.tests_left_out) {
+            const reason = testReasonText(
+              test.reason,
+              release.release,
+              step.previous,
+            )
+            reasons.set(reason, [...(reasons.get(reason) ?? []), test.test])
+          }
+          const coverage = coverageParts(
+            firstOf(release, combinationKey(item.combination)),
+          )
+          const also = alsoChangedText(item.also_changed)
           return (
-            <li key={combinationText(item.combination)} data-combination>
+            <li key={combinationKey(item.combination)} data-combination>
               <span className="tr-mono tr-small tr-strong tr-wrap">
                 {combinationText(item.combination)}
               </span>
@@ -100,37 +146,88 @@ function Combinations({ verdict }: { verdict: Verdict }) {
                   {warning}
                 </span>
               ))}
-              {item.tests_left_out.length > 0 ? (
-                <span className="tr-faint">
-                  {`Left out: ${item.tests_left_out.join(', ')}`}
+              <span className="tr-move" data-combination-deltas>
+                {VERDICT_METRICS.map((metric) => (
+                  <span key={metric.id} className="tr-move">
+                    {metric.label}{' '}
+                    <DeltaPill
+                      metric={metric}
+                      value={comparedDelta(metric, item)}
+                    />
+                  </span>
+                ))}
+              </span>
+              <span className="tr-faint">
+                {`Counted runs: ${item.latest.counted_runs} on ${latest}, ${item.previous.counted_runs} on ${previous} · ${plural(item.compared_tests, 'compared test')}`}
+              </span>
+              {coverage.length > 0 ? (
+                <span className="tr-faint">{`On ${latest}: ${coverage.join(' · ')}`}</span>
+              ) : null}
+              {reasons.size > 0 ? (
+                <span className="tr-faint" data-tests-left-out>
+                  {`Left out: ${[...reasons]
+                    .map(([reason, tests]) => `${tests.join(', ')} (${reason})`)
+                    .join('; ')}`}
                 </span>
               ) : null}
+              {also ? <span className="tr-faint">{also}</span> : null}
+              <span className="tr-move">
+                <a
+                  className="tr-inline-link"
+                  href={hashForExecution(item.latest.execution)}
+                >
+                  {`${latest} execution`}
+                </a>
+                <a
+                  className="tr-inline-link"
+                  href={hashForExecution(item.previous.execution)}
+                >
+                  {`${previous} execution`}
+                </a>
+              </span>
             </li>
           )
         })}
+        {step.left_out.map((item) => (
+          <li key={combinationKey(item.combination)} data-left-out>
+            <span className="tr-mono tr-small tr-strong tr-wrap">
+              {combinationText(item.combination)}
+            </span>
+            <span className="tr-faint">
+              {`Not compared: ${leftOutText(overview, item, release.release, step.previous)}`}
+            </span>
+          </li>
+        ))}
       </ul>
     </section>
   )
 }
 
-/** A point of the release line, opened. A local run reads on its own; a
- *  release reads against the one before it over what both ran, with what
- *  changed between them and, for the verdict's, each combination. */
+/** A point of a setup's line, opened. A local run reads on its own; a
+ *  release reads as its first completed execution, with what changed since
+ *  the release before it, its coverage and, for the verdict's, each
+ *  setup. */
 export function ReleasePanel({
   overview,
   line,
   index,
+  setup,
   bridge,
   onClose,
 }: {
   overview: Overview
-  line: Timeline
+  line: CombinationLine
   index: number
+  /** The setup's key. */
+  setup: string
   bridge: DashboardDataBridge | null
   onClose: () => void
 }) {
   const point = line.points[index]
-  const release = releaseOf(overview, point)
+  const release =
+    point.group?.by === 'release'
+      ? overview.releases.find((item) => item.release === point.release)
+      : undefined
   if (!release)
     return (
       <PointPanel
@@ -144,31 +241,13 @@ export function ReleasePanel({
         onClose={onClose}
       />
     )
-  const releases = line.points.filter((item) => item.source.kind === 'github')
-  const at = releases.indexOf(point)
-  const holding = (item: OverviewPoint, aggregate: Aggregate) => ({
-    ...item,
-    aggregate,
-    measures: aggregate.measures,
-  })
-  // Both sides over the combinations they share, as the step reads them.
-  const step =
-    point.step?.latest_aggregate && point.step.previous_aggregate
-      ? {
-          latest: holding(point, point.step.latest_aggregate),
-          previous: holding(releases[at - 1], point.step.previous_aggregate),
-        }
-      : null
+  const releases = line.points.filter((item) => item.group?.by === 'release')
   return (
     <PointPanel
-      points={
-        step
-          ? releases.map((item) => (item === point ? step.latest : item))
-          : releases
-      }
-      index={at}
-      changes={[...changesAt(releases, at), ...line.changes[index]]}
-      previous={step?.previous ?? null}
+      points={releases}
+      index={releases.indexOf(point)}
+      changes={line.changes[index]}
+      previous={null}
       baseline={null}
       bridge={bridge}
       here={hashForTrends()}
@@ -176,26 +255,22 @@ export function ReleasePanel({
       versions={false}
       subtitle={[
         plural(release.executions.length, 'Release Control execution'),
-        plural(release.combinations.length, 'combination'),
-        release.tests_not_run > 0
-          ? `${plural(release.tests_not_run, 'planned test')} did not run`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(' · ')}
+        ...coverageParts(firstOf(release, setup)),
+      ].join(' · ')}
       metrics={PANEL_METRICS}
+      notRunText="They are left out of Tests completed."
     >
       {overview.verdict?.latest === release.release ? (
-        <Combinations verdict={overview.verdict} />
+        <Combinations overview={overview} release={release} />
       ) : null}
     </PointPanel>
   )
 }
 
-/** Trends' first screen under the verdict: the metric tabs, the release line
- *  with the local runs beside it, the latest release's step, the CI runs
- *  outside Release Control, `options`, then the latest release's
- *  executions. */
+/** Trends' first screen: the verdict, the metric tabs and the Setup picker,
+ *  the chosen setup's line with its local runs beside it, the latest
+ *  release's step for it, the CI runs outside Release Control, `options`,
+ *  then the latest release's executions. */
 export function ReleaseOverview({
   overview,
   metric,
@@ -204,6 +279,8 @@ export function ReleaseOverview({
   narrow,
   options,
   empty,
+  status,
+  initialCombination,
   now = new Date(),
 }: {
   overview: Overview
@@ -216,9 +293,41 @@ export function ReleaseOverview({
   /** In place of the tabs, the line and the callout while no release has
    *  results. */
   empty?: ReactNode
+  /** Beside the verdict's heading: the sync status. */
+  status?: ReactNode
+  /** The setup to open on, by its key; else the one that decides. */
+  initialCombination?: string
   now?: Date
 }) {
-  const line = useMemo(() => timeline(overview), [overview])
+  const last = overview.releases.at(-1)
+  const fallback = defaultCombination(overview)
+  const fallbackKey = fallback ? combinationKey(fallback) : ''
+  // A setup the reader chose holds until another release is the latest;
+  // until then the one that decides follows each reload.
+  const [chosen, setChosen] = useState<{
+    release: string | undefined
+    key: string | null
+  }>({ release: last?.release, key: initialCombination ?? null })
+  const setup =
+    chosen.release === last?.release && chosen.key !== null
+      ? chosen.key
+      : fallbackKey
+  const choose = (key: string) => setChosen({ release: last?.release, key })
+  const line = useMemo(
+    () => combinationLine(overview, setup),
+    [overview, setup],
+  )
+  // Every point is a release: a diamond for the Harness changing would sit
+  // on every step. The panel still lists it.
+  const marks = useMemo(
+    () =>
+      line.changes.map((changes) =>
+        changes.filter((change) => change.kind !== 'harness'),
+      ),
+    [line],
+  )
+  const setups = combinationOptions(overview)
+  const current = setups.find((item) => combinationKey(item) === setup)
   // The opened point, by id, so a reload keeps it while it is on the line.
   const [picked, setPicked] = useState<string | null>(null)
   const shown = overviewMetric(trendMetric(metric))
@@ -226,20 +335,25 @@ export function ReleaseOverview({
   const selected = line.points.findIndex(
     (point) => point.execution_id === picked,
   )
-  const latest: OverviewPoint | undefined = line.points[line.latest]
-  const last = releaseOf(overview, latest)
-  // The latest step, when both of its sides were measured.
-  const step = latest?.step
-  const against =
-    step?.latest_aggregate && step.previous_aggregate ? step : null
+  const item = last?.step ? stepItem(last.step, setup) : null
   const outside = overview.outside_release_control
   const pick = (index: number) => {
     const id = line.points[index]?.execution_id ?? null
-    setPicked((current) => (current === id ? null : id))
+    setPicked((was) => (was === id ? null : id))
+  }
+  const open = (key: string) => {
+    choose(key)
+    setPicked(last ? (firstOf(last, key)?.point.execution_id ?? null) : null)
   }
   return (
     <div className="tr-overview">
-      {latest && last ? (
+      <VerdictHeadline
+        overview={overview}
+        onOpen={open}
+        status={status}
+        now={now}
+      />
+      {last ? (
         <>
           <div className="tr-tabs">
             <SegmentedControl
@@ -293,6 +407,50 @@ export function ReleaseOverview({
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+            {setups.length > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="tr-control"
+                    aria-label={
+                      current ? `Setup: ${combinationText(current)}` : 'Setup'
+                    }
+                    data-picker="setup"
+                  >
+                    <span>{current ? current.suite_label : 'Setup'}</span>
+                    <ChevronDown
+                      size={16}
+                      aria-hidden="true"
+                      className="tr-faint-ink"
+                    />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  aria-label="Setup"
+                  className="tr-menu tr-period-menu"
+                >
+                  <DropdownMenuRadioGroup
+                    value={setup}
+                    onValueChange={(key) => {
+                      choose(key)
+                      setPicked(null)
+                    }}
+                  >
+                    {setups.map((option) => (
+                      <DropdownMenuRadioItem
+                        key={combinationKey(option)}
+                        value={combinationKey(option)}
+                        className="tr-menu-item"
+                      >
+                        {combinationText(option)}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
           </div>
           <div className="tr-top" data-panel={!narrow || undefined}>
             <section
@@ -312,21 +470,18 @@ export function ReleaseOverview({
               <Plot
                 metric={shown}
                 points={line.points}
-                changes={line.changes}
+                changes={marks}
                 selected={selected}
                 baseline={-1}
                 height={narrow ? 270 : 320}
                 latest={line.latest}
-                step={(index) => stepText(shown, line.points[index])}
+                step={(index) => stepText(overview, shown, line.steps[index])}
                 onPick={pick}
               />
               <p className="tr-footnote">
-                One step per Harness release with Release Control results,
-                oldest first. Each step reads against the release before it,
-                over the suites, models, profiles and stacks both ran, each
-                weighing the same. A hollow ring ran on this harness or in
-                Docker, beside the release current when it started; it never
-                counts in the verdict.
+                Each point is this setup's first completed Release Control
+                execution of that release, oldest first; a diamond marks a step
+                that left tests out or changed what ran.
               </p>
               {overview.unversioned > 0 ? (
                 <p className="tr-footnote">
@@ -340,6 +495,7 @@ export function ReleaseOverview({
                 overview={overview}
                 line={line}
                 index={selected}
+                setup={setup}
                 bridge={bridge}
                 onClose={() => setPicked(null)}
               />
@@ -351,41 +507,41 @@ export function ReleaseOverview({
                 <h2 id="tr-callout" className="tr-h2">
                   {`${releaseText(last.release)} · ${plural(last.executions.length, 'Release Control run')}`}
                 </h2>
-                {against ? (
+                {item && last.step && isCompared(item) ? (
                   <dl className="tr-measures">
-                    {MAIN_METRICS.map((item) => (
-                      <div key={item.id}>
-                        <dt>{item.label}</dt>
+                    {MAIN_METRICS.map((metric) => (
+                      <div key={metric.id}>
+                        <dt>{metric.label}</dt>
                         <dd>
                           <DeltaPill
-                            metric={item}
-                            value={aggregateDelta(
-                              item,
-                              against.latest_aggregate,
-                              against.previous_aggregate,
-                            )}
+                            metric={metric}
+                            value={comparedDelta(metric, item)}
                           />
                         </dd>
                       </div>
                     ))}
                   </dl>
                 ) : (
-                  <p className="tr-faint">
-                    {step
-                      ? `Nothing to compare with ${releaseText(step.previous)}.`
+                  <p className="tr-faint" data-not-compared>
+                    {item && last.step && !isCompared(item)
+                      ? `Not compared: ${leftOutText(overview, item, last.release, last.step.previous)}`
                       : 'Nothing earlier to compare with.'}
                   </p>
                 )}
-                <div className="tr-actions">
-                  <button
-                    type="button"
-                    className={buttonClassName({ variant: 'secondary' })}
-                    onClick={() => setPicked(latest.execution_id)}
-                  >
-                    What changed
-                    <ChevronRight size={16} aria-hidden="true" />
-                  </button>
-                </div>
+                {line.latest >= 0 ? (
+                  <div className="tr-actions">
+                    <button
+                      type="button"
+                      className={buttonClassName({ variant: 'secondary' })}
+                      onClick={() =>
+                        setPicked(line.points[line.latest].execution_id)
+                      }
+                    >
+                      What changed
+                      <ChevronRight size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                ) : null}
               </aside>
             )}
           </div>
@@ -396,7 +552,7 @@ export function ReleaseOverview({
             </li>
             <li>
               <span className="tr-legend-ring" aria-hidden="true" />
-              local run (this harness or Docker)
+              local run (this harness or Docker); it never counts in the verdict
             </li>
             <li>
               <span
@@ -404,7 +560,7 @@ export function ReleaseOverview({
                 data-major="true"
                 aria-hidden="true"
               />
-              the suites, models, profiles or stacks that ran changed
+              tests left out, or what ran changed
             </li>
           </ul>
         </>

@@ -1205,8 +1205,9 @@ under Sync options, **Turn off sync** (it and **Download CI results** go through
 `e2e::dashboard::ci-sync-set`, which keeps the switch in `ci-sync.json` in the
 data directory, so a restart resumes). It imports through
 **Import**'s path, one run at a time: only Release Control runs first, a day at
-a time from the newest, until the two newest Harness releases each have one (or
-90 days are scanned), so the verdict comes before the pull-request backlog;
+a time from the newest, until the three newest Harness releases each have one
+(or 90 days are scanned), so the verdict comes before the pull-request backlog
+and reads the previous release's first night rather than only its last ones;
 then the newest 100 other runs it listed, so Trends can count the runs outside
 Release Control; then the rest GitHub keeps (90 days), Release Control first;
 then, every 10 minutes, the runs created in the last 7 days, so a re-run of an

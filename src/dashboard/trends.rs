@@ -13,7 +13,7 @@ use crate::plans::store::{ExecutionParameters, ExecutionSource, StackWorker, Whe
 pub(super) const NOT_RECORDED: &str = "not_recorded";
 pub(super) const ANY: &str = "any";
 /// Stack rows that are the runner and the engine, not workers of the stack.
-const RUNNER: &str = "harness-e2e";
+pub(super) const RUNNER: &str = "harness-e2e";
 const ENGINE: &str = "compose";
 /// The stack row that is the Harness under test.
 pub(super) const HARNESS: &str = "harness";
@@ -214,6 +214,10 @@ pub(super) struct TrendRun {
     pub attempt_id: String,
     /// Technically valid: only these are measured.
     pub counted: bool,
+    /// The subject failed it (the Harness, its provider request or a budget),
+    /// not the E2E infrastructure; such a run counts unless written before
+    /// run causes. The series view ignores it.
+    pub harness_failed: bool,
     pub completed: bool,
     pub score: Option<f64>,
     pub duration_ms: Option<f64>,
@@ -852,6 +856,7 @@ pub(super) mod tests {
             behavior_sha256: Some(format!("sha256:{test}")),
             attempt_id: String::new(),
             counted,
+            harness_failed: false,
             completed,
             score,
             duration_ms: Some(1_000.0),
