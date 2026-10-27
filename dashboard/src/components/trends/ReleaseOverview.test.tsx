@@ -177,6 +177,19 @@ describe('release overview', () => {
     )
   })
 
+  it('marks only the steps that left tests out, never what else changed', () => {
+    // Core changed iii, the Harness and workers at 1.8.36, and left no test
+    // out: no diamond.
+    expect(count(render(), /class="tr-diamond"/)).toBe(0)
+    const apps = render({
+      initialCombination: combinationKey(step.compared[1].combination),
+    })
+    expect(count(apps, /class="tr-diamond"/)).toBe(1)
+    expect(apps).toContain(
+      'aria-label="What changed · v1.8.36: registry_implementation, tests"',
+    )
+  })
+
   it('calls out every main measure of the setup’s latest step', () => {
     const html = render()
     expect(html).toContain('v1.8.36 · 3 Release Control runs')

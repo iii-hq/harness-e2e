@@ -174,8 +174,9 @@ what changed since the previous release, the execution's coverage and, on the
 verdict's release, each setup of the step with what each side counted, the
 tests left out by reason and links to both executions. A hollow ring is a local
 or Docker run of the setup, beside the release it ran with; the line leaves it
-out and it never counts. A diamond marks a step that left tests out or changed
-what ran. A strip counts the **CI runs outside Release Control** and links to
+out and it never counts. A diamond marks only a step that left tests out; the
+Harness, the engine and the workers change at nearly every release, so the
+panel lists them instead. A strip counts the **CI runs outside Release Control** and links to
 them in the Executions list.
 
 The overview is the page's address (`#/`): a link to it names no series, and

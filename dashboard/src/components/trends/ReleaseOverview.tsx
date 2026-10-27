@@ -43,6 +43,7 @@ import {
 import {
   releaseText,
   TREND_METRICS,
+  type TrendChange,
   type TrendMetricId,
   trendMetric,
 } from '@/lib/trends'
@@ -52,6 +53,9 @@ import { DeltaPill, Direction, Plot } from './TrendsChart'
 import { VerdictHeadline } from './VerdictHeadline'
 
 const MORE_METRICS = TREND_METRICS.filter((metric) => metric.tier === 'more')
+/** The changes that leave tests out of a step: tests one side did not plan
+ *  or count, and definitions that changed. */
+const LEFT_OUT_KINDS: TrendChange['kind'][] = ['tests', 'definition']
 const PANEL_METRICS = TREND_METRICS.map(overviewMetric)
 
 /** What a first execution did not measure: `3 runs failed in the E2E
@@ -317,12 +321,12 @@ export function ReleaseOverview({
     () => combinationLine(overview, setup),
     [overview, setup],
   )
-  // Every point is a release: a diamond for the Harness changing would sit
-  // on every step. The panel still lists it.
+  // A diamond only where the step left tests out. The Harness, the engine
+  // and the workers change at nearly every release; the panel lists them.
   const marks = useMemo(
     () =>
       line.changes.map((changes) =>
-        changes.filter((change) => change.kind !== 'harness'),
+        changes.filter((change) => LEFT_OUT_KINDS.includes(change.kind)),
       ),
     [line],
   )
@@ -481,7 +485,8 @@ export function ReleaseOverview({
               <p className="tr-footnote">
                 Each point is this setup's first completed Release Control
                 execution of that release, oldest first; a diamond marks a step
-                that left tests out or changed what ran.
+                that left tests out, and a point's panel lists what else
+                changed.
               </p>
               {overview.unversioned > 0 ? (
                 <p className="tr-footnote">
@@ -560,7 +565,7 @@ export function ReleaseOverview({
                 data-major="true"
                 aria-hidden="true"
               />
-              tests left out, or what ran changed
+              tests left out of the step
             </li>
           </ul>
         </>
