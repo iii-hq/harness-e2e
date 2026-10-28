@@ -50,6 +50,7 @@ vocabulary! {
     /// iii releases. harness, harness-e2e, fp and provider-* are left out.
     Worker {
         Ade = "ade",
+        ApprovalGate = "approval-gate",
         Auth = "auth",
         Browser = "browser",
         Canvas = "canvas",
@@ -273,6 +274,14 @@ impl ScenarioId {
                 | Self::MemoryLearnFromLongMessage
                 | Self::MemoryHonorsDoNotKeep
                 | Self::MemoryKeepsWithoutARule => (&[W::Memory], A::Memory, &[]),
+                Self::SpawnDepthCap => (&[W::State], A::Coordination, &[]),
+                // The call guards and their fixtures are the Harness's own;
+                // the fixtures are the runner's, not a worker's.
+                Self::RepeatedFailureBreaker | Self::TruncatedCallGuard => (&[], A::CoreLoop, &[]),
+                // The runner restarts session-manager and the Harness through
+                // Compose; the store the restart must keep is session-manager's.
+                Self::RestartRecovery => (&[W::SessionManager, W::State], A::Scheduling, &[]),
+                Self::ApprovalRoundtrip => (&[W::ApprovalGate], A::Security, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {
@@ -322,7 +331,9 @@ mod tests {
                 "prompt_injection_resilience",
                 "registry_implementation",
                 "registry_verification",
+                "repeated_failure_breaker",
                 "trending_topics_build",
+                "truncated_call_guard",
             ])
         );
     }

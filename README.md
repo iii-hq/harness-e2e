@@ -267,6 +267,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | All 14 cases nine independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Context capacity (compaction) | `context-capacity` | Kanban chapters 1, 4 and 7 and context pressure, on the `context-capacity` stack. |
+| Human approval of agent calls | `approvals` | One approved and one denied call through the approval gate, on the `approvals` stack. |
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
@@ -307,9 +308,25 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 99 jobs, nine at a time.
+`regression` runs eleven (`-r01` to `-r11`): 143 jobs, thirteen at a time.
 
-The `null-canary` suite runs the regression's nine tests and `minimal_path`
+Four of the regression's tests check a Harness mechanism the model has to set
+in motion. `spawn_depth_cap` reads the Harness's `max_depth` from its
+configuration entry and expects one session at each depth up to it and the
+next spawn refused (`harness/spawn_depth_exceeded`, `spawn depth N+1 exceeds
+max_depth N`); the executor stamps `max_depth: 1` on a stack that runs it, the
+cheapest cap that still refuses, unless `depth_ladder` needs 6.
+`repeated_failure_breaker` and `truncated_call_guard` check the two guards the
+Harness answers locally: the third identical failing call and a call whose
+arguments the output limit cut short never reach their run-scoped fixture. A
+run where the model called the fixture but never provoked the guard (it
+stopped retrying, or split the payload up front) is undetermined, with no
+score; one that never called it is incomplete. `restart_recovery` restarts
+session-manager between its first two exchanges and the Harness while its third
+waits on a held call, so it runs last, in a stack group of its own; it is
+validated by its unit tests, never on a shared stack.
+
+The `null-canary` suite runs the regression's thirteen tests and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no
 technical retries, and is meant to run as the `null-agent` Directory profile
 ([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
@@ -631,6 +648,23 @@ to 0.09, about US$0.60 per repetition, summary not included.
 
 ```bash
 gh workflow run exact-stack-e2e.yml -f suite=context-capacity -f stack=context-capacity -f model=deepseek/deepseek-flash
+```
+
+### Approvals
+
+The `approvals` suite runs `approval_roundtrip` once on the `approvals` stack,
+the default stack plus `approval-gate`. The gate binds the Harness's
+`pre_trigger` hook on `*` in fail_closed mode, so on that stack every call of
+every session waits for a human; no other suite can run there. The runner plays
+the human: it reads `approval::list-pending` for its own session (the
+`e2e_run_id` it stamps on the session's metadata), allows the release fixture
+and anything else the subject calls, and denies the purge fixture. The release
+must run exactly once with its receipt in one result, the purge must never run
+and answer with the reviewer's reason, and nothing may be left pending; a second
+decision on a resolved call must come back `resolved: false`.
+
+```bash
+gh workflow run exact-stack-e2e.yml -f suite=approvals -f stack=approvals -f model=deepseek/deepseek-flash
 ```
 
 ### Comparing Harness versions
