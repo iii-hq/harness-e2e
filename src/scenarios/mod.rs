@@ -15,6 +15,7 @@ use crate::wire::{SessionMetricsResponse, TurnStatus};
 
 pub mod alertmanager_route_match;
 mod assessment;
+pub mod binding_contract_probe;
 pub mod browser_cross_site;
 pub mod chess_engine;
 pub mod chess_engine_build;
@@ -673,6 +674,7 @@ scenarios! {
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
     HarnessContractProbe = "harness_contract_probe" => harness_contract_probe::HarnessContractProbe,
     DispatchPipeline = "dispatch_pipeline" => dispatch_pipeline::DispatchPipeline,
+    BindingContractProbe = "binding_contract_probe" => binding_contract_probe::BindingContractProbe,
     TurnFailureSurface = "turn_failure_surface" => turn_failure_surface::TurnFailureSurface,
 }
 
