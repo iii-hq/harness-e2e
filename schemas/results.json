@@ -2806,7 +2806,8 @@
         "memory_learn_from_long_message",
         "memory_honors_do_not_keep",
         "memory_keeps_without_a_rule",
-        "context_compaction"
+        "context_compaction",
+        "result_bounds"
       ]
     },
     "ScenarioMeasurement": {

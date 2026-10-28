@@ -54,6 +54,7 @@ pub mod registry;
 mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
+pub mod result_bounds;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
@@ -660,6 +661,7 @@ scenarios! {
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
     ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
+    ResultBounds = "result_bounds" => result_bounds::ResultBounds,
 }
 
 impl ScenarioId {
@@ -1011,7 +1013,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 90);
+        assert_eq!(ids.len(), 91);
     }
 
     #[test]

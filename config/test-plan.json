@@ -156,7 +156,8 @@
       "id": "m11",
       "label": "Harness mechanisms",
       "scenarios": [
-        "context_compaction"
+        "context_compaction",
+        "result_bounds"
       ]
     }
   ],
