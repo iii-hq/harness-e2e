@@ -158,7 +158,8 @@
       "scenarios": [
         "context_compaction",
         "result_bounds",
-        "structured_output"
+        "structured_output",
+        "ask_handshake"
       ]
     }
   ],

@@ -2808,7 +2808,8 @@
         "memory_keeps_without_a_rule",
         "context_compaction",
         "result_bounds",
-        "structured_output"
+        "structured_output",
+        "ask_handshake"
       ]
     },
     "ScenarioMeasurement": {

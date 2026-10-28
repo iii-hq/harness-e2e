@@ -14,6 +14,7 @@ use crate::report::CompletionState;
 use crate::wire::{SessionMetricsResponse, TurnStatus};
 
 pub mod alertmanager_route_match;
+pub mod ask_handshake;
 mod assessment;
 pub mod browser_cross_site;
 pub mod chess_engine;
@@ -671,6 +672,7 @@ scenarios! {
     ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
     ResultBounds = "result_bounds" => result_bounds::ResultBounds,
     StructuredOutput = "structured_output" => structured_output::StructuredOutput,
+    AskHandshake = "ask_handshake" => ask_handshake::AskHandshake,
 }
 
 impl ScenarioId {
@@ -1034,7 +1036,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 92);
+        assert_eq!(ids.len(), 93);
     }
 
     #[test]

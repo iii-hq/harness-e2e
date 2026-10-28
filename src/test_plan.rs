@@ -945,7 +945,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:13aba489483c9d624bf2f2889a42812042874ba5be8caf415a71908b2b0158fa"
+            "sha256:427a0498d54cc7cb278ef8907139158b50dd621792fb12b3ea141142a0a8fedf"
         );
     }
 
