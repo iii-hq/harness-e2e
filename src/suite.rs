@@ -2380,6 +2380,24 @@ async fn execute(
         output,
     } = request;
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
+    report.harness_preflight = Some(
+        crate::prompt_surface::preflight(context, subject)
+            .await
+            .map_err(|failure| {
+                let message = format!("Harness preflight: {}", failure.message);
+                let mut failure = RunFailure::retryable(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Setup,
+                    failure.code,
+                    message,
+                );
+                // A misconfigured stack stays misconfigured on a re-run.
+                if failure.code == crate::prompt_surface::HARNESS_MISCONFIGURED {
+                    failure.retry_scope = crate::report::RetryScope::None;
+                }
+                failure
+            })?,
+    );
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     module
         .setup(context, run_id)
@@ -2555,6 +2573,21 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
+    let sent_root = options_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.pointer("/fs_scope/root"))
+        .and_then(serde_json::Value::as_str);
+    report.prompt_surface = Some(
+        crate::prompt_surface::collect(context, subject, report, sent_root)
+            .await
+            .map_err(|error| {
+                RunFailure::new(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    format!("capture the prompt surface: {error:#}"),
+                )
+            })?,
+    );
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
@@ -2690,9 +2723,10 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 }
 
 /// Checks the Harness invariants. Unresolved context limits make the
-/// measurement untrustworthy, an infrastructure error the slot re-runs. A
-/// lost function result is incomplete like a failed gate, whatever the agent
-/// delivered; the score stays what the criteria awarded.
+/// measurement untrustworthy, an infrastructure error the slot re-runs. Any
+/// other broken invariant (a lost function result, a drifted prompt surface)
+/// is incomplete like a failed gate, whatever the agent delivered; the score
+/// stays what the criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -2708,7 +2742,6 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             .join("; ")
     };
     let unresolved = broken(HarnessInvariant::FallbackContextLimits);
-    let lost = broken(HarnessInvariant::LostFunctionResult);
     if !unresolved.is_empty() {
         report.push_typed_failure(
             RunStatus::InfrastructureError,
@@ -2722,7 +2755,7 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             CompletionState::Undetermined,
             EvaluatorAvailability::Unavailable,
         );
-    } else if !lost.is_empty() {
+    } else if !report.harness_violations.is_empty() {
         report.set_completion(
             CompletionState::TaskIncomplete,
             EvaluatorAvailability::Available,
@@ -4800,6 +4833,32 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_drifted_prompt_surface_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.prompt_surface = Some(crate::prompt_surface::PromptSurface {
+            default_prompt: Some("You are an iii agent worker.".into()),
+            response_language: Some("eng".into()),
+            sessions: vec![crate::prompt_surface::SessionSurface {
+                session_id: "session".into(),
+                frozen_prompt: Some("You are CUSTOM.".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::FrozenPromptDrift
+        );
     }
 
     #[test]

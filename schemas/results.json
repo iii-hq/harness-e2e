@@ -988,6 +988,17 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
+        "harness_preflight": {
+          "description": "The Harness configuration and routing the run started from.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HarnessPreflight"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "harness_violations": {
           "description": "Harness invariants the run broke; README Completion says what each costs the run.",
           "type": "array",
@@ -1601,8 +1612,67 @@
           "enum": [
             "fallback_context_limits"
           ]
+        },
+        {
+          "description": "A session froze a built-in prompt other than the default identity (or the subject's agent profile prompt).",
+          "type": "string",
+          "enum": [
+            "frozen_prompt_drift"
+          ]
+        },
+        {
+          "description": "The runtime context frozen into a session's prompt misnames the session, the working directory, the co-author or the dispatch policy.",
+          "type": "string",
+          "enum": [
+            "runtime_context_malformed"
+          ]
+        },
+        {
+          "description": "An English prompt pinned another response language, or none.",
+          "type": "string",
+          "enum": [
+            "response_language_mispinned"
+          ]
+        },
+        {
+          "description": "A turn record holds its prompt inline, or names a body the prompt store does not hold under that hash.",
+          "type": "string",
+          "enum": [
+            "prompt_ref_broken"
+          ]
         }
       ]
+    },
+    "HarnessPreflight": {
+      "description": "What the preflight read of the stack the run measures.",
+      "type": "object",
+      "required": [
+        "configuration_id",
+        "configuration_sha256"
+      ],
+      "properties": {
+        "configuration_id": {
+          "description": "The Harness's configuration entry and the SHA-256 of its value.",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "route_candidates": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "route_provider": {
+          "description": "`router::route` for the subject model with no provider pinned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "HarnessViolation": {
       "type": "object",

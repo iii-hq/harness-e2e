@@ -844,9 +844,15 @@ pub struct E2eRunReport {
     /// costs the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
+    /// The Harness configuration and routing the run started from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_preflight: Option<crate::prompt_surface::HarnessPreflight>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub prompt_surface: Option<crate::prompt_surface::PromptSurface>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -900,7 +906,9 @@ impl E2eRunReport {
             failures: Vec::new(),
             audit: None,
             harness_violations: Vec::new(),
+            harness_preflight: None,
             terminal_status: None,
+            prompt_surface: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,

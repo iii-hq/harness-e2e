@@ -26,6 +26,17 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// A session froze a built-in prompt other than the default identity (or
+    /// the subject's agent profile prompt).
+    FrozenPromptDrift,
+    /// The runtime context frozen into a session's prompt misnames the
+    /// session, the working directory, the co-author or the dispatch policy.
+    RuntimeContextMalformed,
+    /// An English prompt pinned another response language, or none.
+    ResponseLanguageMispinned,
+    /// A turn record holds its prompt inline, or names a body the prompt
+    /// store does not hold under that hash.
+    PromptRefBroken,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +59,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(crate::prompt_surface::violations(report, subject));
     violations
 }
 

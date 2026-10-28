@@ -116,17 +116,56 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
-Two Harness invariants hold on every native run that passed, whatever its
-gates. They belong to no scenario's digest; the run's `harness_violations`
-records what broke.
+Harness invariants hold on every native run that passed, whatever its gates.
+They belong to no scenario's digest; the run's `harness_violations` records
+what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
+- The prompt surface drifted, read before teardown from the root and every
+  session `metrics.by_session` names (`src/prompt_surface.rs`): incomplete,
+  and the score stays.
+  - `frozen_prompt_drift`: the root's `harness::system-prompt::get` built-in
+    layer is not the `default_only` one opening with `You are an iii agent
+    worker.` (the agent profile's prompt for an `--agent` subject); a child
+    is held to it only when its `harness::spawn` named no `agent` and no
+    `options.system_prompt`.
+  - `runtime_context_malformed`: the frozen `runtime_context` aid does not
+    open with `Your session id is <id>.`, names a working directory other
+    than the one sent (else `harness::filesystem::info.default_root`, with
+    the `(default directory, not an access boundary)` suffix under
+    `configured_roots`), has other than one `Co-authored-by` line, or shows
+    the dispatch-policy line on an unrestricted policy (or omits it on a
+    narrowed one).
+  - `response_language_mispinned`: the root session's
+    `metadata.response_language` is not `eng`, or is unset on a prompt of 20
+    words or more (shorter ones may miss the 0.8 detector threshold).
+  - `prompt_ref_broken`: `harness_turn/<sid>.options.system_prompt` is not a
+    `{"$ref": "sha256:…"}`, or `harness_prompt` holds no body hashing to it.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
   can be trusted. It is an infrastructure error (`context_limits_unresolved`)
   the slot re-runs.
+
+Before a native run's first send, a preflight reads the Harness without a model
+call and records `harness_preflight`: the SHA-256 of the Harness's
+`configuration::get` entry and the `router::route` candidates for the subject
+model with no provider pinned. It refuses the run as an infrastructure error
+when:
+
+- the default `engine::functions::list` lacks a function the Harness
+  `register`s, a `register_internal` one is not registered, or
+  `engine::triggers::list` lacks `harness::ready`, `harness::turn-started`,
+  `harness::compaction`, `timer` or one of the six `harness::hook::*` types
+  (`harness_not_ready`, re-run in the same slot);
+- an internal function is on the default catalog, a retired key
+  (`provider_identity_prompt`, `permissions`, `providers`) is still set,
+  `max_validation_retries` is not 2, `max_children` not 8, `max_depth` not 3
+  (16 and 6 are the executor's `fanout_ladder` and `depth_ladder` stamps),
+  `default_max_turns` not 500, `prompt_cache_sections` or `co_author` not
+  true, or `harness::context-policy` does not allow pruning for the subject
+  model (`harness_misconfigured`).
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches

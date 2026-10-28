@@ -16,6 +16,7 @@ pub mod manifest;
 mod observe;
 pub mod persistence;
 pub(crate) mod plans;
+pub mod prompt_surface;
 pub mod redaction;
 pub mod report;
 pub mod result_contract;
