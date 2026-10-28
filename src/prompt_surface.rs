@@ -149,10 +149,12 @@ pub async fn preflight(
         .context("read the context policy")
         .map_err(PreflightFailure::not_ready)?;
     // The regression's pruning measurements assume a model whose aged results
-    // may be pruned; a thinking-binding model would never prune.
+    // may be pruned. The Harness never prunes one that binds thinking
+    // (`window.rs` `binds_thinking`), so such a subject cannot run at all.
     if policy.get("allow_prune") != Some(&Value::Bool(true)) {
         misconfigured.push(format!(
-            "harness::context-policy does not allow pruning for {}",
+            "harness::context-policy does not allow pruning for {}: a subject model that binds \
+             thinking cannot run the regression",
             subject.model
         ));
     }
@@ -193,13 +195,7 @@ async fn harness_configuration(context: &E2eContext) -> Result<(String, Value)> 
         .trigger_value("configuration::list", json!({}))
         .await
         .context("list configuration entries")?;
-    let id = listed
-        .get("configurations")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|entry| entry.pointer("/metadata/ui_form").and_then(Value::as_str) == Some("harness"))
-        .and_then(|entry| entry.get("id").and_then(Value::as_str))
+    let id = harness_configuration_id(&listed)
         .context("no Harness configuration entry is registered")?
         .to_string();
     let value = context
@@ -210,6 +206,16 @@ async fn harness_configuration(context: &E2eContext) -> Result<(String, Value)> 
         .cloned()
         .with_context(|| format!("configuration {id} has no value"))?;
     Ok((id, value))
+}
+
+fn harness_configuration_id(listed: &Value) -> Option<&str> {
+    listed
+        .get("configurations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|entry| text(entry, "/metadata/ui_form") == Some("harness"))
+        .and_then(|entry| text(entry, "/id"))
 }
 
 /// Functions and trigger types that are missing (not ready), and internal
@@ -277,6 +283,8 @@ pub struct PromptSurface {
     pub default_prompt: Option<String>,
     /// The subject's agent profile prompt, when it runs as one.
     pub profile_prompt: Option<String>,
+    /// The blocks the Harness appends to that prompt, in order.
+    pub profile_blocks: Vec<&'static str>,
     /// `harness::filesystem::info`.
     pub default_root: Option<String>,
     pub configured_roots: bool,
@@ -326,15 +334,18 @@ pub async fn collect(
             .await
             .context("read the default system prompt")?,
     );
-    let profile_prompt = match subject.agent.as_deref() {
-        Some(id) => context
-            .trigger_value("directory::agents::get", json!({ "id": id }))
-            .await
-            .with_context(|| format!("read agent profile {id}"))?
-            .get("system_prompt")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        None => None,
+    let (profile_prompt, profile_blocks) = match subject.agent.as_deref() {
+        Some(id) => {
+            let profile = context
+                .trigger_value("directory::agents::get", json!({ "id": id }))
+                .await
+                .with_context(|| format!("read agent profile {id}"))?;
+            (
+                text(&profile, "/system_prompt").map(str::to_string),
+                preloaded_blocks(&profile),
+            )
+        }
+        None => (None, Vec::new()),
     };
     let filesystem = context
         .trigger_value("harness::filesystem::info", json!({}))
@@ -400,6 +411,7 @@ pub async fn collect(
     Ok(PromptSurface {
         default_prompt,
         profile_prompt,
+        profile_blocks,
         default_root: text(&filesystem, "/default_root").map(str::to_string),
         configured_roots: text(&filesystem, "/boundary") == Some("configured_roots"),
         sent_root: sent_root.map(str::to_string),
@@ -431,8 +443,9 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
     violations
 }
 
-/// The root runs the default identity, or its agent profile's prompt; a child
-/// does only when its spawn named no `agent` and no `options.system_prompt`.
+/// The root runs the default identity, or its agent profile's prompt with the
+/// preloaded blocks the Harness appends; a child runs the default identity
+/// only when it is a [`plain_spawns`] one.
 fn frozen_prompt(
     surface: &PromptSurface,
     session: &SessionSurface,
@@ -449,8 +462,16 @@ fn frozen_prompt(
         (false, _) => return None,
     };
     let frozen = session.frozen_prompt.as_deref();
+    let blocks: &[&str] = if source == "default" {
+        &[]
+    } else {
+        &surface.profile_blocks
+    };
     let mut problems = Vec::new();
-    if frozen != expected || frozen.is_none() {
+    if !frozen
+        .zip(expected)
+        .is_some_and(|(frozen, prompt)| freezes(frozen, prompt, blocks))
+    {
         problems.push(format!(
             "froze {}, not the {source} prompt {}",
             digest(frozen),
@@ -466,6 +487,40 @@ fn frozen_prompt(
         &session.session_id,
         problems,
     )
+}
+
+/// `frozen` is `prompt` followed by each block, as `agents.rs` `append_block`
+/// joins them: a blank line apart, the first alone when the prompt is empty.
+fn freezes(frozen: &str, prompt: &str, blocks: &[&str]) -> bool {
+    if blocks.is_empty() {
+        return frozen == prompt;
+    }
+    let head = prompt.trim_end_matches('\n');
+    let Some(mut rest) = frozen.strip_prefix(head) else {
+        return false;
+    };
+    for (index, block) in blocks.iter().enumerate() {
+        let separator = if index == 0 && head.is_empty() {
+            ""
+        } else {
+            "\n\n"
+        };
+        let Some(body) = rest.strip_prefix(&format!("{separator}<{block}>\n")) else {
+            return false;
+        };
+        let close = format!("\n</{block}>");
+        // The last block runs to the end, whatever its skill bodies hold.
+        let end = if index + 1 == blocks.len() {
+            body.rfind(&close)
+        } else {
+            body.find(&close)
+        };
+        let Some(end) = end else {
+            return false;
+        };
+        rest = &body[end + close.len()..];
+    }
+    rest.is_empty()
 }
 
 /// The aid the first step froze into the system prompt (`turn_loop.rs`
@@ -592,15 +647,24 @@ fn response_language(surface: &PromptSurface, prompt: &str) -> Option<HarnessVio
     )
 }
 
-/// Children spawned with neither `agent` nor `options.system_prompt`, from the
-/// `harness::spawn` calls and results in every transcript the run read.
+/// Children spawned with neither `agent` nor `options.system_prompt` by a
+/// session that ran no profile, from the `harness::spawn` calls and results in
+/// every transcript the run read. A profiled parent's plain spawn continues
+/// its profile (`subagent.rs` `child_agent_id`).
 fn plain_spawns(sessions: &[SessionSurface]) -> BTreeSet<String> {
-    let messages = sessions
+    let results = sessions
         .iter()
         .flat_map(|session| messages(&session.transcript))
         .collect::<Vec<_>>();
-    messages
+    sessions
         .iter()
+        .filter(|session| {
+            session
+                .record
+                .pointer("/options/agent")
+                .is_none_or(Value::is_null)
+        })
+        .flat_map(|session| messages(&session.transcript))
         .filter(|entry| text(entry, "/message/role") == Some("assistant"))
         .flat_map(|entry| {
             entry
@@ -628,7 +692,7 @@ fn plain_spawns(sessions: &[SessionSurface]) -> BTreeSet<String> {
             plain.then_some(id)
         })
         .filter_map(|call_id| {
-            messages.iter().find_map(|entry| {
+            results.iter().find_map(|entry| {
                 (text(entry, "/message/role") == Some("function_result")
                     && text(entry, "/message/function_call_id") == Some(call_id))
                 .then(|| text(entry, "/message/details/child_session_id"))?
@@ -636,6 +700,28 @@ fn plain_spawns(sessions: &[SessionSurface]) -> BTreeSet<String> {
         })
         .map(str::to_string)
         .collect()
+}
+
+/// The blocks `agents.rs` `resolve` appends to a profile's prompt: one for its
+/// preloaded functions, then one for its preloaded skills.
+fn preloaded_blocks(profile: &Value) -> Vec<&'static str> {
+    let declares = |key: &str| {
+        profile
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|ids| {
+                ids.iter()
+                    .any(|id| id.as_str().is_some_and(|id| !id.trim().is_empty()))
+            })
+    };
+    [
+        ("functions", "preloaded_functions"),
+        ("skills", "preloaded_skills"),
+    ]
+    .into_iter()
+    .filter(|(key, _)| declares(key))
+    .map(|(_, block)| block)
+    .collect()
 }
 
 fn prompt_ref(record: &Value) -> Option<&str> {
@@ -731,6 +817,7 @@ mod tests {
         PromptSurface {
             default_prompt: Some(DEFAULT.into()),
             profile_prompt: None,
+            profile_blocks: Vec::new(),
             default_root: Some("/work".into()),
             configured_roots: true,
             sent_root: None,
@@ -798,6 +885,62 @@ mod tests {
             invariants(&violations(&report(other), &subject(Some("lead")))),
             [HarnessInvariant::FrozenPromptDrift]
         );
+    }
+
+    #[test]
+    fn a_profile_freezes_its_prompt_with_the_preloaded_blocks_it_declares() {
+        let preloaded = "Profile.\n\n<preloaded_functions>\nThese functions.\n\n### `state::get`\n\
+                         </preloaded_functions>\n\n<preloaded_skills>\nThese skills.\n\n\
+                         <skill id=\"a\">\nBody.\n</skill>\n</preloaded_skills>";
+        let judged = |frozen: &str, blocks: Vec<&'static str>| {
+            let mut root = session("root", &aid("root", false), "*", vec![]);
+            root.frozen_prompt = Some(frozen.into());
+            let mut surface = surface(vec![root]);
+            surface.profile_prompt = Some("Profile.".into());
+            surface.profile_blocks = blocks;
+            invariants(&violations(&report(surface), &subject(Some("lead"))))
+        };
+        let both = vec!["preloaded_functions", "preloaded_skills"];
+
+        assert_eq!(judged(preloaded, both.clone()), []);
+        assert_eq!(
+            judged(&preloaded.replace("Profile.", "Other."), both.clone()),
+            [HarnessInvariant::FrozenPromptDrift]
+        );
+        assert_eq!(
+            judged("Profile.", both),
+            [HarnessInvariant::FrozenPromptDrift]
+        );
+        assert_eq!(
+            judged(preloaded, vec!["preloaded_skills"]),
+            [HarnessInvariant::FrozenPromptDrift]
+        );
+    }
+
+    #[test]
+    fn a_plain_spawn_continues_its_parents_profile() {
+        let mut root = session(
+            "root",
+            &aid("root", false),
+            "*",
+            spawn("c1", "lead", json!({ "task": "t" })),
+        );
+        root.record["options"]["agent"] = json!({ "id": "lead" });
+        root.frozen_prompt = Some("Profile.".into());
+        let mut lead = session(
+            "lead",
+            &aid("lead", false),
+            "*",
+            spawn("c2", "engineer", json!({ "task": "t" })),
+        );
+        lead.record["options"]["agent"] = json!({ "id": "lead" });
+        lead.frozen_prompt = Some("Profile.".into());
+        let mut engineer = session("engineer", &aid("engineer", false), "*", vec![]);
+        engineer.frozen_prompt = Some("Profile.".into());
+        let mut surface = surface(vec![root, lead, engineer]);
+        surface.profile_prompt = Some("Profile.".into());
+
+        assert_eq!(violations(&report(surface), &subject(Some("lead"))), []);
     }
 
     fn spawn(call_id: &str, child: &str, payload: Value) -> Vec<Value> {
@@ -938,6 +1081,20 @@ mod tests {
             [HarnessInvariant::ResponseLanguageMispinned]
         );
         assert_eq!(violations(&short, &subject(None)), []);
+    }
+
+    #[test]
+    fn the_harness_entry_is_the_one_its_form_names() {
+        let listed = json!({ "configurations": [
+            { "id": "stack/router", "metadata": { "ui_form": "router" } },
+            { "id": "stack/harness", "metadata": { "ui_form": "harness" } },
+        ] });
+
+        assert_eq!(harness_configuration_id(&listed), Some("stack/harness"));
+        assert_eq!(
+            harness_configuration_id(&json!({ "configurations": [listed["configurations"][0]] })),
+            None
+        );
     }
 
     fn listed(ids: &[&str]) -> Value {

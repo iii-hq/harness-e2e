@@ -127,9 +127,11 @@ what broke.
   and the score stays.
   - `frozen_prompt_drift`: the root's `harness::system-prompt::get` built-in
     layer is not the `default_only` one opening with `You are an iii agent
-    worker.` (the agent profile's prompt for an `--agent` subject); a child
-    is held to it only when its `harness::spawn` named no `agent` and no
-    `options.system_prompt`.
+    worker.` (for an `--agent` subject, the profile's `system_prompt`
+    followed by the `<preloaded_functions>` and `<preloaded_skills>` blocks
+    it declares); a child is held to the default only when its
+    `harness::spawn` named no `agent` and no `options.system_prompt` and its
+    parent ran no profile (a profiled parent's plain spawn continues it).
   - `runtime_context_malformed`: the frozen `runtime_context` aid does not
     open with `Your session id is <id>.`, names a working directory other
     than the one sent (else `harness::filesystem::info.default_root`, with
@@ -165,7 +167,10 @@ when:
   (16 and 6 are the executor's `fanout_ladder` and `depth_ladder` stamps),
   `default_max_turns` not 500, `prompt_cache_sections` or `co_author` not
   true, or `harness::context-policy` does not allow pruning for the subject
-  model (`harness_misconfigured`).
+  model (`harness_misconfigured`, not re-run). The Harness never prunes a
+  model that binds thinking (any id containing `claude-opus-5-5`,
+  `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`), so those
+  subjects cannot run the regression.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches

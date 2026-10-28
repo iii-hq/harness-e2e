@@ -2363,6 +2363,21 @@ impl RunFailure {
     }
 }
 
+fn preflight_failure(failure: crate::prompt_surface::PreflightFailure) -> RunFailure {
+    let message = format!("Harness preflight: {}", failure.message);
+    let mut run_failure = RunFailure::retryable(
+        RunStatus::InfrastructureError,
+        FailurePhase::Setup,
+        failure.code,
+        message,
+    );
+    // A misconfigured stack stays misconfigured on a re-run.
+    if failure.code == crate::prompt_surface::HARNESS_MISCONFIGURED {
+        run_failure.retry_scope = crate::report::RetryScope::None;
+    }
+    run_failure
+}
+
 async fn execute(
     context: &E2eContext,
     request: ExecutionRequest<'_>,
@@ -2383,20 +2398,7 @@ async fn execute(
     report.harness_preflight = Some(
         crate::prompt_surface::preflight(context, subject)
             .await
-            .map_err(|failure| {
-                let message = format!("Harness preflight: {}", failure.message);
-                let mut failure = RunFailure::retryable(
-                    RunStatus::InfrastructureError,
-                    FailurePhase::Setup,
-                    failure.code,
-                    message,
-                );
-                // A misconfigured stack stays misconfigured on a re-run.
-                if failure.code == crate::prompt_surface::HARNESS_MISCONFIGURED {
-                    failure.retry_scope = crate::report::RetryScope::None;
-                }
-                failure
-            })?,
+            .map_err(preflight_failure)?,
     );
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     module
@@ -4833,6 +4835,27 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_not_ready_harness_reruns_the_slot_and_a_misconfigured_one_does_not() {
+        use crate::prompt_surface::{PreflightFailure, HARNESS_MISCONFIGURED, HARNESS_NOT_READY};
+        let failure = |code| {
+            preflight_failure(PreflightFailure {
+                code,
+                message: "m".into(),
+            })
+        };
+
+        let not_ready = failure(HARNESS_NOT_READY);
+        let misconfigured = failure(HARNESS_MISCONFIGURED);
+
+        assert_eq!(not_ready.status, RunStatus::InfrastructureError);
+        assert_eq!(not_ready.code, HARNESS_NOT_READY);
+        assert_eq!(not_ready.message, "Harness preflight: m");
+        assert_eq!(not_ready.retry_scope, crate::report::RetryScope::SameSlot);
+        assert_eq!(misconfigured.code, HARNESS_MISCONFIGURED);
+        assert_eq!(misconfigured.retry_scope, crate::report::RetryScope::None);
     }
 
     #[test]
