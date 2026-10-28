@@ -197,6 +197,8 @@ pub(super) struct TrendMeasures {
     pub compactions_mean: Option<f64>,
     /// The largest root prompt over the window the Harness fit it into, per run.
     pub peak_context_fill_mean: Option<f64>,
+    /// Prefix rewrites no compaction explains, per run.
+    pub prefix_divergences_mean: Option<f64>,
     /// The counted runs behind each mean, by its name: a run without the
     /// value is left out of it, so a group weighs each mean by these.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -242,6 +244,7 @@ pub(super) struct TrendRun {
     pub technical_retries: Option<f64>,
     pub compactions: Option<f64>,
     pub peak_context_fill: Option<f64>,
+    pub prefix_divergences: Option<f64>,
 }
 
 /// An execution of the Console that belongs to a series.
@@ -794,6 +797,7 @@ pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasur
         technical_retries_mean: mean_of("technical_retries_mean", |run| run.technical_retries),
         compactions_mean: mean_of("compactions_mean", |run| run.compactions),
         peak_context_fill_mean: mean_of("peak_context_fill_mean", |run| run.peak_context_fill),
+        prefix_divergences_mean: mean_of("prefix_divergences_mean", |run| run.prefix_divergences),
         samples,
     })
 }
@@ -895,6 +899,7 @@ pub(super) mod tests {
             technical_retries: Some(0.0),
             compactions: Some(2.0),
             peak_context_fill: Some(0.5),
+            prefix_divergences: Some(1.0),
         }
     }
 
@@ -953,6 +958,7 @@ pub(super) mod tests {
         assert_eq!(measures.reasoning_tokens_mean, Some(8.0));
         assert_eq!(measures.compactions_mean, Some(2.0));
         assert_eq!(measures.peak_context_fill_mean, Some(0.5));
+        assert_eq!(measures.prefix_divergences_mean, Some(1.0));
         assert_eq!(measures.validation_retries_mean, Some(1.0));
         assert_eq!(measures.technical_retries_mean, Some(0.0));
         let invalid = &point.tests[12];

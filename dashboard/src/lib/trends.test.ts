@@ -258,7 +258,22 @@ describe('measures', () => {
       'function_calls',
       'compactions',
       'peak_context',
+      'prefix_divergences',
     ])
+  })
+
+  it('reads the prefix rewrites no compaction explains per run, fewer being better', () => {
+    const point = {
+      ...regression[0],
+      measures: {
+        ...regression[0].measures,
+        prefix_divergences_mean: 0.5,
+      } as TrendMeasures,
+    }
+    const rewrites = metric('prefix_divergences')
+    expect(rewrites.value(point)).toBe(0.5)
+    expect(rewrites.better).toBe('lower')
+    expect(rewrites.value(regression[0])).toBeNull()
   })
 
   it('reads compactions per run and the peak context as a share of the window', () => {
@@ -570,7 +585,7 @@ describe('grouping', () => {
     expect(grouped.measures?.score_mean).toBe(40)
     expect(trendMetric('error_rate').value(grouped)).toBe(5)
     const keys = Object.keys(one.measures as TrendMeasures).sort()
-    expect(keys).toHaveLength(18)
+    expect(keys).toHaveLength(19)
     // The group says how many runs each of its means is over.
     expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(
       [...keys, 'samples'].sort(),

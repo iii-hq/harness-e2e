@@ -26,6 +26,12 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// A session's requests carried no shared prompt prefix
+    /// (`prompt_sections_fallback`), so the provider cache reuses nothing.
+    PromptSectionsFallback,
+    /// A multi-step run's cache-hit ratio fell below half the median of its
+    /// setup's latest executions.
+    PromptCacheRegressed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +54,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(crate::prompt_cache::violations(report));
     violations
 }
 
