@@ -2511,16 +2511,18 @@ async fn execute(
         report.metrics = metrics.clone();
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
-    report.turn_lifecycle = Some(
-        crate::turn_lifecycle::capture(context, spec.id, session_id, &sent_turn_ids, &metrics)
-            .await
-            .map_err(|error| {
-                collection_failure(
-                    FailurePhase::Collect,
-                    format!("capture the turn lifecycle: {error:#}"),
-                )
-            })?,
-    );
+    match crate::turn_lifecycle::capture(context, spec.id, session_id, &sent_turn_ids, &metrics)
+        .await
+    {
+        Ok(lifecycle) => report.turn_lifecycle = Some(lifecycle),
+        Err(error) => {
+            capture_partial_observation(context, session_id, report).await;
+            return Err(collection_failure(
+                FailurePhase::Collect,
+                format!("capture the turn lifecycle: {error:#}"),
+            ));
+        }
+    }
     let terminal_status = match context
         .trigger::<_, Option<StatusReport>>(
             "harness::status",
