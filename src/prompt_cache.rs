@@ -24,6 +24,9 @@ const MAX_SCANNED_EXECUTIONS: usize = 100;
 /// A session whose requests carried no shared prompt prefix
 /// (`prompt_sections_fallback`: `disabled`, `no_stable_prefix` or
 /// `prefix_rewritten`) pays the whole prompt on every step.
+// shortcut: reads each session's latest snapshot only (the Harness overwrites
+// the field per generation), so a `prefix_rewritten` on an earlier step alone
+// is missed; check every step once harness::metrics returns per-step snapshots.
 pub(crate) fn violations(report: &E2eRunReport) -> Vec<HarnessViolation> {
     let Some(metrics) = report.metrics.as_ref() else {
         return Vec::new();
@@ -97,7 +100,8 @@ pub(crate) fn unexpected_prefix_divergences(
 
 /// The share of the run's billed prompt the provider served from its cache,
 /// only when the root session sent more than one request: the first request
-/// of a session has nothing to reuse.
+/// of a session has nothing to reuse. The Harness's `input_tokens` excludes
+/// cached tokens, so the prompt is their sum, as in `processed_prompt_tokens`.
 pub fn cache_hit_ratio(totals: &SessionUsageTotals, transcript: Option<&Value>) -> Option<f64> {
     let steps = messages(transcript)
         .iter()
@@ -122,7 +126,7 @@ pub struct Setup<'a> {
 /// The median cache-hit ratio of each scenario over the latest
 /// [`BASELINE_EXECUTIONS`] executions of the setup in `history` that completed
 /// before `before` (RFC 3339), one ratio per execution: the mean over its
-/// passed multi-step runs. A scenario with fewer than three such executions
+/// passed multi-step runs that did not already lose the cache. A scenario with fewer than three such executions
 /// has none. An unreadable execution is skipped.
 pub fn baselines(
     history: &Path,
@@ -175,7 +179,7 @@ pub fn baselines(
             let runs = scenario
                 .runs
                 .iter()
-                .filter(|run| run.status == RunStatus::Passed)
+                .filter(|run| run.status == RunStatus::Passed && !run.lost_the_cache())
                 .filter_map(|run| {
                     cache_hit_ratio(&run.metrics.as_ref()?.totals, run.transcript.as_ref())
                 })
@@ -291,8 +295,23 @@ struct HistoryScenario {
 #[derive(Deserialize)]
 struct HistoryRun {
     status: RunStatus,
+    #[serde(default)]
+    harness_violations: Vec<HarnessViolation>,
     metrics: Option<HistoryMetrics>,
     transcript: Option<Value>,
+}
+
+impl HistoryRun {
+    /// A run that already lost the prompt cache would pull its setup's
+    /// baseline down, until a sustained regression stops being flagged.
+    fn lost_the_cache(&self) -> bool {
+        self.harness_violations.iter().any(|violation| {
+            matches!(
+                violation.invariant,
+                HarnessInvariant::PromptSectionsFallback | HarnessInvariant::PromptCacheRegressed
+            )
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -440,7 +459,7 @@ mod tests {
         id: &str,
         lane: &str,
         completed_at: &str,
-        runs: &[(&str, &str, u64, u64)],
+        runs: &[(&str, &str, u64, u64, Option<&str>)],
     ) {
         let directory = history.join(id);
         std::fs::create_dir_all(&directory).unwrap();
@@ -449,9 +468,13 @@ mod tests {
             "subject": { "model": "deepseek-flash", "provider": "deepseek" },
         });
         let mut scenarios = BTreeMap::<&str, Vec<Value>>::new();
-        for (scenario, status, input, cache_read) in runs {
+        for (scenario, status, input, cache_read, invariant) in runs {
+            let violations = invariant
+                .map(|invariant| vec![json!({ "invariant": invariant, "detail": "" })])
+                .unwrap_or_default();
             scenarios.entry(scenario).or_default().push(json!({
                 "status": status,
+                "harness_violations": violations,
                 "metrics": { "totals": {
                     "sessions": 1, "turns": 1, "function_calls": 0, "function_call_errors": 0,
                     "input_tokens": input, "cache_read_tokens": cache_read,
@@ -486,31 +509,46 @@ mod tests {
                 &format!("e{day}"),
                 "local",
                 &format!("2026-10-0{day}T00:00:00.000Z"),
-                &[("cached", "passed", 100 - 10 * day, 10 * day)],
+                &[("cached", "passed", 100 - 10 * day, 10 * day, None)],
             );
         }
-        // Another lane, a later execution and a failed run never count.
-        store(
-            history.path(),
-            "lane",
-            "other",
-            "2026-10-09T01:00:00.000Z",
-            &[("cached", "passed", 100, 0)],
-        );
-        store(
-            history.path(),
-            "later",
-            "local",
-            "2026-10-11T00:00:00.000Z",
-            &[("cached", "passed", 100, 0)],
-        );
-        store(
-            history.path(),
-            "failed",
-            "local",
-            "2026-10-09T02:00:00.000Z",
-            &[("cached", "hard_gate_failed", 100, 0)],
-        );
+        // Each of these would push out 0.3 for a full hit and move the median
+        // to 0.7: another lane, a later execution, a failed run, and a passed
+        // run already incomplete for losing the prompt cache.
+        let excluded = [
+            ("lane", "other", "2026-10-09T01:00:00.000Z", "passed", None),
+            ("later", "local", "2026-10-11T00:00:00.000Z", "passed", None),
+            (
+                "failed",
+                "local",
+                "2026-10-09T02:00:00.000Z",
+                "hard_gate_failed",
+                None,
+            ),
+            (
+                "fallback",
+                "local",
+                "2026-10-09T03:00:00.000Z",
+                "passed",
+                Some("prompt_sections_fallback"),
+            ),
+            (
+                "regressed",
+                "local",
+                "2026-10-09T04:00:00.000Z",
+                "passed",
+                Some("prompt_cache_regressed"),
+            ),
+        ];
+        for (id, lane, completed_at, status, invariant) in excluded {
+            store(
+                history.path(),
+                id,
+                lane,
+                completed_at,
+                &[("cached", status, 0, 100, invariant)],
+            );
+        }
         // Two executions are not a baseline.
         for day in 1..=2u64 {
             store(
@@ -518,7 +556,7 @@ mod tests {
                 &format!("rare{day}"),
                 "local",
                 &format!("2026-10-0{day}T05:00:00.000Z"),
-                &[("rare", "passed", 50, 50)],
+                &[("rare", "passed", 50, 50, None)],
             );
         }
 
@@ -530,7 +568,11 @@ mod tests {
         );
 
         assert_eq!(baselines.len(), 1);
-        assert!((baselines["cached"] - 0.6).abs() < 1e-9);
+        assert!(
+            (baselines["cached"] - 0.6).abs() < 1e-9,
+            "{}",
+            baselines["cached"]
+        );
     }
 
     #[test]

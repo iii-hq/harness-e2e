@@ -122,7 +122,7 @@ records what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
-- A session's context snapshot carries `prompt_sections_fallback` (`disabled`,
+- A session's latest context snapshot carries `prompt_sections_fallback` (`disabled`,
   `no_stable_prefix` or `prefix_rewritten`): its requests shared no stable
   prompt prefix, so the provider cache reused nothing. Incomplete, and the
   score stays.
@@ -131,7 +131,8 @@ records what broke.
   executions of the same lane, model, provider and agent profile that
   completed before this one started, of each execution's mean cache share
   (cache reads over input, cache reads and cache writes) of its passed
-  multi-step runs. Incomplete, and the score stays. Fewer than 3 such
+  multi-step runs that broke neither of these two cache invariants.
+  Incomplete, and the score stays. Fewer than 3 such
   executions hold the run to no baseline. The baseline is read from the
   history the execution is stored in (the Console's runs directory, or
   `run --runs-dir`); a run without one is not held to it.
