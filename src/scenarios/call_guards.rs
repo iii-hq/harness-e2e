@@ -288,17 +288,6 @@ fn breaker_evaluation(record: &Value, response: &str, run_id: &str) -> Objective
         .iter()
         .filter(|call| call.get("arguments") == Some(&identical))
         .collect();
-    // No call at all is a task not done; a call or two is a model that
-    // stopped retrying before the breaker had anything to do.
-    if (1..=REPEATED_FAILURE_LIMIT as usize).contains(&repeated.len()) {
-        return undetermined(
-            BREAKER_ASSESSMENTS,
-            &format!(
-                "the session made {} identical call(s); the breaker acts on the third",
-                repeated.len()
-            ),
-        );
-    }
     let reached = |arguments: &Value| {
         invocations(record)
             .iter()
@@ -308,7 +297,21 @@ fn breaker_evaluation(record: &Value, response: &str, run_id: &str) -> Objective
     let target_failure = |call: &Value| {
         call.get("is_error") == Some(&json!(true)) && guard_code(call) != Some("repeated_failure")
     };
-    // Past the undetermined branch there are none or more than the limit.
+    // No call at all is a task not done; a call or two that each failed at
+    // the target is a model that stopped retrying before the breaker had
+    // anything to do. A local answer among them is a breaker that fired early.
+    if (1..=REPEATED_FAILURE_LIMIT as usize).contains(&repeated.len())
+        && repeated.iter().all(|call| target_failure(call))
+        && reached(&identical) == repeated.len()
+    {
+        return undetermined(
+            BREAKER_ASSESSMENTS,
+            &format!(
+                "the session made {} identical call(s); the breaker acts on the third",
+                repeated.len()
+            ),
+        );
+    }
     let limit = REPEATED_FAILURE_LIMIT as usize;
     let first_two_failed =
         repeated.len() > limit && repeated[..limit].iter().all(|call| target_failure(call));
@@ -863,6 +866,20 @@ pub(crate) mod tests {
         let evaluation = breaker_evaluation(&record, "BREAKER-REPORT", RUN);
         assert_eq!(evaluation.completion, Some(CompletionState::Undetermined));
         assert_eq!(awarded(&evaluation), [None, None, None]);
+    }
+
+    /// A breaker that fires early: the second identical call is answered
+    /// locally after a single target failure, and the model stops there.
+    #[test]
+    fn a_breaker_that_fires_before_the_third_call_fails_the_breaker_gate() {
+        let identical = identical_arguments(RUN);
+        let record = json!({
+            "calls": [call(identical.clone(), true, target_error()), call(identical.clone(), true, repeated())],
+            "invocations": [identical],
+        });
+        let evaluation = breaker_evaluation(&record, "BREAKER-REPORT", RUN);
+        assert_eq!(evaluation.completion, None);
+        assert_eq!(evaluation.awards[0].awarded, Some(0));
     }
 
     /// As the transcript keeps it: the salvaged fields, without the marker.

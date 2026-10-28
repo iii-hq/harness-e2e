@@ -390,6 +390,15 @@ with one line containing `{MARKER}`, the release receipt, and whether the purge 
         }
     }
 
+    /// The approval gate: on a stack without it (any but stacks/approvals.yaml)
+    /// the run is a setup failure, not a Harness that let calls through.
+    fn required_functions(&self, _run_id: &str) -> Vec<String> {
+        vec![
+            "approval::list-pending".to_string(),
+            "approval::resolve".to_string(),
+        ]
+    }
+
     async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         release_runtime(run_id);
         let watch = Arc::new(Mutex::new(Watch::default()));

@@ -194,6 +194,9 @@ pub trait Scenario: Send + Sync {
         _exchange: usize,
     ) {
     }
+    /// Called once the last exchange has its answer, before the runner reads
+    /// `harness::status`, so a probe can read state that read would change.
+    async fn after_dialogue(&self, _context: &E2eContext, _run_id: &str, _session_id: &str) {}
     /// The attempt-owned filesystem root that `setup` prepared for the
     /// subject, when the scenario allocates one.
     fn prepared_root(&self, _run_id: &str) -> Result<Option<PathBuf>> {

@@ -47,7 +47,7 @@ const CHAIN_REACHES_CAP: AssessmentSpec = AssessmentSpec::gate(
 const REFUSAL_RECORDED: AssessmentSpec = AssessmentSpec::scored(
     "refusal_recorded",
     20,
-    "Did the refused level store its level and the refusal message verbatim under the refused key, with no spawn retried after the refusal?",
+    "Did every level up to the cap store its depth row, and the refused level its level and the refusal message verbatim under the refused key, with no spawn retried after the refusal?",
 )
 .labeled("Refusal stored, no retry");
 const ASSESSMENTS: &[AssessmentSpec] = &[CAP_ENFORCED, CHAIN_REACHES_CAP, REFUSAL_RECORDED];
@@ -88,13 +88,16 @@ impl SpawnOutcome {
     }
 }
 
-/// What capture records: the cap the Harness runs with, the tree, and the
-/// refusal row.
+/// What capture records: the cap the Harness runs with, the tree, the row
+/// each depth up to the cap wrote, and the refusal row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct DepthRecord {
     max_depth: u32,
     root_session_id: String,
     levels: Vec<Level>,
+    /// `depth-<d>` for d in 0..=max_depth, in order.
+    #[serde(default)]
+    rows: Vec<Value>,
     refused: Value,
 }
 
@@ -148,7 +151,14 @@ fn audit(record: &DepthRecord) -> DepthAudit {
         .filter(|level| level.depth < cap)
         .any(|level| level.spawns.iter().any(SpawnOutcome::refused_for_depth));
 
+    let rows_written = record.rows.len() == cap as usize + 1
+        && record
+            .rows
+            .iter()
+            .zip(0..)
+            .all(|(row, depth)| *row == json!({ "level": depth }));
     let refusal_recorded = refused_at_cap
+        && rows_written
         && at_cap[0].spawns.len() == 1
         && record.refused.get("level").and_then(Value::as_u64) == Some(u64::from(cap))
         && record
@@ -184,7 +194,11 @@ fn evaluation(record: &DepthRecord) -> ObjectiveEvaluation {
         ),
         REFUSAL_RECORDED.full_or_zero(
             audit.refusal_recorded,
-            format!("refused_row={}", record.refused),
+            format!(
+                "depth_rows={}, refused_row={}",
+                json!(record.rows),
+                record.refused
+            ),
         ),
     ])
 }
@@ -218,7 +232,8 @@ fn max_depth_of(value: &Value) -> anyhow::Result<u32> {
         Some(depth) => depth
             .as_u64()
             .and_then(|depth| u32::try_from(depth).ok())
-            .with_context(|| format!("Harness max_depth is not a depth: {depth}")),
+            .filter(|depth| *depth > 0)
+            .with_context(|| format!("Harness max_depth leaves no relay to run: {depth}")),
     }
 }
 
@@ -350,10 +365,15 @@ line containing `{DISPATCHED}`."#
             });
         }
         let scope = scope(run_id);
+        let mut rows = Vec::new();
+        for depth in 0..=max_depth {
+            rows.push(common::get_state(context, &scope, &row_key(depth)).await?);
+        }
         let record = DepthRecord {
             max_depth,
             root_session_id: root.clone(),
             levels,
+            rows,
             refused: common::get_state(context, &scope, REFUSED_KEY).await?,
         };
         Ok(vec![CapturedDeliverable {
@@ -450,6 +470,7 @@ pub(crate) mod tests {
             max_depth: 1,
             root_session_id: "e2e_control".into(),
             levels: vec![level("e2e_control", None, 0, Vec::new())],
+            rows: Vec::new(),
             refused: Value::Null,
         };
         let mut reference = reference(1);
@@ -522,6 +543,7 @@ pub(crate) mod tests {
             max_depth: cap,
             root_session_id: "root".into(),
             levels,
+            rows: (0..=cap).map(|depth| json!({ "level": depth })).collect(),
             refused: json!({
                 "level": cap,
                 "error": format!("{REFUSAL_CODE}: {}", refusal_message(cap)),
@@ -555,6 +577,7 @@ pub(crate) mod tests {
             max_depth: 1,
             root_session_id: "root".into(),
             levels: vec![level("root", None, 0, Vec::new())],
+            rows: Vec::new(),
             refused: Value::Null,
         };
         assert_eq!(awarded(&evaluation(&record)), [Some(0), Some(0), Some(0)]);
@@ -611,8 +634,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_level_that_skipped_its_row_loses_the_record_points() {
+        let mut record = reference(3);
+        record.rows[2] = Value::Null;
+        let audit = audit(&record);
+        assert!(audit.cap_enforced && audit.chain_reaches_cap);
+        assert!(!audit.refusal_recorded);
+    }
+
+    #[test]
     fn the_cap_comes_from_the_entry_or_the_harness_default() {
         assert_eq!(max_depth_of(&json!({"max_depth": 1})).unwrap(), 1);
+        // No spawn at all is allowed: there is no relay to run.
+        assert!(max_depth_of(&json!({"max_depth": 0})).is_err());
         assert_eq!(max_depth_of(&json!({})).unwrap(), DEFAULT_MAX_DEPTH);
         assert_eq!(max_depth_of(&Value::Null).unwrap(), DEFAULT_MAX_DEPTH);
         assert!(max_depth_of(&json!({"max_depth": "3"})).is_err());

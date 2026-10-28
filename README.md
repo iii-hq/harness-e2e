@@ -308,7 +308,7 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 143 jobs, thirteen at a time.
+`regression` runs eleven (`-r01` to `-r11`): 143 jobs, nine at a time.
 
 Four of the regression's tests check a Harness mechanism the model has to set
 in motion. `spawn_depth_cap` reads the Harness's `max_depth` from its
@@ -323,8 +323,11 @@ run where the model called the fixture but never provoked the guard (it
 stopped retrying, or split the payload up front) is undetermined, with no
 score; one that never called it is incomplete. `restart_recovery` restarts
 session-manager between its first two exchanges and the Harness while its third
-waits on a held call, so it runs last, in a stack group of its own; it is
-validated by its unit tests, never on a shared stack.
+waits on a held call. Every regression test runs in a stack group, and so a
+job, of its own, so the restarts reach no other test; it must never run on a
+shared stack. It reads the session's status before the runner's
+`harness::status`, which would repair a lost projection, and counts that read
+only when the runner's wait ended on the turn's terminal event.
 
 The `null-canary` suite runs the regression's thirteen tests and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no

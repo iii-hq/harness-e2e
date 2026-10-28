@@ -8,15 +8,17 @@
 //! that does not answer, and while it is held the runner restarts the Harness.
 //! The new Harness announces `harness::ready` once, the held turn completes
 //! within 240 s of the restart with one result per call and one turn
-//! completion, and `session::get` reads `done` before anyone calls
-//! `harness::status`, which would repair the status itself.
+//! completion, and `session::get` reads `done` before the runner calls
+//! `harness::status`, which would repair the status itself: the read runs in
+//! `after_dialogue`, and counts only when the runner's wait ended on the
+//! turn's terminal event rather than on a status sample.
 //!
 //! The ready, turn-completed and hold registrations are made before either
 //! restart, so the run first checks that they survive one: a binding the
 //! engine did not hand to the restarted Harness never hears `harness::ready`.
 //!
-//! The restarts touch the whole stack, so the test runs in a stack group of
-//! its own, last in its suite.
+//! The restarts touch the whole stack, so the test needs a stack group of its
+//! own: every regression test has one.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -207,6 +209,7 @@ async fn restart(client: &IIIClient, container: &str) -> anyhow::Result<()> {
         json!({ "container": container }),
     )
     .await?;
+    restart_outcome(container, &accepted)?;
     let Some(operation_id) = accepted.get("operation_id").and_then(Value::as_str) else {
         return Ok(());
     };
@@ -219,17 +222,24 @@ async fn restart(client: &IIIClient, container: &str) -> anyhow::Result<()> {
         .await?;
         match operation.get("status").and_then(Value::as_str) {
             Some("accepted" | "running") => tokio::time::sleep(Duration::from_millis(500)).await,
-            Some("failed") => anyhow::bail!(
-                "compose::restart {container} failed: {}",
-                operation
-                    .pointer("/last_event/detail")
-                    .and_then(Value::as_str)
-                    .unwrap_or("no detail")
-            ),
-            _ => return Ok(()),
+            _ => return restart_outcome(container, &operation),
         }
     }
     anyhow::bail!("compose::restart {container} did not finish in 120 s")
+}
+
+/// A `MutationOutcome` or a settled operation: `status: failed` is a restart
+/// Compose refused or could not finish.
+fn restart_outcome(container: &str, outcome: &Value) -> anyhow::Result<()> {
+    if outcome.get("status").and_then(Value::as_str) != Some("failed") {
+        return Ok(());
+    }
+    let detail = outcome
+        .pointer("/error/message")
+        .or_else(|| outcome.pointer("/last_event/detail"))
+        .and_then(Value::as_str)
+        .unwrap_or("no detail");
+    anyhow::bail!("compose::restart {container} failed: {detail}")
 }
 
 /// The session's meta and entries, read once they stopped changing: the
@@ -278,17 +288,26 @@ async fn store_check(
             Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
         }
     };
-    let first_row = json!({
-        "scope": scope(run_id),
-        "key": row_key(1),
-        "value": expected_row(run_id, 1),
-    });
     Ok(StoreCheck {
         meta_identical: serde_json::to_vec(&meta)? == serde_json::to_vec(&meta_after)?,
         entries_identical: serde_json::to_vec(&entries)? == serde_json::to_vec(&entries_after)?,
-        wrote_first_row: common::function_calls(&entries)
-            .iter()
-            .any(|call| call.function_id == "state::set" && call.arguments == first_row),
+        wrote_first_row: first_row_written(&entries, run_id),
+    })
+}
+
+/// Whether the entries hold the first exchange's `state::set`, judged by the
+/// value state stored: a model may send the row as a JSON string.
+fn first_row_written(entries: &Value, run_id: &str) -> bool {
+    let row = expected_row(run_id, 1);
+    common::function_outcomes(entries).iter().any(|outcome| {
+        outcome.function_id == "state::set"
+            && outcome.arguments.get("scope") == Some(&json!(scope(run_id)))
+            && outcome.arguments.get("key") == Some(&json!(row_key(1)))
+            && outcome
+                .details
+                .as_ref()
+                .and_then(|details| details.get("new_value"))
+                == Some(&row)
     })
 }
 
@@ -348,8 +367,12 @@ fn evaluation(record: &Value, run_id: &str) -> anyhow::Result<ObjectiveEvaluatio
         !hold_results.is_empty() && hold_results.iter().all(|results| *results == 1);
     let recovered = probe.harness_restarted && completed_in_time && one_result_each && row(3);
 
-    let status_done =
-        probe.harness_restarted && probe.status_after_restart.as_deref() == Some("done");
+    // Only a wait that ended on the terminal event reached `after_dialogue`
+    // without a `harness::status` sample of the finished turn, which would
+    // have re-projected the status itself.
+    let status_done = probe.harness_restarted
+        && !terminal.is_empty()
+        && probe.status_after_restart.as_deref() == Some("done");
 
     Ok(assessment::build_evaluation([
         STORE_SURVIVES.full_or_zero(
@@ -385,7 +408,11 @@ fn evaluation(record: &Value, run_id: &str) -> anyhow::Result<ObjectiveEvaluatio
         ),
         STATUS_DONE.full_or_zero(
             status_done,
-            format!("session_get_status={:?}", probe.status_after_restart),
+            format!(
+                "session_get_status={:?}, terminal_event_heard={}",
+                probe.status_after_restart,
+                !terminal.is_empty()
+            ),
         ),
     ]))
 }
@@ -496,60 +523,25 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
         ),
     );
 
-    let (heard, reader) = (Arc::clone(&probe), client.clone());
+    let heard = Arc::clone(&probe);
     let turns_id = turn_sink(run_id);
     functions.push(
         context.client().register_function(
             turns_id.clone(),
             RegisterFunction::new_async(move |payload: Value| {
-                let (heard, reader) = (Arc::clone(&heard), reader.clone());
+                let heard = Arc::clone(&heard);
                 async move {
                     let Ok(event) = serde_json::from_value::<TurnCompletedPayload>(payload) else {
                         return Ok::<Value, iii_sdk::errors::Error>(json!({ "ok": false }));
                     };
-                    let read_status = {
-                        let mut probe = common::lock_unpoisoned(&heard);
-                        let root =
-                            probe.root_session_id.as_deref() == Some(event.session_id.as_str());
-                        match probe.restarted_at.filter(|_| root) {
-                            Some(restarted_at) => {
-                                probe.record.completions_after_restart.push(Completion {
-                                    turn_id: event.turn_id.clone(),
-                                    status: event.status,
-                                    terminal: event.terminal,
-                                    after_restart_ms: restarted_at.elapsed().as_millis() as u64,
-                                });
-                                event.terminal
-                            }
-                            None => false,
-                        }
-                    };
-                    if read_status {
-                        // Before the runner's harness::status, which re-projects it.
-                        tokio::spawn(async move {
-                            let deadline = Instant::now() + STATUS_PROJECTION;
-                            loop {
-                                let status = common::invoke(
-                                    &reader,
-                                    "session::get",
-                                    json!({ "session_id": event.session_id }),
-                                )
-                                .await
-                                .ok()
-                                .and_then(|got| {
-                                    got.pointer("/meta/status")
-                                        .and_then(Value::as_str)
-                                        .map(str::to_owned)
-                                });
-                                let settled =
-                                    status.as_deref().is_some_and(|status| status != "working");
-                                if settled || Instant::now() >= deadline {
-                                    common::lock_unpoisoned(&heard).record.status_after_restart =
-                                        status;
-                                    break;
-                                }
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-                            }
+                    let mut probe = common::lock_unpoisoned(&heard);
+                    let root = probe.root_session_id.as_deref() == Some(event.session_id.as_str());
+                    if let Some(restarted_at) = probe.restarted_at.filter(|_| root) {
+                        probe.record.completions_after_restart.push(Completion {
+                            turn_id: event.turn_id,
+                            status: event.status,
+                            terminal: event.terminal,
+                            after_restart_ms: restarted_at.elapsed().as_millis() as u64,
                         });
                     }
                     Ok(json!({ "ok": true }))
@@ -682,6 +674,12 @@ impl Scenario for RestartRecovery {
         ]
     }
 
+    /// A stack Compose did not start cannot restart its workers: a setup
+    /// failure, not a Harness that did not recover.
+    fn required_functions(&self, _run_id: &str) -> Vec<String> {
+        vec!["compose::restart".to_string()]
+    }
+
     async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         release_runtime(run_id);
         let runtime = register_probes(context, run_id)?;
@@ -709,6 +707,42 @@ impl Scenario for RestartRecovery {
             Ok(check) => probe.record.store = Some(check),
             Err(error) => probe.record.store_error = Some(format!("{error:#}")),
         }
+    }
+
+    /// Reads the status the Harness projected for the recovered turn before
+    /// the runner's `harness::status`, which repairs a terminal turn's
+    /// projection and so would hide one the restart lost.
+    async fn after_dialogue(&self, context: &E2eContext, run_id: &str, session_id: &str) {
+        let Some(probe) = probe(run_id) else {
+            return;
+        };
+        let heard_terminal = common::lock_unpoisoned(&probe)
+            .record
+            .completions_after_restart
+            .iter()
+            .any(|completion| completion.terminal);
+        if !heard_terminal {
+            return;
+        }
+        let deadline = Instant::now() + STATUS_PROJECTION;
+        let status = loop {
+            let status = context
+                .trigger_value("session::get", json!({ "session_id": session_id }))
+                .await
+                .ok()
+                .and_then(|got| {
+                    got.pointer("/meta/status")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                });
+            if status.as_deref().is_some_and(|status| status != "working")
+                || Instant::now() >= deadline
+            {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        common::lock_unpoisoned(&probe).record.status_after_restart = status;
     }
 
     async fn capture(
@@ -947,12 +981,65 @@ pub(crate) mod tests {
         assert_eq!(awarded(&record)[4], Some(0));
     }
 
+    /// Without the terminal event the runner's wait ended on a
+    /// `harness::status` sample, which re-projects the status itself.
+    #[test]
+    fn a_status_read_without_the_terminal_event_fails_the_status_gate() {
+        let mut record = reference();
+        record["probe"]["completions_after_restart"] = json!([]);
+        assert_eq!(awarded(&record)[4], Some(0));
+    }
+
+    #[test]
+    fn a_restart_compose_refused_is_an_error() {
+        let failed = json!({
+            "changed": false,
+            "status": "failed",
+            "error": { "code": "unknown_container", "message": "no container session-manager" },
+        });
+        let error = restart_outcome(SESSION_MANAGER, &failed).unwrap_err();
+        assert!(error.to_string().contains("no container session-manager"));
+        let operation = json!({ "status": "failed", "last_event": { "detail": "exit 1" } });
+        assert!(restart_outcome(HARNESS, &operation).is_err());
+        assert!(restart_outcome(HARNESS, &json!({ "changed": true, "status": "ok" })).is_ok());
+    }
+
     #[test]
     fn a_restart_the_runner_could_not_make_is_an_infrastructure_error() {
         let mut record = reference();
         record["probe"]["store_error"] = json!("compose::restart session-manager failed");
         let evaluation = evaluation(&record, RUN).unwrap();
         assert!(evaluation.infrastructure_error.is_some());
+    }
+
+    /// Seen live: the value sent as a JSON string, stored as the object.
+    #[test]
+    fn the_first_row_counts_by_what_state_stored() {
+        let row = expected_row(RUN, 1);
+        let entries = |value: Value, stored: Value| {
+            json!({ "messages": [
+                { "message": { "role": "assistant", "content": [{
+                    "type": "function_call", "id": "call-0", "function_id": "agent_trigger",
+                    "arguments": { "function": "state::set", "payload": {
+                        "scope": scope(RUN), "key": row_key(1), "value": value,
+                    } },
+                }] } },
+                { "message": {
+                    "role": "function_result", "function_call_id": "call-0",
+                    "function_id": "state::set", "is_error": false,
+                    "details": { "new_value": stored, "old_value": null },
+                } },
+            ] })
+        };
+        assert!(first_row_written(&entries(row.clone(), row.clone()), RUN));
+        assert!(first_row_written(
+            &entries(json!(row.to_string()), row.clone()),
+            RUN
+        ));
+        assert!(!first_row_written(
+            &entries(row.clone(), json!({ "phase": 1 })),
+            RUN
+        ));
     }
 
     #[test]
