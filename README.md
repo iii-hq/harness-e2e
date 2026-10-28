@@ -260,7 +260,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | ID | Purpose |
 | --- | --- | --- |
-| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, three independent rounds; one technical retry where safe. |
+| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
 | Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
@@ -304,10 +304,10 @@ receives the implementation delivery. Trending topics runs in
 stack contract. Alertmanager runs in its own group, needs Go 1.25+, and has no
 turn or token ceiling.
 
-A suite with `repetitions: 3` (`regression`, `software-engineering-x3`)
-materializes three campaigns, `<suite>-r01` to `-r03`, with the same groups and
-seeds; every group of every round is its own job, so a round adds jobs, not
-time to a job.
+A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
+campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
+of every round is its own job, so a round adds jobs, not time to a job.
+`regression` runs eleven (`-r01` to `-r11`): 99 jobs, nine at a time.
 
 The `null-canary` suite runs the regression's nine tests and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no

@@ -258,7 +258,7 @@
         "context_pressure",
         "prompt_injection_resilience"
       ],
-      "repetitions": 3,
+      "repetitions": 11,
       "technical_retries": 1,
       "lane": "local-regression"
     },
