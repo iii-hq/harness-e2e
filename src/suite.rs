@@ -2421,48 +2421,50 @@ async fn execute(
                 .await;
         }
         context.drain_turn_completed_events();
-        let response: SendResponse = context
-            .trigger(
-                "harness::send",
-                SendRequest {
-                    session_id: Some(session_id.to_string()),
-                    message: MessageInput::Text(message),
-                    model: Some(subject.model.clone()),
-                    provider: Some(subject.provider.clone()),
-                    idempotency_key: Some(format!(
-                        "e2e:{run_id}:{}:send:{exchange}",
-                        spec.id
+        let request = if exchange > 0 && module.bare_followup(exchange - 1) {
+            SendRequest::bare(session_id, message)
+        } else {
+            SendRequest {
+                session_id: Some(session_id.to_string()),
+                message: MessageInput::Text(message),
+                model: Some(subject.model.clone()),
+                provider: Some(subject.provider.clone()),
+                idempotency_key: Some(format!(
+                    "e2e:{run_id}:{}:send:{exchange}",
+                    spec.id
+                )),
+                session: (exchange == 0).then(|| SessionInit {
+                    kind: Some(E2E_SESSION_KIND.into()),
+                    title: Some(format!("Harness E2E: {}", spec.id)),
+                    metadata: Some(json!({
+                        "e2e_run_id": run_id,
+                        "e2e_scenario": spec.id,
+                        "e2e_execution_kind": if scripted_dialogue { "scripted_dialogue" } else { "harness_turn" },
+                    })),
+                }),
+                options: Some(SendOptions {
+                    thinking_level: subject.thinking_level.clone(),
+                    provider_options: subject.provider_options.clone(),
+                    // New sessions only: the Harness refuses a profile on
+                    // an existing session, and a dialogue reuses one.
+                    agent: (exchange == 0).then(|| subject.agent.clone()).flatten(),
+                    // The Harness has no "unbounded" value and falls back to
+                    // its own default when the field is absent.
+                    max_turns: Some(spec.execution.max_turns.unwrap_or(u32::MAX)),
+                    max_cost_usd: subject_cost_cap(subject, spec.id),
+                    max_output_tokens: spec.execution.max_output_tokens,
+                    max_total_tokens: spec.execution.max_total_tokens,
+                    max_validation_retries: spec.execution.max_validation_retries,
+                    functions: Some(e2e_function_policy(
+                        spec,
+                        module.allowed_functions(run_id),
                     )),
-                    session: (exchange == 0).then(|| SessionInit {
-                        kind: Some(E2E_SESSION_KIND.into()),
-                        title: Some(format!("Harness E2E: {}", spec.id)),
-                        metadata: Some(json!({
-                            "e2e_run_id": run_id,
-                            "e2e_scenario": spec.id,
-                            "e2e_execution_kind": if scripted_dialogue { "scripted_dialogue" } else { "harness_turn" },
-                        })),
-                    }),
-                    options: Some(SendOptions {
-                        thinking_level: subject.thinking_level.clone(),
-                        provider_options: subject.provider_options.clone(),
-                        // New sessions only: the Harness refuses a profile on
-                        // an existing session, and a dialogue reuses one.
-                        agent: (exchange == 0).then(|| subject.agent.clone()).flatten(),
-                        // The Harness has no "unbounded" value and falls back to
-                        // its own default when the field is absent.
-                        max_turns: Some(spec.execution.max_turns.unwrap_or(u32::MAX)),
-                        max_cost_usd: subject_cost_cap(subject, spec.id),
-                        max_output_tokens: spec.execution.max_output_tokens,
-                        max_total_tokens: spec.execution.max_total_tokens,
-                        max_validation_retries: spec.execution.max_validation_retries,
-                        functions: Some(e2e_function_policy(
-                            spec,
-                            module.allowed_functions(run_id),
-                        )),
-                        metadata: options_metadata.clone(),
-                    }),
-                },
-            )
+                    metadata: options_metadata.clone(),
+                }),
+            }
+        };
+        let response: SendResponse = context
+            .trigger("harness::send", request)
             .await
             .map_err(subject_dispatch_failure)?;
         if !response.accepted
@@ -2484,6 +2486,7 @@ async fn execute(
                     spec.id,
                     session_id,
                     &response.turn_id,
+                    module.expected_root_outcome(),
                     stuck_timeout,
                     progress_interval.is_some(),
                     control.map(|control| &control.cancellation),

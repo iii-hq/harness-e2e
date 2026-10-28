@@ -9,7 +9,7 @@ use tokio::sync::watch;
 
 use crate::context::E2eContext;
 use crate::wire::{
-    FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
+    FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit, TurnStatus,
     E2E_SESSION_KIND,
 };
 
@@ -231,6 +231,7 @@ async fn run_fresh_planner(
             &request.metadata.scenario_id,
             session_id,
             &response.turn_id,
+            TurnStatus::Completed,
             PLANNER_STUCK_TIMEOUT,
             false,
             request.cancellation,

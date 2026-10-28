@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::assessment::{AssessmentKind, AssessmentPolicy};
 use crate::context::E2eContext;
 use crate::report::CompletionState;
-use crate::wire::SessionMetricsResponse;
+use crate::wire::{SessionMetricsResponse, TurnStatus};
 
 pub mod alertmanager_route_match;
 mod assessment;
@@ -143,6 +143,22 @@ pub trait Scenario: Send + Sync {
     }
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         Vec::new()
+    }
+    /// Whether follow-up `followup` (an index into `dialogue_followups`) goes
+    /// out bare: only `session_id` and `message`, with no model, provider,
+    /// options or idempotency key, so its turn runs on the provider, model
+    /// and policy the session already holds. Folded into `behavior_sha256`
+    /// when any follow-up is bare.
+    fn bare_followup(&self, _followup: usize) -> bool {
+        false
+    }
+    /// How every root turn the runner waits on is meant to end: `Completed`,
+    /// or `Failed` or `Cancelled` for a scenario that drives the root into
+    /// that outcome on purpose. A root turn that ends any other way fails the
+    /// run, as a `Failed` or `Cancelled` one does under the default. Folded
+    /// into `behavior_sha256` when not `Completed`.
+    fn expected_root_outcome(&self) -> TurnStatus {
+        TurnStatus::Completed
     }
     /// Extra `harness::send` `options.metadata` keys, sent on every exchange
     /// beside the runner's own, which win on a clash. Part of the task, so it
@@ -709,14 +725,14 @@ pub const CONTRACT_NAMESPACE: &str = "contract";
 /// bounded, how it is scored, and the case-independent contract. Seed-specific
 /// inputs are excluded so every seed of one definition shares the digest.
 pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
-    crate::artifact::sha256_value(&behavior_definition(id, case)?)
+    crate::artifact::sha256_value(&behavior_definition(id.module(), case)?)
 }
 
 /// The JSON that `behavior_sha256` hashes.
-pub(crate) fn behavior_definition(id: ScenarioId, case: &ScenarioCase) -> Result<Value> {
-    let spec = id.spec(CONTRACT_NAMESPACE);
+pub(crate) fn behavior_definition(module: &dyn Scenario, case: &ScenarioCase) -> Result<Value> {
+    let spec = module.spec(CONTRACT_NAMESPACE);
     let mut definition = serde_json::json!({
-        "scenario_id": id.as_str(),
+        "scenario_id": module.id(),
         "prompt": spec.prompt,
         "execution": spec.execution,
         "denied_functions": spec.denied_functions,
@@ -745,13 +761,22 @@ pub(crate) fn behavior_definition(id: ScenarioId, case: &ScenarioCase) -> Result
     });
     // What the subject may call and what it is told next change the task;
     // written only when a scenario declares them, like `gate` above.
-    let module = id.module();
     if let Some(functions) = module.allowed_functions(CONTRACT_NAMESPACE) {
         definition["allowed_functions"] = serde_json::json!(functions);
     }
     let followups = module.dialogue_followups(CONTRACT_NAMESPACE);
     if !followups.is_empty() {
         definition["dialogue_followups"] = serde_json::json!(followups);
+    }
+    let bare: Vec<usize> = (0..followups.len())
+        .filter(|&followup| module.bare_followup(followup))
+        .collect();
+    if !bare.is_empty() {
+        definition["bare_followups"] = serde_json::json!(bare);
+    }
+    let outcome = module.expected_root_outcome();
+    if outcome != TurnStatus::Completed {
+        definition["expected_root_outcome"] = serde_json::json!(outcome);
     }
     let send_metadata = module.send_metadata(CONTRACT_NAMESPACE);
     if !send_metadata.is_empty() {
@@ -868,6 +893,61 @@ mod tests {
         ) -> Result<ObjectiveEvaluation> {
             unreachable!("the default capture test never evaluates")
         }
+    }
+
+    /// minimal_path with a bare follow-up and a root meant to fail.
+    struct BareFailingMinimalPath;
+
+    #[async_trait]
+    impl Scenario for BareFailingMinimalPath {
+        fn id(&self) -> &'static str {
+            "minimal_path"
+        }
+
+        fn case(&self, seed: u64) -> Result<ScenarioCase> {
+            ScenarioId::MinimalPath.module().case(seed)
+        }
+
+        fn spec(&self, run_id: &str) -> ScenarioSpec {
+            ScenarioId::MinimalPath.spec(run_id)
+        }
+
+        fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
+            vec!["Answer again.".into(), "Once more.".into()]
+        }
+
+        fn bare_followup(&self, followup: usize) -> bool {
+            followup == 1
+        }
+
+        fn expected_root_outcome(&self) -> TurnStatus {
+            TurnStatus::Failed
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            _observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> Result<ObjectiveEvaluation> {
+            unreachable!("the definition test never evaluates")
+        }
+    }
+
+    /// Both change what the run asks and what counts as its end, so both are
+    /// part of the definition; a scenario that declares neither keeps its digest.
+    #[test]
+    fn a_bare_follow_up_and_an_expected_outcome_are_part_of_the_definition() {
+        let case = ScenarioId::MinimalPath
+            .materialize("attempt-a", ScenarioId::MinimalPath.canonical_seed())
+            .unwrap()
+            .case;
+        let plain = behavior_definition(ScenarioId::MinimalPath.module(), &case).unwrap();
+        assert!(plain.get("bare_followups").is_none());
+        assert!(plain.get("expected_root_outcome").is_none());
+        let declared = behavior_definition(&BareFailingMinimalPath, &case).unwrap();
+        assert_eq!(declared["bare_followups"], serde_json::json!([1]));
+        assert_eq!(declared["expected_root_outcome"], "failed");
     }
 
     #[tokio::test]
@@ -1237,7 +1317,7 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
             let materialized = scenario
                 .materialize("attempt-a", scenario.canonical_seed())
                 .unwrap();
-            let definition = behavior_definition(scenario, &materialized.case).unwrap();
+            let definition = behavior_definition(scenario.module(), &materialized.case).unwrap();
             assert_eq!(
                 definition["send_metadata"],
                 serde_json::json!({"memory_bank": "e2e-contract"}),
