@@ -501,7 +501,17 @@
         "harness_contract_probe",
         "dispatch_pipeline",
         "binding_contract_probe",
-        "turn_failure_surface"
+        "turn_failure_surface",
+        "context_compaction",
+        "result_bounds",
+        "structured_output",
+        "ask_handshake",
+        "long_transcript_tail",
+        "subtree_deletion",
+        "session_continuity",
+        "steer_and_stop",
+        "router_fault_contract",
+        "prompt_layers"
       ]
     },
     "ScenarioRealism": {

@@ -15,6 +15,7 @@ use crate::wire::{SessionMetricsResponse, TurnStatus};
 
 pub mod alertmanager_route_match;
 pub mod approval_roundtrip;
+pub mod ask_handshake;
 mod assessment;
 pub mod binding_contract_probe;
 pub mod browser_cross_site;
@@ -25,6 +26,7 @@ pub mod chess_play_ladder;
 pub mod cleanup_under_failure;
 pub mod common;
 pub mod contention_ledger;
+pub mod context_compaction;
 pub mod context_pressure;
 pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
@@ -41,7 +43,9 @@ pub mod incident_response;
 pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
+pub mod long_transcript_tail;
 pub mod mechanical_reaction;
+mod mechanism;
 pub mod memory;
 pub mod minimal_path;
 pub mod moving_target;
@@ -52,6 +56,7 @@ pub mod poison_message;
 pub mod policy_bound_action;
 pub(crate) mod probe;
 pub mod prompt_injection_resilience;
+pub mod prompt_layers;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
 pub mod registry;
@@ -59,12 +64,18 @@ mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod restart_recovery;
+pub mod result_bounds;
+pub mod router_fault_contract;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
+pub mod session_continuity;
 pub mod shell_coder_sandbox;
 pub mod spawn_depth_cap;
+pub mod steer_and_stop;
+pub mod structured_output;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
+pub mod subtree_deletion;
 pub mod tags;
 pub mod timer_wake;
 pub mod todo_worker;
@@ -175,6 +186,13 @@ pub trait Scenario: Send + Sync {
     /// when not `Completed`.
     fn expected_root_outcome(&self) -> TurnStatus {
         TurnStatus::Completed
+    }
+    /// The turn's deliverable, sent as `options.output` on every exchange
+    /// that is not bare: `{"type": "json", "schema": …}` asks for a JSON
+    /// result, which the Harness returns as the turn's `result`. Folded into
+    /// `behavior_sha256` when `Some`.
+    fn output_contract(&self) -> Option<Value> {
+        None
     }
     /// Extra `harness::send` `options.metadata` keys, sent on every exchange
     /// beside the runner's own, which win on a clash. Part of the task, so it
@@ -688,6 +706,16 @@ scenarios! {
     DispatchPipeline = "dispatch_pipeline" => dispatch_pipeline::DispatchPipeline,
     BindingContractProbe = "binding_contract_probe" => binding_contract_probe::BindingContractProbe,
     TurnFailureSurface = "turn_failure_surface" => turn_failure_surface::TurnFailureSurface,
+    ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
+    ResultBounds = "result_bounds" => result_bounds::ResultBounds,
+    StructuredOutput = "structured_output" => structured_output::StructuredOutput,
+    AskHandshake = "ask_handshake" => ask_handshake::AskHandshake,
+    LongTranscriptTail = "long_transcript_tail" => long_transcript_tail::LongTranscriptTail,
+    SubtreeDeletion = "subtree_deletion" => subtree_deletion::SubtreeDeletion,
+    SessionContinuity = "session_continuity" => session_continuity::SessionContinuity,
+    SteerAndStop = "steer_and_stop" => steer_and_stop::SteerAndStop,
+    RouterFaultContract = "router_fault_contract" => router_fault_contract::RouterFaultContract,
+    PromptLayers = "prompt_layers" => prompt_layers::PromptLayers,
 }
 
 impl ScenarioId {
@@ -820,6 +848,9 @@ pub(crate) fn behavior_definition(module: &dyn Scenario, case: &ScenarioCase) ->
     let outcome = module.expected_root_outcome();
     if outcome != TurnStatus::Completed {
         definition["expected_root_outcome"] = serde_json::json!(outcome);
+    }
+    if let Some(output) = module.output_contract() {
+        definition["output_contract"] = output;
     }
     let send_metadata = module.send_metadata(CONTRACT_NAMESPACE);
     if !send_metadata.is_empty() {
@@ -967,6 +998,10 @@ mod tests {
             TurnStatus::Failed
         }
 
+        fn output_contract(&self) -> Option<Value> {
+            Some(serde_json::json!({ "type": "json" }))
+        }
+
         async fn evaluate(
             &self,
             _context: &E2eContext,
@@ -977,10 +1012,10 @@ mod tests {
         }
     }
 
-    /// Both change what the run asks and what counts as its end, so both are
-    /// part of the definition; a scenario that declares neither keeps its digest.
+    /// Each changes what the run asks or what counts as its end, so each is
+    /// part of the definition; a scenario that declares none keeps its digest.
     #[test]
-    fn a_bare_follow_up_and_an_expected_outcome_are_part_of_the_definition() {
+    fn a_bare_follow_up_an_expected_outcome_and_an_output_contract_are_part_of_the_definition() {
         let case = ScenarioId::MinimalPath
             .materialize("attempt-a", ScenarioId::MinimalPath.canonical_seed())
             .unwrap()
@@ -988,9 +1023,14 @@ mod tests {
         let plain = behavior_definition(ScenarioId::MinimalPath.module(), &case).unwrap();
         assert!(plain.get("bare_followups").is_none());
         assert!(plain.get("expected_root_outcome").is_none());
+        assert!(plain.get("output_contract").is_none());
         let declared = behavior_definition(&BareFailingMinimalPath, &case).unwrap();
         assert_eq!(declared["bare_followups"], serde_json::json!([1]));
         assert_eq!(declared["expected_root_outcome"], "failed");
+        assert_eq!(
+            declared["output_contract"],
+            serde_json::json!({ "type": "json" })
+        );
     }
 
     /// Exchange 0 is the prompt, so follow-up `n` is exchange `n + 1`.
@@ -1030,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_ninety_eight_unique_valid_scenarios() {
+    fn registry_contains_every_unique_valid_scenario() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -1042,7 +1082,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 98);
+        assert_eq!(ids.len(), 108);
     }
 
     #[test]

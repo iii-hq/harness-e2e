@@ -141,6 +141,10 @@ pub struct SendOptions {
     pub max_total_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_validation_retries: Option<u32>,
+    /// The turn's deliverable (`{"type": "json", "schema": …}`); omitted is
+    /// free text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub functions: Option<FunctionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]

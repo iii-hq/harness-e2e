@@ -249,8 +249,8 @@ Featured suites:
 
 `config/test-plan.json` groups the catalog into modules (state, context,
 wakes, coordination, software engineering, integration, security, adaptive
-operations, continuous engineering, the Harness contract, and the incremental
-Kanban application)
+operations, continuous engineering, the Harness contract, the Harness
+mechanisms, and the incremental Kanban application)
 plus a diagnostic set that suites can opt into.
 
 ## Test plans
