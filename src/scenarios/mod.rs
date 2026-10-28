@@ -50,6 +50,7 @@ pub mod persistent_state;
 pub mod poison_message;
 pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
+pub mod prompt_layers;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
 pub mod registry;
@@ -683,6 +684,7 @@ scenarios! {
     SessionContinuity = "session_continuity" => session_continuity::SessionContinuity,
     SteerAndStop = "steer_and_stop" => steer_and_stop::SteerAndStop,
     RouterFaultContract = "router_fault_contract" => router_fault_contract::RouterFaultContract,
+    PromptLayers = "prompt_layers" => prompt_layers::PromptLayers,
 }
 
 impl ScenarioId {
@@ -1046,7 +1048,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 98);
+        assert_eq!(ids.len(), 99);
     }
 
     #[test]

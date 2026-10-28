@@ -474,7 +474,8 @@
         "subtree_deletion",
         "session_continuity",
         "steer_and_stop",
-        "router_fault_contract"
+        "router_fault_contract",
+        "prompt_layers"
       ]
     },
     "StackIdentity": {
