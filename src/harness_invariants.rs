@@ -26,6 +26,12 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// A transient resume in a turn that neither failed nor stopped has no
+    /// `recovered` row of its attempt or a later one: the Harness lost the
+    /// recovery's outcome.
+    UnrecoveredTransientResume,
+    /// A turn resumed more often than its `max_transient_resumes`.
+    TransientResumesOverLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +54,9 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(crate::transient_recovery::violations(
+        report.transient_recovery.as_deref().unwrap_or_default(),
+    ));
     violations
 }
 
