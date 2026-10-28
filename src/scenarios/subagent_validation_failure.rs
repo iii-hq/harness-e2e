@@ -34,13 +34,16 @@ const THRESHOLD: u64 = 100;
 /// Explicit child budget: initial attempt + 2 retries = 2 nudges, then fail.
 const CHILD_RETRIES: u64 = 2;
 const EXPECTED_NUDGES: usize = 2;
-/// Wake deadline: comfortably after the child fails (~1 min), well inside
-/// the stuck timeout.
-const EXPIRY_DELAY_MS: u64 = 150_000;
-const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::scored(
+/// Wake deadline: the child's three attempts fail about 12 s after the spawn
+/// on deepseek-flash, so a minute leaves room for a slower model without
+/// idling the run for minutes.
+const EXPIRY_DELAY_MS: u64 = 60_000;
+/// What the Harness records on a turn whose post-turn gate spent its retries.
+const CHILD_FAILURE_CODE: &str = "harness.output_contract_invalid";
+const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::gate(
     "bounded_failure",
     40,
-    "Does the child fail after exactly two validation retry requests, without writing a verdict?",
+    "Does the child's turn fail on its output contract after exactly two validation retry requests, without writing a verdict?",
 );
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
@@ -68,6 +71,10 @@ impl Scenario for SubagentValidationFailure {
 
     fn summary(&self) -> Option<&'static str> {
         Some("Limit an impossible child validation loop to two retry requests, then report that the child failed and the parent finished.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("A validator on a sub-agent bounds it: once the child spends its validation retries its turn fails, writes nothing, and the parent is woken by its wake's deadline instead of waiting forever. If it fails, a sub-agent with an unreachable goal loops without end or reports success it never earned, and its parent hangs.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
@@ -161,83 +168,43 @@ impl Scenario for SubagentValidationFailure {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
-        let child = child_session(run_id);
-        let (child_status, child_nudges) =
-            child_evidence(context, &observation.transcript, &child).await?;
-        let verdict = common::state_value(
-            context
-                .trigger(
-                    "state::get",
-                    json!({ "scope": scope(run_id), "key": "verdict" }),
-                )
-                .await?,
-        );
-        let calls = common::function_calls(&observation.transcript);
-        let validator_index = calls.iter().position(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
-        });
-        let wake_index = calls.iter().position(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
-                && call
-                    .arguments
-                    .pointer("/lifecycle/expires_in_ms")
-                    .and_then(Value::as_u64)
-                    .is_some()
-        });
-        let spawn_index = calls.iter().position(|call| {
-            call.function_id == "harness::spawn"
-                && call.arguments.get("session_id").and_then(Value::as_str) == Some(child.as_str())
-        });
-        let ordered = matches!(
-            (validator_index, wake_index, spawn_index),
-            (Some(validator), Some(wake), Some(spawn)) if validator < spawn && wake < spawn
-        );
-        let bounded =
-            child_status == "failed" && verdict.is_null() && child_nudges == EXPECTED_NUDGES;
-        let reported = observation.response.contains("CHILD GAVE UP")
-            && observation.response.contains("PARENT DONE");
-
+        let facts = Facts::read(context, observation, run_id).await?;
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "recovery_record".to_string(),
             content: json!({
-                "child_session_id": child,
-                "child_status": child_status,
-                "verdict": verdict,
-                "validation_nudges": child_nudges,
-                "validator_index": validator_index,
-                "wake_index": wake_index,
-                "spawn_index": spawn_index,
-                "report": observation.response,
+                "child_session_id": facts.child,
+                "child_status": facts.child_status,
+                "child_failure_code": facts.child_failure_code,
+                "verdict": facts.verdict,
+                "validation_nudges": facts.child_nudges,
+                "validator_index": facts.validator_index,
+                "wake_index": facts.wake_index,
+                "spawn_index": facts.spawn_index,
+                "report": facts.report,
             })
             .into(),
             invariants: vec![
                 CapturedInvariant {
                     id: BOUNDED_FAILURE.id().to_string(),
-                    passed: bounded,
-                    reason: format!(
-                        "child_status={child_status}, verdict={verdict}, validation_nudges={child_nudges}"
-                    ),
+                    passed: facts.bounded(),
+                    reason: facts.bounded_detail(),
                 },
                 CapturedInvariant {
                     id: ORCHESTRATION_DISCIPLINE.id().to_string(),
-                    passed: ordered,
-                    reason: format!(
-                        "validator@{validator_index:?}, wake@{wake_index:?}, spawn@{spawn_index:?}"
-                    ),
+                    passed: facts.ordered(),
+                    reason: facts.ordered_detail(),
                 },
                 CapturedInvariant {
                     id: EXPIRY_REPORT.id().to_string(),
-                    passed: reported,
+                    passed: facts.reported(),
                     reason: "final response checked for bounded-failure markers".to_string(),
                 },
             ],
             provenance: vec![
                 ProvenanceEvidence {
                     kind: "session".to_string(),
-                    source_id: child,
+                    source_id: facts.child,
                     relation: "observed_terminal_failure".to_string(),
                 },
                 ProvenanceEvidence {
@@ -255,67 +222,7 @@ impl Scenario for SubagentValidationFailure {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<ObjectiveEvaluation> {
-        let child = child_session(run_id);
-        let (child_status, child_nudges) =
-            child_evidence(context, &observation.transcript, &child).await?;
-        let verdict = common::state_value(
-            context
-                .trigger(
-                    "state::get",
-                    json!({ "scope": scope(run_id), "key": "verdict" }),
-                )
-                .await?,
-        );
-        let calls = common::function_calls(&observation.transcript);
-        let validator_index = calls.iter().position(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
-        });
-        let wake_index = calls.iter().position(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
-                && call
-                    .arguments
-                    .pointer("/lifecycle/expires_in_ms")
-                    .and_then(Value::as_u64)
-                    .is_some()
-        });
-        let spawn_index = calls.iter().position(|call| {
-            call.function_id == "harness::spawn"
-                && call.arguments.get("session_id").and_then(Value::as_str) == Some(child.as_str())
-        });
-        let ordered = matches!(
-            (validator_index, wake_index, spawn_index),
-            (Some(v), Some(w), Some(s)) if v < s && w < s
-        );
-
-        let child_failed = child_status == "failed";
-        let verdict_absent = verdict.is_null();
-        let bounded = child_nudges == EXPECTED_NUDGES;
-        let reported = observation.response.contains("CHILD GAVE UP")
-            && observation.response.contains("PARENT DONE");
-
-        Ok(assessment::build_evaluation([
-            BOUNDED_FAILURE.full_or_zero(
-                child_failed && verdict_absent && bounded,
-                format!(
-                    "child status `{child_status}`, expected `failed`; verdict key holds \
-                     {verdict}, expected null; observed {child_nudges} nudge(s), expected exactly \
-                     {EXPECTED_NUDGES} (the child budget)"
-                ),
-            ),
-            ORCHESTRATION_DISCIPLINE.full_or_zero(
-                ordered,
-                format!(
-                    "validator@{validator_index:?} wake@{wake_index:?} \
-                     spawn@{spawn_index:?} — both must precede the spawn"
-                ),
-            ),
-            EXPIRY_REPORT.full_or_zero(
-                reported,
-                "expected both CHILD GAVE UP and PARENT DONE in the final response",
-            ),
-        ]))
+        Ok(Facts::read(context, observation, run_id).await?.evaluation())
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -336,18 +243,126 @@ impl Scenario for SubagentValidationFailure {
     }
 }
 
+/// What the run left behind, read once for the capture and once for the
+/// evaluation.
+#[derive(Debug, Clone, PartialEq)]
+struct Facts {
+    child: String,
+    child_status: String,
+    child_nudges: usize,
+    /// The `code` of the child's last `error` entry.
+    child_failure_code: Option<String>,
+    verdict: Value,
+    validator_index: Option<usize>,
+    wake_index: Option<usize>,
+    spawn_index: Option<usize>,
+    report: String,
+}
+
+impl Facts {
+    async fn read(
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Self> {
+        let child = child_session(run_id);
+        let (child_status, child_nudges, child_failure_code) =
+            child_evidence(context, &observation.transcript, &child).await?;
+        let verdict = common::state_value(
+            context
+                .trigger(
+                    "state::get",
+                    json!({ "scope": scope(run_id), "key": "verdict" }),
+                )
+                .await?,
+        );
+        let calls = common::function_calls(&observation.transcript);
+        let registers = |trigger_type: &str, call: &common::ObservedFunctionCall| {
+            call.function_id == "engine::register_trigger"
+                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(trigger_type)
+        };
+        Ok(Self {
+            validator_index: calls.iter().position(|call| registers(HOOK_TYPE, call)),
+            wake_index: calls.iter().position(|call| {
+                registers("state", call)
+                    && call
+                        .arguments
+                        .pointer("/lifecycle/expires_in_ms")
+                        .and_then(Value::as_u64)
+                        .is_some()
+            }),
+            spawn_index: calls.iter().position(|call| {
+                call.function_id == "harness::spawn"
+                    && call.arguments.get("session_id").and_then(Value::as_str)
+                        == Some(child.as_str())
+            }),
+            child,
+            child_status,
+            child_nudges,
+            child_failure_code,
+            verdict,
+            report: observation.response.clone(),
+        })
+    }
+
+    fn bounded(&self) -> bool {
+        self.child_status == "failed"
+            && self.child_failure_code.as_deref() == Some(CHILD_FAILURE_CODE)
+            && self.verdict.is_null()
+            && self.child_nudges == EXPECTED_NUDGES
+    }
+
+    fn bounded_detail(&self) -> String {
+        format!(
+            "child status `{}` with failure code {:?}, expected `failed` with \
+             {CHILD_FAILURE_CODE:?}; verdict key holds {}, expected null; observed {} nudge(s), \
+             expected exactly {EXPECTED_NUDGES} (the child budget)",
+            self.child_status, self.child_failure_code, self.verdict, self.child_nudges
+        )
+    }
+
+    fn ordered(&self) -> bool {
+        matches!(
+            (self.validator_index, self.wake_index, self.spawn_index),
+            (Some(validator), Some(wake), Some(spawn)) if validator < spawn && wake < spawn
+        )
+    }
+
+    fn ordered_detail(&self) -> String {
+        format!(
+            "validator@{:?} wake@{:?} spawn@{:?} — both must precede the spawn",
+            self.validator_index, self.wake_index, self.spawn_index
+        )
+    }
+
+    fn reported(&self) -> bool {
+        self.report.contains("CHILD GAVE UP") && self.report.contains("PARENT DONE")
+    }
+
+    fn evaluation(&self) -> ObjectiveEvaluation {
+        assessment::build_evaluation([
+            BOUNDED_FAILURE.full_or_zero(self.bounded(), self.bounded_detail()),
+            ORCHESTRATION_DISCIPLINE.full_or_zero(self.ordered(), self.ordered_detail()),
+            EXPIRY_REPORT.full_or_zero(
+                self.reported(),
+                "expected both CHILD GAVE UP and PARENT DONE in the final response",
+            ),
+        ])
+    }
+}
+
 async fn child_evidence(
     context: &E2eContext,
     transcript: &Value,
     child: &str,
-) -> anyhow::Result<(String, usize)> {
+) -> anyhow::Result<(String, usize, Option<String>)> {
     let spawned = common::function_outcomes(transcript).iter().any(|call| {
         call.function_id == "harness::spawn"
             && call.arguments["session_id"] == child
             && call.is_error == Some(false)
     });
     if !spawned {
-        return Ok(("not_spawned".into(), 0));
+        return Ok(("not_spawned".into(), 0, None));
     }
     let status = context
         .trigger_value("harness::status", json!({ "session_id": child }))
@@ -356,8 +371,25 @@ async fn child_evidence(
         .and_then(Value::as_str)
         .context("child status is missing")?
         .to_string();
-    let nudges = common::validation_nudges(&context.transcript(child).await?);
-    Ok((status, nudges))
+    let child_transcript = context.transcript(child).await?;
+    Ok((
+        status,
+        common::validation_nudges(&child_transcript),
+        failure_code(&child_transcript),
+    ))
+}
+
+/// The `code` of the last `error` entry the Harness appended to a transcript.
+fn failure_code(transcript: &Value) -> Option<String> {
+    transcript
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|entry| entry.pointer("/custom/custom_type").and_then(Value::as_str) == Some("error"))?
+        .pointer("/custom/data/code")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -369,12 +401,14 @@ fn deliverable_contract() -> DeliverableContract {
             schema: json!({
                 "type": "object",
                 "required": [
-                    "child_session_id", "child_status", "verdict", "validation_nudges",
+                    "child_session_id", "child_status", "child_failure_code", "verdict",
+                    "validation_nudges",
                     "validator_index", "wake_index", "spawn_index", "report"
                 ],
                 "properties": {
                     "child_session_id": { "type": "string", "minLength": 1 },
                     "child_status": { "type": "string" },
+                    "child_failure_code": { "type": ["string", "null"] },
                     "verdict": {},
                     "validation_nudges": { "type": "integer", "minimum": 0 },
                     "validator_index": { "type": ["integer", "null"] },
@@ -414,6 +448,91 @@ fn child_session(run_id: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_child_that_does_not_fail_within_its_budget_leaves_the_run_incomplete() {
+        let spec = SubagentValidationFailure.spec("run");
+        let gates: Vec<&str> = spec
+            .criteria
+            .iter()
+            .filter(|criterion| criterion.gate)
+            .map(|criterion| criterion.id)
+            .collect();
+        assert_eq!(gates, ["bounded_failure", "expiry_report"]);
+    }
+
+    fn facts() -> Facts {
+        Facts {
+            child: "child".into(),
+            child_status: "failed".into(),
+            child_nudges: EXPECTED_NUDGES,
+            child_failure_code: Some(CHILD_FAILURE_CODE.into()),
+            verdict: Value::Null,
+            validator_index: Some(2),
+            wake_index: Some(3),
+            spawn_index: Some(4),
+            report: "CHILD GAVE UP: validation budget exhausted. PARENT DONE.".into(),
+        }
+    }
+
+    fn awarded(facts: &Facts) -> Vec<Option<u8>> {
+        facts
+            .evaluation()
+            .awards
+            .iter()
+            .map(|award| award.awarded)
+            .collect()
+    }
+
+    #[test]
+    fn the_bounded_give_up_earns_every_point() {
+        assert_eq!(awarded(&facts()), [Some(40), Some(30), Some(30)]);
+    }
+
+    /// The null-agent canary: an agent that answers "done" and calls nothing
+    /// spawns no child, so no criterion pays.
+    #[test]
+    fn an_agent_that_does_nothing_scores_zero() {
+        let idle = Facts {
+            child_status: "not_spawned".into(),
+            child_nudges: 0,
+            child_failure_code: None,
+            validator_index: None,
+            wake_index: None,
+            spawn_index: None,
+            report: "done".into(),
+            ..facts()
+        };
+        assert_eq!(awarded(&idle), [Some(0), Some(0), Some(0)]);
+    }
+
+    #[test]
+    fn a_child_failed_by_anything_but_its_output_contract_is_not_bounded() {
+        for code in [None, Some("router/provider_transient".to_string())] {
+            let other = Facts {
+                child_failure_code: code,
+                ..facts()
+            };
+            assert_eq!(awarded(&other)[0], Some(0));
+            assert!(other.bounded_detail().contains(CHILD_FAILURE_CODE));
+        }
+    }
+
+    #[test]
+    fn the_failure_code_is_the_last_error_entry_of_the_transcript() {
+        let error = |code: &str| json!({"custom": {"custom_type": "error", "data": {"code": code}}});
+        let transcript = json!({"messages": [
+            error("router/provider_transient"),
+            {"message": {"role": "user"}},
+            error(CHILD_FAILURE_CODE),
+            {"custom": {"custom_type": "notice", "data": {"code": "other"}}},
+        ]});
+        assert_eq!(
+            failure_code(&transcript).as_deref(),
+            Some(CHILD_FAILURE_CODE)
+        );
+        assert_eq!(failure_code(&json!({"messages": []})), None);
+    }
+
     #[tokio::test]
     async fn only_a_created_child_requires_live_evidence() {
         let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
@@ -422,7 +541,7 @@ mod tests {
             child_evidence(&context, &json!({"messages":[]}), child)
                 .await
                 .unwrap(),
-            ("not_spawned".into(), 0)
+            ("not_spawned".into(), 0, None)
         );
         for is_error in [true, false] {
             let transcript = json!({"messages": [
@@ -435,7 +554,7 @@ mod tests {
             ]});
             let evidence = child_evidence(&context, &transcript, child).await;
             if is_error {
-                assert_eq!(evidence.unwrap(), ("not_spawned".into(), 0));
+                assert_eq!(evidence.unwrap(), ("not_spawned".into(), 0, None));
             } else {
                 let error = evidence.unwrap_err();
                 assert_eq!(
