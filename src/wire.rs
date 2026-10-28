@@ -182,6 +182,23 @@ pub struct SendRequest {
     pub options: Option<SendOptions>,
 }
 
+impl SendRequest {
+    /// A follow-up that names only the session and the message, so the turn
+    /// runs on what the session holds (`Scenario::bare_followup` lists what
+    /// it does not keep).
+    pub fn bare(session_id: &str, message: String) -> Self {
+        Self {
+            session_id: Some(session_id.to_string()),
+            message: MessageInput::Text(message),
+            model: None,
+            provider: None,
+            idempotency_key: None,
+            session: None,
+            options: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SendResponsePayload {
     pub session_id: String,
@@ -1037,6 +1054,15 @@ mod tests {
         assert!(init.get("metadata").is_none());
         let bare = serde_json::to_value(SessionInit::default()).unwrap();
         assert!(bare.get("kind").is_none());
+    }
+
+    #[test]
+    fn a_bare_follow_up_names_only_the_session_and_the_message() {
+        let bare = serde_json::to_value(SendRequest::bare("e2e_run", "Again.".into())).unwrap();
+        assert_eq!(
+            bare,
+            serde_json::json!({"session_id": "e2e_run", "message": "Again."})
+        );
     }
 
     #[test]
