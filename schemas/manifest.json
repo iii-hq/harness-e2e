@@ -470,7 +470,8 @@
         "result_bounds",
         "structured_output",
         "ask_handshake",
-        "long_transcript_tail"
+        "long_transcript_tail",
+        "subtree_deletion"
       ]
     },
     "StackIdentity": {

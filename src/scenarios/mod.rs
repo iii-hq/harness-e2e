@@ -63,6 +63,7 @@ pub mod shell_coder_sandbox;
 pub mod structured_output;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
+pub mod subtree_deletion;
 pub mod tags;
 pub mod timer_wake;
 pub mod todo_worker;
@@ -675,6 +676,7 @@ scenarios! {
     StructuredOutput = "structured_output" => structured_output::StructuredOutput,
     AskHandshake = "ask_handshake" => ask_handshake::AskHandshake,
     LongTranscriptTail = "long_transcript_tail" => long_transcript_tail::LongTranscriptTail,
+    SubtreeDeletion = "subtree_deletion" => subtree_deletion::SubtreeDeletion,
 }
 
 impl ScenarioId {
@@ -1038,7 +1040,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 94);
+        assert_eq!(ids.len(), 95);
     }
 
     #[test]
