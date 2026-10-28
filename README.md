@@ -116,7 +116,7 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
-Two Harness invariants hold on every native run that passed, whatever its
+These Harness invariants hold on every native run that passed, whatever its
 gates. They belong to no scenario's digest; the run's `harness_violations`
 records what broke.
 
@@ -127,6 +127,23 @@ records what broke.
   tokens: the router could not resolve the model, so nothing measured there
   can be trusted. It is an infrastructure error (`context_limits_unresolved`)
   the slot re-runs.
+- The turn events keep their contract (`turn_events`): every root turn (an
+  `origin.turn_id` of the root transcript) got exactly one
+  `harness::turn-started`, every turn of the tree at least one
+  `harness::turn-completed`, every turn the runner sent got its completion
+  event rather than ending only through the status poll, and `terminal` is
+  `false` only on a root turn a wake follows and `true` on the last one.
+  Delivery is at-least-once, so repeated completions are counted
+  (`duplicate_completions`), never failed.
+- Within 5 seconds of the tree completing, and before the terminal
+  `harness::status` re-projects it, `session::get` shows the root `done` and
+  each child `done` or `error` (`session_status`), and reads back what was
+  sent (`session_read_back`): the root's `kind` `e2e`, title and
+  `metadata.e2e_run_id` / `e2e_scenario`; each child's `kind` `e2e`,
+  `parent_session_id` and `depth`.
+
+Each of the last three leaves the run incomplete, like a lost result. The
+run's `turn_lifecycle` keeps the events and session reads they were judged on.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches
@@ -1547,13 +1564,14 @@ from a protected supervisor. Lane promotion is governed by
 
 The runner waits for a session tree to finish by binding
 `harness::turn-completed` to an internal sink, `e2e::on-turn-completed`, before
-`harness::send`. That sink is not a control-plane verb: it is not registered
-with `e2e::run`, `e2e::status`, or `e2e::cancel`, and it does not appear in
-`e2e::scenarios-list`. Subject policies already deny `e2e::*`.
+`harness::send`, and `harness::turn-started` to `e2e::on-turn-started` for the
+turn-event invariants. Neither sink is a control-plane verb: they are not
+registered with `e2e::run`, `e2e::status`, or `e2e::cancel`, and they do not
+appear in `e2e::scenarios-list`. Subject policies already deny `e2e::*`.
 
 A 15-second watchdog samples `harness::metrics` and one root
 `harness::status` for stuck detection, heartbeat logs, and `e2e::cancel`. If
-the trigger type is missing from `engine::triggers::list`, the run is
+either trigger type is missing from `engine::triggers::list`, the run is
 unsupported infrastructure. There is no fallback that polls `harness::status`
 or `harness::metrics`. After the tree completes, the runner still collects
 terminal status, metrics, transcripts, and deliverables.

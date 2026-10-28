@@ -18,6 +18,7 @@ use tokio::sync::watch;
 
 use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::report::ObservedWorkerContract;
+use crate::turn_lifecycle::{self, TurnEvent, TurnEventKind, TurnLog};
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
     StopResponse, TeardownResponse, TurnCompletedEvent,
@@ -31,7 +32,8 @@ const READ_TRANSPORT_BACKOFF: Duration = Duration::from_millis(100);
 pub struct E2eContext {
     client: IIIClient,
     hub: ObserveHub,
-    binding: Mutex<Option<Trigger>>,
+    turn_log: TurnLog,
+    bindings: Mutex<Vec<Trigger>>,
     execution_outputs: Mutex<HashMap<&'static str, Option<ExecutionOutput>>>,
 }
 
@@ -58,7 +60,8 @@ impl E2eContext {
         Self {
             client,
             hub: ObserveHub::new(),
-            binding: Mutex::new(None),
+            turn_log: TurnLog::default(),
+            bindings: Mutex::new(Vec::new()),
             execution_outputs: Mutex::new(HashMap::new()),
         }
     }
@@ -83,7 +86,8 @@ impl E2eContext {
         let context = Self {
             client,
             hub: ObserveHub::new(),
-            binding: Mutex::new(None),
+            turn_log: TurnLog::default(),
+            bindings: Mutex::new(Vec::new()),
             execution_outputs: Mutex::new(HashMap::new()),
         };
         context.wait_until_ready().await?;
@@ -222,6 +226,11 @@ impl E2eContext {
         self.hub.drain();
     }
 
+    /// Every turn event since the last bind, before any dedupe.
+    pub(crate) fn turn_log(&self) -> &TurnLog {
+        &self.turn_log
+    }
+
     pub async fn runtime_versions(&self) -> Result<RuntimeVersions> {
         let health = self
             .trigger_value("engine::health::check", json!({}))
@@ -258,6 +267,7 @@ impl E2eContext {
     pub async fn bind_turn_completed(&self) -> Result<()> {
         self.unbind_turn_completed().await.ok();
         self.hub.drain();
+        self.turn_log.clear();
         let listed = self
             .trigger_value(
                 "engine::triggers::list",
@@ -268,19 +278,34 @@ impl E2eContext {
         if !observe::turn_completed_available(&listed) {
             return Err(observe::missing_turn_completed_trigger());
         }
+        if !observe::trigger_type_ids(&listed).any(|id| id == turn_lifecycle::TURN_STARTED_TRIGGER)
+        {
+            bail!(
+                "unsupported: required trigger type {} is not registered",
+                turn_lifecycle::TURN_STARTED_TRIGGER
+            );
+        }
         // Observation is a worker-owned subscription in the stack namespace.
         // engine::register_trigger creates a durable binding in default instead.
-        let binding = self.client.register_trigger(RegisterTriggerInput::new(
-            observe::TURN_COMPLETED_TRIGGER,
-            observe::SINK_FUNCTION_ID,
-            json!({}),
-        ))?;
-        *self.lock_binding() = Some(binding);
+        for (trigger_type, function_id) in [
+            (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
+            (
+                turn_lifecycle::TURN_STARTED_TRIGGER,
+                turn_lifecycle::STARTED_SINK_FUNCTION_ID,
+            ),
+        ] {
+            let binding = self.client.register_trigger(RegisterTriggerInput::new(
+                trigger_type,
+                function_id,
+                json!({}),
+            ))?;
+            self.lock_bindings().push(binding);
+        }
         Ok(())
     }
 
     pub async fn unbind_turn_completed(&self) -> Result<()> {
-        if let Some(binding) = self.lock_binding().take() {
+        for binding in self.lock_bindings().drain(..) {
             binding.unregister();
         }
         self.hub.drain();
@@ -475,13 +500,23 @@ impl E2eContext {
 
     fn register_observation_sink(&self) {
         let hub = self.hub.clone();
+        let log = self.turn_log.clone();
         self.client.register_function(
             observe::SINK_FUNCTION_ID,
             RegisterFunction::new_async(move |payload: Value| {
                 let hub = hub.clone();
+                let log = log.clone();
                 async move {
                     match serde_json::from_value::<TurnCompletedEvent>(payload) {
-                        Ok(event) => hub.push(event),
+                        Ok(event) => {
+                            log.push(TurnEvent {
+                                kind: TurnEventKind::Completed,
+                                session_id: event.session_id.clone(),
+                                turn_id: event.turn_id.clone(),
+                                terminal: Some(event.terminal),
+                            });
+                            hub.push(event);
+                        }
                         Err(error) => tracing::warn!(
                             %error,
                             "ignored malformed harness::turn-completed payload"
@@ -495,10 +530,35 @@ impl E2eContext {
             .description("Internal harness::turn-completed sink for E2E session-tree observation.")
             .metadata(json!({ "internal": true })),
         );
+        let log = self.turn_log.clone();
+        self.client.register_function(
+            turn_lifecycle::STARTED_SINK_FUNCTION_ID,
+            RegisterFunction::new_async(move |payload: Value| {
+                let log = log.clone();
+                async move {
+                    let id =
+                        |key: &str| payload.get(key).and_then(Value::as_str).map(str::to_owned);
+                    match (id("session_id"), id("turn_id")) {
+                        (Some(session_id), Some(turn_id)) => log.push(TurnEvent {
+                            kind: TurnEventKind::Started,
+                            session_id,
+                            turn_id,
+                            terminal: None,
+                        }),
+                        _ => tracing::warn!("ignored malformed harness::turn-started payload"),
+                    }
+                    Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
+                        accepted: true,
+                    })
+                }
+            })
+            .description("Internal harness::turn-started sink for E2E turn-lifecycle evidence.")
+            .metadata(json!({ "internal": true })),
+        );
     }
 
-    fn lock_binding(&self) -> std::sync::MutexGuard<'_, Option<Trigger>> {
-        self.binding
+    fn lock_bindings(&self) -> std::sync::MutexGuard<'_, Vec<Trigger>> {
+        self.bindings
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }

@@ -1059,6 +1059,17 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
+        "turn_lifecycle": {
+          "description": "The turn events and session state the Harness invariants judge.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnLifecycleEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -1600,6 +1611,27 @@
           "type": "string",
           "enum": [
             "fallback_context_limits"
+          ]
+        },
+        {
+          "description": "The turn events broke their contract: a root turn did not start exactly once, a turn never completed, a sent turn completed only through the status poll, or a completion's `terminal` contradicts the wakes.",
+          "type": "string",
+          "enum": [
+            "turn_events"
+          ]
+        },
+        {
+          "description": "A session of the completed tree is not `done` (a child may be `error`).",
+          "type": "string",
+          "enum": [
+            "session_status"
+          ]
+        },
+        {
+          "description": "`session::get` lost a session or reads back other than what was sent: the root's kind, title and run metadata, a child's kind and parent link.",
+          "type": "string",
+          "enum": [
+            "session_read_back"
           ]
         }
       ]
@@ -2885,6 +2917,54 @@
         }
       }
     },
+    "SentTurn": {
+      "description": "A turn the runner sent, and whether its `turn-completed` had arrived once the tree settled: without it only the status poll saw the turn end. Read after the settle window, so an event the poll merely beat still counts.",
+      "type": "object",
+      "required": [
+        "completed_by_event",
+        "turn_id"
+      ],
+      "properties": {
+        "completed_by_event": {
+          "type": "boolean"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionLifecycle": {
+      "description": "One session of the tree: where the metrics place it, its turns in transcript order (`origin.turn_id` of its assistant entries) and its `session::get` meta at the end of the polling window.",
+      "type": "object",
+      "required": [
+        "depth",
+        "session_id",
+        "turn_ids"
+      ],
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "meta": true,
+        "parent_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "SessionMetricsPayload": {
       "type": "object",
       "required": [
@@ -3265,6 +3345,79 @@
         "valid",
         "technical_invalid"
       ]
+    },
+    "TurnEvent": {
+      "type": "object",
+      "required": [
+        "kind",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/TurnEventKind"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "terminal": {
+          "description": "`turn-completed` only.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
+    },
+    "TurnEventKind": {
+      "type": "string",
+      "enum": [
+        "started",
+        "completed"
+      ]
+    },
+    "TurnLifecycleEvidence": {
+      "type": "object",
+      "required": [
+        "duplicate_completions",
+        "events",
+        "scenario",
+        "sent_turns",
+        "sessions"
+      ],
+      "properties": {
+        "duplicate_completions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "events": {
+          "description": "The tree's events; delivery is at-least-once, so repeats are counted in `duplicate_completions` and never fail the run.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TurnEvent"
+          }
+        },
+        "scenario": {
+          "type": "string"
+        },
+        "sent_turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SentTurn"
+          }
+        },
+        "sessions": {
+          "description": "The root first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SessionLifecycle"
+          }
+        }
+      }
     },
     "TypedPortValue": {
       "type": "object",

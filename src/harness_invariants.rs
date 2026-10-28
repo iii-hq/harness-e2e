@@ -26,6 +26,15 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// The turn events broke their contract: a root turn did not start exactly
+    /// once, a turn never completed, a sent turn completed only through the
+    /// status poll, or a completion's `terminal` contradicts the wakes.
+    TurnEvents,
+    /// A session of the completed tree is not `done` (a child may be `error`).
+    SessionStatus,
+    /// `session::get` lost a session or reads back other than what was sent:
+    /// the root's kind, title and run metadata, a child's kind and parent link.
+    SessionReadBack,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +57,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(crate::turn_lifecycle::violations(report));
     violations
 }
 

@@ -2414,6 +2414,7 @@ async fn execute(
     messages.extend(module.dialogue_followups(run_id));
     let scripted_dialogue = messages.len() > 1;
     let mut metrics = None;
+    let mut sent_turn_ids = Vec::new();
     for (exchange, message) in messages.into_iter().enumerate() {
         if exchange > 0 {
             module
@@ -2435,7 +2436,7 @@ async fn execute(
                     )),
                     session: (exchange == 0).then(|| SessionInit {
                         kind: Some(E2E_SESSION_KIND.into()),
-                        title: Some(format!("Harness E2E: {}", spec.id)),
+                        title: Some(crate::turn_lifecycle::session_title(spec.id)),
                         metadata: Some(json!({
                             "e2e_run_id": run_id,
                             "e2e_scenario": spec.id,
@@ -2478,6 +2479,7 @@ async fn execute(
                 ),
             ));
         }
+        sent_turn_ids.push(response.turn_id.clone());
         metrics = Some(
             match context
                 .wait_for_turn(
@@ -2509,6 +2511,16 @@ async fn execute(
         report.metrics = metrics.clone();
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
+    report.turn_lifecycle = Some(
+        crate::turn_lifecycle::capture(context, spec.id, session_id, &sent_turn_ids, &metrics)
+            .await
+            .map_err(|error| {
+                collection_failure(
+                    FailurePhase::Collect,
+                    format!("capture the turn lifecycle: {error:#}"),
+                )
+            })?,
+    );
     let terminal_status = match context
         .trigger::<_, Option<StatusReport>>(
             "harness::status",
@@ -2690,8 +2702,9 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 }
 
 /// Checks the Harness invariants. Unresolved context limits make the
-/// measurement untrustworthy, an infrastructure error the slot re-runs. A
-/// lost function result is incomplete like a failed gate, whatever the agent
+/// measurement untrustworthy, an infrastructure error the slot re-runs. Any
+/// other broken invariant (a lost function result, a turn event or session
+/// state out of contract) is incomplete like a failed gate, whatever the agent
 /// delivered; the score stays what the criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
@@ -2708,7 +2721,10 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             .join("; ")
     };
     let unresolved = broken(HarnessInvariant::FallbackContextLimits);
-    let lost = broken(HarnessInvariant::LostFunctionResult);
+    let defective = report
+        .harness_violations
+        .iter()
+        .any(|violation| violation.invariant != HarnessInvariant::FallbackContextLimits);
     if !unresolved.is_empty() {
         report.push_typed_failure(
             RunStatus::InfrastructureError,
@@ -2722,7 +2738,7 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             CompletionState::Undetermined,
             EvaluatorAvailability::Unavailable,
         );
-    } else if !lost.is_empty() {
+    } else if defective {
         report.set_completion(
             CompletionState::TaskIncomplete,
             EvaluatorAvailability::Available,
@@ -4800,6 +4816,41 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_turn_without_its_completion_event_leaves_a_passed_run_incomplete() {
+        use crate::turn_lifecycle::{SentTurn, SessionLifecycle, TurnLifecycleEvidence};
+
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.turn_lifecycle = Some(TurnLifecycleEvidence::new(
+            "scenario",
+            Vec::new(),
+            vec![SentTurn {
+                turn_id: "t1".into(),
+                completed_by_event: false,
+            }],
+            vec![SessionLifecycle {
+                session_id: "session".into(),
+                parent_session_id: None,
+                depth: 0,
+                turn_ids: Vec::new(),
+                meta: Some(serde_json::json!({
+                    "status": "done", "kind": "e2e", "title": "Harness E2E: scenario",
+                    "metadata": { "e2e_run_id": report.attempt_id, "e2e_scenario": "scenario" },
+                })),
+            }],
+        ));
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::TurnEvents
+        );
     }
 
     #[test]

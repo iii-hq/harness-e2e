@@ -844,6 +844,9 @@ pub struct E2eRunReport {
     /// costs the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
+    /// The turn events and session state the Harness invariants judge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_lifecycle: Option<crate::turn_lifecycle::TurnLifecycleEvidence>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -900,6 +903,7 @@ impl E2eRunReport {
             failures: Vec::new(),
             audit: None,
             harness_violations: Vec::new(),
+            turn_lifecycle: None,
             terminal_status: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
