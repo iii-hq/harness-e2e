@@ -18,7 +18,8 @@ pub const BASELINE_EXECUTIONS: usize = 7;
 /// Fewer earlier executions than this hold the run to no baseline.
 const MIN_BASELINE_EXECUTIONS: usize = 3;
 // shortcut: reads at most this many of the setup's latest executions, so a
-// scenario run rarely can stay without a baseline; index the history if so.
+// scenario run rarely can stay without a baseline, and still parses every
+// manifest to find them; index the history if either starts to matter.
 const MAX_SCANNED_EXECUTIONS: usize = 100;
 
 /// A session whose requests carried no shared prompt prefix
@@ -126,8 +127,9 @@ pub struct Setup<'a> {
 /// The median cache-hit ratio of each scenario over the latest
 /// [`BASELINE_EXECUTIONS`] executions of the setup in `history` that completed
 /// before `before` (RFC 3339), one ratio per execution: the mean over its
-/// passed multi-step runs that did not already lose the cache. A scenario with fewer than three such executions
-/// has none. An unreadable execution is skipped.
+/// passed multi-step runs, over all its seeds, that did not already lose the
+/// cache. A scenario with fewer than three such executions has none. An
+/// unreadable execution is skipped.
 pub fn baselines(
     history: &Path,
     setup: &Setup<'_>,
@@ -169,24 +171,28 @@ pub fn baselines(
         else {
             continue;
         };
+        // Rotating seeds give a scenario one entry per seed: pool them so the
+        // execution adds one ratio.
+        let mut execution = BTreeMap::<String, Vec<f64>>::new();
         for scenario in report.scenarios {
+            execution.entry(scenario.scenario_id).or_default().extend(
+                scenario
+                    .runs
+                    .iter()
+                    .filter(|run| run.status == RunStatus::Passed && !run.lost_the_cache())
+                    .filter_map(|run| {
+                        cache_hit_ratio(&run.metrics.as_ref()?.totals, run.transcript.as_ref())
+                    }),
+            );
+        }
+        for (scenario, runs) in execution {
             let Some(ratios) = samples
-                .get_mut(&scenario.scenario_id)
-                .filter(|ratios| ratios.len() < BASELINE_EXECUTIONS)
+                .get_mut(&scenario)
+                .filter(|ratios| ratios.len() < BASELINE_EXECUTIONS && !runs.is_empty())
             else {
                 continue;
             };
-            let runs = scenario
-                .runs
-                .iter()
-                .filter(|run| run.status == RunStatus::Passed && !run.lost_the_cache())
-                .filter_map(|run| {
-                    cache_hit_ratio(&run.metrics.as_ref()?.totals, run.transcript.as_ref())
-                })
-                .collect::<Vec<_>>();
-            if !runs.is_empty() {
-                ratios.push(runs.iter().sum::<f64>() / runs.len() as f64);
-            }
+            ratios.push(runs.iter().sum::<f64>() / runs.len() as f64);
         }
     }
     samples
@@ -573,6 +579,39 @@ mod tests {
             "{}",
             baselines["cached"]
         );
+    }
+
+    #[test]
+    fn one_execution_counts_once_however_many_seeds_it_ran() {
+        let history = tempfile::tempdir().unwrap();
+        store(
+            history.path(),
+            "seeded",
+            "local",
+            "2026-10-01T00:00:00.000Z",
+            &[("cached", "passed", 50, 50, None)],
+        );
+        // Rotating seeds give one scenario entry per (scenario, seed) case.
+        let results: Value = serde_json::from_slice(
+            &std::fs::read(history.path().join("seeded/results.json")).unwrap(),
+        )
+        .unwrap();
+        let entry = results["scenarios"][0].clone();
+        let seeded = json!({ "scenarios": [entry.clone(), entry.clone(), entry] });
+        std::fs::write(
+            history.path().join("seeded/results.json"),
+            seeded.to_string(),
+        )
+        .unwrap();
+
+        let baselines = baselines(
+            history.path(),
+            &setup(),
+            "2026-10-10T00:00:00.000Z",
+            &["cached"],
+        );
+
+        assert!(baselines.is_empty(), "{baselines:?}");
     }
 
     #[test]
