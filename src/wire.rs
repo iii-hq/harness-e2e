@@ -298,6 +298,17 @@ pub struct SessionUsageTotals {
     pub reasoning_tokens: Option<u64>,
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_model: Vec<ModelUsage>,
+}
+
+/// The route of the steps one model generated (`harness::metrics` `by_model`);
+/// its counters stay in the raw payload. Empty from a Harness that predates it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ModelUsage {
+    pub provider: String,
+    pub model: String,
+    pub turns: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -327,6 +338,8 @@ pub struct SessionUsage {
     pub reasoning_tokens: Option<u64>,
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_model: Vec<ModelUsage>,
     #[serde(default)]
     pub context: Option<Value>,
 }

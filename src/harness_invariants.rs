@@ -26,6 +26,17 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// The run's tokens or a priced run's cost were not counted, or a
+    /// generation that ended or called a function carries no usage.
+    UsageUnmetered,
+    /// The counters disagree: the sessions' costs do not add up to the total,
+    /// a session's running cost drifts from its metered cost, or `free` is
+    /// not what the window leaves.
+    UsageMisaccounted,
+    /// A generation ran on a model or provider its session was not routed to.
+    ModelMisrouted,
+    /// The subject disabled thinking and still reasoned.
+    ReasoningWhileDisabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +59,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(crate::usage_invariants::violations(report, subject));
     violations
 }
 
@@ -242,13 +254,18 @@ mod tests {
                 cache_write_tokens: None,
                 reasoning_tokens: None,
                 cost_usd: None,
+                by_model: Vec::new(),
                 context: Some(context),
             })
             .collect();
         report.metrics = Some(Observed::from_normalized(SessionMetricsPayload {
             root_session_id: "root".into(),
             complete: true,
-            totals: SessionUsageTotals::default(),
+            totals: SessionUsageTotals {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                ..SessionUsageTotals::default()
+            },
             by_session,
             traces: None,
         }));

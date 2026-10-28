@@ -1601,6 +1601,34 @@
           "enum": [
             "fallback_context_limits"
           ]
+        },
+        {
+          "description": "The run's tokens or a priced run's cost were not counted, or a generation that ended or called a function carries no usage.",
+          "type": "string",
+          "enum": [
+            "usage_unmetered"
+          ]
+        },
+        {
+          "description": "The counters disagree: the sessions' costs do not add up to the total, a session's running cost drifts from its metered cost, or `free` is not what the window leaves.",
+          "type": "string",
+          "enum": [
+            "usage_misaccounted"
+          ]
+        },
+        {
+          "description": "A generation ran on a model or provider its session was not routed to.",
+          "type": "string",
+          "enum": [
+            "model_misrouted"
+          ]
+        },
+        {
+          "description": "The subject disabled thinking and still reasoned.",
+          "type": "string",
+          "enum": [
+            "reasoning_while_disabled"
+          ]
         }
       ]
     },
@@ -1717,6 +1745,28 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ModelUsage": {
+      "description": "The route of the steps one model generated (`harness::metrics` `by_model`); its counters stay in the raw payload. Empty from a Harness that predates it.",
+      "type": "object",
+      "required": [
+        "model",
+        "provider",
+        "turns"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       }
     },
@@ -2924,6 +2974,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3048,6 +3104,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
