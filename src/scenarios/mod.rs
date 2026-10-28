@@ -14,8 +14,10 @@ use crate::report::CompletionState;
 use crate::wire::{SessionMetricsResponse, TurnStatus};
 
 pub mod alertmanager_route_match;
+pub mod approval_roundtrip;
 mod assessment;
 pub mod browser_cross_site;
+pub mod call_guards;
 pub mod chess_engine;
 pub mod chess_engine_build;
 pub mod chess_play_ladder;
@@ -52,9 +54,11 @@ pub mod registry;
 mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
+pub mod restart_recovery;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
+pub mod spawn_depth_cap;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod tags;
@@ -190,6 +194,9 @@ pub trait Scenario: Send + Sync {
         _exchange: usize,
     ) {
     }
+    /// Called once the last exchange has its answer, before the runner reads
+    /// `harness::status`, so a probe can read state that read would change.
+    async fn after_dialogue(&self, _context: &E2eContext, _run_id: &str, _session_id: &str) {}
     /// The attempt-owned filesystem root that `setup` prepared for the
     /// subject, when the scenario allocates one.
     fn prepared_root(&self, _run_id: &str) -> Result<Option<PathBuf>> {
@@ -657,6 +664,11 @@ scenarios! {
     MemoryLearnFromLongMessage = "memory_learn_from_long_message" => memory::Memory(26),
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
+    SpawnDepthCap = "spawn_depth_cap" => spawn_depth_cap::SpawnDepthCap,
+    RepeatedFailureBreaker = "repeated_failure_breaker" => call_guards::RepeatedFailureBreaker,
+    TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
+    RestartRecovery = "restart_recovery" => restart_recovery::RestartRecovery,
+    ApprovalRoundtrip = "approval_roundtrip" => approval_roundtrip::ApprovalRoundtrip,
 }
 
 impl ScenarioId {
@@ -999,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_eighty_nine_unique_valid_scenarios() {
+    fn registry_contains_ninety_four_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -1008,7 +1020,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 89);
+        assert_eq!(ids.len(), 94);
     }
 
     #[test]

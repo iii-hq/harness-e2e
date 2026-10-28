@@ -2805,7 +2805,12 @@
         "memory_automation_not_learned",
         "memory_learn_from_long_message",
         "memory_honors_do_not_keep",
-        "memory_keeps_without_a_rule"
+        "memory_keeps_without_a_rule",
+        "spawn_depth_cap",
+        "repeated_failure_breaker",
+        "truncated_call_guard",
+        "restart_recovery",
+        "approval_roundtrip"
       ]
     },
     "ScenarioMeasurement": {
@@ -3285,6 +3290,7 @@
       "type": "string",
       "enum": [
         "ade",
+        "approval-gate",
         "auth",
         "browser",
         "canvas",

@@ -46,7 +46,8 @@
         "validation_chain",
         "cleanup_under_failure",
         "poison_message",
-        "wake_chain_soak"
+        "wake_chain_soak",
+        "restart_recovery"
       ]
     },
     {
@@ -60,7 +61,8 @@
         "fanout_ladder",
         "depth_ladder",
         "research_pipeline",
-        "receiving_operation"
+        "receiving_operation",
+        "spawn_depth_cap"
       ]
     },
     {
@@ -83,7 +85,9 @@
       "scenarios": [
         "tool_contract_recovery",
         "cross_app_transaction",
-        "browser_cross_site"
+        "browser_cross_site",
+        "repeated_failure_breaker",
+        "truncated_call_guard"
       ]
     },
     {
@@ -92,7 +96,8 @@
       "scenarios": [
         "prompt_injection_resilience",
         "secret_hygiene",
-        "policy_bound_action"
+        "policy_bound_action",
+        "approval_roundtrip"
       ]
     },
     {
@@ -240,7 +245,7 @@
     {
       "id": "regression",
       "label": "Core runtime regression",
-      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Nine short, deterministic tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, and instructions hidden in tool output. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
+      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Thirteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -256,7 +261,11 @@
         "contention_ledger",
         "validation_self_repair",
         "context_pressure",
-        "prompt_injection_resilience"
+        "prompt_injection_resilience",
+        "spawn_depth_cap",
+        "repeated_failure_breaker",
+        "truncated_call_guard",
+        "restart_recovery"
       ],
       "repetitions": 11,
       "technical_retries": 1,
@@ -469,7 +478,11 @@
         "contention_ledger",
         "validation_self_repair",
         "context_pressure",
-        "prompt_injection_resilience"
+        "prompt_injection_resilience",
+        "spawn_depth_cap",
+        "repeated_failure_breaker",
+        "truncated_call_guard",
+        "restart_recovery"
       ],
       "repetitions": 1,
       "technical_retries": 0,
@@ -478,7 +491,7 @@
     {
       "id": "regression-x11",
       "label": "Core runtime regression ×11 (harness comparison)",
-      "purpose": "To compare two Harness versions, the nine Core runtime regression tests run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
+      "purpose": "To compare two Harness versions, the thirteen Core runtime regression tests run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -494,7 +507,11 @@
         "contention_ledger",
         "validation_self_repair",
         "context_pressure",
-        "prompt_injection_resilience"
+        "prompt_injection_resilience",
+        "spawn_depth_cap",
+        "repeated_failure_breaker",
+        "truncated_call_guard",
+        "restart_recovery"
       ],
       "repetitions": 11,
       "technical_retries": 1,
@@ -519,6 +536,23 @@
       "repetitions": 1,
       "technical_retries": 0,
       "lane": "local-context-capacity"
+    },
+    {
+      "id": "approvals",
+      "label": "Human approval of agent calls",
+      "purpose": "Does a call held for a human still run exactly once when approved and never when denied? Runs on stacks/approvals.yaml, the default stack plus the approval gate, which holds every call of every session for approval; that is why it cannot join a suite on the default stack. The runner plays the human: it allows a release, denies a purge, and checks that no pending approval is left behind. Not covered: the Console's approval inbox, auto mode and always-allow rules, and filesystem-access approvals.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "modules": [],
+      "scenarios": [
+        "approval_roundtrip"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-approvals"
     },
     {
       "id": "memory",
