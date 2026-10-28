@@ -1230,15 +1230,13 @@ impl E2eRunReport {
                 .as_ref()
                 .map(|status| u64::from(status.validation_retries))
         });
-        // The status counts only the root's last turn.
-        let transient_resumes = metrics
-            .totals
-            .transient_resumes
-            .or_else(|| {
-                self.transient_recovery
-                    .as_deref()
-                    .map(crate::transient_recovery::resumes)
-            })
+        // The recovery rows cover every session and turn; neither the metrics
+        // total nor the status (the root's last turn only) counts a child's.
+        let transient_resumes = self
+            .transient_recovery
+            .as_deref()
+            .map(crate::transient_recovery::resumes)
+            .or(metrics.totals.transient_resumes)
             .or_else(|| {
                 self.terminal_status
                     .as_ref()
@@ -5851,7 +5849,10 @@ mod tests {
             }
         };
         let mut attempt = run(100, true);
-        attempt.metrics = Some(metrics());
+        // A Harness total that missed the child's resume must not win.
+        let mut root_only = metrics().into_normalized();
+        root_only.totals.transient_resumes = Some(3);
+        attempt.metrics = Some(crate::wire::Observed::from_normalized(root_only));
         // The status reports only the root's last turn.
         attempt.terminal_status = Some(status(0, 1));
         attempt.transient_recovery = Some(vec![
