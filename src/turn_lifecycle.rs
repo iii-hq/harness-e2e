@@ -32,6 +32,18 @@ pub struct TurnEvent {
     pub terminal: Option<bool>,
 }
 
+impl TurnEvent {
+    /// A `harness::turn-started` payload, or `None` when it names no turn.
+    pub fn started(payload: &Value) -> Option<Self> {
+        Some(Self {
+            kind: TurnEventKind::Started,
+            session_id: text(payload, "/session_id")?.into(),
+            turn_id: text(payload, "/turn_id")?.into(),
+            terminal: None,
+        })
+    }
+}
+
 /// Every turn event the bindings delivered, in arrival order and before any
 /// dedupe: the waits drain their own queue between exchanges, this one only
 /// when a run binds.
@@ -173,24 +185,13 @@ pub async fn capture(
                 meta: None,
             }),
     );
-    let deadline = tokio::time::Instant::now() + SESSION_STATUS_WINDOW;
-    loop {
-        for session in sessions.iter_mut().filter(|s| !settled(s.meta.as_ref())) {
-            let response: Option<Value> = context
-                .trigger(
-                    "session::get",
-                    serde_json::json!({ "session_id": session.session_id }),
-                )
-                .await?;
-            session.meta = response.and_then(|response| response.get("meta").cloned());
-        }
-        if sessions.iter().all(|s| settled(s.meta.as_ref()))
-            || tokio::time::Instant::now() >= deadline
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
+    read_sessions(&mut sessions, SESSION_STATUS_WINDOW, |session_id| {
+        context.trigger(
+            "session::get",
+            serde_json::json!({ "session_id": session_id }),
+        )
+    })
+    .await?;
     for session in &mut sessions {
         session.turn_ids = transcript_turns(&context.transcript(&session.session_id).await?);
     }
@@ -208,6 +209,32 @@ pub async fn capture(
         sent_turns,
         sessions,
     ))
+}
+
+/// Reads each session's `session::get` meta until all settled or the window
+/// closed, rereading only the sessions still working.
+async fn read_sessions<F, Fut>(
+    sessions: &mut [SessionLifecycle],
+    window: std::time::Duration,
+    mut get: F,
+) -> anyhow::Result<()>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Option<Value>>>,
+{
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        for session in sessions.iter_mut().filter(|s| !settled(s.meta.as_ref())) {
+            let response = get(session.session_id.clone()).await?;
+            session.meta = response.and_then(|response| response.get("meta").cloned());
+        }
+        if sessions.iter().all(|s| settled(s.meta.as_ref()))
+            || tokio::time::Instant::now() >= deadline
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 pub(crate) fn violations(report: &E2eRunReport) -> Vec<HarnessViolation> {
@@ -338,6 +365,9 @@ fn session_state(evidence: &TurnLifecycleEvidence, attempt_id: &str) -> Vec<Harn
                 ),
             ]);
         } else {
+            // shortcut: the metrics walk follows these same parent links, so a
+            // child stored under the wrong parent is never listed; catching it
+            // needs the spawned ids from the root transcript.
             let parent = session
                 .parent_session_id
                 .as_deref()
@@ -648,6 +678,62 @@ mod tests {
         let mut report = report(woken());
         report.turn_lifecycle = None;
         assert!(violations(&report).is_empty());
+    }
+
+    #[test]
+    fn the_started_sink_keeps_the_session_and_turn_of_a_payload() {
+        let payload = json!({ "session_id": "root", "turn_id": "t1", "depth": 0 });
+        assert_eq!(TurnEvent::started(&payload), Some(started("root", "t1")));
+        assert_eq!(TurnEvent::started(&json!({ "session_id": "root" })), None);
+    }
+
+    #[tokio::test]
+    async fn session_reads_repeat_until_every_session_settles() {
+        let (_, _, mut sessions) = woken();
+        sessions.iter_mut().for_each(|s| s.meta = None);
+        let mut answers = std::collections::VecDeque::from([
+            ("root", "working"),
+            ("child", "done"),
+            ("root", "done"),
+        ]);
+        let mut asked = Vec::new();
+
+        read_sessions(&mut sessions, SESSION_STATUS_WINDOW, |id| {
+            asked.push(id.clone());
+            let (expected, status) = answers.pop_front().unwrap();
+            assert_eq!(id, expected);
+            std::future::ready(Ok(Some(json!({ "meta": { "status": status } }))))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(asked, ["root", "child", "root"]);
+        assert!(sessions.iter().all(|s| settled(s.meta.as_ref())));
+    }
+
+    #[tokio::test]
+    async fn session_reads_give_up_at_the_window_and_surface_a_failed_read() {
+        let (_, _, mut sessions) = woken();
+        sessions[0].meta = None;
+        let mut asked = 0;
+        read_sessions(&mut sessions[..1], std::time::Duration::ZERO, |_| {
+            asked += 1;
+            std::future::ready(Ok(Some(json!({ "meta": { "status": "working" } }))))
+        })
+        .await
+        .unwrap();
+        assert_eq!(asked, 1);
+        assert_eq!(
+            text(sessions[0].meta.as_ref().unwrap(), "/status"),
+            Some("working")
+        );
+
+        let error = read_sessions(&mut sessions, std::time::Duration::ZERO, |_| {
+            std::future::ready(Err(anyhow::anyhow!("store down")))
+        })
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("store down"), "{error:#}");
     }
 
     #[test]

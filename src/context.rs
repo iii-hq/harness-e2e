@@ -275,25 +275,9 @@ impl E2eContext {
             )
             .await
             .context("discover harness::turn-completed trigger type")?;
-        if !observe::turn_completed_available(&listed) {
-            return Err(observe::missing_turn_completed_trigger());
-        }
-        if !observe::trigger_type_ids(&listed).any(|id| id == turn_lifecycle::TURN_STARTED_TRIGGER)
-        {
-            bail!(
-                "unsupported: required trigger type {} is not registered",
-                turn_lifecycle::TURN_STARTED_TRIGGER
-            );
-        }
         // Observation is a worker-owned subscription in the stack namespace.
         // engine::register_trigger creates a durable binding in default instead.
-        for (trigger_type, function_id) in [
-            (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
-            (
-                turn_lifecycle::TURN_STARTED_TRIGGER,
-                turn_lifecycle::STARTED_SINK_FUNCTION_ID,
-            ),
-        ] {
+        for (trigger_type, function_id) in turn_bindings(&listed)? {
             let binding = self.client.register_trigger(RegisterTriggerInput::new(
                 trigger_type,
                 function_id,
@@ -536,16 +520,9 @@ impl E2eContext {
             RegisterFunction::new_async(move |payload: Value| {
                 let log = log.clone();
                 async move {
-                    let id =
-                        |key: &str| payload.get(key).and_then(Value::as_str).map(str::to_owned);
-                    match (id("session_id"), id("turn_id")) {
-                        (Some(session_id), Some(turn_id)) => log.push(TurnEvent {
-                            kind: TurnEventKind::Started,
-                            session_id,
-                            turn_id,
-                            terminal: None,
-                        }),
-                        _ => tracing::warn!("ignored malformed harness::turn-started payload"),
+                    match TurnEvent::started(&payload) {
+                        Some(event) => log.push(event),
+                        None => tracing::warn!("ignored malformed harness::turn-started payload"),
                     }
                     Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
                         accepted: true,
@@ -711,11 +688,33 @@ fn is_retryable_read(function_id: &str) -> bool {
             | "harness::metrics"
             | "harness::session-tree"
             | "session::messages"
+            | "session::get"
             | "engine::functions::list"
             | "engine::functions::info"
             | "router::models::get"
             | "router::models::list"
     )
+}
+
+/// The turn-event bindings a run needs, or unsupported when the stack does not
+/// list one of their trigger types.
+fn turn_bindings(listed: &Value) -> Result<[(&'static str, &'static str); 2]> {
+    if !observe::turn_completed_available(listed) {
+        return Err(observe::missing_turn_completed_trigger());
+    }
+    if !observe::trigger_type_ids(listed).any(|id| id == turn_lifecycle::TURN_STARTED_TRIGGER) {
+        bail!(
+            "unsupported: required trigger type {} is not registered",
+            turn_lifecycle::TURN_STARTED_TRIGGER
+        );
+    }
+    Ok([
+        (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
+        (
+            turn_lifecycle::TURN_STARTED_TRIGGER,
+            turn_lifecycle::STARTED_SINK_FUNCTION_ID,
+        ),
+    ])
 }
 
 async fn invoke_with_transport_retries<F, Fut>(
@@ -1010,6 +1009,7 @@ mod tests {
             "harness::metrics",
             "harness::session-tree",
             "session::messages",
+            "session::get",
             "engine::functions::list",
             "engine::functions::info",
             "router::models::get",
@@ -1030,6 +1030,36 @@ mod tests {
             "unknown::read",
         ] {
             assert!(!is_retryable_read(function_id), "{function_id}");
+        }
+    }
+
+    #[test]
+    fn a_run_binds_both_turn_events_and_refuses_a_stack_missing_either() {
+        let completed = json!({ "id": observe::TURN_COMPLETED_TRIGGER });
+        let started = json!({ "id": turn_lifecycle::TURN_STARTED_TRIGGER });
+        assert_eq!(
+            turn_bindings(&json!({ "triggers": [completed, started] })).unwrap(),
+            [
+                (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
+                (
+                    turn_lifecycle::TURN_STARTED_TRIGGER,
+                    turn_lifecycle::STARTED_SINK_FUNCTION_ID
+                ),
+            ]
+        );
+        for (listed, missing) in [
+            (
+                json!({ "triggers": [started] }),
+                observe::TURN_COMPLETED_TRIGGER,
+            ),
+            (
+                json!({ "triggers": [completed] }),
+                turn_lifecycle::TURN_STARTED_TRIGGER,
+            ),
+        ] {
+            let error = turn_bindings(&listed).unwrap_err().to_string();
+            assert!(error.starts_with("unsupported"), "{error}");
+            assert!(error.contains(missing), "{error}");
         }
     }
 

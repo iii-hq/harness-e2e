@@ -133,14 +133,20 @@ records what broke.
   `harness::turn-completed`, every turn the runner sent got its completion
   event rather than ending only through the status poll, and `terminal` is
   `false` only on a root turn a wake follows and `true` on the last one.
-  Delivery is at-least-once, so repeated completions are counted
+  The flag is not required to be `false` before a wake, and children's flags
+  are not judged: a wake may be armed after its turn completed. Delivery is
+  at-least-once, so repeated completions are counted
   (`duplicate_completions`), never failed.
 - Within 5 seconds of the tree completing, and before the terminal
   `harness::status` re-projects it, `session::get` shows the root `done` and
   each child `done` or `error` (`session_status`), and reads back what was
   sent (`session_read_back`): the root's `kind` `e2e`, title and
   `metadata.e2e_run_id` / `e2e_scenario`; each child's `kind` `e2e`,
-  `parent_session_id` and `depth`.
+  `parent_session_id` and `depth`. A child may end `error` on a passed run,
+  since the root can recover from a child that failed. The children are the
+  ones `harness::metrics` walks from the root, through the same parent links,
+  so a child stored under the wrong parent is missed rather than flagged; a
+  grandchild is held to its own parent and depth 2.
 
 Each of the last three leaves the run incomplete, like a lost result. The
 run's `turn_lifecycle` keeps the events and session reads they were judged on.
