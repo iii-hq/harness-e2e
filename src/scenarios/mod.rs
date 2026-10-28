@@ -22,6 +22,7 @@ pub mod chess_play_ladder;
 pub mod cleanup_under_failure;
 pub mod common;
 pub mod contention_ledger;
+pub mod context_compaction;
 pub mod context_pressure;
 pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
@@ -37,6 +38,7 @@ pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
 pub mod mechanical_reaction;
+mod mechanism;
 pub mod memory;
 pub mod minimal_path;
 pub mod moving_target;
@@ -657,6 +659,7 @@ scenarios! {
     MemoryLearnFromLongMessage = "memory_learn_from_long_message" => memory::Memory(26),
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
+    ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
 }
 
 impl ScenarioId {
@@ -999,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_eighty_nine_unique_valid_scenarios() {
+    fn registry_contains_every_unique_valid_scenario() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -1008,7 +1011,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 89);
+        assert_eq!(ids.len(), 90);
     }
 
     #[test]

@@ -151,6 +151,13 @@
         "memory_honors_do_not_keep",
         "memory_keeps_without_a_rule"
       ]
+    },
+    {
+      "id": "m11",
+      "label": "Harness mechanisms",
+      "scenarios": [
+        "context_compaction"
+      ]
     }
   ],
   "diagnostics": [
