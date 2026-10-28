@@ -472,7 +472,8 @@
         "ask_handshake",
         "long_transcript_tail",
         "subtree_deletion",
-        "session_continuity"
+        "session_continuity",
+        "steer_and_stop"
       ]
     },
     "StackIdentity": {

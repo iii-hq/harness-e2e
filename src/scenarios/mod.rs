@@ -61,6 +61,7 @@ pub mod secret_hygiene;
 pub mod sequential_pipeline;
 pub mod session_continuity;
 pub mod shell_coder_sandbox;
+pub mod steer_and_stop;
 pub mod structured_output;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
@@ -679,6 +680,7 @@ scenarios! {
     LongTranscriptTail = "long_transcript_tail" => long_transcript_tail::LongTranscriptTail,
     SubtreeDeletion = "subtree_deletion" => subtree_deletion::SubtreeDeletion,
     SessionContinuity = "session_continuity" => session_continuity::SessionContinuity,
+    SteerAndStop = "steer_and_stop" => steer_and_stop::SteerAndStop,
 }
 
 impl ScenarioId {
@@ -1042,7 +1044,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 96);
+        assert_eq!(ids.len(), 97);
     }
 
     #[test]
