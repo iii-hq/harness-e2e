@@ -2555,8 +2555,9 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
-    // Only the usage invariants read them, and they judge fewer children
-    // without them, so a failed fetch must not void the run's outcome.
+    // Only the usage invariants read them; without them they judge fewer
+    // children and leave a nulled total unjudged, so a failed fetch must not
+    // void the run's outcome.
     match crate::usage_invariants::child_transcripts(context, &observation.metrics).await {
         Ok(transcripts) => report.child_transcripts = transcripts,
         Err(error) => tracing::warn!(

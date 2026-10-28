@@ -45,11 +45,21 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
                 .map(|(session, transcript)| (session.as_str(), transcript)),
         )
         .collect::<Vec<_>>();
-    let unreported = transcripts
+    // A missing transcript hides its usage-less generations, so a nulled total
+    // can be neither explained nor refuted: only a counted zero is judged.
+    let fetched_all = metrics
+        .by_session
         .iter()
-        .flat_map(|(_, transcript)| generations(transcript))
-        .filter(|(_, message)| !message.get("usage").is_some_and(Value::is_object))
-        .count();
+        .all(|session| transcripts.iter().any(|(id, _)| *id == session.session_id));
+    let unreported = if fetched_all {
+        transcripts
+            .iter()
+            .flat_map(|(_, transcript)| generations(transcript))
+            .filter(|(_, message)| !message.get("usage").is_some_and(Value::is_object))
+            .count()
+    } else {
+        usize::MAX
+    };
     let mut violations = metering(metrics, subject, unreported);
     violations.extend(
         transcripts
@@ -619,7 +629,9 @@ mod tests {
                 E2eRunReport::new("run".into(), "a".into(), 1, "root".into(), "p".into());
             report.status = RunStatus::Passed;
             report.transcript = Some(self.root);
-            report.child_transcripts = BTreeMap::from([("child".into(), self.child)]);
+            if !self.child.is_null() {
+                report.child_transcripts.insert("child".into(), self.child);
+            }
             if !self.grandchild.is_null() {
                 report
                     .child_transcripts
@@ -686,6 +698,23 @@ mod tests {
             &nulled(&["x1"]),
             HarnessInvariant::UsageUnmetered,
             "no input tokens",
+        );
+    }
+
+    #[test]
+    fn a_nulled_total_is_not_unmetered_when_a_descendant_transcript_is_missing() {
+        let unfetched = |input: Value| {
+            Run::new()
+                .set("child", "", Value::Null)
+                .set("metrics", "/totals/input_tokens", input)
+                .check(&subject())
+        };
+
+        assert_eq!(unfetched(Value::Null), []);
+        only(
+            &unfetched(json!(0)),
+            HarnessInvariant::UsageUnmetered,
+            "0 input tokens",
         );
     }
 
