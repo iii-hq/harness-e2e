@@ -271,6 +271,9 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
 | Memory quality | `memory` | What the memory worker injects into a live session, twenty-two cases three times each, on the `memory` stack. |
+| Memory smoke | `memory-smoke` | Three memory cases once each, on the `memory` stack, for every Harness release and daily: recall, a repeated question, and a rule changed mid-session with the memory section and the prompt prefix frozen. |
+| Harness mechanisms (weekly) | `harness-weekly` | `mechanical_reaction`: a state call binding mirrors its event without a model turn and wakes only its session. |
+| Context pressure with signed thinking (weekly) | `context-thinking` | `context_pressure` on a Claude 5.5 model, on the `context-thinking` stack: compaction with thinking that the API rejects when its prefix changed. |
 | Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
@@ -633,6 +636,30 @@ to 0.09, about US$0.60 per repetition, summary not included.
 gh workflow run exact-stack-e2e.yml -f suite=context-capacity -f stack=context-capacity -f model=deepseek/deepseek-flash
 ```
 
+### Signed thinking across a compaction
+
+Claude 5.5 signs each thinking block over the exact prompt before it. After a
+compaction the Harness strips the thinking logged before the compaction record
+(`harness/src/window.rs`); one it leaves behind is dropped by the API, silently
+by default. The weekly `context-thinking` suite runs `context_pressure` on the
+`context-thinking` stack, which cuts the window as `context-capacity` does
+(Claude 5.5 lists 1,000,000 and 128,000, so a reserve of 744,000 at 75% leaves
+128,000 usable) and sets `PROVIDER_ANTHROPIC_PREFIX_MISMATCH=error` on
+`provider-anthropic`, so the API answers 400 instead and the run fails. Haiku
+5.5 is the cheapest model that binds thinking, and it thinks at the provider's
+default effort. Scores compare only with other runs of this suite.
+
+```bash
+gh workflow run exact-stack-e2e.yml -f suite=context-thinking -f stack=context-thinking -f model=anthropic/claude-haiku-5-5
+```
+
+### Schedules
+
+Release Control holds the schedules; a suite here is only what to run. Beyond
+the daily `regression`, these run on their own: `memory-smoke` daily and for
+every Harness release on the `memory` stack, `harness-weekly` weekly on
+`default`, and `context-thinking` weekly as above.
+
 ### Comparing Harness versions
 
 Decided on 2026-10-24 (KAN-516): a Harness release is judged on demand, when
@@ -646,8 +673,9 @@ Changing the repetitions is changing `repetitions` in
 
 Cost per comparison, both arms, subject cost only (the judge and technical
 retries add some): the mean of each test in local `deepseek-flash` runs, summed
-over the suite, times repetitions, times two. The regression is US$0.14 a pass,
-so about US$3; the 14 cases of `software-engineering` are US$2.51 a pass, so
+over the suite, times repetitions, times two. The regression is US$0.15 a pass
+(`subagent_validation_failure`, added after that measurement, costs about
+US$0.009), so about US$3.3; the 14 cases of `software-engineering` are US$2.51 a pass, so
 about US$45.
 
 A/A, to check the calibration: dispatch the same stack of
