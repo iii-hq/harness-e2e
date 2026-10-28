@@ -67,6 +67,10 @@ pub struct ExchangePrompt {
     /// `None` when it sent no split prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_digest: Option<String>,
+    /// Why the runner has no digest to compare: the status read failed, or
+    /// never ran for this exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_unread: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,8 +138,9 @@ impl Extraction {
 #[derive(Debug, Default)]
 pub struct Snapshot {
     pub prompts: Vec<PromptRecord>,
-    /// Each exchange's prompt prefix digest, in order.
-    pub surface_digests: Vec<Option<String>>,
+    /// Each exchange's prompt prefix digest, in order, or why the status
+    /// could not be read.
+    pub surface_digests: Vec<Result<Option<String>, String>>,
     pub compaction: Option<String>,
     pub retrieval: Option<Retrieval>,
     /// Memory's stored text of each case seed, `None` until saved.
@@ -304,6 +309,11 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
         .iter()
         .enumerate()
         .map(|(index, exchange)| {
+            let (surface_digest, surface_unread) = match snapshot.surface_digests.get(index) {
+                Some(Ok(digest)) => (digest.clone(), None),
+                Some(Err(error)) => (None, Some(error.clone())),
+                None => (None, Some("no status was read after it".to_string())),
+            };
             let seen: Vec<&PromptRecord> = records
                 .iter()
                 .filter(|record| record.turn_id == exchange.turn_id && record.step == 0)
@@ -318,7 +328,8 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
                     .or(seen.last())
                     .and_then(|record| memory_section(&record.system_prompt))
                     .map(|section| if foreign(section) { WITHHELD } else { section }.to_string()),
-                surface_digest: snapshot.surface_digests.get(index).cloned().flatten(),
+                surface_digest,
+                surface_unread,
             }
         })
         .collect();
@@ -1176,6 +1187,21 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             _ => problems.push(format!("exchange {index}: the observer recorded no prompt")),
         }
     }
+    // Only the frozen-section gate reads the digests: elsewhere a failed
+    // status read costs nothing.
+    if case
+        .criteria
+        .iter()
+        .any(|criterion| criterion.check == Check::SectionFrozen)
+    {
+        for (index, prompt) in evidence.prompts.iter().enumerate() {
+            if let Some(error) = &prompt.surface_unread {
+                problems.push(format!(
+                    "exchange {index}: no prompt prefix digest was read: {error}"
+                ));
+            }
+        }
+    }
     if case.compact_before.is_some() && evidence.compaction_status.as_deref() != Some("ok") {
         problems.push(format!(
             "the forced compaction did not report ok (status: {})",
@@ -1319,7 +1345,7 @@ mod tests {
             .collect();
         Snapshot {
             prompts: records,
-            surface_digests: vec![Some(SURFACE.into()); observed.exchanges.len()],
+            surface_digests: vec![Ok(Some(SURFACE.into())); observed.exchanges.len()],
             compaction: status.map(str::to_string),
             retrieval: Some(Retrieval::Lexical),
             changes: applied(case),
@@ -1472,6 +1498,7 @@ mod tests {
                 sha_matches: Some(true),
                 memory_section: Some("\n\n# Memory — bank: e2e-a\nbody".into()),
                 surface_digest: None,
+                surface_unread: Some("no status was read after it".into()),
             }
         );
         assert_eq!(
@@ -1481,6 +1508,7 @@ mod tests {
                 sha_matches: Some(false),
                 memory_section: None,
                 surface_digest: None,
+                surface_unread: Some("no status was read after it".into()),
             }
         );
     }
@@ -1513,6 +1541,7 @@ mod tests {
                 sha_matches: None,
                 memory_section: Some(HEADER.into()),
                 surface_digest: None,
+                surface_unread: Some("no status was read after it".into()),
             }]
         );
         assert_eq!(evaluate(case, &found).infrastructure_error, None);
@@ -2071,6 +2100,55 @@ mod tests {
         let mut unsplit = evidence_with(case, seen(), &frozen, None);
         unsplit.prompts[1].surface_digest = None;
         assert_eq!(score(unsplit), Some(0));
+    }
+
+    /// A prefix digest the runner failed to read says nothing about the
+    /// Harness: the frozen-section gate cannot score it, so it reruns.
+    #[test]
+    fn an_unread_prompt_prefix_digest_is_an_infrastructure_error() {
+        let case = case_named("memory_rule_changed_mid_session");
+        let answers = vec!["a"; 1 + case.followups.len()];
+        let snapshot_of = |seen: &mut Observed| recorded(case, seen, PROMPT, Some("ok"));
+        let infrastructure = |edit: &dyn Fn(&mut Snapshot)| {
+            let mut seen = observed(&answers, vec![]);
+            let mut snapshot = snapshot_of(&mut seen);
+            edit(&mut snapshot);
+            evaluate(case, &assemble(case, RUN, seen, snapshot)).infrastructure_error
+        };
+        assert_eq!(infrastructure(&|_| {}), None);
+        // The status read failed after exchange 1.
+        let failed = infrastructure(&|snapshot| {
+            snapshot.surface_digests[1] = Err("harness::status timed out".into())
+        })
+        .unwrap();
+        assert!(
+            failed.contains("exchange 1") && failed.contains("timed out"),
+            "{failed}"
+        );
+        // The last exchange's read never ran.
+        let missing = infrastructure(&|snapshot| {
+            snapshot.surface_digests.pop();
+        })
+        .unwrap();
+        assert!(
+            missing.contains(&format!("exchange {}", case.followups.len())),
+            "{missing}"
+        );
+        // A status read fine but without a digest is the Harness's: scored.
+        assert_eq!(
+            infrastructure(&|snapshot| snapshot.surface_digests[1] = Ok(None)),
+            None
+        );
+
+        // A case that does not check the section needs no digest.
+        let recall = case_named("memory_relevant_recall");
+        let mut seen = observed(&vec!["a"; 1 + recall.followups.len()], vec![]);
+        let mut snapshot = recorded(recall, &mut seen, PROMPT, Some("ok"));
+        snapshot.surface_digests.clear();
+        assert_eq!(
+            evaluate(recall, &assemble(recall, RUN, seen, snapshot)).infrastructure_error,
+            None
+        );
     }
 
     #[test]

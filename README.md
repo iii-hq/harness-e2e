@@ -310,9 +310,9 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 99 jobs, nine at a time.
+`regression` runs eleven (`-r01` to `-r11`): 110 jobs, nine at a time.
 
-The `null-canary` suite runs the regression's nine tests and `minimal_path`
+The `null-canary` suite runs the regression's ten tests and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no
 technical retries, and is meant to run as the `null-agent` Directory profile
 ([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
@@ -645,7 +645,9 @@ by default. The weekly `context-thinking` suite runs `context_pressure` on the
 `context-thinking` stack, which cuts the window as `context-capacity` does
 (Claude 5.5 lists 1,000,000 and 128,000, so a reserve of 744,000 at 75% leaves
 128,000 usable) and sets `PROVIDER_ANTHROPIC_PREFIX_MISMATCH=error` on
-`provider-anthropic`, so the API answers 400 instead and the run fails. Haiku
+`provider-anthropic`, so the API answers 400 instead and the run fails. Below
+a 200,000-token window `context_pressure`'s charter gate also needs a
+compaction record, so a run that never compacted cannot pass here. Haiku
 5.5 is the cheapest model that binds thinking, and it thinks at the provider's
 default effort. Scores compare only with other runs of this suite.
 

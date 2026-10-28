@@ -65,8 +65,9 @@ struct Run {
     strays: Vec<String>,
     /// The bank once extraction read the teacher session.
     taught: Option<Extraction>,
-    /// Each answered exchange's prompt prefix digest, in order.
-    surface_digests: Vec<Option<String>>,
+    /// Each answered exchange's prompt prefix digest, in order, or why the
+    /// status could not be read.
+    surface_digests: Vec<Result<Option<String>, String>>,
 }
 
 /// A memory as memory stored it.
@@ -786,7 +787,7 @@ pub async fn apply_changes(context: &E2eContext, case: &Case, run_id: &str, fini
 
 /// Keeps the digest of the cacheable prompt prefix the session's last step
 /// sent, once an exchange has its answer. A status that cannot be read keeps
-/// `None`, which the frozen-section gate fails.
+/// its error, an infrastructure error at evaluation rather than a gate failed.
 pub async fn record_surface(context: &E2eContext, run_id: &str, session_id: &str) {
     let digest = context
         // Only the verbose status carries the context snapshot.
@@ -795,13 +796,13 @@ pub async fn record_surface(context: &E2eContext, run_id: &str, session_id: &str
             json!({"session_id": session_id, "verbose": true}),
         )
         .await
-        .ok()
-        .and_then(|status| {
+        .map(|status| {
             status
-                .pointer("/context/prompt_surface_digest")?
-                .as_str()
+                .pointer("/context/prompt_surface_digest")
+                .and_then(Value::as_str)
                 .map(str::to_string)
-        });
+        })
+        .map_err(|error| format!("{error:#}"));
     if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
         run.surface_digests.push(digest);
     }
