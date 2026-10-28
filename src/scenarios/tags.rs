@@ -273,6 +273,13 @@ impl ScenarioId {
                 | Self::MemoryLearnFromLongMessage
                 | Self::MemoryHonorsDoNotKeep
                 | Self::MemoryKeepsWithoutARule => (&[W::Memory], A::Memory, &[]),
+                // The Harness contract probes: the runner, not the subject,
+                // drives the Harness, so the only worker is the one whose
+                // events fire the bindings under test.
+                Self::HarnessContractProbe | Self::DispatchPipeline | Self::TurnFailureSurface => {
+                    (&[], A::CoreLoop, &[])
+                }
+                Self::BindingContractProbe => (&[W::State], A::Scheduling, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {
@@ -319,10 +326,13 @@ mod tests {
             harness_only,
             BTreeSet::from([
                 "context_pressure",
+                "dispatch_pipeline",
+                "harness_contract_probe",
                 "prompt_injection_resilience",
                 "registry_implementation",
                 "registry_verification",
                 "trending_topics_build",
+                "turn_failure_surface",
             ])
         );
     }

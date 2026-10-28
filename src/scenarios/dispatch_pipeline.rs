@@ -70,13 +70,13 @@ const HELD_CALL: AssessmentSpec = AssessmentSpec::gate_in(
     "Does a held call run exactly once with the hook's arguments when resolved with execute, a second resolve report resolved:false, and a direct call to a held target only report pending?",
     EvaluationDimension::Deliverable,
 )
-.labeled("A held call runs once, as the hook changed it");
+.labeled("Held call runs once, as changed");
 const DISCOVERY: AssessmentSpec = AssessmentSpec::scored(
     "discovery",
     25,
     "Does discovery hide denied ids, expose the functions through agent_trigger, narrow a spawned child to pipe_echo, and announce a registry change to the model?",
 )
-.labeled("Discovery shows only what may be called, and changes");
+.labeled("Discovery shows only callable functions");
 const ASSESSMENTS: &[AssessmentSpec] = &[DENIALS, NORMALIZATION, HOOK_CHAIN, HELD_CALL, DISCOVERY];
 
 fn fixture_id(run_id: &str, name: &str) -> String {
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_held_call_failing_leaves_the_task_incomplete() {
-        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let context = &E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
         let ids = [
             "deny.denied_id",
             "deny.unregistered_id",
@@ -1068,7 +1068,7 @@ mod tests {
             );
             async move {
                 DispatchPipeline
-                    .evaluate(&context, &observation, "control")
+                    .evaluate(context, &observation, "control")
                     .await
                     .unwrap()
             }

@@ -746,7 +746,7 @@ mod tests {
         let plan = embedded().unwrap();
         assert_eq!(plan.suites.len(), 14);
         for (id, cases, runs) in [
-            ("regression", 9, 99),
+            ("regression", 13, 143),
             ("null-canary", 10, 10),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
@@ -874,12 +874,17 @@ mod tests {
         let state = suite(json!({"id": "impact", "workers": ["state"]})).unwrap();
         assert_eq!(
             state.scenario_ids,
-            [&pr[..], &["contention_ledger", "timer_wake"]].concat()
+            [
+                &pr[..],
+                &["binding_contract_probe", "contention_ledger", "timer_wake"]
+            ]
+            .concat()
         );
         let impact = state.impact.as_ref().unwrap();
         assert_eq!(
             impact.matched,
             [
+                "binding_contract_probe",
                 "contention_ledger",
                 "minimal_path",
                 "persistent_state",
@@ -945,7 +950,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:9a097b81f10f2da794e0f1febad03e6ff14d65c2ca0d9f43c53442e8e5dfa2ea"
+            "sha256:9af1363beecf1b450bcf1d3763c9c14521b66f6321cbb4e928f8360900a994bf"
         );
     }
 
@@ -977,6 +982,7 @@ mod tests {
         assert_eq!(
             coverage["workers"]["state"],
             json!([
+                "binding_contract_probe",
                 "contention_ledger",
                 "linkly_tutorial",
                 "minimal_path",
@@ -1173,8 +1179,10 @@ mod tests {
         assert_eq!(plan.materialize("regression").unwrap().campaigns.len(), 11);
     }
 
-    /// The version-comparison suites are the daily ones with more rounds,
-    /// and the capacity lane is four tests that already exist.
+    /// The version-comparison suites are the daily ones with more rounds
+    /// (the Harness comparison without the Harness contract probes, which
+    /// score the Harness itself), and the capacity lane is four tests that
+    /// already exist.
     #[test]
     fn the_comparison_and_capacity_suites_reuse_existing_tests() {
         let plan = embedded().unwrap();
@@ -1186,12 +1194,20 @@ mod tests {
                 plan.materialize(comparison).unwrap(),
                 plan.materialize(base).unwrap(),
             );
-            assert_eq!(comparison.scenario_ids, base.scenario_ids);
+            let mut expected = base.scenario_ids.clone();
+            expected.retain(|id| {
+                !LIVE_CONTROLS
+                    .iter()
+                    .any(|(live, reason, _)| *reason == HARNESS_LIVE && live.as_str() == id)
+            });
+            assert_eq!(comparison.scenario_ids, expected);
             assert_eq!(comparison.campaigns.len(), rounds);
-            assert_eq!(
-                comparison.campaigns[0]["groups"],
-                base.campaigns[0]["groups"]
-            );
+            if expected == base.scenario_ids {
+                assert_eq!(
+                    comparison.campaigns[0]["groups"],
+                    base.campaigns[0]["groups"]
+                );
+            }
         }
         assert_eq!(
             plan.materialize("context-capacity").unwrap().scenario_ids,
@@ -1207,11 +1223,14 @@ mod tests {
     const NULL_AGENT: &str = include_str!("../config/agents/null-agent.md");
 
     /// The canary is the regression plus the minimal path (the one test the
-    /// `pr` and `after-release` suites add), run by an agent that does nothing.
+    /// `pr` and `after-release` suites add), run by an agent that does nothing;
+    /// a test whose control needs a live stack (the Harness contract probes,
+    /// which score the Harness and not the agent) stays out.
     #[test]
     fn the_null_canary_runs_the_regression_as_an_agent_that_does_nothing() {
         let plan = embedded().unwrap();
         let mut expected = plan.materialize("regression").unwrap().scenario_ids;
+        expected.retain(|id| !LIVE_CONTROLS.iter().any(|(live, _, _)| live.as_str() == id));
         expected.insert(0, ScenarioId::MinimalPath.to_string());
         assert_eq!(
             plan.materialize("null-canary").unwrap().scenario_ids,
@@ -1319,7 +1338,15 @@ mod tests {
         (ScenarioId::MemoryLearnFromLongMessage, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryHonorsDoNotKeep, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryKeepsWithoutARule, MEMORY_LIVE, &[]),
+        (ScenarioId::HarnessContractProbe, HARNESS_LIVE, &[]),
+        (ScenarioId::DispatchPipeline, HARNESS_LIVE, &[]),
+        (ScenarioId::BindingContractProbe, HARNESS_LIVE, &[]),
+        (ScenarioId::TurnFailureSurface, HARNESS_LIVE, &[]),
     ];
+    const HARNESS_LIVE: &str =
+        "capture probes the Harness's own contract on a live stack and evaluate scores that \
+         record; the subject is the Harness, not the agent, so a null agent is no control of \
+         it, and the scenario's unit tests score failing probe records offline; no CI control";
     const MEMORY_LIVE: &str =
         "capture runs live sessions against the memory worker and audits what it injected \
          into each turn; the subject is the memory worker, not the agent, so a null agent is \

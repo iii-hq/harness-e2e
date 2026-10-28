@@ -49,7 +49,7 @@ const BUDGET_RULES: AssessmentSpec = AssessmentSpec::gate(
     30,
     "Are a zero token budget, a changed frozen budget and a budget added to an unmetered session refused?",
 )
-.labeled("Budgets: no zero, frozen once set, never added late");
+.labeled("Zero, changed and late budgets refused");
 const OUTPUT_CAP: AssessmentSpec = AssessmentSpec::scored_in(
     "output_cap",
     15,

@@ -1018,16 +1018,19 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_eighty_nine_unique_valid_scenarios() {
+    fn registry_contains_ninety_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
-            scenario.spec("run").validate().unwrap();
+            scenario
+                .spec("run")
+                .validate_expecting(scenario.module().expected_root_outcome())
+                .unwrap();
             scenario
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 89);
+        assert_eq!(ids.len(), 93);
     }
 
     #[test]

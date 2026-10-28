@@ -66,7 +66,7 @@ const WAKES: AssessmentSpec = AssessmentSpec::gate_in(
     "Does a wake notify once per burst event, cut a long event to 8,000 characters, tell the session when it expires unfired, and when it is removed from outside, and never fire after removal?",
     EvaluationDimension::Deliverable,
 )
-.labeled("Wakes notify once each, bounded, and say when they end");
+.labeled("Wakes notify once, bounded, and on ending");
 const CAPACITY: AssessmentSpec = AssessmentSpec::scored(
     "capacity",
     20,
@@ -875,7 +875,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_probes_is_a_prerequisite_failure_and_all_pass_completes() {
-        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let context = &E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
         let evaluate = |probes: Vec<Probe>| {
             let observation = ScenarioObservation::for_test(
                 ScenarioId::BindingContractProbe,
@@ -886,13 +886,20 @@ mod tests {
             );
             async move {
                 BindingContractProbe
-                    .evaluate(&context, &observation, "control")
+                    .evaluate(context, &observation, "control")
                     .await
                     .unwrap()
             }
         };
         let none = evaluate(Vec::new()).await;
-        assert!(none.awards.iter().all(|award| award.awarded.is_none()));
+        assert!(none
+            .awards
+            .iter()
+            .all(|award| award.awarded.unwrap_or(0) == 0));
+        assert_eq!(
+            none.completion,
+            Some(crate::report::CompletionState::Undetermined)
+        );
         let ids = REFUSAL_PROBES.iter().copied().chain([
             "call.max_fires",
             "call.burst",
