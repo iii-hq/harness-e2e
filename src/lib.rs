@@ -9,6 +9,7 @@ pub mod control;
 pub mod dashboard;
 pub mod durable;
 pub mod harness_invariants;
+pub mod harness_metrics;
 pub mod identity;
 pub mod journal;
 pub mod longitudinal;

@@ -116,12 +116,17 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
-Two Harness invariants hold on every native run that passed, whatever its
+Three Harness invariants hold on every native run that passed, whatever its
 gates. They belong to no scenario's digest; the run's `harness_violations`
 records what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
+- A turn of the root session ran one call (same target, same arguments) into
+  the same error more than twice: the repeated-failure breaker answers the
+  third locally, so the run went past it. Incomplete, and the score stays. A
+  success between them, a different error or another turn starts the count
+  over, as in the Harness.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
@@ -1571,6 +1576,28 @@ the Harness's own count of it (claude-code adds a prompt of its own) is marked
 `cache_comparable: false`, and its prompt and cache figures read as not
 comparable. The Harness prompt-surface digest of each session role is kept as
 data: it changes with every Harness release.
+
+Harness mechanisms whose numbers depend on the model or the environment are
+trends, never gates (`src/harness_metrics.rs`). Trends charts them per run under
+More: trace and error spans of the session tree, `registry-changed` and hook
+notices, the tokens hooks added after assembly on the last root step
+(`hook_guidance`, which holds the `injected` prompt parts), reconciled calls
+and the p95 of their latency, repeated
+`engine::functions::info` calls, and the calls the Harness refused without
+running them (`arguments_truncated` by cause, `agent_trigger_no_target`,
+`repeated_failure`). They read the root session's transcript, as stored, so
+older runs get them when they are reprojected. A native run also counts the
+root session's `session::message-added` deliveries past the first of each entry
+(`duplicate_entry_events`): delivery is at-least-once, and runs stored before
+the count have none. Of the `harness::sweep-pending` counters only the run's own
+share of `resolved` is charted (`sweep_resolved_calls`, results with the
+`pending_timeout` error): the sweep runs from the stack's cron over every
+session of the stack and returns its counters only to the cron, and its other
+counters leave nothing in a transcript. A reconciled call is timed only
+after a sibling result: an assistant entry is stamped when its generation
+starts, so the first call of a step has no dispatch time. A run whose timed
+reconciled calls pass 2.5 s at the p95 carries the advisory audit flag
+`audit_slow_reconciled_calls`.
 
 ## Evidence
 

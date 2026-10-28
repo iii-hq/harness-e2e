@@ -466,6 +466,9 @@ struct RunMetrics {
     /// The largest root prompt over the window the Harness fit it into.
     #[serde(default)]
     peak_context_fill: Option<f64>,
+    /// Harness mechanisms Trends charts, by `harness_metrics::TREND_KEYS`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    harness: BTreeMap<String, f64>,
 }
 
 impl RunMetrics {
@@ -1251,6 +1254,7 @@ impl DashboardReadModel {
                         technical_retries: run.technical_retries,
                         compactions: run.compactions,
                         peak_context_fill: run.peak_context_fill,
+                        harness: run.harness.clone(),
                     }
                 }));
             }
@@ -1694,6 +1698,11 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
                 .filter(|usable| *usable > 0)?;
             Some(efficiency.peak_context_tokens? as f64 / usable as f64)
         }),
+        harness: crate::harness_metrics::measure(
+            run.transcript.as_ref(),
+            run.metrics.as_ref(),
+            run.duplicate_entry_events,
+        ),
     }
 }
 
@@ -2403,9 +2412,12 @@ mod tests {
                     ..SessionUsageTotals::default()
                 },
                 by_session: Vec::new(),
-                traces: None,
+                traces: Some(json!({ "span_count": 40, "error_span_count": 2 })),
             },
         ));
+        run.transcript = Some(json!({ "messages": [
+            { "custom": { "custom_type": "model_notice", "data": { "kind": "registry-changed" } } },
+        ] }));
         run.update_efficiency();
         run.efficiency.as_mut().unwrap().technical_attempts = 3;
         let efficiency = run.efficiency.as_mut().unwrap();
@@ -2444,6 +2456,14 @@ mod tests {
         assert_eq!(
             (run.compactions, run.peak_context_fill),
             (Some(3.0), Some(0.5))
+        );
+        assert_eq!(
+            (
+                run.harness["error_spans"],
+                run.harness["registry_notices"],
+                run.harness["repeated_failure"]
+            ),
+            (2.0, 1.0, 0.0)
         );
     }
 

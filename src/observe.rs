@@ -14,6 +14,8 @@ use crate::wire::{
 
 pub const SINK_FUNCTION_ID: &str = "e2e::on-turn-completed";
 pub const TURN_COMPLETED_TRIGGER: &str = "harness::turn-completed";
+pub const ENTRY_SINK_FUNCTION_ID: &str = "e2e::on-message-added";
+pub const MESSAGE_ADDED_TRIGGER: &str = "session::message-added";
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SinkAck {

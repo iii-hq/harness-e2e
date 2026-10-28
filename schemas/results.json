@@ -532,6 +532,13 @@
           "enum": [
             "context_over_window"
           ]
+        },
+        {
+          "description": "The run's reconciled calls took more than 2.5 s at the p95.",
+          "type": "string",
+          "enum": [
+            "slow_reconciled_calls"
+          ]
         }
       ]
     },
@@ -962,6 +969,15 @@
           "items": {
             "$ref": "#/definitions/DimensionReport"
           }
+        },
+        "duplicate_entry_events": {
+          "description": "`session::message-added` deliveries of the root session past the first of each entry; absent when the run did not count them.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
         },
         "efficiency": {
           "anyOf": [
@@ -1600,6 +1616,13 @@
           "type": "string",
           "enum": [
             "fallback_context_limits"
+          ]
+        },
+        {
+          "description": "A turn ran one call into the same error more than twice: the repeated-failure breaker answers the third locally.",
+          "type": "string",
+          "enum": [
+            "repeated_failure_executed"
           ]
         }
       ]

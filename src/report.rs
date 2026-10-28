@@ -844,6 +844,10 @@ pub struct E2eRunReport {
     /// costs the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
+    /// `session::message-added` deliveries of the root session past the
+    /// first of each entry; absent when the run did not count them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_entry_events: Option<u64>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -900,6 +904,7 @@ impl E2eRunReport {
             failures: Vec::new(),
             audit: None,
             harness_violations: Vec::new(),
+            duplicate_entry_events: None,
             terminal_status: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),

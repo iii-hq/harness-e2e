@@ -86,7 +86,31 @@ export type TrendMeasures = {
   /** The counted runs behind each mean: a run without the value is left
    *  out of it. Absent from data older than it. */
   samples?: Partial<Record<TrendMean, number>>
-}
+} & Partial<Record<HarnessMean, number | null>>
+
+/** Harness mechanisms that depend on the model or the environment, per run
+ *  (`harness_metrics::TREND_KEYS`): trends, never gates. Absent from data
+ *  older than them. */
+export const HARNESS_MEANS = [
+  'trace_spans_mean',
+  'error_spans_mean',
+  'registry_notices_mean',
+  'hook_notices_mean',
+  'hook_guidance_tokens_mean',
+  'reconciled_calls_mean',
+  'reconciled_p95_ms_mean',
+  'functions_info_repeats_mean',
+  'duplicate_entry_events_mean',
+  'arguments_truncated_invalid_json_mean',
+  'arguments_truncated_incomplete_json_mean',
+  'arguments_truncated_max_output_tokens_mean',
+  'agent_trigger_no_target_mean',
+  'repeated_failure_mean',
+  'sweep_resolved_calls_mean',
+] as const
+
+export type HarnessMean = (typeof HARNESS_MEANS)[number]
+type HarnessMetricId = HarnessMean extends `${infer Id}_mean` ? Id : never
 
 /** The measures that are means over counted runs. */
 export type TrendMean = Extract<keyof TrendMeasures, `${string}_mean`>
@@ -757,6 +781,7 @@ export type TrendMetricId =
   | 'function_calls'
   | 'compactions'
   | 'peak_context'
+  | HarnessMetricId
 
 export type TrendMetric = {
   id: TrendMetricId
@@ -971,6 +996,112 @@ export const TREND_METRICS: TrendMetric[] = [
     figure: (value) => `${fixed1(value)}%`,
     axis: (value) => `${round1(value)}%`,
     delta: 'percent_points',
+  },
+  ...(
+    [
+      ['trace_spans', 'Trace spans', 'session tree, mean per run', 'neither'],
+      ['error_spans', 'Error spans', 'session tree, mean per run', 'lower'],
+      [
+        'registry_notices',
+        'Registry notices',
+        'registry-changed, root session, mean per run',
+        'lower',
+      ],
+      [
+        'hook_notices',
+        'Hook notices',
+        'messages hooks appended, root session, mean per run',
+        'neither',
+      ],
+      [
+        'reconciled_calls',
+        'Reconciled calls',
+        'arguments repaired before dispatch, mean per run',
+        'lower',
+      ],
+      [
+        'functions_info_repeats',
+        'Repeated contract reads',
+        'engine::functions::info with arguments it already had, mean per run',
+        'lower',
+      ],
+      [
+        'duplicate_entry_events',
+        'Repeated entry events',
+        'session::message-added past the first per entry, root session, mean per run',
+        'lower',
+      ],
+      [
+        'arguments_truncated_invalid_json',
+        'Truncated: invalid JSON',
+        'calls refused, mean per run',
+        'lower',
+      ],
+      [
+        'arguments_truncated_incomplete_json',
+        'Truncated: incomplete JSON',
+        'calls refused, mean per run',
+        'lower',
+      ],
+      [
+        'arguments_truncated_max_output_tokens',
+        'Truncated: output limit',
+        'calls refused, mean per run',
+        'lower',
+      ],
+      [
+        'agent_trigger_no_target',
+        'Calls without a target',
+        'agent_trigger refused, mean per run',
+        'lower',
+      ],
+      [
+        'repeated_failure',
+        'Repeated failures refused',
+        'by the breaker, mean per run',
+        'lower',
+      ],
+      [
+        'sweep_resolved_calls',
+        'Pending calls timed out',
+        'resolved by harness::sweep-pending, mean per run',
+        'lower',
+      ],
+    ] as const
+  ).map(
+    ([id, label, note, better]): TrendMetric => ({
+      id,
+      tier: 'more',
+      label,
+      note,
+      better,
+      value: measure(`${id}_mean`),
+      figure: fixed1,
+      axis: fixed1,
+      delta: 'points',
+    }),
+  ),
+  {
+    id: 'hook_guidance_tokens',
+    tier: 'more',
+    label: 'Hook guidance',
+    note: 'tokens hooks added after assembly, last root step, mean per run',
+    better: 'lower',
+    value: measure('hook_guidance_tokens_mean'),
+    figure: formatTokens,
+    axis: formatTokens,
+    delta: 'percent',
+  },
+  {
+    id: 'reconciled_p95_ms',
+    tier: 'more',
+    label: 'Reconciled call p95',
+    note: 'latency after a sibling result; audited past 2.5 s',
+    better: 'lower',
+    value: measure('reconciled_p95_ms_mean'),
+    figure: formatDuration,
+    axis: formatDuration,
+    delta: 'percent',
   },
 ]
 
@@ -1490,7 +1621,7 @@ function consolidate(
     let weight = 0
     for (const member of valid) {
       const value = member.measures[mean]
-      if (value === null) continue
+      if (value === null || value === undefined) continue
       const runs = member.measures.samples?.[mean] ?? member.counted
       sum += value * runs
       weight += runs
@@ -1574,6 +1705,9 @@ function consolidate(
           technical_retries_mean: weighted('technical_retries_mean'),
           compactions_mean: weighted('compactions_mean'),
           peak_context_fill_mean: weighted('peak_context_fill_mean'),
+          ...Object.fromEntries(
+            HARNESS_MEANS.map((mean) => [mean, weighted(mean)]),
+          ),
           samples,
         }
       : null,

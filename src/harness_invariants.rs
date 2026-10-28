@@ -26,6 +26,9 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// A turn ran one call into the same error more than twice: the
+    /// repeated-failure breaker answers the third locally.
+    RepeatedFailureExecuted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

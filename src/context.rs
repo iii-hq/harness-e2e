@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -32,6 +32,8 @@ pub struct E2eContext {
     client: IIIClient,
     hub: ObserveHub,
     binding: Mutex<Option<Trigger>>,
+    entry_events: Arc<EntryEvents>,
+    entry_binding: Mutex<Option<Trigger>>,
     execution_outputs: Mutex<HashMap<&'static str, Option<ExecutionOutput>>>,
 }
 
@@ -59,6 +61,8 @@ impl E2eContext {
             client,
             hub: ObserveHub::new(),
             binding: Mutex::new(None),
+            entry_events: Arc::default(),
+            entry_binding: Mutex::new(None),
             execution_outputs: Mutex::new(HashMap::new()),
         }
     }
@@ -84,6 +88,8 @@ impl E2eContext {
             client,
             hub: ObserveHub::new(),
             binding: Mutex::new(None),
+            entry_events: Arc::default(),
+            entry_binding: Mutex::new(None),
             execution_outputs: Mutex::new(HashMap::new()),
         };
         context.wait_until_ready().await?;
@@ -279,10 +285,47 @@ impl E2eContext {
         Ok(())
     }
 
+    /// Counts the `session::message-added` deliveries of one root session per
+    /// entry until the next unbind. Delivery is at-least-once, so Trends
+    /// charts the repeats; a binding that fails leaves the metric absent.
+    pub fn count_entry_events(&self, session_id: &str) {
+        self.entry_events.start();
+        match self.client.register_trigger(RegisterTriggerInput::new(
+            observe::MESSAGE_ADDED_TRIGGER,
+            observe::ENTRY_SINK_FUNCTION_ID,
+            json!({ "session_id": session_id }),
+        )) {
+            Ok(binding) => {
+                *self
+                    .entry_binding
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(binding)
+            }
+            Err(error) => {
+                self.entry_events.stop();
+                tracing::warn!(%error, "could not count session::message-added deliveries");
+            }
+        }
+    }
+
+    /// Deliveries past the first of each entry since `count_entry_events`.
+    pub fn duplicate_entry_events(&self) -> Option<u64> {
+        self.entry_events.duplicates()
+    }
+
     pub async fn unbind_turn_completed(&self) -> Result<()> {
         if let Some(binding) = self.lock_binding().take() {
             binding.unregister();
         }
+        if let Some(binding) = self
+            .entry_binding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            binding.unregister();
+        }
+        self.entry_events.stop();
         self.hub.drain();
         Ok(())
     }
@@ -493,6 +536,21 @@ impl E2eContext {
                 }
             })
             .description("Internal harness::turn-completed sink for E2E session-tree observation.")
+            .metadata(json!({ "internal": true })),
+        );
+        let entry_events = self.entry_events.clone();
+        self.client.register_function(
+            observe::ENTRY_SINK_FUNCTION_ID,
+            RegisterFunction::new_async(move |payload: Value| {
+                let entry_events = entry_events.clone();
+                async move {
+                    entry_events.record(&payload);
+                    Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
+                        accepted: true,
+                    })
+                }
+            })
+            .description("Internal session::message-added sink counting repeat deliveries.")
             .metadata(json!({ "internal": true })),
         );
     }
@@ -761,6 +819,39 @@ pub(crate) fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
         })
 }
 
+/// Deliveries per entry id, `None` while not counting.
+#[derive(Default)]
+struct EntryEvents(Mutex<Option<HashMap<String, u64>>>);
+
+impl EntryEvents {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<HashMap<String, u64>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn start(&self) {
+        *self.lock() = Some(HashMap::new());
+    }
+
+    fn stop(&self) {
+        *self.lock() = None;
+    }
+
+    fn record(&self, payload: &Value) {
+        let Some(entry_id) = payload.get("entry_id").and_then(Value::as_str) else {
+            return;
+        };
+        if let Some(counts) = self.lock().as_mut() {
+            *counts.entry(entry_id.to_owned()).or_default() += 1;
+        }
+    }
+
+    fn duplicates(&self) -> Option<u64> {
+        Some(self.lock().as_ref()?.values().map(|count| count - 1).sum())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +869,23 @@ mod tests {
         )
         .unwrap();
         root.into()
+    }
+
+    #[test]
+    fn entry_events_count_only_repeat_deliveries_while_counting() {
+        let events = EntryEvents::default();
+        events.record(&json!({ "entry_id": "e1" }));
+        assert_eq!(events.duplicates(), None);
+
+        events.start();
+        for entry in ["e1", "e2", "e1", "e1"] {
+            events.record(&json!({ "session_id": "s", "entry_id": entry }));
+        }
+        events.record(&json!({ "session_id": "s" }));
+
+        assert_eq!(events.duplicates(), Some(2));
+        events.stop();
+        assert_eq!(events.duplicates(), None);
     }
 
     #[test]

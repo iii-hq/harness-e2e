@@ -1397,6 +1397,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         &mut report,
     )
     .await;
+    report.duplicate_entry_events = context.duplicate_entry_events();
     if let Err(error) = context.unbind_turn_completed().await {
         report.push_failure(
             RunStatus::InfrastructureError,
@@ -2410,6 +2411,7 @@ async fn execute(
         .bind_turn_completed()
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    context.count_entry_events(session_id);
     let mut messages = vec![spec.prompt.clone()];
     messages.extend(module.dialogue_followups(run_id));
     let scripted_dialogue = messages.len() > 1;
@@ -2691,13 +2693,16 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 
 /// Checks the Harness invariants. Unresolved context limits make the
 /// measurement untrustworthy, an infrastructure error the slot re-runs. A
-/// lost function result is incomplete like a failed gate, whatever the agent
-/// delivered; the score stays what the criteria awarded.
+/// lost function result, or a call run past the repeated-failure breaker, is
+/// incomplete like a failed gate, whatever the agent delivered; the score
+/// stays what the criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
 
     report.harness_violations = crate::harness_invariants::violations(report, subject);
+    let repeated = crate::harness_metrics::repeated_failures(report);
+    report.harness_violations.extend(repeated);
     let broken = |invariant| {
         report
             .harness_violations
@@ -2709,6 +2714,7 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     };
     let unresolved = broken(HarnessInvariant::FallbackContextLimits);
     let lost = broken(HarnessInvariant::LostFunctionResult);
+    let repeated = broken(HarnessInvariant::RepeatedFailureExecuted);
     if !unresolved.is_empty() {
         report.push_typed_failure(
             RunStatus::InfrastructureError,
@@ -2722,7 +2728,7 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             CompletionState::Undetermined,
             EvaluatorAvailability::Unavailable,
         );
-    } else if !lost.is_empty() {
+    } else if !lost.is_empty() || !repeated.is_empty() {
         report.set_completion(
             CompletionState::TaskIncomplete,
             EvaluatorAvailability::Available,
@@ -4800,6 +4806,35 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_failure_run_past_the_breaker_leaves_a_passed_run_incomplete() {
+        let step = |id: &str| {
+            [
+                serde_json::json!({ "message": { "role": "assistant", "content": [
+                    { "type": "function_call", "id": id, "function_id": "a::b", "arguments": {} },
+                ] } }),
+                serde_json::json!({ "origin": { "turn_id": "t1" }, "message": {
+                    "role": "function_result", "function_call_id": id, "is_error": true,
+                    "details": { "error": { "code": "invocation_failed", "message": "boom" } },
+                } }),
+            ]
+        };
+        let messages = ["c1", "c2", "c3"]
+            .iter()
+            .flat_map(|id| step(id))
+            .collect::<Vec<_>>();
+        let mut report = full_marks_run(serde_json::json!({ "messages": messages }));
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::RepeatedFailureExecuted
+        );
     }
 
     #[test]

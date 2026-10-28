@@ -149,8 +149,8 @@ describe('release overview', () => {
     expect(html).toMatch(
       /role="radiogroup"[^>]*tr-segments|tr-segments[^>]*role="radiogroup"/,
     )
-    // Ten measures under More, four setups under Setup.
-    expect(count(html, /role="menuitemradio"/)).toBe(14)
+    // 25 measures under More, four setups under Setup.
+    expect(count(html, /role="menuitemradio"/)).toBe(29)
     expect(count(html, /class="tr-point"/)).toBe(6)
     expect(count(html, /data-source="local"/)).toBe(2)
     expect(count(html, /data-latest="true"/)).toBe(1)
