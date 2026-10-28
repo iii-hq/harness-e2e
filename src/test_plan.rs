@@ -161,11 +161,12 @@ pub struct UncoveredTag {
 }
 
 /// Left out of every selection by tag: the registry pair runs 17 to 34 min
-/// a test, and Linkly, the onboarding tour and the memory tests need a stack
-/// of their own.
+/// a test, and Linkly, the onboarding tour, the memory tests and the approval
+/// round trip need a stack of their own.
 // ponytail: a fixed list; a ceiling from run durations belongs where the
 // durations are (Release Control's deploy check).
 const IMPACT_EXCLUDED: &[ScenarioId] = &[
+    ScenarioId::ApprovalRoundtrip,
     ScenarioId::RegistryImplementation,
     ScenarioId::RegistryVerification,
     ScenarioId::LinklyTutorial,
@@ -744,14 +745,14 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 14);
+        assert_eq!(plan.suites.len(), 15);
         for (id, cases, runs) in [
-            ("regression", 9, 99),
-            ("null-canary", 10, 10),
+            ("regression", 13, 143),
+            ("null-canary", 14, 14),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
             ("software-engineering-x9", 14, 126),
-            ("regression-x11", 9, 99),
+            ("regression-x11", 13, 143),
             ("context-capacity", 4, 4),
             ("deepwork", 3, 3),
             ("linkly", 1, 1),
@@ -760,6 +761,7 @@ mod tests {
             ("after-release", 5, 5),
             ("memory", 22, 66),
             ("memory-learning", 7, 21),
+            ("approvals", 1, 1),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -874,7 +876,16 @@ mod tests {
         let state = suite(json!({"id": "impact", "workers": ["state"]})).unwrap();
         assert_eq!(
             state.scenario_ids,
-            [&pr[..], &["contention_ledger", "timer_wake"]].concat()
+            [
+                &pr[..],
+                &[
+                    "contention_ledger",
+                    "restart_recovery",
+                    "spawn_depth_cap",
+                    "timer_wake"
+                ]
+            ]
+            .concat()
         );
         let impact = state.impact.as_ref().unwrap();
         assert_eq!(
@@ -883,6 +894,8 @@ mod tests {
                 "contention_ledger",
                 "minimal_path",
                 "persistent_state",
+                "restart_recovery",
+                "spawn_depth_cap",
                 "timer_wake"
             ]
         );
@@ -945,7 +958,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:d47ba325434c487c2148d1823815e4e79e66a76b9b928c22cfda02e27fb3b626"
+            "sha256:8e3b7e84894d3a673d929fff87bf61069e9e8afd8c8b71364f13ecb26d7ef130"
         );
     }
 
@@ -998,6 +1011,8 @@ mod tests {
                 "minimal_path",
                 "onboarding_tour",
                 "persistent_state",
+                "restart_recovery",
+                "spawn_depth_cap",
                 "timer_wake"
             ])
         );
@@ -1397,6 +1412,11 @@ mod tests {
             ScenarioId::ContextPressure => context_pressure::tests::controls(),
             ScenarioId::PromptInjectionResilience => prompt_injection_resilience::tests::controls(),
             ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls().await,
+            ScenarioId::SpawnDepthCap => spawn_depth_cap::tests::controls().await,
+            ScenarioId::RepeatedFailureBreaker => call_guards::tests::breaker_controls().await,
+            ScenarioId::TruncatedCallGuard => call_guards::tests::truncation_controls().await,
+            ScenarioId::RestartRecovery => restart_recovery::tests::controls().await,
+            ScenarioId::ApprovalRoundtrip => approval_roundtrip::tests::controls().await,
             _ => return None,
         })
     }
