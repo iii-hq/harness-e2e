@@ -390,6 +390,49 @@ impl E2eContext {
             .await
     }
 
+    /// Tokens of the prompt parts `pre_generate` hooks declare they inject
+    /// into the session.
+    pub async fn injected_prompt_tokens(&self, session_id: &str) -> Result<u64> {
+        let preview: Value = self
+            .trigger(
+                "harness::system-prompt::get",
+                json!({ "session_id": session_id }),
+            )
+            .await?;
+        crate::harness_metrics::injected_prompt_tokens(&preview)
+            .ok_or_else(|| anyhow!("harness::system-prompt::get returned no parts"))
+    }
+
+    /// Milliseconds of each of the session's own `judge::evaluate` calls in
+    /// the engine's span store.
+    pub async fn judge_call_ms(&self, session_id: &str) -> Result<Vec<f64>> {
+        const PAGE: usize = 500;
+        let mut durations = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page: Value = self
+                .trigger(
+                    "engine::traces::spans",
+                    json!({
+                        "name": crate::harness_metrics::JUDGE_CALL_SPAN,
+                        "attributes": [["iii.session.id", session_id]],
+                        "search_all_spans": true,
+                        "include_internal": true,
+                        "include_events": false,
+                        "offset": offset,
+                        "limit": PAGE,
+                    }),
+                )
+                .await?;
+            durations.extend(crate::harness_metrics::judge_call_ms(&page, session_id));
+            let listed = page["spans"].as_array().map_or(0, Vec::len);
+            offset += listed;
+            if listed == 0 || offset as u64 >= page["total"].as_u64().unwrap_or(0) {
+                return Ok(durations);
+            }
+        }
+    }
+
     pub async fn transcript(&self, session_id: &str) -> Result<Value> {
         let mut cursor: Option<String> = None;
         let mut messages = Vec::new();

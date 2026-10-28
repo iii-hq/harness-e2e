@@ -2557,6 +2557,7 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
+    capture_harness_trends(context, session_id, report).await;
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
@@ -3011,6 +3012,18 @@ async fn capture_partial_observation(
             %error,
             "could not capture partial E2E transcript"
         ),
+    }
+}
+
+/// Trend inputs only: a read that fails leaves its metric absent.
+async fn capture_harness_trends(context: &E2eContext, session_id: &str, report: &mut E2eRunReport) {
+    match context.injected_prompt_tokens(session_id).await {
+        Ok(tokens) => report.injected_prompt_tokens = Some(tokens),
+        Err(error) => tracing::warn!(session_id, %error, "could not read injected prompt parts"),
+    }
+    match context.judge_call_ms(session_id).await {
+        Ok(durations) => report.reconciliation_judge_ms = Some(durations),
+        Err(error) => tracing::warn!(session_id, %error, "could not read judge call spans"),
     }
 }
 

@@ -1,16 +1,16 @@
 //! Harness mechanisms whose numbers depend on the model or the environment,
 //! so Trends charts them instead of gating on them, read from the root
-//! session's transcript and the session-tree metrics the suite already
-//! captured. One gate rides along: the repeated-failure breaker.
+//! session's transcript, its prompt parts and judge spans, and the
+//! session-tree metrics the suite already captured. One gate rides along:
+//! the repeated-failure breaker.
 
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::audit::{AuditFlag, AuditFlagKind, AuditFlagSource, AuditSeverity};
 use crate::harness_invariants::{HarnessInvariant, HarnessViolation};
 use crate::report::{E2eRunReport, RunStatus};
-use crate::wire::SessionMetricsResponse;
 
 /// What Trends charts per run, by the name its `<name>_mean` takes.
 pub const TREND_KEYS: &[&str] = &[
@@ -19,6 +19,7 @@ pub const TREND_KEYS: &[&str] = &[
     "registry_notices",
     "hook_notices",
     "hook_guidance_tokens",
+    "injected_prompt_tokens",
     "reconciled_calls",
     "reconciled_p95_ms",
     "functions_info_repeats",
@@ -31,41 +32,82 @@ pub const TREND_KEYS: &[&str] = &[
     "sweep_resolved_calls",
 ];
 
+/// The keys read from somewhere other than the transcript.
+const NOT_FROM_TRANSCRIPT: &[&str] = &[
+    "trace_spans",
+    "error_spans",
+    "injected_prompt_tokens",
+    "reconciled_p95_ms",
+    "duplicate_entry_events",
+];
+
 /// The Harness's `REPEATED_FAILURE_LIMIT`: identical failures of one call a
 /// turn runs before the next identical call is answered locally.
 const REPEATED_FAILURE_LIMIT: u32 = 2;
 
-/// Above it a run's reconciled calls are flagged as slow.
+/// Above it a run's reconciliations are flagged as slow.
 const RECONCILED_P95_ALERT_MS: f64 = 2_500.0;
 
-/// Answers the Harness gives a call without running its target, or through
-/// the resolve path, which does not note results: they never reach the
-/// breaker.
-const LOCAL_REFUSALS: &[&str] = &[
+/// Calls the turn loop answers itself, on paths that never note a result
+/// for the breaker: the `agent_trigger` wrapper with no target, the
+/// `harness::spawn` guards, `harness::ask` and `submit_result`.
+const CONTROL_CALLS: &[&str] = &[
+    "agent_trigger",
+    "harness::spawn",
+    "harness::ask",
+    "submit_result",
+];
+
+/// Answers the turn loop gives a dispatchable call without running its
+/// target, results the sweep or a stop supplies, and the result of a call a
+/// restart cut off: none reaches the breaker.
+const NOT_DISPATCHED: &[&str] = &[
     "repeated_failure",
-    "pending_timeout",
     "arguments_truncated",
     "agent_trigger_no_target",
     "policy_denied",
     "hook_denied",
+    "pending_timeout",
+    "cancelled",
+    "interrupted",
 ];
 
 const FUNCTIONS_INFO: &str = "engine::functions::info";
 
+/// The engine's span for the Harness's call to the judge, the one step of
+/// argument reconciliation that leaves the Harness: the schema repairs and
+/// the diagnosis run in process.
+pub const JUDGE_CALL_SPAN: &str = "call judge::evaluate";
+
 /// A key is absent when its evidence is: no transcript, no traces, no
-/// reconciled call whose latency the transcript bounds, no count of the root
-/// session's `session::message-added` deliveries. A count over present
+/// reconciliation that reached the judge, no prompt parts or no count of the
+/// root session's `session::message-added` deliveries. A count over present
 /// evidence is there even at zero, so a mean never skips a clean run.
-pub fn measure(
-    transcript: Option<&Value>,
-    metrics: Option<&SessionMetricsResponse>,
-    duplicate_entry_events: Option<u64>,
-) -> BTreeMap<String, f64> {
+pub fn measure(run: &E2eRunReport) -> BTreeMap<String, f64> {
     let mut measured = BTreeMap::new();
-    if let Some(count) = duplicate_entry_events {
-        measured.insert("duplicate_entry_events".into(), count as f64);
+    for (key, value) in [
+        (
+            "duplicate_entry_events",
+            run.duplicate_entry_events.map(|count| count as f64),
+        ),
+        (
+            "injected_prompt_tokens",
+            run.injected_prompt_tokens.map(|tokens| tokens as f64),
+        ),
+        (
+            "reconciled_p95_ms",
+            run.reconciliation_judge_ms.clone().and_then(p95),
+        ),
+    ] {
+        if let Some(value) = value {
+            measured.insert(key.to_string(), value);
+        }
     }
-    if let Some(traces) = metrics.and_then(|metrics| metrics.traces.as_ref()) {
+    if let Some(traces) = run
+        .metrics
+        .as_ref()
+        .and_then(|metrics| metrics.traces.as_ref())
+    {
         for (key, field) in [
             ("trace_spans", "span_count"),
             ("error_spans", "error_span_count"),
@@ -75,39 +117,27 @@ pub fn measure(
             }
         }
     }
-    let hook_guidance = metrics
-        .and_then(|metrics| metrics.by_session.iter().find(|session| session.depth == 0))
-        .and_then(|root| root.context.as_ref())
-        .and_then(|context| context.pointer("/categories/hook_guidance"))
-        .and_then(Value::as_u64);
-    if let Some(tokens) = hook_guidance {
-        measured.insert("hook_guidance_tokens".into(), tokens as f64);
-    }
-    let Some(messages) = messages(transcript) else {
+    let Some(messages) = messages(run.transcript.as_ref()) else {
         return measured;
     };
     for key in TREND_KEYS {
-        if ![
-            "trace_spans",
-            "error_spans",
-            "hook_guidance_tokens",
-            "reconciled_p95_ms",
-            "duplicate_entry_events",
-        ]
-        .contains(key)
-        {
+        if !NOT_FROM_TRANSCRIPT.contains(key) {
             measured.insert(key.to_string(), 0.0);
         }
     }
     let mut count = |key: String| *measured.entry(key).or_insert(0.0) += 1.0;
     let mut info_payloads = Vec::new();
+    let mut hook_bytes = 0;
     for entry in messages {
         match text(entry, "/custom/data/kind") {
             Some("registry-changed") => count("registry_notices".into()),
-            Some("hook") => count("hook_notices".into()),
+            Some("hook") => {
+                count("hook_notices".into());
+                hook_bytes += text(entry, "/custom/data/text").map_or(0, str::len);
+            }
             _ => {}
         }
-        for (function_id, payload) in calls(entry) {
+        for (function_id, payload) in content(entry).filter_map(planned) {
             if function_id == FUNCTIONS_INFO {
                 if info_payloads.contains(&payload) {
                     count("functions_info_repeats".into());
@@ -129,16 +159,19 @@ pub fn measure(
             _ => {}
         }
     }
-    if let Some(p95) = p95(reconciled_latencies(messages)) {
-        measured.insert("reconciled_p95_ms".into(), p95);
-    }
+    measured.insert("hook_guidance_tokens".into(), tokens(hook_bytes));
     measured
 }
 
 /// The breaker answers the third identical failure of a call in a turn
 /// locally, so a passed run whose turn ran a call into the same error more
 /// than twice ran past it. Like the Harness, a success clears a call's count
-/// and a different error restarts it.
+/// and a different error restarts it, and only a dispatched call's own
+/// result counts.
+/// shortcut: a call a hook held and an approver released runs through
+/// `harness::function::resolve`, which notes nothing, yet its result looks
+/// dispatched; the suite binds no approval gate (`approval::*` is denied),
+/// so read the hold from the turn record if one ever runs here.
 pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     if report.status != RunStatus::Passed {
         return Vec::new();
@@ -153,15 +186,18 @@ pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     for entry in messages {
         if text(entry, "/message/role") == Some("assistant") {
             for block in content(entry) {
-                if let Some(id) = block.get("id").and_then(Value::as_str) {
-                    keys.insert(id, block_key(block));
+                let id = block.get("id").and_then(Value::as_str);
+                if let (Some(id), Some((target, payload))) = (id, planned(block)) {
+                    if !CONTROL_CALLS.contains(&target) {
+                        keys.insert(id, format!("{target} {payload}"));
+                    }
                 }
             }
             continue;
         }
         if text(entry, "/message/role") != Some("function_result")
             || text(entry, "/message/details/error")
-                .is_some_and(|code| LOCAL_REFUSALS.contains(&code))
+                .is_some_and(|code| NOT_DISPATCHED.contains(&code))
         {
             continue;
         }
@@ -195,17 +231,60 @@ pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     violations
 }
 
-/// Advisory: the p95 of a run's reconciled-call latencies past 2.5 s.
+/// Advisory: the p95 of a run's reconciliation round trips to the judge past
+/// 2.5 s.
 pub fn slow_reconciled_flag(report: &E2eRunReport) -> Option<AuditFlag> {
-    let p95 = p95(reconciled_latencies(messages(report.transcript.as_ref())?))?;
+    let p95 = p95(report.reconciliation_judge_ms.clone()?)?;
     (p95 > RECONCILED_P95_ALERT_MS).then(|| AuditFlag {
         kind: AuditFlagKind::SlowReconciledCalls,
         severity: AuditSeverity::Warning,
         source: AuditFlagSource::Deterministic,
-        summary: format!("reconciled calls took {p95} ms at the p95, past 2500 ms"),
+        summary: format!("reconciliation took {p95} ms at the p95, past 2500 ms"),
         evidence: Vec::new(),
         confidence: None,
     })
+}
+
+/// The tokens of the prompt parts `pre_generate` hooks declare they inject,
+/// from a `harness::system-prompt::get` preview.
+pub fn injected_prompt_tokens(preview: &Value) -> Option<u64> {
+    let parts = preview.get("parts")?.as_array()?;
+    let bytes = parts
+        .iter()
+        .filter(|part| text(part, "/kind") == Some("injected"))
+        .filter_map(|part| text(part, "/body"))
+        .map(str::len)
+        .sum();
+    Some(tokens(bytes) as u64)
+}
+
+/// The durations of one session's own judge calls in a page of
+/// `engine::traces::spans`. Its filters pick whole traces, so the page also
+/// holds the other spans of those traces, and a child session's own.
+pub fn judge_call_ms(page: &Value, session_id: &str) -> Vec<f64> {
+    let session = json!(["iii.session.id", session_id]);
+    page.get("spans")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|span| text(span, "/name") == Some(JUDGE_CALL_SPAN))
+        .filter(|span| {
+            span.get("attributes")
+                .and_then(Value::as_array)
+                .is_some_and(|attributes| attributes.contains(&session))
+        })
+        .filter_map(|span| {
+            let start = span.get("start_time_unix_nano")?.as_u64()?;
+            // A span still open ends at 0.
+            let end = span.get("end_time_unix_nano")?.as_u64()?;
+            (end >= start).then(|| (end - start) as f64 / 1e6)
+        })
+        .collect()
+}
+
+/// Bytes / 4, rounded up: the estimate the suite uses where nothing counted.
+fn tokens(bytes: usize) -> f64 {
+    bytes.div_ceil(4) as f64
 }
 
 fn messages(transcript: Option<&Value>) -> Option<&[Value]> {
@@ -221,35 +300,30 @@ fn content(entry: &Value) -> impl Iterator<Item = &Value> {
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("function_call"))
 }
 
-/// Each call of an assistant entry as the target it names and its payload,
-/// through the `agent_trigger` wrapper when it is one.
-fn calls(entry: &Value) -> impl Iterator<Item = (&str, Option<&Value>)> {
-    content(entry).filter_map(|block| {
-        let function_id = block.get("function_id")?.as_str()?;
-        let arguments = block.get("arguments");
-        Some(
-            match arguments
-                .and_then(|a| a.get("function"))
-                .and_then(Value::as_str)
-            {
-                Some(target) if function_id == "agent_trigger" => {
-                    (target, arguments.and_then(|a| a.get("payload")))
-                }
-                _ => (function_id, arguments),
-            },
-        )
-    })
-}
-
-fn block_key(block: &Value) -> String {
-    let function_id = block
-        .get("function_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    format!(
-        "{function_id} {}",
-        block.get("arguments").unwrap_or(&Value::Null)
-    )
+/// A call as the Harness plans it: the target the `agent_trigger` wrapper
+/// names and its payload, without the wrapper's `description`. A wrapper
+/// with no target stays `agent_trigger`.
+fn planned(block: &Value) -> Option<(&str, Value)> {
+    let function_id = block.get("function_id")?.as_str()?;
+    let arguments = block.get("arguments").cloned().unwrap_or(Value::Null);
+    let target = block.pointer("/arguments/function").and_then(Value::as_str);
+    let (Some(target), "agent_trigger") = (target, function_id) else {
+        return Some((function_id, arguments));
+    };
+    let payload = match arguments.get("payload") {
+        Some(Value::String(payload)) => {
+            serde_json::from_str(payload).unwrap_or_else(|_| Value::String(payload.clone()))
+        }
+        Some(payload) => payload.clone(),
+        // The Harness hoists a flattened payload from beside `function`.
+        None => {
+            let mut hoisted = arguments.as_object().cloned().unwrap_or_default();
+            hoisted.remove("function");
+            hoisted.remove("description");
+            Value::Object(hoisted)
+        }
+    };
+    Some((target, payload))
 }
 
 /// The target's own error content, as the breaker digests it: before the
@@ -274,30 +348,6 @@ fn is_reconciled(entry: &Value) -> bool {
         .is_some_and(|changes| !changes.is_empty())
 }
 
-/// The calls of a step run one after another and each result is stamped when
-/// appended, so a call after a sibling took the time since that sibling's
-/// result. The first call of a step is not timed: its assistant entry is
-/// stamped when the generation starts.
-/// shortcut: first calls go untimed; read their dispatch span from the engine
-/// traces when Trends needs every reconciled call.
-fn reconciled_latencies(messages: &[Value]) -> Vec<f64> {
-    let mut previous = None;
-    let mut latencies = Vec::new();
-    for entry in messages {
-        let Some(timestamp) = entry.pointer("/message/timestamp").and_then(Value::as_u64) else {
-            continue;
-        };
-        let role = text(entry, "/message/role");
-        if role == Some("function_result") && is_reconciled(entry) {
-            if let Some((Some("function_result"), before)) = previous {
-                latencies.push(timestamp.saturating_sub(before) as f64);
-            }
-        }
-        previous = Some((role, timestamp));
-    }
-    latencies
-}
-
 /// Nearest rank.
 fn p95(mut values: Vec<f64>) -> Option<f64> {
     values.sort_by(f64::total_cmp);
@@ -314,7 +364,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::wire::{Observed, SessionMetricsPayload, SessionUsage, SessionUsageTotals};
+    use crate::wire::{Observed, SessionMetricsPayload, SessionUsageTotals};
 
     fn transcript(messages: Value) -> Value {
         json!({ "messages": messages })
@@ -349,66 +399,65 @@ mod tests {
         entry
     }
 
-    fn notice(kind: &str) -> Value {
-        json!({ "custom": { "custom_type": "model_notice", "data": { "kind": kind } } })
+    fn notice(kind: &str, text: &str) -> Value {
+        json!({ "custom": { "custom_type": "model_notice",
+                            "data": { "kind": kind, "text": text } } })
     }
 
-    fn metrics(traces: Option<Value>, context: Option<Value>) -> SessionMetricsResponse {
-        Observed::from_normalized(SessionMetricsPayload {
-            root_session_id: "root".into(),
-            complete: true,
-            totals: SessionUsageTotals::default(),
-            by_session: vec![SessionUsage {
-                session_id: "root".into(),
-                parent_session_id: None,
-                depth: 0,
-                turns: 1,
-                function_calls: 0,
-                function_call_errors: 0,
-                validation_retries: None,
-                transient_resumes: None,
-                wake_resumes: None,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_tokens: None,
-                cache_write_tokens: None,
-                reasoning_tokens: None,
-                cost_usd: None,
-                context,
-            }],
-            traces,
-        })
+    fn run(messages: Option<Value>) -> E2eRunReport {
+        let mut report = E2eRunReport::new("run".into(), "a".into(), 1, "root".into(), "p".into());
+        report.transcript = messages.map(transcript);
+        report
     }
 
     #[test]
     fn a_clean_transcript_counts_zero_and_leaves_out_what_it_cannot_bound() {
-        let measured = measure(Some(&transcript(json!([]))), None, None);
+        let measured = measure(&run(Some(json!([]))));
 
         assert_eq!(measured["registry_notices"], 0.0);
         assert_eq!(measured["repeated_failure"], 0.0);
         assert_eq!(measured["sweep_resolved_calls"], 0.0);
         assert_eq!(measured["arguments_truncated_invalid_json"], 0.0);
-        // No traces, no reconciled call, no context snapshot: unmeasured.
-        for key in ["trace_spans", "reconciled_p95_ms", "hook_guidance_tokens"] {
-            assert!(!measured.contains_key(key), "{key}");
+        assert_eq!(measured["hook_guidance_tokens"], 0.0);
+        // No traces, no judge call, no prompt parts, no delivery count.
+        for key in NOT_FROM_TRANSCRIPT {
+            assert!(!measured.contains_key(*key), "{key}");
         }
-        assert!(measure(None, None, None).is_empty());
+        assert!(measure(&run(None)).is_empty());
     }
 
     #[test]
-    fn duplicate_entry_events_are_charted_only_when_they_were_counted() {
-        let measured = measure(None, None, Some(2));
+    fn what_the_suite_read_beside_the_transcript_is_charted_only_when_read() {
+        let mut read = run(None);
+        read.duplicate_entry_events = Some(2);
+        read.injected_prompt_tokens = Some(1_941);
+        read.metrics = Some(Observed::from_normalized(SessionMetricsPayload {
+            root_session_id: "root".into(),
+            complete: true,
+            totals: SessionUsageTotals::default(),
+            by_session: Vec::new(),
+            traces: Some(json!({ "trace_count": 2, "span_count": 40, "error_span_count": 3 })),
+        }));
+
+        let measured = measure(&read);
 
         assert_eq!(measured["duplicate_entry_events"], 2.0);
-        assert!(!measure(None, None, None).contains_key("duplicate_entry_events"));
+        assert_eq!(measured["injected_prompt_tokens"], 1_941.0);
+        assert_eq!(
+            (measured["trace_spans"], measured["error_spans"]),
+            (40.0, 3.0)
+        );
+        assert!(!measured.contains_key("hook_guidance_tokens"));
     }
 
     #[test]
     fn notices_refusals_and_repeated_info_calls_are_counted() {
         let messages = json!([
-            notice("registry-changed"),
-            notice("hook"),
-            notice("registry-changed"),
+            notice("registry-changed", "functions changed"),
+            // The text hooks appended: 9 and 8 bytes, 5 tokens.
+            notice("hook", "Use fp:: "),
+            notice("registry-changed", "functions changed"),
+            notice("hook", "Be brief"),
             assistant(
                 "t1",
                 0,
@@ -448,17 +497,12 @@ mod tests {
             ),
             result("t1", "c8", 5, json!({ "error": "pending_timeout" }), true),
         ]);
-        let traces = json!({ "trace_count": 2, "span_count": 40, "error_span_count": 3 });
-        let context = json!({ "categories": { "hook_guidance": 928 } });
 
-        let measured = measure(
-            Some(&transcript(messages)),
-            Some(&metrics(Some(traces), Some(context))),
-            None,
-        );
+        let measured = measure(&run(Some(messages)));
 
         let pick = |key: &str| measured[key];
-        assert_eq!((pick("registry_notices"), pick("hook_notices")), (2.0, 1.0));
+        assert_eq!((pick("registry_notices"), pick("hook_notices")), (2.0, 2.0));
+        assert_eq!(pick("hook_guidance_tokens"), 5.0);
         assert_eq!(pick("functions_info_repeats"), 1.0);
         assert_eq!(pick("arguments_truncated_invalid_json"), 1.0);
         assert_eq!(pick("arguments_truncated_incomplete_json"), 1.0);
@@ -466,39 +510,52 @@ mod tests {
         assert_eq!(pick("agent_trigger_no_target"), 1.0);
         assert_eq!(pick("repeated_failure"), 1.0);
         assert_eq!(pick("sweep_resolved_calls"), 1.0);
-        assert_eq!((pick("trace_spans"), pick("error_spans")), (40.0, 3.0));
-        assert_eq!(pick("hook_guidance_tokens"), 928.0);
-    }
-
-    fn reconciled(turn: &str, call_id: &str, timestamp: u64) -> Value {
-        let mut entry = result(turn, call_id, timestamp, json!({}), false);
-        entry["origin"]["reconciled"] = json!([{ "kind": "renamed", "path": "/a" }]);
-        entry
     }
 
     #[test]
-    fn a_reconciled_call_is_timed_only_after_a_sibling_result() {
-        // The assistant entry is stamped when its generation starts, so the
-        // first call of a step is not timed; a later one runs after the
-        // previous result.
-        let messages = json!([
-            assistant("t1", 1_000, vec![]),
-            reconciled("t1", "c1", 4_000),
-            reconciled("t1", "c2", 4_100),
-            result("t1", "c3", 4_200, json!({}), false),
-            reconciled("t1", "c4", 7_200),
-        ]);
+    fn only_the_prompt_parts_hooks_inject_are_counted() {
+        let preview = json!({ "parts": [
+            { "kind": "built_in", "name": "embedded harness default", "body": "x".repeat(400) },
+            { "kind": "runtime", "body": "x".repeat(40) },
+            { "kind": "injected", "name": "browser", "body": "x".repeat(10) },
+            { "kind": "injected", "name": "fp", "body": "x".repeat(5) },
+        ] });
 
-        let measured = measure(Some(&transcript(messages)), None, None);
+        assert_eq!(injected_prompt_tokens(&preview), Some(4));
+        assert_eq!(injected_prompt_tokens(&json!({ "parts": [] })), Some(0));
+        assert_eq!(injected_prompt_tokens(&json!({})), None);
+    }
 
-        assert_eq!(measured["reconciled_calls"], 3.0);
-        assert_eq!(measured["reconciled_p95_ms"], 3_000.0);
+    #[test]
+    fn reconciliation_is_timed_by_the_sessions_own_judge_calls() {
+        let span = |name: &str, session: &str, start: u64, end: u64| {
+            json!({ "name": name, "start_time_unix_nano": start, "end_time_unix_nano": end,
+                    "attributes": [["function_id", "judge::evaluate"],
+                                   ["iii.session.id", session]] })
+        };
+        let page = json!({ "total": 5, "spans": [
+            span(JUDGE_CALL_SPAN, "root", 1_000_000, 1_800_000_000),
+            // The same trace's other spans, a child's own judge call, and
+            // a call still open.
+            span("execute judge::evaluate", "root", 0, 2_000_000_000),
+            span(JUDGE_CALL_SPAN, "child", 0, 9_000_000_000),
+            span(JUDGE_CALL_SPAN, "root", 5_000_000, 0),
+            span(JUDGE_CALL_SPAN, "root", 0, 2_600_000_000),
+        ] });
+
+        assert_eq!(judge_call_ms(&page, "root"), vec![1_799.0, 2_600.0]);
+
+        let mut timed = run(Some(json!([])));
+        timed.reconciliation_judge_ms = Some(vec![1_799.0, 2_600.0, 40.0]);
+        assert_eq!(measure(&timed)["reconciled_p95_ms"], 2_600.0);
+        // Every reconciliation ran in process: nothing to time.
+        timed.reconciliation_judge_ms = Some(Vec::new());
+        assert!(!measure(&timed).contains_key("reconciled_p95_ms"));
     }
 
     fn passed(messages: Value) -> E2eRunReport {
-        let mut report = E2eRunReport::new("run".into(), "a".into(), 1, "root".into(), "p".into());
+        let mut report = run(Some(messages));
         report.status = RunStatus::Passed;
-        report.transcript = Some(transcript(messages));
         report
     }
 
@@ -572,21 +629,89 @@ mod tests {
     }
 
     #[test]
-    fn slow_reconciled_calls_are_flagged_past_two_and_a_half_seconds() {
-        let slow = passed(json!([
-            assistant("t1", 0, vec![]),
-            result("t1", "c0", 100, json!({}), false),
-            reconciled("t1", "c1", 2_700),
-        ]));
-        let fast = passed(json!([
-            assistant("t1", 0, vec![]),
-            result("t1", "c0", 100, json!({}), false),
-            reconciled("t1", "c1", 2_500),
+    fn calls_the_breaker_never_notes_are_not_repeats() {
+        // Spawn guards, ask refusals and submit_result validation answer in
+        // the turn loop before the breaker notes a result; a cut-off call's
+        // result is not the target's either.
+        let spawn = |id: &str| call(id, "harness::spawn", json!({ "prompt": "p" }));
+        let ask = |id: &str| call(id, "harness::ask", json!({ "question": "q" }));
+        let submit = |id: &str| {
+            json!({ "type": "function_call", "id": id, "function_id": "submit_result",
+                    "arguments": { "answer": 1 } })
+        };
+        let same = |id: &str| call(id, "a::b", json!({ "x": 1 }));
+        let refused = |turn: &str, id: &str, details: Value| {
+            let mut entry = result(turn, id, 1, details, true);
+            entry["message"]["content"] = json!([{ "type": "text", "text": "refused" }]);
+            entry
+        };
+        // Worded like the target's error, so only the path tells them apart.
+        let cut_off = |turn: &str, id: &str, details: Value| {
+            let mut entry = result(turn, id, 1, details, true);
+            entry["message"]["content"] = json!([{ "type": "text", "text": "boom" }]);
+            entry
+        };
+        let depth = json!({ "error": "harness/spawn_depth_exceeded", "message": "too deep" });
+        let report = passed(json!([
+            assistant("t1", 0, vec![spawn("s1"), spawn("s2"), spawn("s3")]),
+            refused("t1", "s1", depth.clone()),
+            refused("t1", "s2", depth.clone()),
+            refused("t1", "s3", depth),
+            assistant("t1", 2, vec![ask("a1"), ask("a2"), ask("a3")]),
+            refused("t1", "a1", Value::Null),
+            refused("t1", "a2", Value::Null),
+            refused("t1", "a3", Value::Null),
+            assistant("t1", 3, vec![submit("r1"), submit("r2"), submit("r3")]),
+            refused("t1", "r1", Value::Null),
+            refused("t1", "r2", Value::Null),
+            refused("t1", "r3", Value::Null),
+            assistant("t1", 4, vec![same("c1"), same("c2"), same("c3")]),
+            failed("t1", "c1", 5, "boom"),
+            failed("t1", "c2", 6, "boom"),
+            cut_off("t1", "c3", json!({ "error": "interrupted" })),
+            assistant("t2", 7, vec![same("d1"), same("d2"), same("d3")]),
+            failed("t2", "d1", 8, "boom"),
+            failed("t2", "d2", 9, "boom"),
+            cut_off(
+                "t2",
+                "d3",
+                json!({ "error": "cancelled", "cancelled_by": "user" })
+            ),
         ]));
 
-        let flag = slow_reconciled_flag(&slow).expect("slow reconciled calls flagged");
+        assert_eq!(repeated_failures(&report), Vec::new());
+    }
+
+    #[test]
+    fn the_breaker_keys_a_call_on_its_target_and_payload_not_its_description() {
+        let described = |id: &str, description: &str| {
+            json!({ "type": "function_call", "id": id, "function_id": "agent_trigger",
+                    "arguments": { "function": "a::b", "description": description,
+                                   "payload": { "x": 1 } } })
+        };
+        let report = passed(json!([
+            assistant("t1", 0, vec![described("c1", "Trying a::b")]),
+            failed("t1", "c1", 1, "boom"),
+            assistant("t1", 2, vec![described("c2", "Retrying a::b")]),
+            failed("t1", "c2", 3, "boom"),
+            assistant("t1", 4, vec![described("c3", "Once more")]),
+            failed("t1", "c3", 5, "boom"),
+        ]));
+
+        assert_eq!(repeated_failures(&report).len(), 1);
+    }
+
+    #[test]
+    fn slow_reconciliations_are_flagged_past_two_and_a_half_seconds() {
+        let mut slow = run(None);
+        slow.reconciliation_judge_ms = Some(vec![120.0, 2_600.0]);
+        let mut fast = run(None);
+        fast.reconciliation_judge_ms = Some(vec![120.0, 2_500.0]);
+
+        let flag = slow_reconciled_flag(&slow).expect("slow reconciliation flagged");
         assert_eq!(flag.kind, AuditFlagKind::SlowReconciledCalls);
         assert!(flag.summary.contains("2600 ms"), "{}", flag.summary);
         assert!(slow_reconciled_flag(&fast).is_none());
+        assert!(slow_reconciled_flag(&run(None)).is_none());
     }
 }

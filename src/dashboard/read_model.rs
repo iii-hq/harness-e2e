@@ -1698,11 +1698,7 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
                 .filter(|usable| *usable > 0)?;
             Some(efficiency.peak_context_tokens? as f64 / usable as f64)
         }),
-        harness: crate::harness_metrics::measure(
-            run.transcript.as_ref(),
-            run.metrics.as_ref(),
-            run.duplicate_entry_events,
-        ),
+        harness: crate::harness_metrics::measure(run),
     }
 }
 

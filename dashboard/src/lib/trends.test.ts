@@ -273,6 +273,7 @@ describe('measures', () => {
       'repeated_failure',
       'sweep_resolved_calls',
       'hook_guidance_tokens',
+      'injected_prompt_tokens',
       'reconciled_p95_ms',
     ])
   })
@@ -289,6 +290,7 @@ describe('measures', () => {
     expect(metric('error_spans').value(point)).toBe(2.5)
     expect(metric('reconciled_p95_ms').figure(3_100, point)).toBe('3.1s')
     expect(metric('error_spans').value(regression[0])).toBeNull()
+    expect(metric('injected_prompt_tokens').note).toContain('declare')
   })
 
   it('reads compactions per run and the peak context as a share of the window', () => {

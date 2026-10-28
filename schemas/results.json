@@ -1011,6 +1011,15 @@
             "$ref": "#/definitions/HarnessViolation"
           }
         },
+        "injected_prompt_tokens": {
+          "description": "Tokens (bytes / 4) of the prompt parts `pre_generate` hooks declare they inject into the root session; absent when they were not read.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "metrics": {
           "anyOf": [
             {
@@ -1023,6 +1032,17 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "reconciliation_judge_ms": {
+          "description": "Milliseconds of each of the root session's `judge::evaluate` calls, the round trip of argument reconciliation; absent when not read.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
         },
         "retry_attempts": {
           "type": "array",
