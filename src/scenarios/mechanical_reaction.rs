@@ -18,22 +18,26 @@ const REACTIONS_ARMED: AssessmentSpec = AssessmentSpec::scored(
     "reactions_armed",
     30,
     "Are the wake and mechanical call registered before the source write?",
-);
+)
+.labeled("Both reactions armed before the source write");
 const MECHANICAL_MIRROR: AssessmentSpec = AssessmentSpec::gate(
     "mechanical_mirror",
     35,
     "Does the call binding mirror the complete source event without a root write?",
-);
+)
+.labeled("Call binding mirrors the whole source event");
 const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
     "Does the mirror state event wake only the original session?",
-);
+)
+.labeled("Mirror write wakes only this session");
 const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::scored(
     "clean_completion",
     15,
     "Does the run finish without children, errors, or surviving bindings?",
-);
+)
+.labeled("Ends with no errors or bindings left");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REACTIONS_ARMED,
     MECHANICAL_MIRROR,
@@ -55,6 +59,10 @@ impl Scenario for MechanicalReaction {
 
     fn summary(&self) -> Option<&'static str> {
         Some("Mirrors a state event through a mechanical binding and wakes the originating session once.")
+    }
+
+    fn protects(&self) -> Option<&'static str> {
+        Some("A trigger can call a function on its own: a state write runs the bound call with the event as its input, no model turn in between, and the call's write wakes only the session that armed it. If it fails, automations that should react to data without spending tokens stop firing, or wake sessions that never asked.")
     }
 
     fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
@@ -184,101 +192,18 @@ impl Scenario for MechanicalReaction {
                     .await?,
             ),
         };
-        let calls = common::function_calls(&observation.transcript);
-        let registrations: Vec<_> = calls
-            .iter()
-            .enumerate()
-            .filter(|(_, call)| call.function_id == "engine::register_trigger")
-            .collect();
-        let wakes: Vec<_> = registrations
-            .iter()
-            .filter(|(_, call)| is_mirror_wake(call, &names))
-            .collect();
-        let mirrors: Vec<_> = registrations
-            .iter()
-            .filter(|(_, call)| is_mirror_call(call, &names))
-            .collect();
-        let writes: Vec<_> = calls
-            .iter()
-            .enumerate()
-            .filter(|(_, call)| call.function_id == "state::set")
-            .collect();
-        let exact_source_write = writes.len() == 1
-            && writes[0].1.arguments
-                == json!({ "scope": names.scope, "key": SOURCE_KEY, "value": source });
-        let reactions_armed = registrations.len() == 2
-            && wakes.len() == 1
-            && mirrors.len() == 1
-            && writes.len() == 1
-            && wakes[0].0 < writes[0].0
-            && mirrors[0].0 < writes[0].0;
-
-        let mirror_valid = valid_mirror(&mirror, &names, &source);
-        let records = common::trigger_fired_records(&observation.transcript);
-        let call_records: Vec<_> = records
-            .iter()
-            .filter(|record| record.get("target").and_then(Value::as_str) == Some("state::set"))
-            .collect();
-        let wake_records: Vec<_> = records
-            .iter()
-            .filter(|record| record.get("target").and_then(Value::as_str) == Some("harness::send"))
-            .collect();
-        let call_delivered = call_records.len() == 1;
-        // A delivered ƒ-call fire always records what it dispatched; only a
-        // skip/gc/expiry record omits `payload`, and neither of those can
-        // have produced the mirror write `mirror_valid` checks below — so
-        // pinning presence here catches a regression that stops recording it.
-        let call_payload_recorded =
-            call_records.len() == 1 && call_records[0].get("payload").is_some();
-        let parent_woken = wake_records.len() == 1
-            && wake_records[0].get("retired").and_then(Value::as_bool) == Some(true)
-            && observation.metrics.totals.sessions == 1
-            && calls
-                .iter()
-                .all(|call| call.function_id != "harness::spawn");
-
         let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let no_errors = observation.metrics.totals.function_call_errors == 0;
-        let confirmed = observation.response.to_ascii_lowercase().contains("mirror");
-        let mechanical_mirror =
-            exact_source_write && mirror_valid && call_delivered && call_payload_recorded;
-        let clean_completion = active_bindings == 0 && no_errors && confirmed;
-
-        Ok(assessment::build_evaluation(
-            [
-            REACTIONS_ARMED.full_or_zero(
-                reactions_armed,
-                format!(
-                    "registrations={}, wakes={}, call_bindings={}, writes={}",
-                    registrations.len(),
-                    wakes.len(),
-                    mirrors.len(),
-                    writes.len()
-                ),
-            ),
-            MECHANICAL_MIRROR.full_or_zero(
-                mechanical_mirror,
-                format!(
-                    "exact_source_write={exact_source_write}, mirror_valid={mirror_valid}, \
-                         call_delivered={call_delivered}, call_payload_recorded={call_payload_recorded}"
-                ),
-            ),
-            PARENT_WOKEN.full_or_zero(
-                parent_woken,
-                format!(
-                    "wake_records={}, sessions={}",
-                    wake_records.len(),
-                    observation.metrics.totals.sessions
-                ),
-            ),
-            CLEAN_COMPLETION.full_or_zero(
-                clean_completion,
-                format!(
-                    "active_bindings={active_bindings}, function_errors={}, confirmed={confirmed}",
-                    observation.metrics.totals.function_call_errors
-                ),
-            ),
-            ],
+        Ok(evaluation_of(
+            &names,
+            &source,
+            &mirror,
+            &observation.transcript,
+            &observation.response,
+            Totals {
+                sessions: observation.metrics.totals.sessions,
+                function_call_errors: observation.metrics.totals.function_call_errors,
+                active_bindings,
+            },
         ))
     }
 
@@ -356,6 +281,121 @@ binding armed."#,
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
     }
+}
+
+/// What the run's metrics and the live bindings say, beside the transcript.
+struct Totals {
+    sessions: u64,
+    function_call_errors: u64,
+    active_bindings: usize,
+}
+
+/// Scores a run from what it left behind, without the engine.
+fn evaluation_of(
+    names: &Names,
+    source: &Value,
+    mirror: &Value,
+    transcript: &Value,
+    response: &str,
+    Totals {
+        sessions,
+        function_call_errors,
+        active_bindings,
+    }: Totals,
+) -> ObjectiveEvaluation {
+        let calls = common::function_calls(transcript);
+        let registrations: Vec<_> = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.function_id == "engine::register_trigger")
+            .collect();
+        let wakes: Vec<_> = registrations
+            .iter()
+            .filter(|(_, call)| is_mirror_wake(call, names))
+            .collect();
+        let mirrors: Vec<_> = registrations
+            .iter()
+            .filter(|(_, call)| is_mirror_call(call, names))
+            .collect();
+        let writes: Vec<_> = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.function_id == "state::set")
+            .collect();
+        let exact_source_write = writes.len() == 1
+            && writes[0].1.arguments
+                == json!({ "scope": names.scope, "key": SOURCE_KEY, "value": source });
+        let reactions_armed = registrations.len() == 2
+            && wakes.len() == 1
+            && mirrors.len() == 1
+            && writes.len() == 1
+            && wakes[0].0 < writes[0].0
+            && mirrors[0].0 < writes[0].0;
+
+        let mirror_valid = valid_mirror(mirror, names, source);
+        let records = common::trigger_fired_records(transcript);
+        let call_records: Vec<_> = records
+            .iter()
+            .filter(|record| record.get("target").and_then(Value::as_str) == Some("state::set"))
+            .collect();
+        let wake_records: Vec<_> = records
+            .iter()
+            .filter(|record| record.get("target").and_then(Value::as_str) == Some("harness::send"))
+            .collect();
+        let call_delivered = call_records.len() == 1;
+        // A delivered ƒ-call fire always records what it dispatched; only a
+        // skip/gc/expiry record omits `payload`, and neither of those can
+        // have produced the mirror write `mirror_valid` checks below — so
+        // pinning presence here catches a regression that stops recording it.
+        let call_payload_recorded =
+            call_records.len() == 1 && call_records[0].get("payload").is_some();
+        let parent_woken = wake_records.len() == 1
+            && wake_records[0].get("retired").and_then(Value::as_bool) == Some(true)
+            && sessions == 1
+            && calls
+                .iter()
+                .all(|call| call.function_id != "harness::spawn");
+
+        let no_errors = function_call_errors == 0;
+        let confirmed = response.to_ascii_lowercase().contains("mirror");
+        let mechanical_mirror =
+            exact_source_write && mirror_valid && call_delivered && call_payload_recorded;
+        let clean_completion = active_bindings == 0 && no_errors && confirmed;
+
+        assessment::build_evaluation([
+            REACTIONS_ARMED.full_or_zero(
+                reactions_armed,
+                format!(
+                    "registrations={}, wakes={}, call_bindings={}, writes={}",
+                    registrations.len(),
+                    wakes.len(),
+                    mirrors.len(),
+                    writes.len()
+                ),
+            ),
+            MECHANICAL_MIRROR.full_or_zero(
+                mechanical_mirror,
+                format!(
+                    "exact_source_write={exact_source_write}, mirror_valid={mirror_valid}, \
+                         call_delivered={call_delivered}, call_payload_recorded={call_payload_recorded}"
+                ),
+            ),
+            PARENT_WOKEN.full_or_zero(
+                parent_woken,
+                format!(
+                    "wake_records={}, sessions={}",
+                    wake_records.len(),
+                    sessions
+                ),
+            ),
+            CLEAN_COMPLETION.full_or_zero(
+                clean_completion,
+                format!(
+                    "active_bindings={active_bindings}, function_errors={}, confirmed={confirmed}",
+                    function_call_errors
+                ),
+            ),
+            ])
 }
 
 /// The mirror value the capture stored verbatim before cleanup.
@@ -508,8 +548,62 @@ impl Names {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The null delivery and the reference one, for the plan's controls.
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        let names = Names::new("control");
+        let source = source_value(7);
+        let call = |function_id: &str, arguments: Value| {
+            json!({"type": "function_call", "id": function_id, "function_id": function_id,
+                "arguments": arguments})
+        };
+        let fired = |data: Value| json!({"custom": {"custom_type": "trigger_fired", "data": data}});
+        let reference = json!({"messages": [
+            {"message": {"role": "assistant", "content": [
+                call("engine::register_trigger", json!({
+                    "trigger_type": "state", "label": "mirror ready",
+                    "config": {"scope": names.scope, "key": MIRROR_KEY},
+                })),
+                call("engine::register_trigger", json!({
+                    "trigger_type": "state",
+                    "config": {"scope": names.scope, "key": SOURCE_KEY},
+                    "target": {"function_id": "state::set", "event_into": "/value",
+                        "payload": {"scope": names.scope, "key": MIRROR_KEY}},
+                })),
+                call("state::set", json!({"scope": names.scope, "key": SOURCE_KEY,
+                    "value": source})),
+            ]}},
+            fired(json!({"target": "state::set", "payload": {"key": MIRROR_KEY}})),
+            fired(json!({"target": "harness::send", "retired": true})),
+        ]});
+        let mirror = json!({"scope": names.scope, "key": SOURCE_KEY,
+            "new_value": source, "event_type": "state:set"});
+        let totals = || Totals {
+            sessions: 1,
+            function_call_errors: 0,
+            active_bindings: 0,
+        };
+        [
+            evaluation_of(
+                &names,
+                &source,
+                &Value::Null,
+                &json!({"messages": []}),
+                "done",
+                totals(),
+            ),
+            evaluation_of(
+                &names,
+                &source,
+                &mirror,
+                &reference,
+                "The mirror was created.",
+                totals(),
+            ),
+        ]
+    }
 
     fn mirror_wake(names: &Names, label_location: &str) -> common::ObservedFunctionCall {
         let mut arguments = json!({

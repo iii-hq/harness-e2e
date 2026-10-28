@@ -44,17 +44,20 @@ const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::gate(
     "bounded_failure",
     40,
     "Does the child's turn fail on its output contract after exactly two validation retry requests, without writing a verdict?",
-);
+)
+.labeled("Child fails on its contract, writes nothing");
 const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     30,
     "Are calls to set a post-turn trigger and a state wake deadline made before the call that starts the expected child?",
-);
+)
+.labeled("Validator and deadline armed before the spawn");
 const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::gate(
     "expiry_report",
     30,
     "Does the parent's final response contain both required markers: CHILD GAVE UP and PARENT DONE?",
-);
+)
+.labeled("Parent reports the give-up and finishes");
 const ASSESSMENTS: &[AssessmentSpec] = &[BOUNDED_FAILURE, ORCHESTRATION_DISCIPLINE, EXPIRY_REPORT];
 
 pub struct SubagentValidationFailure;
@@ -445,7 +448,7 @@ fn child_session(run_id: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -483,6 +486,24 @@ mod tests {
             .collect()
     }
 
+    /// The null delivery and the reference one, for the plan's controls.
+    pub(crate) fn controls() -> [ObjectiveEvaluation; 2] {
+        [idle().evaluation(), facts().evaluation()]
+    }
+
+    fn idle() -> Facts {
+        Facts {
+            child_status: "not_spawned".into(),
+            child_nudges: 0,
+            child_failure_code: None,
+            validator_index: None,
+            wake_index: None,
+            spawn_index: None,
+            report: "done".into(),
+            ..facts()
+        }
+    }
+
     #[test]
     fn the_bounded_give_up_earns_every_point() {
         assert_eq!(awarded(&facts()), [Some(40), Some(30), Some(30)]);
@@ -492,17 +513,7 @@ mod tests {
     /// spawns no child, so no criterion pays.
     #[test]
     fn an_agent_that_does_nothing_scores_zero() {
-        let idle = Facts {
-            child_status: "not_spawned".into(),
-            child_nudges: 0,
-            child_failure_code: None,
-            validator_index: None,
-            wake_index: None,
-            spawn_index: None,
-            report: "done".into(),
-            ..facts()
-        };
-        assert_eq!(awarded(&idle), [Some(0), Some(0), Some(0)]);
+        assert_eq!(awarded(&idle()), [Some(0), Some(0), Some(0)]);
     }
 
     #[test]

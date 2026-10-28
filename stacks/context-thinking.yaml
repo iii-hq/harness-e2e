@@ -1,0 +1,53 @@
+# Select suite=context-thinking with a Claude 5.5 model (claude-haiku-5-5 is
+# the cheapest). Claude 5.5 signs each thinking block over the exact prompt
+# before it, so after a compaction the Harness must strip the thinking logged
+# before the compaction record (harness/src/window.rs). Two settings make a
+# miss fail the run instead of passing unseen:
+#
+# - The usable window is cut to about 128k tokens so context_pressure
+#   compacts. usable = (context_window - max_output_tokens) - reserved,
+#   reserved = min(reserved_tokens_cap, context_window * reserved_pct / 100)
+#   (context-manager/src/core/budget.rs). Claude 5.5 lists 1,000,000 and
+#   128,000, so the base is 872,000; a reserve of 744,000 leaves 128,000, and
+#   the pct must allow it (75% of 1,000,000 = 750,000). Read `usable` in the
+#   run before comparing another model.
+# - provider-anthropic sends prefix_mismatch_behavior "error": the API answers
+#   400 to a thinking block whose prefix changed, where its default
+#   (drop_block) drops the reasoning silently.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+    start_after:
+    - context-manager
+
+  # Declared, and held by the edge above, only to carry the window override,
+  # as in context-capacity.yaml.
+  context-manager:
+    worker: package://context-manager
+    version: latest
+    config_override:
+      reserved_tokens_cap: 744000
+      reserved_pct: 75
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-anthropic:
+    worker: package://provider-anthropic
+    version: latest
+    environment:
+      PROVIDER_ANTHROPIC_PREFIX_MISMATCH: error
+
+startup_timeout: 5m
+stop_timeout: 30s

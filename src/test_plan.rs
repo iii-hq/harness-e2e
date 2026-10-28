@@ -744,14 +744,14 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 14);
+        assert_eq!(plan.suites.len(), 17);
         for (id, cases, runs) in [
-            ("regression", 9, 99),
-            ("null-canary", 10, 10),
+            ("regression", 10, 110),
+            ("null-canary", 11, 11),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
             ("software-engineering-x9", 14, 126),
-            ("regression-x11", 9, 99),
+            ("regression-x11", 10, 110),
             ("context-capacity", 4, 4),
             ("deepwork", 3, 3),
             ("linkly", 1, 1),
@@ -760,6 +760,9 @@ mod tests {
             ("after-release", 5, 5),
             ("memory", 22, 66),
             ("memory-learning", 7, 21),
+            ("memory-smoke", 3, 3),
+            ("harness-weekly", 1, 1),
+            ("context-thinking", 1, 1),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -945,7 +948,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:9a097b81f10f2da794e0f1febad03e6ff14d65c2ca0d9f43c53442e8e5dfa2ea"
+            "sha256:e2481068716049de3e024699a71b0ffcfd68e8f660fdd22558011a279edeef94"
         );
     }
 
@@ -1016,6 +1019,9 @@ mod tests {
             "linkly",
             "memory",
             "memory-learning",
+            "memory-smoke",
+            "harness-weekly",
+            "context-thinking",
         ] {
             for id in plan.materialize(suite).unwrap().scenario_ids {
                 let scenario = id.parse::<ScenarioId>().unwrap();
@@ -1120,6 +1126,29 @@ mod tests {
         );
     }
 
+    /// The memory slice a Harness release runs: three memory cases, each
+    /// alone, once, with the memory suite's retry.
+    #[test]
+    fn memory_smoke_runs_three_memory_cases_alone_once() {
+        let plan = embedded().unwrap();
+        let snapshot = plan.materialize("memory-smoke").unwrap();
+        assert_eq!(
+            snapshot.scenario_ids,
+            [
+                "memory_relevant_recall",
+                "memory_session_repeat",
+                "memory_rule_changed_mid_session"
+            ]
+        );
+        assert_eq!(snapshot.campaigns.len(), 1);
+        let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
+        for (group, id) in groups.iter().zip(&snapshot.scenario_ids) {
+            assert_eq!(group["scenarios"], json!([id]));
+            assert_eq!(group["technical_retries"], 1);
+        }
+        assert_eq!(groups.len(), 3);
+    }
+
     /// The memory cases need the memory stack, so a selection by tag leaves
     /// them out instead of running them where they would fail in setup.
     #[test]
@@ -1202,6 +1231,12 @@ mod tests {
                 "context_pressure"
             ]
         );
+        for (suite, scenario) in [
+            ("context-thinking", "context_pressure"),
+            ("harness-weekly", "mechanical_reaction"),
+        ] {
+            assert_eq!(plan.materialize(suite).unwrap().scenario_ids, [scenario]);
+        }
     }
 
     const NULL_AGENT: &str = include_str!("../config/agents/null-agent.md");
@@ -1381,6 +1416,8 @@ mod tests {
             ScenarioId::ContextPressure => context_pressure::tests::controls(),
             ScenarioId::PromptInjectionResilience => prompt_injection_resilience::tests::controls(),
             ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls().await,
+            ScenarioId::SubagentValidationFailure => subagent_validation_failure::tests::controls(),
+            ScenarioId::MechanicalReaction => mechanical_reaction::tests::controls(),
             _ => return None,
         })
     }
