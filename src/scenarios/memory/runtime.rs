@@ -789,7 +789,11 @@ pub async fn apply_changes(context: &E2eContext, case: &Case, run_id: &str, fini
 /// `None`, which the frozen-section gate fails.
 pub async fn record_surface(context: &E2eContext, run_id: &str, session_id: &str) {
     let digest = context
-        .trigger_value("harness::status", json!({"session_id": session_id}))
+        // Only the verbose status carries the context snapshot.
+        .trigger_value(
+            "harness::status",
+            json!({"session_id": session_id, "verbose": true}),
+        )
         .await
         .ok()
         .and_then(|status| {
