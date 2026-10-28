@@ -2813,7 +2813,8 @@
         "long_transcript_tail",
         "subtree_deletion",
         "session_continuity",
-        "steer_and_stop"
+        "steer_and_stop",
+        "router_fault_contract"
       ]
     },
     "ScenarioMeasurement": {

@@ -57,6 +57,7 @@ mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod result_bounds;
+pub mod router_fault_contract;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
 pub mod session_continuity;
@@ -681,6 +682,7 @@ scenarios! {
     SubtreeDeletion = "subtree_deletion" => subtree_deletion::SubtreeDeletion,
     SessionContinuity = "session_continuity" => session_continuity::SessionContinuity,
     SteerAndStop = "steer_and_stop" => steer_and_stop::SteerAndStop,
+    RouterFaultContract = "router_fault_contract" => router_fault_contract::RouterFaultContract,
 }
 
 impl ScenarioId {
@@ -1044,7 +1046,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 97);
+        assert_eq!(ids.len(), 98);
     }
 
     #[test]
