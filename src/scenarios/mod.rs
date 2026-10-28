@@ -32,6 +32,7 @@ pub mod engineering_endurance_ladder;
 pub mod fanout_ladder;
 pub(crate) mod fixture;
 pub mod git_regression_forensics;
+pub mod harness_contract_probe;
 pub mod incident_response;
 pub mod insert_record;
 pub mod kanban;
@@ -669,6 +670,7 @@ scenarios! {
     MemoryLearnFromLongMessage = "memory_learn_from_long_message" => memory::Memory(26),
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
+    HarnessContractProbe = "harness_contract_probe" => harness_contract_probe::HarnessContractProbe,
     TurnFailureSurface = "turn_failure_surface" => turn_failure_surface::TurnFailureSurface,
 }
 
