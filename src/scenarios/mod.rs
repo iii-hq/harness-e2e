@@ -59,6 +59,7 @@ pub mod research_pipeline;
 pub mod result_bounds;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
+pub mod session_continuity;
 pub mod shell_coder_sandbox;
 pub mod structured_output;
 pub mod subagent_validation;
@@ -677,6 +678,7 @@ scenarios! {
     AskHandshake = "ask_handshake" => ask_handshake::AskHandshake,
     LongTranscriptTail = "long_transcript_tail" => long_transcript_tail::LongTranscriptTail,
     SubtreeDeletion = "subtree_deletion" => subtree_deletion::SubtreeDeletion,
+    SessionContinuity = "session_continuity" => session_continuity::SessionContinuity,
 }
 
 impl ScenarioId {
@@ -1040,7 +1042,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 95);
+        assert_eq!(ids.len(), 96);
     }
 
     #[test]

@@ -2811,7 +2811,8 @@
         "structured_output",
         "ask_handshake",
         "long_transcript_tail",
-        "subtree_deletion"
+        "subtree_deletion",
+        "session_continuity"
       ]
     },
     "ScenarioMeasurement": {
