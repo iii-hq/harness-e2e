@@ -26,6 +26,17 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// A `trigger_fired` record has an outcome outside `TriggerOutcome`, or
+    /// retired its binding without a `retirement_reason`.
+    MalformedTriggerRecord,
+    /// A wake binding's `delivered` records and the `e_fire_` entries it
+    /// injected differ in number: a wake was lost or doubled.
+    WakeDeliveryMismatch,
+    /// A `once` binding was delivered more than once.
+    OnceBindingRedelivered,
+    /// A binding of the run outlived `harness::teardown`, on the engine or in
+    /// the binding store.
+    LeakedTriggerBinding,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +59,12 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(
+        report
+            .trigger_bindings
+            .iter()
+            .flat_map(|bindings| bindings.violations.iter().cloned()),
+    );
     violations
 }
 

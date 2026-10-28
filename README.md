@@ -116,12 +116,20 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
-Two Harness invariants hold on every native run that passed, whatever its
+These Harness invariants hold on every native run that passed, whatever its
 gates. They belong to no scenario's digest; the run's `harness_violations`
 records what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
+- The session tree's trigger bindings keep their contract, read from the
+  `trigger_fired` records of every session in `metrics.by_session`: each
+  `outcome` is a known one and a retirement names its reason, a wake's
+  `delivered` records match the `e_fire_` entries it injected, a `once`
+  binding is delivered at most once, and after `harness::teardown` no session
+  lists a binding and no engine trigger delivers one. A broken one is
+  incomplete, like a failed gate; the run's `trigger_bindings` keeps the
+  counts by outcome and what teardown removed.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
