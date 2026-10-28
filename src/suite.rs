@@ -2421,7 +2421,7 @@ async fn execute(
                 .await;
         }
         context.drain_turn_completed_events();
-        let request = if exchange > 0 && module.bare_followup(exchange - 1) {
+        let request = if crate::scenarios::sends_bare(module, exchange) {
             SendRequest::bare(session_id, message)
         } else {
             SendRequest {
@@ -3210,7 +3210,7 @@ fn is_retryable_technical_failure(report: &E2eRunReport) -> bool {
 /// unreachable or dropped the stream, plus the router call itself failing.
 // ponytail: matches the harness's copy; read the code of the transcript's
 // error entry instead if that copy starts changing.
-const PROVIDER_TRANSPORT_FAILURES: &[&str] = &[
+pub(crate) const PROVIDER_TRANSPORT_FAILURES: &[&str] = &[
     "The selected provider is temporarily unavailable.",
     "The provider is busy right now.",
     "The response stream could not be started.",

@@ -184,7 +184,8 @@ pub struct SendRequest {
 
 impl SendRequest {
     /// A follow-up that names only the session and the message, so the turn
-    /// runs on the provider, model and policy the session already holds.
+    /// runs on what the session holds (`Scenario::bare_followup` lists what
+    /// it does not keep).
     pub fn bare(session_id: &str, message: String) -> Self {
         Self {
             session_id: Some(session_id.to_string()),

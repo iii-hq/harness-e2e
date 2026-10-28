@@ -146,17 +146,24 @@ pub trait Scenario: Send + Sync {
     }
     /// Whether follow-up `followup` (an index into `dialogue_followups`) goes
     /// out bare: only `session_id` and `message`, with no model, provider,
-    /// options or idempotency key, so its turn runs on the provider, model
-    /// and policy the session already holds. Folded into `behavior_sha256`
-    /// when any follow-up is bare.
+    /// options or idempotency key. The session keeps its provider, model,
+    /// functions, reasoning, prompt, token and cost budgets and `fs_scope`,
+    /// but not the rest of `spec.execution` or `send_metadata`: `max_turns`
+    /// and `max_validation_retries` fall back to the Harness defaults, and
+    /// `max_output_tokens`, `output` and `options.metadata` go unset.
+    /// Folded into `behavior_sha256` when any follow-up is bare.
     fn bare_followup(&self, _followup: usize) -> bool {
         false
     }
     /// How every root turn the runner waits on is meant to end: `Completed`,
     /// or `Failed` or `Cancelled` for a scenario that drives the root into
-    /// that outcome on purpose. A root turn that ends any other way fails the
-    /// run, as a `Failed` or `Cancelled` one does under the default. Folded
-    /// into `behavior_sha256` when not `Completed`.
+    /// that outcome on purpose. It holds for every exchange, so a dialogue
+    /// whose turns end differently cannot be declared. A root turn that ends
+    /// any other way fails the run, as a `Failed` or `Cancelled` one does
+    /// under the default, and so does a provider transport failure. Any other
+    /// failure ends the wait, whatever caused it: `evaluate` checks the cause
+    /// (`harness::status`'s `result_error`). Folded into `behavior_sha256`
+    /// when not `Completed`.
     fn expected_root_outcome(&self) -> TurnStatus {
         TurnStatus::Completed
     }
@@ -728,6 +735,11 @@ pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
     crate::artifact::sha256_value(&behavior_definition(id.module(), case)?)
 }
 
+/// Whether exchange `exchange` (0 is the prompt) goes out bare.
+pub(crate) fn sends_bare(module: &dyn Scenario, exchange: usize) -> bool {
+    exchange > 0 && module.bare_followup(exchange - 1)
+}
+
 /// The JSON that `behavior_sha256` hashes.
 pub(crate) fn behavior_definition(module: &dyn Scenario, case: &ScenarioCase) -> Result<Value> {
     let spec = module.spec(CONTRACT_NAMESPACE);
@@ -948,6 +960,16 @@ mod tests {
         let declared = behavior_definition(&BareFailingMinimalPath, &case).unwrap();
         assert_eq!(declared["bare_followups"], serde_json::json!([1]));
         assert_eq!(declared["expected_root_outcome"], "failed");
+    }
+
+    /// Exchange 0 is the prompt, so follow-up `n` is exchange `n + 1`.
+    #[test]
+    fn a_bare_follow_up_is_the_exchange_after_its_index() {
+        let bare: Vec<bool> = (0..3)
+            .map(|exchange| sends_bare(&BareFailingMinimalPath, exchange))
+            .collect();
+        assert_eq!(bare, [false, false, true]);
+        assert!(!(0..3).any(|exchange| sends_bare(ScenarioId::MinimalPath.module(), exchange)));
     }
 
     #[tokio::test]

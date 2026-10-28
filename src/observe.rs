@@ -235,7 +235,10 @@ fn unexpected_outcome(
     result_error: Option<&str>,
     expected: TurnStatus,
 ) -> Option<String> {
-    if status == expected {
+    // A provider that dropped the turn is never the failure a scenario drives.
+    let transport = result_error
+        .is_some_and(|reason| crate::suite::PROVIDER_TRANSPORT_FAILURES.contains(&reason));
+    if status == expected && !transport {
         return None;
     }
     match status {
@@ -400,11 +403,19 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         match observer.pull_root_status(root_session_id).await {
             Ok(Some(status)) => {
                 ensure_not_cancelled(cancellation.as_ref())?;
+                // An older turn that completed is not the awaited turn's outcome.
+                let older_completed = status.status == TurnStatus::Completed
+                    && machine
+                        .expected_turn_id
+                        .as_deref()
+                        .is_some_and(|expected| status.turn_id.as_deref() != Some(expected));
                 if let Some(message) = unexpected_outcome(
                     status.status,
                     status.result_error.as_deref(),
                     expected_outcome,
-                ) {
+                )
+                .filter(|_| !older_completed)
+                {
                     bail!("{message}");
                 }
                 let expected_ended = machine.expected_turn_id.as_deref().is_some_and(|expected| {
@@ -555,9 +566,18 @@ mod tests {
     }
 
     fn status(turn_status: TurnStatus, expects_wake: bool) -> StatusReport {
+        root_status("turn-1", turn_status, expects_wake, None)
+    }
+
+    fn root_status(
+        turn_id: &str,
+        turn_status: TurnStatus,
+        expects_wake: bool,
+        result_error: Option<&str>,
+    ) -> StatusReport {
         StatusReport::from_normalized(StatusReportPayload {
             session_id: "root".to_string(),
-            turn_id: Some("turn-1".to_string()),
+            turn_id: Some(turn_id.to_string()),
             status: turn_status,
             step: 1,
             turn_count: 1,
@@ -566,7 +586,7 @@ mod tests {
             children: Vec::new(),
             queued: Vec::new(),
             expects_wake,
-            result_error: None,
+            result_error: result_error.map(str::to_string),
             validation_retries: 0,
             transient_resumes: 0,
         })
@@ -895,6 +915,54 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_eq!(error, "turn ended as Cancelled: stopped");
+    }
+
+    /// A provider that dropped the turn is never the failure a scenario
+    /// drives, so it keeps the copy the report classifies as transport.
+    #[tokio::test]
+    async fn a_provider_transport_failure_is_not_the_expected_failure() {
+        let reason = "The provider is busy right now.";
+        let observer = Injected::new(metrics(true, 1, 0), status(TurnStatus::Failed, false));
+        observer.push(event(
+            "root",
+            "turn-1",
+            TurnStatus::Failed,
+            true,
+            Some(reason),
+        ));
+        let error = wait_expecting(&observer, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, format!("turn ended as Failed: {reason}"));
+
+        let polled = Injected::new(
+            metrics(true, 1, 0),
+            root_status("turn-1", TurnStatus::Failed, false, Some(reason)),
+        );
+        let error = wait_expecting(&polled, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, format!("turn ended as Failed: {reason}"));
+    }
+
+    /// The status may still show an older turn that completed before the
+    /// awaited one starts; that is not the awaited turn's outcome.
+    #[tokio::test]
+    async fn an_older_completed_turn_does_not_fail_an_expected_failure() {
+        let observer = Injected::new(
+            metrics(false, 1, 0),
+            root_status("turn-0", TurnStatus::Completed, false, None),
+        );
+        let drive = async {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            observer.set_metrics(metrics(true, 1, 0));
+            *observer.status.lock().unwrap() =
+                root_status("turn-1", TurnStatus::Failed, false, Some("budget"));
+        };
+        let (result, _) = tokio::join!(wait_expecting(&observer, TurnStatus::Failed), drive);
+        assert!(result.unwrap().complete);
     }
 
     #[tokio::test]
