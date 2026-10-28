@@ -217,8 +217,7 @@ fn checks(transcript: &Value, status: &Value, events: &Value, native: Option<boo
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|event| event["turn_id"] == turn_id && event["status"] == "completed")
-        .last();
+        .rfind(|event| event["turn_id"] == turn_id && event["status"] == "completed");
     let submits = common::function_calls(transcript)
         .into_iter()
         .filter(|call| call.function_id == SUBMIT_RESULT)
