@@ -233,18 +233,29 @@ async fn delivering(context: &E2eContext) -> Result<Vec<(String, String)>> {
         .flatten()
         .filter_map(|row| row.get("id").and_then(Value::as_str))
     {
-        // A row unregistered between the list and its info is gone.
-        let Ok(info) = context
+        let info = match context
             .trigger_value("engine::registered-triggers::info", json!({ "id": id }))
             .await
-        else {
-            continue;
+        {
+            Ok(info) => info,
+            // A row unregistered between the list and its info is gone.
+            Err(error) if disappeared(&error) => continue,
+            Err(error) => return Err(error),
         };
         if let Some(binding) = text(&info, "/metadata/__binding") {
             delivering.push((id.to_string(), binding.to_string()));
         }
     }
     Ok(delivering)
+}
+
+/// The engine answers `NOT_FOUND` for a trigger row it no longer holds; a
+/// missing function is `function_not_found`, and a transport error is neither.
+fn disappeared(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<iii_sdk::errors::Error>(),
+        Some(iii_sdk::errors::Error::Remote { code, .. }) if code == "NOT_FOUND"
+    )
 }
 
 /// `(session, binding)` for every binding `harness::triggers::list` returns.
@@ -415,6 +426,25 @@ mod tests {
             invariants(&bindings),
             [HarnessInvariant::OnceBindingRedelivered]
         );
+    }
+
+    #[test]
+    fn only_a_trigger_row_the_engine_reports_not_found_has_disappeared() {
+        let remote = |code: &str| {
+            anyhow::Error::new(iii_sdk::errors::Error::Remote {
+                code: code.into(),
+                message: String::new(),
+                stacktrace: None,
+            })
+            .context("invoke engine::registered-triggers::info")
+        };
+
+        assert!(disappeared(&remote("NOT_FOUND")));
+        // The info function itself missing is not a removed row.
+        assert!(!disappeared(&remote("function_not_found")));
+        assert!(!disappeared(
+            &anyhow::Error::new(iii_sdk::errors::Error::Timeout).context("invoke")
+        ));
     }
 
     #[test]

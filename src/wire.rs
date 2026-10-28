@@ -659,6 +659,25 @@ const TEARDOWN_RESPONSE: &[SchemaField] = &[SchemaField {
     required: true,
 }];
 
+const TRIGGERS_LIST_REQUEST: &[SchemaField] = &[SchemaField {
+    path: "session_id",
+    kind: JsonType::String,
+    required: false,
+}];
+
+const TRIGGERS_LIST_RESPONSE: &[SchemaField] = &[
+    SchemaField {
+        path: "subscriptions",
+        kind: JsonType::Array,
+        required: true,
+    },
+    SchemaField {
+        path: "subscriptions[].subscription_id",
+        kind: JsonType::String,
+        required: true,
+    },
+];
+
 const CONTROL_PLANE: &[FunctionRequirement] = &[
     FunctionRequirement {
         function_id: "harness::send",
@@ -689,6 +708,11 @@ const CONTROL_PLANE: &[FunctionRequirement] = &[
         function_id: "harness::teardown",
         request: ROOT_SESSION_REQUEST,
         response: TEARDOWN_RESPONSE,
+    },
+    FunctionRequirement {
+        function_id: "harness::triggers::list",
+        request: TRIGGERS_LIST_REQUEST,
+        response: TRIGGERS_LIST_RESPONSE,
     },
 ];
 
@@ -959,9 +983,18 @@ mod tests {
                 schema_fixture(include_str!(
                     "../tests/golden/schemas/harness.teardown.json"
                 )),
+                schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.triggers.list.json"
+                )),
             ]
         });
         validate_control_plane(&raw).unwrap();
+
+        // Every native run lists the session tree's trigger bindings.
+        let mut without_bindings = raw;
+        without_bindings["functions"].as_array_mut().unwrap().pop();
+        let error = validate_control_plane(&without_bindings).unwrap_err();
+        assert!(error.to_string().contains("harness::triggers::list"));
     }
 
     #[test]
@@ -1152,6 +1185,9 @@ mod tests {
                 schema_fixture(include_str!("../tests/golden/schemas/harness.stop.json")),
                 schema_fixture(include_str!(
                     "../tests/golden/schemas/harness.teardown.json"
+                )),
+                schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.triggers.list.json"
                 )),
             ]
         });
