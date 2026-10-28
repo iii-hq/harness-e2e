@@ -2363,6 +2363,18 @@ impl RunFailure {
     }
 }
 
+/// A failed read of the prompt surface after the turn: the engine's state
+/// reads it makes are idempotent, and preflight already rejected a Harness
+/// missing them, so the slot reruns.
+fn prompt_surface_failure(error: anyhow::Error) -> RunFailure {
+    RunFailure::retryable(
+        RunStatus::InfrastructureError,
+        FailurePhase::Collect,
+        "prompt_surface_collection_failed",
+        format!("capture the prompt surface: {error:#}"),
+    )
+}
+
 fn preflight_failure(failure: crate::prompt_surface::PreflightFailure) -> RunFailure {
     let message = format!("Harness preflight: {}", failure.message);
     let mut run_failure = RunFailure::retryable(
@@ -2582,13 +2594,7 @@ async fn execute(
     report.prompt_surface = Some(
         crate::prompt_surface::collect(context, subject, report, sent_root)
             .await
-            .map_err(|error| {
-                RunFailure::new(
-                    RunStatus::InfrastructureError,
-                    FailurePhase::Collect,
-                    format!("capture the prompt surface: {error:#}"),
-                )
-            })?,
+            .map_err(prompt_surface_failure)?,
     );
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
@@ -4856,6 +4862,19 @@ mod tests {
         assert_eq!(not_ready.retry_scope, crate::report::RetryScope::SameSlot);
         assert_eq!(misconfigured.code, HARNESS_MISCONFIGURED);
         assert_eq!(misconfigured.retry_scope, crate::report::RetryScope::None);
+    }
+
+    #[test]
+    fn a_failed_prompt_surface_read_reruns_the_slot() {
+        let failure = prompt_surface_failure(anyhow::anyhow!("state::get timed out"));
+
+        assert_eq!(failure.status, RunStatus::InfrastructureError);
+        assert_eq!(failure.code, "prompt_surface_collection_failed");
+        assert_eq!(failure.retry_scope, crate::report::RetryScope::SameSlot);
+        assert_eq!(
+            failure.message,
+            "capture the prompt surface: state::get timed out"
+        );
     }
 
     #[test]

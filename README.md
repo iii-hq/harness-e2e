@@ -124,7 +124,8 @@ what broke.
   without a result: incomplete, like a failed gate, and the score stays.
 - The prompt surface drifted, read before teardown from the root and every
   session `metrics.by_session` names (`src/prompt_surface.rs`): incomplete,
-  and the score stays.
+  and the score stays. A read of that surface that fails is an
+  infrastructure error (`prompt_surface_collection_failed`) the slot re-runs.
   - `frozen_prompt_drift`: the root's `harness::system-prompt::get` built-in
     layer is not the `default_only` one opening with `You are an iii agent
     worker.` (for an `--agent` subject, the profile's `system_prompt`
