@@ -497,7 +497,17 @@
         "repeated_failure_breaker",
         "truncated_call_guard",
         "restart_recovery",
-        "approval_roundtrip"
+        "approval_roundtrip",
+        "context_compaction",
+        "result_bounds",
+        "structured_output",
+        "ask_handshake",
+        "long_transcript_tail",
+        "subtree_deletion",
+        "session_continuity",
+        "steer_and_stop",
+        "router_fault_contract",
+        "prompt_layers"
       ]
     },
     "ScenarioRealism": {

@@ -207,6 +207,7 @@ async fn run_fresh_planner(
                     max_output_tokens: Some(PLANNER_MAX_OUTPUT_TOKENS),
                     max_total_tokens: Some(PLANNER_MAX_TOTAL_TOKENS),
                     max_validation_retries: Some(0),
+                    output: None,
                     functions: Some(FunctionPolicy {
                         allow: Vec::new(),
                         deny: vec!["*".into(), "e2e::*".into()],

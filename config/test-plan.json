@@ -156,6 +156,22 @@
         "memory_honors_do_not_keep",
         "memory_keeps_without_a_rule"
       ]
+    },
+    {
+      "id": "m11",
+      "label": "Harness mechanisms",
+      "scenarios": [
+        "context_compaction",
+        "result_bounds",
+        "structured_output",
+        "ask_handshake",
+        "long_transcript_tail",
+        "subtree_deletion",
+        "session_continuity",
+        "steer_and_stop",
+        "router_fault_contract",
+        "prompt_layers"
+      ]
     }
   ],
   "diagnostics": [
@@ -239,6 +255,12 @@
     "onboarding_tour": [
       "The onboarding stack: a fresh harness template project with the tour's onboarding worker, as iii project init --learn-iii creates it, with the model's provider and its key",
       "The Onboarding agent profile (ade-worker-builder) the harness template ships, served by the Directory"
+    ],
+    "prompt_layers": [
+      "A disposable stack: while it runs it replaces the stored default prompt and the Harness default_filesystem_root every session sees, and adds skills to the catalog"
+    ],
+    "router_fault_contract": [
+      "A disposable stack: it registers two e2e-*-<run> providers with the llm-router that no call can remove"
     ]
   },
   "suites": [
