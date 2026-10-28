@@ -38,6 +38,7 @@ pub mod incident_response;
 pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
+pub mod long_transcript_tail;
 pub mod mechanical_reaction;
 mod mechanism;
 pub mod memory;
@@ -673,6 +674,7 @@ scenarios! {
     ResultBounds = "result_bounds" => result_bounds::ResultBounds,
     StructuredOutput = "structured_output" => structured_output::StructuredOutput,
     AskHandshake = "ask_handshake" => ask_handshake::AskHandshake,
+    LongTranscriptTail = "long_transcript_tail" => long_transcript_tail::LongTranscriptTail,
 }
 
 impl ScenarioId {
@@ -1036,7 +1038,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 93);
+        assert_eq!(ids.len(), 94);
     }
 
     #[test]
