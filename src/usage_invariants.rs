@@ -2,7 +2,7 @@
 //! descendant transcripts `metrics.by_session` names, and the metrics
 //! themselves. `harness_invariants::violations` checks them on a passed run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -11,7 +11,7 @@ use crate::context::E2eContext;
 use crate::harness_invariants::{HarnessInvariant, HarnessViolation};
 use crate::report::E2eRunReport;
 use crate::suite::SubjectConfig;
-use crate::wire::SessionMetricsPayload;
+use crate::wire::{SessionMetricsPayload, SessionUsage};
 
 /// Fetches every descendant session's transcript the metrics name, before
 /// teardown removes them.
@@ -60,8 +60,15 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
     if metrics.complete {
         violations.extend(accounting(metrics));
     }
-    violations.extend(routing(metrics, subject, &transcripts));
-    violations.extend(reasoning(report, metrics, subject));
+    let (root_lineage, spawns) = spawns(metrics, subject, &transcripts);
+    violations.extend(routing(metrics, subject, &transcripts, &spawns));
+    violations.extend(reasoning(
+        metrics,
+        subject,
+        &transcripts,
+        root_lineage,
+        &spawns,
+    ));
     violations
 }
 
@@ -191,57 +198,53 @@ fn accounting(metrics: &SessionMetricsPayload) -> Vec<HarnessViolation> {
     violations
 }
 
-/// Root generations run on the subject's route. A child runs on the model its
-/// spawn named, or on its parent's route when the spawn named none
-/// (`harness/src/subagent.rs` `spawn_child`).
-fn routing(
-    metrics: &SessionMetricsPayload,
+/// What a session runs with, as the spawns above it set it
+/// (`harness/src/subagent.rs` `seed_child`).
+#[derive(Clone, Copy)]
+struct Lineage {
+    /// On an agent profile, whose route and reasoning effort win: named by
+    /// its spawn, or continued from its parent unless the spawn brought its
+    /// own system prompt (`child_agent_id`).
+    profile: bool,
+    /// Still on the subject's provider options: a child copies its parent's
+    /// unless its spawn named a thinking level (`child_reasoning`).
+    options: bool,
+}
+
+/// A fresh child some session in the tree spawned.
+struct Spawn<'a> {
+    parent: &'a str,
+    child: &'a SessionUsage,
+    arguments: Value,
+    lineage: Lineage,
+}
+
+/// Every fresh spawn in the tree, parents before their children, walked
+/// from the root through the transcripts at hand.
+fn spawns<'a>(
+    metrics: &'a SessionMetricsPayload,
     subject: &SubjectConfig,
-    transcripts: &[(&str, &Value)],
-) -> Vec<HarnessViolation> {
+    transcripts: &[(&'a str, &'a Value)],
+) -> (Lineage, Vec<Spawn<'a>>) {
     let root = metrics.root_session_id.as_str();
+    let root_lineage = Lineage {
+        profile: subject.agent.is_some(),
+        options: true,
+    };
     let sessions = metrics
         .by_session
         .iter()
         .map(|session| (session.session_id.as_str(), session))
         .collect::<BTreeMap<_, _>>();
-    let route_of = |session: &str| -> Option<(&str, &str)> {
-        if session == root {
-            return Some((&subject.provider, &subject.model));
-        }
-        match sessions.get(session)?.by_model.as_slice() {
-            [usage] => Some((&usage.provider, &usage.model)),
-            _ => None,
-        }
-    };
-    let mut violations = Vec::new();
-    for (session, transcript) in transcripts {
-        if *session == root {
-            let misrouted = generations(transcript)
-                .filter(|(_, message)| {
-                    text(message, "/provider") != Some(subject.provider.as_str())
-                        || text(message, "/model") != Some(subject.model.as_str())
-                })
-                .map(|(entry, message)| {
-                    let provider = text(message, "/provider").unwrap_or("?");
-                    format!(
-                        "{entry} ran on {provider}/{}",
-                        text(message, "/model").unwrap_or("?")
-                    )
-                })
-                .collect::<Vec<_>>();
-            if !misrouted.is_empty() {
-                violations.push(violation(
-                    HarnessInvariant::ModelMisrouted,
-                    format!(
-                        "{root}: {} instead of {}/{}",
-                        misrouted.join(", "),
-                        subject.provider,
-                        subject.model
-                    ),
-                ));
-            }
-        }
+    let transcripts = transcripts.iter().copied().collect::<BTreeMap<_, _>>();
+    let mut lineages = BTreeMap::from([(root, root_lineage)]);
+    let mut queue = VecDeque::from([root]);
+    let mut spawns = Vec::new();
+    while let Some(parent) = queue.pop_front() {
+        let Some(transcript) = transcripts.get(parent) else {
+            continue;
+        };
+        let lineage = lineages[parent];
         let children = spawned_children(transcript);
         for invocation in crate::scenarios::common::function_invocations(transcript) {
             if invocation.call.function_id != "harness::spawn" {
@@ -251,41 +254,116 @@ fn routing(
                 .call_id
                 .as_deref()
                 .and_then(|call| children.get(call))
-                .and_then(|child| sessions.get(child.as_str()))
+                .and_then(|child| sessions.get(child.as_str()).copied())
             else {
                 continue;
             };
-            let arguments = &invocation.call.arguments;
-            let named = text(arguments, "/model");
-            // A profile's route wins over the spawn's, and an in-turn spawn
-            // that names no profile continues the subject's.
-            if arguments.get("agent").is_some_and(|agent| !agent.is_null())
-                || (subject.agent.is_some() && named.is_some())
+            let arguments = invocation.call.arguments;
+            let named = |pointer| arguments.pointer(pointer).is_some_and(|v| !v.is_null());
+            let child_lineage = Lineage {
+                profile: named("/agent") || (lineage.profile && !named("/options/system_prompt")),
+                options: lineage.options && !named("/options/thinking_level"),
+            };
+            if lineages
+                .insert(child.session_id.as_str(), child_lineage)
+                .is_none()
             {
-                continue;
+                queue.push_back(child.session_id.as_str());
             }
-            let Some((provider, model)) = named
-                .map(|model| (text(arguments, "/provider"), model))
-                .or_else(|| route_of(session).map(|(provider, model)| (Some(provider), model)))
-            else {
-                continue;
-            };
-            let expected = provider.map_or_else(
-                || model.to_string(),
-                |provider| format!("{provider}/{model}"),
-            );
-            for usage in &child.by_model {
-                if usage.model != model
-                    || provider.is_some_and(|provider| provider != usage.provider)
-                {
-                    violations.push(violation(
-                        HarnessInvariant::ModelMisrouted,
-                        format!(
-                            "{} ran on {}/{}, spawned for {expected}",
-                            child.session_id, usage.provider, usage.model
-                        ),
-                    ));
-                }
+            spawns.push(Spawn {
+                parent,
+                child,
+                arguments,
+                lineage: child_lineage,
+            });
+        }
+    }
+    (root_lineage, spawns)
+}
+
+/// Root generations run on the subject's route. A child runs on the model its
+/// spawn named, or on its parent's model when the spawn named none, with the
+/// provider its spawn named, else its parent's (`child_provider`).
+fn routing(
+    metrics: &SessionMetricsPayload,
+    subject: &SubjectConfig,
+    transcripts: &[(&str, &Value)],
+    spawns: &[Spawn],
+) -> Vec<HarnessViolation> {
+    let root = metrics.root_session_id.as_str();
+    let mut violations = Vec::new();
+    if let Some((_, transcript)) = transcripts.iter().find(|(session, _)| *session == root) {
+        let misrouted = generations(transcript)
+            .filter(|(_, message)| {
+                text(message, "/provider") != Some(subject.provider.as_str())
+                    || text(message, "/model") != Some(subject.model.as_str())
+            })
+            .map(|(entry, message)| {
+                let provider = text(message, "/provider").unwrap_or("?");
+                format!(
+                    "{entry} ran on {provider}/{}",
+                    text(message, "/model").unwrap_or("?")
+                )
+            })
+            .collect::<Vec<_>>();
+        if !misrouted.is_empty() {
+            violations.push(violation(
+                HarnessInvariant::ModelMisrouted,
+                format!(
+                    "{root}: {} instead of {}/{}",
+                    misrouted.join(", "),
+                    subject.provider,
+                    subject.model
+                ),
+            ));
+        }
+    }
+    let route_of = |session: &str| -> Option<(&str, &str)> {
+        if session == root {
+            return Some((&subject.provider, &subject.model));
+        }
+        let session = metrics
+            .by_session
+            .iter()
+            .find(|s| s.session_id == session)?;
+        match session.by_model.as_slice() {
+            [usage] => Some((&usage.provider, &usage.model)),
+            _ => None,
+        }
+    };
+    for spawn in spawns {
+        let arguments = &spawn.arguments;
+        let named = text(arguments, "/model");
+        // A profile's route wins over the spawn's model, and a spawn that
+        // names none continues the parent's, which ran on the same profile.
+        let names_agent = arguments.get("agent").is_some_and(|agent| !agent.is_null());
+        if spawn.lineage.profile && (named.is_some() || names_agent) {
+            continue;
+        }
+        let Some((provider, model)) = (match named {
+            Some(model) => Some((text(arguments, "/provider"), model)),
+            None => route_of(spawn.parent).map(|(provider, model)| {
+                (
+                    Some(text(arguments, "/provider").unwrap_or(provider)),
+                    model,
+                )
+            }),
+        }) else {
+            continue;
+        };
+        let expected = provider.map_or_else(
+            || model.to_string(),
+            |provider| format!("{provider}/{model}"),
+        );
+        for usage in &spawn.child.by_model {
+            if usage.model != model || provider.is_some_and(|provider| provider != usage.provider) {
+                violations.push(violation(
+                    HarnessInvariant::ModelMisrouted,
+                    format!(
+                        "{} ran on {}/{}, spawned for {expected}",
+                        spawn.child.session_id, usage.provider, usage.model
+                    ),
+                ));
             }
         }
     }
@@ -313,60 +391,78 @@ fn spawned_children(transcript: &Value) -> BTreeMap<&str, String> {
         .collect()
 }
 
-/// With the provider's native thinking switch off, the root reasons not at
-/// all. shortcut: children are not held to it, since whether a child keeps
-/// the parent's provider options depends on its route; check them once
-/// verbose `harness::status` reports the options a session runs with.
+/// A session that runs with the subject's thinking switch off for its
+/// provider reasons not at all. Sessions on a profile are not judged: its
+/// reasoning effort is applied over the switch (`apply_reasoning`).
 fn reasoning(
-    report: &E2eRunReport,
     metrics: &SessionMetricsPayload,
     subject: &SubjectConfig,
+    transcripts: &[(&str, &Value)],
+    root_lineage: Lineage,
+    spawns: &[Spawn],
 ) -> Vec<HarnessViolation> {
-    let disabled = subject
-        .provider_options
-        .as_ref()
-        .and_then(|options| options.get(&subject.provider))
-        .and_then(|options| text(options, "/thinking"))
-        == Some("disabled");
-    if !disabled {
-        return Vec::new();
-    }
+    let disabled_for = |provider: &str| {
+        subject
+            .provider_options
+            .as_ref()
+            .and_then(|options| options.get(provider))
+            .and_then(|options| text(options, "/thinking"))
+            == Some("disabled")
+    };
     let root = metrics.root_session_id.as_str();
+    let judged = metrics.by_session.iter().filter(|session| {
+        if session.session_id == root {
+            return !root_lineage.profile && disabled_for(&subject.provider);
+        }
+        spawns
+            .iter()
+            .find(|spawn| spawn.child.session_id == session.session_id)
+            .is_some_and(|spawn| {
+                !spawn.lineage.profile
+                    && spawn.lineage.options
+                    && !session.by_model.is_empty()
+                    && session
+                        .by_model
+                        .iter()
+                        .all(|usage| disabled_for(&usage.provider))
+            })
+    });
     let mut violations = Vec::new();
-    if let Some(tokens) = metrics
-        .by_session
-        .iter()
-        .find(|session| session.session_id == root)
-        .and_then(|session| session.reasoning_tokens)
-        .filter(|tokens| *tokens > 0)
-    {
-        violations.push(violation(
-            HarnessInvariant::ReasoningWhileDisabled,
-            format!("{root} counted {tokens} reasoning tokens with thinking disabled"),
-        ));
-    }
-    let thinking = report
-        .transcript
-        .iter()
-        .flat_map(generations)
-        .filter(|(_, message)| {
-            message
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .any(|block| matches!(text(block, "/type"), Some("thinking" | "redacted_thinking")))
-        })
-        .map(|(entry, _)| entry)
-        .collect::<Vec<_>>();
-    if !thinking.is_empty() {
-        violations.push(violation(
-            HarnessInvariant::ReasoningWhileDisabled,
-            format!(
-                "{root}: {} carried thinking with thinking disabled",
-                thinking.join(", ")
-            ),
-        ));
+    for session in judged {
+        let id = session.session_id.as_str();
+        if let Some(tokens) = session.reasoning_tokens.filter(|tokens| *tokens > 0) {
+            violations.push(violation(
+                HarnessInvariant::ReasoningWhileDisabled,
+                format!("{id} counted {tokens} reasoning tokens with thinking disabled"),
+            ));
+        }
+        let thinking = transcripts
+            .iter()
+            .filter(|(session, _)| *session == id)
+            .flat_map(|(_, transcript)| generations(transcript))
+            .filter(|(_, message)| {
+                message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|block| match text(block, "/type") {
+                        Some("thinking") => text(block, "/text").is_some_and(|t| !t.is_empty()),
+                        Some("redacted_thinking") => true,
+                        _ => false,
+                    })
+            })
+            .map(|(entry, _)| entry)
+            .collect::<Vec<_>>();
+        if !thinking.is_empty() {
+            violations.push(violation(
+                HarnessInvariant::ReasoningWhileDisabled,
+                format!(
+                    "{id}: {} carried thinking with thinking disabled",
+                    thinking.join(", ")
+                ),
+            ));
+        }
     }
     violations
 }
@@ -453,6 +549,7 @@ mod tests {
     struct Run {
         root: Value,
         child: Value,
+        grandchild: Value,
         metrics: Value,
     }
 
@@ -467,6 +564,7 @@ mod tests {
                 child: json!({ "messages": [
                     assistant("e3", 0.03, json!([{ "type": "text", "text": "3" }])),
                 ] }),
+                grandchild: Value::Null,
                 metrics: json!({
                     "root_session_id": "root", "complete": true,
                     "totals": {
@@ -495,12 +593,38 @@ mod tests {
             self
         }
 
+        /// The child, instead of answering, spawns a grandchild with `payload`
+        /// that runs on `model`.
+        fn with_grandchild(self, payload: Value, model: &str) -> Self {
+            let mut run = self.set(
+                "child",
+                "/messages",
+                json!([
+                    assistant("e3", 0.03, spawn("c2", payload)),
+                    spawned("c2", "grandchild"),
+                ]),
+            );
+            let mut grandchild = session("grandchild", Some("child"), 1, 0.0);
+            grandchild["by_model"][0]["model"] = json!(model);
+            run.metrics["by_session"]
+                .as_array_mut()
+                .expect("by_session")
+                .push(grandchild);
+            run.grandchild = json!({ "messages": [] });
+            run
+        }
+
         fn check(self, subject: &SubjectConfig) -> Vec<HarnessViolation> {
             let mut report =
                 E2eRunReport::new("run".into(), "a".into(), 1, "root".into(), "p".into());
             report.status = RunStatus::Passed;
             report.transcript = Some(self.root);
             report.child_transcripts = BTreeMap::from([("child".into(), self.child)]);
+            if !self.grandchild.is_null() {
+                report
+                    .child_transcripts
+                    .insert("grandchild".into(), self.grandchild);
+            }
             report.metrics = Some(Observed::from_normalized(
                 serde_json::from_value(self.metrics).expect("metrics decode"),
             ));
@@ -725,6 +849,54 @@ mod tests {
     }
 
     #[test]
+    fn a_child_spawned_for_a_provider_alone_runs_on_it_with_its_parents_model() {
+        let ran_on = |provider: &str| {
+            Run::new()
+                .set(
+                    "root",
+                    "/messages/0/message/content/0/arguments/payload",
+                    json!({ "provider": "x" }),
+                )
+                .set(
+                    "metrics",
+                    "/by_session/1/by_model/0/provider",
+                    json!(provider),
+                )
+                .check(&subject())
+        };
+
+        assert_eq!(ran_on("x"), []);
+        only(
+            &ran_on("p"),
+            HarnessInvariant::ModelMisrouted,
+            "child ran on p/m, spawned for x/m",
+        );
+    }
+
+    #[test]
+    fn a_profile_a_child_was_spawned_on_reaches_the_spawns_it_makes() {
+        let grandchild = |payload: Value| {
+            Run::new()
+                .set(
+                    "root",
+                    "/messages/0/message/content/0/arguments/payload",
+                    json!({ "agent": "a" }),
+                )
+                .set("metrics", "/by_session/1/by_model/0/model", json!("q"))
+                .with_grandchild(payload, "q")
+                .check(&subject())
+        };
+
+        assert_eq!(grandchild(json!({ "model": "n" })), []);
+        // Its own system prompt sheds the profile, so the named model holds.
+        only(
+            &grandchild(json!({ "model": "n", "options": { "system_prompt": "be brief" } })),
+            HarnessInvariant::ModelMisrouted,
+            "grandchild ran on p/q, spawned for n",
+        );
+    }
+
+    #[test]
     fn a_child_on_an_agent_profile_route_is_not_judged() {
         let violations = Run::new()
             .set(
@@ -762,5 +934,65 @@ mod tests {
         );
         assert_eq!(reasoned().check(&subject()), []);
         assert_eq!(Run::new().check(&disabled), []);
+        // A profile's reasoning effort wins over the subject's switch.
+        let profiled = SubjectConfig {
+            agent: Some("a".into()),
+            ..disabled.clone()
+        };
+        assert_eq!(reasoned().check(&profiled), []);
+        // An empty thinking block carries no reasoning.
+        let empty = Run::new()
+            .set(
+                "root",
+                "/messages/2/message/content",
+                json!([{ "type": "thinking", "text": "" }, { "type": "text", "text": "done" }]),
+            )
+            .check(&disabled);
+        assert_eq!(empty, []);
+    }
+
+    #[test]
+    fn a_child_that_kept_the_disabled_thinking_and_reasoned_is_flagged() {
+        let disabled = SubjectConfig {
+            provider_options: Some(json!({ "p": { "thinking": "disabled" } })),
+            ..subject()
+        };
+        let reasoned = |payload: Value, provider: &str| {
+            Run::new()
+                .set(
+                    "root",
+                    "/messages/0/message/content/0/arguments/payload",
+                    payload,
+                )
+                .set(
+                    "child",
+                    "/messages/0/message/content",
+                    json!([{ "type": "thinking", "text": "hm" }]),
+                )
+                .set("metrics", "/by_session/1/reasoning_tokens", json!(7))
+                .set(
+                    "metrics",
+                    "/by_session/1/by_model/0/provider",
+                    json!(provider),
+                )
+                .check(&disabled)
+        };
+
+        let violations = reasoned(json!({ "task": "count" }), "p");
+        assert_eq!(
+            violations.iter().map(|v| v.invariant).collect::<Vec<_>>(),
+            [HarnessInvariant::ReasoningWhileDisabled; 2],
+            "{violations:?}"
+        );
+        assert!(
+            violations.iter().all(|v| v.detail.starts_with("child")),
+            "{violations:?}"
+        );
+        // A spawn that names a level drops the inherited switch, a profile's
+        // effort wins over it, and another provider has no switch set.
+        let level = json!({ "options": { "thinking_level": "low" } });
+        assert_eq!(reasoned(level, "p"), []);
+        assert_eq!(reasoned(json!({ "agent": "a" }), "p"), []);
+        assert_eq!(reasoned(json!({ "provider": "x" }), "x"), []);
     }
 }

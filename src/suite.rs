@@ -2555,16 +2555,16 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
-    report.child_transcripts =
-        crate::usage_invariants::child_transcripts(context, &observation.metrics)
-            .await
-            .map_err(|error| {
-                RunFailure::new(
-                    RunStatus::InfrastructureError,
-                    FailurePhase::Collect,
-                    format!("capture descendant transcripts: {error:#}"),
-                )
-            })?;
+    // Only the usage invariants read them, and they judge fewer children
+    // without them, so a failed fetch must not void the run's outcome.
+    match crate::usage_invariants::child_transcripts(context, &observation.metrics).await {
+        Ok(transcripts) => report.child_transcripts = transcripts,
+        Err(error) => tracing::warn!(
+            session_id,
+            error = format!("{error:#}"),
+            "could not capture descendant transcripts"
+        ),
+    }
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
