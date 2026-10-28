@@ -37,11 +37,20 @@ mod validation_self_repair;
 
 pub(crate) use context_pressure::{measurements as context_measurements, summary_template};
 
+/// The line the `pre_generate` probe adds to the scenario's prompt, which
+/// makes it part of what the subject is asked (and so of its digest).
+pub fn prompt_append(scenario: &str, run_id: &str) -> Option<String> {
+    (scenario == persistent_state::ID).then(|| persistent_state::marker(run_id))
+}
+
 const PRE_GENERATE: &str = "harness::hook::pre-generate";
 const PRE_TRIGGER: &str = "harness::hook::pre-trigger";
 /// A probe the chokepoint must answer quickly: a wedged session lock is a
 /// broken chokepoint, not a slow one.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The call ids `invoke_as` gives its probes, which the observers tell apart
+/// from the model's own calls by.
+const PROBE_CALL_PREFIX: &str = "e2e_probe_";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MechanismEvidence {
@@ -164,6 +173,7 @@ pub async fn arm(
     run_id: &str,
     agent: Option<&str>,
 ) -> Result<Armed> {
+    let agent = agent_profile::gated(scenario, agent);
     let mut armed = Armed {
         scenario: scenario.into(),
         agent: agent.map(str::to_string),
@@ -173,7 +183,7 @@ pub async fn arm(
         functions: Vec::new(),
         triggers: Vec::new(),
     };
-    let append = (scenario == persistent_state::ID).then(|| persistent_state::marker(run_id));
+    let append = prompt_append(scenario, run_id);
     if agent.is_some()
         || append.is_some()
         || [context_pressure::ID, onboarding::ID].contains(&scenario)
@@ -201,7 +211,10 @@ pub async fn arm(
                 .metadata(json!({"internal": true})),
             ),
         );
-        // Last in the chain, and open on error: it never stops a turn.
+        // Last in the chain, and open on error: it never stops a turn. The
+        // Harness has no session filter for `pre_generate`, so every step on
+        // the stack makes this round trip while the attempt runs; it is armed
+        // only for the scenarios whose gates read prompts.
         armed.triggers.push(
             context
                 .client()
@@ -225,6 +238,7 @@ pub async fn arm(
                     async move {
                         if input["session_id"] == session.as_str() {
                             lock_unpoisoned(&calls).push(json!({
+                                "call_id": input["call"]["id"],
                                 "function_id": input["call"]["function_id"],
                                 "fs_scope": input["call"]["arguments"]["fs_scope"],
                                 "command": input["call"]["arguments"]["command"],
@@ -311,17 +325,17 @@ pub async fn capture(
     context: &E2eContext,
     armed: Armed,
     attempt: &Attempt<'_>,
-) -> Result<Option<MechanismEvidence>> {
+) -> Option<MechanismEvidence> {
     let prompts = std::mem::take(&mut *lock_unpoisoned(&armed.prompts));
     let mut probes = BTreeMap::new();
     match armed.scenario.as_str() {
         context_pressure::ID => context_pressure::capture(attempt, &prompts, &mut probes),
-        contention_ledger::ID => contention_ledger::capture(context, attempt, &mut probes).await?,
+        contention_ledger::ID => contention_ledger::capture(context, attempt, &mut probes).await,
         tool_contract_recovery::ID => {
-            tool_contract_recovery::capture(context, attempt, &mut probes).await?
+            tool_contract_recovery::capture(context, attempt, &mut probes).await
         }
         validation_self_repair::ID => {
-            validation_self_repair::capture(context, attempt, &mut probes).await?
+            validation_self_repair::capture(context, attempt, &mut probes).await
         }
         persistent_state::ID => {
             persistent_state::capture(
@@ -331,37 +345,49 @@ pub async fn capture(
                 &prompts,
                 &mut probes,
             )
-            .await?
+            .await
         }
         shell_coder_sandbox::ID => {
-            shell_coder_sandbox::capture(context, attempt, &armed.calls, &mut probes).await?
+            shell_coder_sandbox::capture(context, attempt, &armed.calls, &mut probes).await
         }
         onboarding::ID => onboarding::capture(&prompts, &mut probes),
         timer_wake::ID => {}
-        _ if armed.agent.is_none() => return Ok(None),
+        _ if armed.agent.is_none() => return None,
         _ => {}
     }
     if let Some(agent) = armed.agent.as_deref() {
-        agent_profile::capture(context, attempt, agent, &prompts, &mut probes).await?;
+        agent_profile::capture(context, attempt, agent, &prompts, &mut probes).await;
     }
-    Ok(Some(MechanismEvidence {
+    Some(MechanismEvidence {
         scenario: armed.scenario.clone(),
         probes,
-    }))
+    })
+}
+
+/// A probe's reply, or the error the stack answered with: a Harness that
+/// errs where it should answer is a broken gate, not an infrastructure
+/// failure to re-run.
+fn answer(reply: Result<Value>) -> Value {
+    reply.unwrap_or_else(|error| json!({"probe_error": format!("{error:#}")}))
+}
+
+/// `function_id` asked directly, its error kept as the answer.
+async fn ask(context: &E2eContext, function_id: &str, payload: Value) -> Value {
+    answer(context.trigger_value(function_id, payload).await)
 }
 
 /// `harness::function::trigger` as `session_id`: the same pipeline a turn's
-/// call goes through, policy and chokepoint included. A timeout is kept as
-/// the probe's answer.
+/// call goes through, policy and chokepoint included. A timeout or an error
+/// is kept as the probe's answer.
 async fn invoke_as(
     context: &E2eContext,
     session_id: &str,
     function_id: &str,
     arguments: Value,
-) -> Result<Value> {
+) -> Value {
     let call = json!({
         "session_id": session_id,
-        "call": {"id": format!("e2e_probe_{}", uuid::Uuid::new_v4().simple()),
+        "call": {"id": format!("{PROBE_CALL_PREFIX}{}", uuid::Uuid::new_v4().simple()),
                  "function_id": function_id, "arguments": arguments},
     });
     match tokio::time::timeout(
@@ -370,8 +396,8 @@ async fn invoke_as(
     )
     .await
     {
-        Ok(reply) => reply,
-        Err(_) => Ok(json!({"timed_out": true})),
+        Ok(reply) => answer(reply),
+        Err(_) => json!({"timed_out": true}),
     }
 }
 
@@ -431,6 +457,14 @@ fn turn_step(entry_id: &str) -> Option<(&str, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_probe_the_stack_errs_on_answers_with_the_error() {
+        let reply = answer(Err(anyhow::anyhow!("session lock poisoned")));
+
+        assert_eq!(reply["probe_error"], "session lock poisoned");
+        assert!(!denied(&reply));
+    }
 
     #[test]
     fn step_entry_ids_name_their_turn_and_step() {

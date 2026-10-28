@@ -2599,7 +2599,8 @@ async fn execute(
             )
         })?;
     // After the evaluation: the probes register and remove bindings the
-    // scenario's own criteria would count.
+    // scenario's own criteria would count. A probe the stack errs on is the
+    // gate's answer, never a collection failure.
     report.mechanism_evidence = crate::mechanism_gates::capture(
         context,
         armed,
@@ -2615,13 +2616,7 @@ async fn execute(
                 .and_then(|status| serde_json::to_value(status).ok()),
         },
     )
-    .await
-    .map_err(|error| {
-        collection_failure(
-            FailurePhase::Collect,
-            format!("probe the mechanism gates: {error:#}"),
-        )
-    })?;
+    .await;
     apply_objective_evaluation(spec, report, objective)
 }
 

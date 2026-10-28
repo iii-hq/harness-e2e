@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
 use super::timer_wake::subscription_id;
@@ -42,7 +41,7 @@ pub(super) async fn capture(
     context: &E2eContext,
     attempt: &Attempt<'_>,
     probes: &mut BTreeMap<String, Value>,
-) -> Result<()> {
+) {
     let status = attempt.terminal_status.clone().unwrap_or_default();
     probes.insert(
         "status".into(),
@@ -56,10 +55,10 @@ pub(super) async fn capture(
         .iter()
         .any(|outcome| outcome.function_id.contains("unregister"));
     let Some((subscription, _)) = validator(attempt.transcript) else {
-        return Ok(());
+        return;
     };
     if unregistered_by_subject {
-        return Ok(());
+        return;
     }
     // The session's own path: the console's `harness::triggers::unregister`
     // does not reach an agent-registered validator.
@@ -71,11 +70,10 @@ pub(super) async fn capture(
             "engine::unregister_trigger",
             json!({"id": subscription}),
         )
-        .await?;
+        .await;
         removed.push(reply["details"]["removed"].clone());
     }
     probes.insert("unregister".into(), json!(removed));
-    Ok(())
 }
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {

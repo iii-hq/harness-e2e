@@ -992,9 +992,11 @@ fn integer_field(row: &Value, field: &str) -> Option<i64> {
         .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
 }
 
-/// The label of the barrier wake, for the mechanism gates.
-pub(crate) fn barrier_label(run_id: &str) -> String {
-    Names::new(run_id).complete_label
+/// The barrier wake the mechanism gates judge: its label, and the state
+/// scope and keys whose writes it waits on.
+pub(crate) fn barrier_watch(run_id: &str) -> (String, String, Vec<String>) {
+    let names = Names::new(run_id);
+    (names.complete_label, names.scope, done_keys())
 }
 
 struct Names {

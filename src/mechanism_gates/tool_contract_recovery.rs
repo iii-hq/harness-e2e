@@ -5,20 +5,22 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::{customs, error_code, messages, text, Attempt, Broken, Run};
+use super::{customs, error_code, invoke_as, messages, text, Attempt, Broken, Run};
 use crate::context::E2eContext;
 use crate::scenarios::common::function_outcomes;
 
 pub const ID: &str = crate::scenarios::tool_contract_recovery::ID;
+/// A registered, read-only function the scenario's policy does not allow:
+/// the decoy every run is denied, whatever the model happened to call.
+const DECOY: &str = "state::get";
 
 pub(super) async fn capture(
     context: &E2eContext,
     attempt: &Attempt<'_>,
     probes: &mut BTreeMap<String, Value>,
-) -> Result<()> {
+) {
     let fixture = crate::scenarios::tool_contract_recovery::mechanism_probe(attempt.run_id);
     let mut registered = serde_json::Map::new();
     for outcome in function_outcomes(attempt.transcript) {
@@ -26,7 +28,8 @@ pub(super) async fn capture(
             error_code(&json!({"details": details})) == Some("policy_denied")
         });
         if denied && !registered.contains_key(&outcome.function_id) {
-            let exists = context.function_exists(&outcome.function_id).await?;
+            // Unknown (null) when the listing fails: the hint is then not judged.
+            let exists = context.function_exists(&outcome.function_id).await.ok();
             registered.insert(outcome.function_id, json!(exists));
         }
     }
@@ -34,16 +37,33 @@ pub(super) async fn capture(
         probes.insert(name.clone(), value.clone());
     }
     probes.insert("registered".into(), Value::Object(registered));
-    Ok(())
+    let decoy = invoke_as(
+        context,
+        attempt.session_id,
+        DECOY,
+        json!({"scope": "e2e_probe", "key": format!("e2e_probe_absent_{}", attempt.run_id)}),
+    )
+    .await;
+    probes.insert("decoy".into(), decoy);
 }
 
-/// Every field the handler decoded holds what the transcript sent.
+/// Every field the handler decoded holds what the transcript sent, at any
+/// depth: a field the handler's types do not know (serde drops it) is the
+/// model's own extra, not a lost one.
 fn received(handler: &Value, sent: &Value) -> bool {
-    handler.as_object().is_some_and(|fields| {
-        fields
+    match (handler, sent) {
+        (Value::Object(fields), _) => fields
             .iter()
-            .all(|(name, value)| sent.get(name).unwrap_or(&Value::Null) == value)
-    })
+            .all(|(name, value)| received(value, sent.get(name).unwrap_or(&Value::Null))),
+        (Value::Array(items), Value::Array(sent_items)) => {
+            items.len() == sent_items.len()
+                && items
+                    .iter()
+                    .zip(sent_items)
+                    .all(|(item, sent)| received(item, sent))
+        }
+        _ => handler == sent,
+    }
 }
 
 fn strings(value: Option<&Value>) -> Vec<&str> {
@@ -96,6 +116,19 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
                         .map(|record| &record["function_id"])
                         .collect::<Vec<_>>()
                 ),
+            ));
+        }
+    }
+
+    if let Some(decoy) = run.probe("decoy") {
+        let message = decoy
+            .pointer("/details/message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !super::denied(decoy) || message.contains("did you mean") {
+            broken.push((
+                "denied_decoy_unhinted",
+                format!("{DECOY}, registered and not allowed, answered {decoy}"),
             ));
         }
     }
@@ -284,6 +317,64 @@ mod tests {
 
         assert_eq!(broken.len(), 1, "{broken:?}");
         assert!(broken[0].starts_with("dispatch_matches_handler"));
+    }
+
+    #[test]
+    fn a_nested_field_the_handler_does_not_decode_is_not_a_mismatch() {
+        let mut entries = recovered();
+        entries[5] = call(
+            "c3",
+            "e2etest::profile_v2_x",
+            json!({"profile_key": "k", "event": {"title": "t", "location": "x"}}),
+        );
+        let log = json!([{"function_id": "e2etest::profile_v2_x",
+                          "arguments": {"profile_key": "k", "event": {"title": "t"}}}]);
+
+        assert_eq!(gates_of(entries, &probes(log)), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_nested_field_the_handler_received_differently_is_a_mismatch() {
+        let mut entries = recovered();
+        entries[5] = call(
+            "c3",
+            "e2etest::profile_v2_x",
+            json!({"profile_key": "k", "event": {"title": "t"}}),
+        );
+        let log = json!([{"function_id": "e2etest::profile_v2_x",
+                          "arguments": {"profile_key": "k", "event": {"title": "other"}}}]);
+
+        let broken = gates_of(entries, &probes(log));
+
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(broken[0].starts_with("dispatch_matches_handler"));
+    }
+
+    #[test]
+    fn the_denied_decoy_probe_must_be_denied_without_a_hint() {
+        let log =
+            json!([{"function_id": "e2etest::profile_v2_x", "arguments": {"profile_key": "k"}}]);
+        let gates_with = |decoy: Value| {
+            let mut probes = probes(log.clone());
+            probes.insert("decoy".into(), decoy);
+            gates_of(recovered(), &probes)
+        };
+
+        assert!(
+            gates_with(json!({"function_id": "state::get", "is_error": true,
+            "details": denial("state::get", None)}))
+            .is_empty()
+        );
+        for decoy in [
+            json!({"function_id": "state::get", "is_error": true,
+                   "details": denial("state::get", Some("e2etest::schedule_v2_x"))}),
+            json!({"function_id": "state::get", "is_error": false, "details": {}}),
+            json!({"probe_error": "remote error"}),
+        ] {
+            let broken = gates_with(decoy.clone());
+            assert_eq!(broken.len(), 1, "{decoy}: {broken:?}");
+            assert!(broken[0].starts_with("denied_decoy_unhinted"), "{broken:?}");
+        }
     }
 
     #[test]

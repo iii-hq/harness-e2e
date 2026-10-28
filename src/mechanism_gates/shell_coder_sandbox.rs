@@ -5,10 +5,9 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::{invoke_as, Attempt, Broken, Run};
+use super::{ask, invoke_as, Attempt, Broken, Run, PROBE_CALL_PREFIX};
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
 
@@ -24,7 +23,7 @@ pub(super) async fn capture(
     attempt: &Attempt<'_>,
     calls: &Mutex<Vec<Value>>,
     probes: &mut BTreeMap<String, Value>,
-) -> Result<()> {
+) {
     let forged = invoke_as(
         context,
         attempt.session_id,
@@ -32,7 +31,7 @@ pub(super) async fn capture(
         json!({"command": FORGED_COMMAND, "args": [],
                "fs_scope": {"root": "/etc", "grants": ["/"], "boundary": "configured_roots"}}),
     )
-    .await?;
+    .await;
     probes.insert(
         "forged_reply".into(),
         json!({"is_error": forged["is_error"], "details": forged["details"]}),
@@ -49,10 +48,7 @@ pub(super) async fn capture(
     );
     probes.insert(
         "boundary".into(),
-        context
-            .trigger_value("harness::filesystem::info", json!({}))
-            .await?["boundary"]
-            .clone(),
+        ask(context, "harness::filesystem::info", json!({})).await["boundary"].clone(),
     );
     let root = format!("/tmp/e2e-probe-grant-{}", attempt.run_id);
     let grant = json!({"session_id": attempt.session_id, "root": root});
@@ -62,7 +58,7 @@ pub(super) async fn capture(
         "harness::filesystem::grant",
         "harness::filesystem::revoke",
     ] {
-        let reply = context.trigger_value(function_id, grant.clone()).await?;
+        let reply = ask(context, function_id, grant.clone()).await;
         grants.push(json!(reply["roots"]
             .as_array()
             .into_iter()
@@ -71,7 +67,6 @@ pub(super) async fn capture(
             .count()));
     }
     probes.insert("grants".into(), json!(grants));
-    Ok(())
 }
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
@@ -85,6 +80,8 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        // The Harness stamps no scope on these (its `is_scoped_function`):
+        // they take their own paths.
         .filter(|call| {
             !call["function_id"]
                 .as_str()
@@ -109,15 +106,24 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             ));
         }
     }
-    if run.probe("forged_reply").is_some()
-        && !stamped
-            .iter()
-            .any(|call| call["command"] == FORGED_COMMAND && call["fs_scope"]["root"] == workspace)
-    {
-        broken.push((
-            "forged_scope_rewritten",
-            "the probe's forged /etc scope was not replaced by the workspace".into(),
-        ));
+    if let Some(reply) = run.probe("forged_reply") {
+        // The probe's own call, not a `pwd` the model ran.
+        let rewritten = stamped.iter().any(|call| {
+            call["call_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with(PROBE_CALL_PREFIX))
+                && call["command"] == FORGED_COMMAND
+                && call["fs_scope"]["root"] == workspace
+        });
+        if !rewritten || reply["is_error"] != false {
+            broken.push((
+                "forged_scope_rewritten",
+                format!(
+                    "the probe's forged /etc scope was not replaced by the workspace \
+                     (rewritten={rewritten}, reply {reply})"
+                ),
+            ));
+        }
     }
     if let Some(grants) = run.probe("grants") {
         if grants != &json!([1, 1, 0]) {
@@ -135,13 +141,22 @@ mod tests {
     use super::*;
 
     fn call(function_id: &str, command: Value, root: &str) -> Value {
-        json!({"function_id": function_id, "command": command,
+        let call_id = if command == json!(FORGED_COMMAND) {
+            "e2e_probe_1"
+        } else {
+            "call_1"
+        };
+        json!({"function_id": function_id, "command": command, "call_id": call_id,
                "fs_scope": {"root": root, "grants": [], "boundary": "workspace"}})
     }
 
     fn gates_of(stamped: Value, grants: Value) -> Vec<String> {
+        gates_with(stamped, grants, json!({"is_error": false}))
+    }
+
+    fn gates_with(stamped: Value, grants: Value, forged_reply: Value) -> Vec<String> {
         let probes = serde_json::from_value(json!({
-            "workspace": "/w", "boundary": "workspace", "forged_reply": {"is_error": false},
+            "workspace": "/w", "boundary": "workspace", "forged_reply": forged_reply,
             "stamped": stamped, "grants": grants,
         }))
         .unwrap();
@@ -191,12 +206,45 @@ mod tests {
     }
 
     #[test]
+    fn the_models_own_pwd_does_not_stand_in_for_the_forged_probe() {
+        let mut models = call("shell::exec", json!(FORGED_COMMAND), "/w");
+        models["call_id"] = json!("call_7");
+        let stamped = json!([call("coder::read-file", Value::Null, "/w"), models]);
+
+        let broken = gates_of(stamped, json!([1, 1, 0]));
+
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(
+            broken[0].starts_with("forged_scope_rewritten"),
+            "{broken:?}"
+        );
+    }
+
+    #[test]
+    fn a_forged_probe_that_failed_is_flagged() {
+        let stamped = json!([call("shell::exec", json!(FORGED_COMMAND), "/w")]);
+
+        let broken = gates_with(
+            stamped,
+            json!([1, 1, 0]),
+            json!({"is_error": true, "details": {"error": "invalid_fs_scope"}}),
+        );
+
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(
+            broken[0].starts_with("forged_scope_rewritten"),
+            "{broken:?}"
+        );
+    }
+
+    #[test]
     fn an_observer_that_saw_nothing_is_flagged() {
         assert_eq!(
             gates_of(json!([]), json!([1, 1, 0])),
             [
                 "fs_scope_stamped: the pre_trigger observer saw no scoped call",
-                "forged_scope_rewritten: the probe's forged /etc scope was not replaced by the workspace",
+                "forged_scope_rewritten: the probe's forged /etc scope was not replaced by the \
+                 workspace (rewritten=false, reply {\"is_error\":false})",
             ]
         );
     }

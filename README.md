@@ -133,10 +133,15 @@ The scenarios that exercise a Harness mechanism also gate the mechanism itself
 its spawns, leaf wall and barrier, `timer_wake` its wake, `tool_contract_recovery`
 its dispatch policy, `validation_self_repair` its validator binding,
 `persistent_state` its invocation chokepoint, `shell_coder_sandbox` its
-filesystem stamp, and a run under an agent profile that profile. The runner
-arms observers before the prompt and probes the stack before teardown; the
-run's `mechanism_evidence` keeps what they saw. A broken gate is a
+filesystem stamp, and a null-canary or onboarding run its agent profile. The
+runner arms observers before the prompt and probes the stack before teardown;
+the run's `mechanism_evidence` keeps what they saw. A probe the stack answers
+with an error is judged like any other answer. A broken gate is a
 `mechanism_gate` violation: incomplete, like a failed gate, and the score stays.
+The `pre_generate` observer is a global hook (the Harness has no session filter
+for it), so while one of these attempts runs, every step on the stack makes one
+extra round trip to the runner. `persistent_state`'s observer also appends one
+line to the prompt, which its behavior digest covers.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches

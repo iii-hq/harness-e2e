@@ -5,12 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::{customs, denied, invoke_as, messages, text, Attempt, Broken, Run};
+use super::{ask, customs, denied, invoke_as, messages, text, Attempt, Broken, Run};
 use crate::context::E2eContext;
-use crate::scenarios::common::function_outcomes;
+use crate::scenarios::common::{function_outcomes, state_value};
 use crate::wire::E2E_SESSION_KIND;
 
 pub const ID: &str = crate::scenarios::contention_ledger::ID;
@@ -63,10 +62,18 @@ pub(super) async fn capture(
     context: &E2eContext,
     attempt: &Attempt<'_>,
     probes: &mut BTreeMap<String, Value>,
-) -> Result<()> {
-    let label = crate::scenarios::contention_ledger::barrier_label(attempt.run_id);
+) {
+    let (label, scope, done_keys) =
+        crate::scenarios::contention_ledger::barrier_watch(attempt.run_id);
     probes.insert("barrier_label".into(), json!(label));
-    let raw_metrics = serde_json::to_value(attempt.metrics)?;
+    let mut ready = true;
+    for key in done_keys {
+        let done =
+            state_value(ask(context, "state::get", json!({"scope": scope, "key": key})).await);
+        ready &= !done.is_null() && done.get("probe_error").is_none();
+    }
+    probes.insert("barrier_ready".into(), json!(ready));
+    let raw_metrics = serde_json::to_value(attempt.metrics).unwrap_or_default();
     let route = |session: &Value| {
         session["by_model"]
             .as_array()
@@ -82,17 +89,15 @@ pub(super) async fn capture(
             probes.insert("root_route".into(), json!(route(session)));
             continue;
         }
-        let meta = context
-            .trigger_value("session::get", json!({"session_id": session_id}))
-            .await?["meta"]
-            .clone();
-        let status = context
-            .trigger_value(
-                "harness::status",
-                json!({"session_id": session_id, "verbose": true}),
-            )
-            .await?;
-        let transcript = context.transcript(session_id).await?;
+        let meta =
+            ask(context, "session::get", json!({"session_id": session_id})).await["meta"].clone();
+        let status = ask(
+            context,
+            "harness::status",
+            json!({"session_id": session_id, "verbose": true}),
+        )
+        .await;
+        let transcript = super::answer(context.transcript(session_id).await);
         let head = messages(&transcript).first().cloned().unwrap_or_default();
         children.push(json!({
             "session_id": session_id, "meta": meta, "route": route(session),
@@ -110,7 +115,7 @@ pub(super) async fn capture(
     {
         let mut wall = Vec::new();
         for function_id in WALLED {
-            let reply = invoke_as(context, &leaf, function_id, json!({})).await?;
+            let reply = invoke_as(context, &leaf, function_id, json!({})).await;
             wall.push(json!({"function_id": function_id, "denied": denied(&reply)}));
         }
         // Every child keeps contract discovery, whatever its spawn narrowed.
@@ -120,19 +125,19 @@ pub(super) async fn capture(
             "engine::functions::info",
             json!({"function_id": "state::get"}),
         )
-        .await?;
+        .await;
         wall.push(json!({
             "function_id": "engine::functions::info", "denied": denied(&control), "control": true,
         }));
         probes.insert("leaf_wall".into(), json!(wall));
-        probes.insert("leaf_bindings".into(), leaf_bindings(context, &leaf).await?);
+        probes.insert("leaf_bindings".into(), leaf_bindings(context, &leaf).await);
     }
-    let ledger = context
-        .trigger_value(
-            "state::get",
-            json!({"scope": "harness_budget", "key": attempt.session_id}),
-        )
-        .await?;
+    let ledger = ask(
+        context,
+        "state::get",
+        json!({"scope": "harness_budget", "key": attempt.session_id}),
+    )
+    .await;
     let ledger = ledger
         .get("value")
         .filter(|value| value.is_object())
@@ -141,12 +146,12 @@ pub(super) async fn capture(
     probes.insert("budget".into(), ledger);
     probes.insert("children".into(), json!(children));
     probes.insert("tree_complete".into(), raw_metrics["complete"].clone());
-    Ok(())
 }
 
 /// Registers, as the leaf, a mechanical binding and a long wake, reads what
-/// the Harness kept, and removes both.
-async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Result<Value> {
+/// the Harness kept, and removes both, each removal tried whatever the last
+/// one answered.
+async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Value {
     let timer = |target: Option<&str>| {
         let mut request = json!({"trigger_type": "timer", "config": {"in_ms": PROBE_WAKE_MS},
                                  "once": true, "label": "e2e-mechanism-probe"});
@@ -161,11 +166,14 @@ async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Result<Value> {
         "engine::register_trigger",
         timer(Some("state::get")),
     )
-    .await?;
-    let wake = invoke_as(context, leaf, "engine::register_trigger", timer(None)).await?;
-    let listed = context
-        .trigger_value("harness::triggers::list", json!({"session_id": leaf}))
-        .await?;
+    .await;
+    let wake = invoke_as(context, leaf, "engine::register_trigger", timer(None)).await;
+    let listed = ask(
+        context,
+        "harness::triggers::list",
+        json!({"session_id": leaf}),
+    )
+    .await;
     let probes: Vec<&Value> = listed["subscriptions"]
         .as_array()
         .into_iter()
@@ -175,21 +183,24 @@ async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Result<Value> {
     let wake_row = probes.iter().find(|row| row["target"].is_null());
     let window =
         wake_row.and_then(|row| Some(row["expires_at"].as_i64()? - row["created_at"].as_i64()?));
+    let mut unregistered = true;
     for row in &probes {
-        context
-            .trigger_value(
-                "harness::triggers::unregister",
-                json!({"session_id": leaf, "subscription_id": row["subscription_id"]}),
-            )
-            .await?;
+        let reply = ask(
+            context,
+            "harness::triggers::unregister",
+            json!({"session_id": leaf, "subscription_id": row["subscription_id"]}),
+        )
+        .await;
+        unregistered &= reply.get("probe_error").is_none();
     }
-    Ok(json!({
+    json!({
         "mechanical_refused": mechanical["is_error"] == true,
         "mechanical_kept": probes.iter().any(|row| !row["target"].is_null()),
         "wake_registered": wake["is_error"] == false,
         "wake_denied": denied(&wake),
         "wake_window_ms": window,
-    }))
+        "unregistered": unregistered,
+    })
 }
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
@@ -299,6 +310,7 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
         if bindings["mechanical_refused"] != true
             || bindings["mechanical_kept"] != false
             || !bounded
+            || bindings["unregistered"] == false
         {
             broken.push((
                 "leaf_bindings_bounded",
@@ -320,7 +332,8 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
         }
     }
     if let Some(label) = run.probe("barrier_label").and_then(Value::as_str) {
-        broken.extend(barrier(run.transcript, label));
+        let ready = run.probe("barrier_ready") == Some(&Value::Bool(true));
+        broken.extend(barrier(run.transcript, label, ready));
     }
     broken
 }
@@ -328,8 +341,10 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
 /// The barrier wake that woke the root skipped the first two done keys
 /// without a failed condition, fired once and retired, and its fire is the
 /// one notification it left. A registration the model got wrong and
-/// replaced is the criteria's business, not the Harness's.
-fn barrier(transcript: &Value, label: &str) -> Vec<Broken> {
+/// replaced is the criteria's business, not the Harness's; a barrier that
+/// watched (it skipped a fire) and never woke once every done key was
+/// written is the Harness's.
+fn barrier(transcript: &Value, label: &str, ready: bool) -> Vec<Broken> {
     let fires: Vec<&Value> = customs(transcript, "trigger_fired")
         .map(|entry| &entry["custom"]["data"])
         .filter(|data| data["label"] == label)
@@ -339,7 +354,30 @@ fn barrier(transcript: &Value, label: &str) -> Vec<Broken> {
         .find(|data| data["outcome"] == "delivered")
         .and_then(|data| data["subscription_id"].as_str())
     else {
-        return Vec::new();
+        // A subscription whose condition failed is the model's wrong one.
+        let failed = |sub: &str| {
+            messages(transcript)
+                .iter()
+                .filter_map(|entry| text(entry, "/entry_id"))
+                .any(|id| id.starts_with(&format!("e_condfail_{sub}")))
+        };
+        let watched = fires.iter().any(|data| {
+            data["outcome"] == "skipped"
+                && data["subscription_id"]
+                    .as_str()
+                    .is_some_and(|sub| !failed(sub))
+        });
+        return if ready && watched {
+            vec![(
+                "barrier_fired_once",
+                format!(
+                    "every done key is written, yet the barrier that skipped {} fire(s) never woke the root",
+                    fires.len()
+                ),
+            )]
+        } else {
+            Vec::new()
+        };
     };
     let fires: Vec<&&Value> = fires
         .iter()
@@ -557,6 +595,38 @@ mod tests {
         );
 
         assert!(gates_of(&transcript, &probes(child()), 2).is_empty());
+    }
+
+    #[test]
+    fn a_barrier_that_never_woke_the_root_after_every_done_key_is_flagged() {
+        let mut transcript = transcript();
+        transcript["messages"][4]["custom"]["data"]["outcome"] = json!("skipped");
+        let mut probes = probes(child());
+
+        // The writers never finished: the barrier had nothing to wake on.
+        probes.insert("barrier_ready".into(), json!(false));
+        assert!(gates_of(&transcript, &probes, 2).is_empty());
+
+        probes.insert("barrier_ready".into(), json!(true));
+        let broken = gates_of(&transcript, &probes, 2);
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(broken[0].starts_with("barrier_fired_once"), "{broken:?}");
+    }
+
+    #[test]
+    fn a_probe_wake_the_leaf_could_not_unregister_is_flagged() {
+        let mut probes = probes(child());
+        probes.insert(
+            "leaf_bindings".into(),
+            json!({"mechanical_refused": true, "mechanical_kept": false,
+                   "wake_registered": true, "wake_window_ms": 1_800_000,
+                   "unregistered": false}),
+        );
+
+        let broken = gates_of(&transcript(), &probes, 2);
+
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(broken[0].starts_with("leaf_bindings_bounded"), "{broken:?}");
     }
 
     #[test]

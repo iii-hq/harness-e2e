@@ -5,17 +5,17 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::{customs, denied, invoke_as, messages, text, Attempt, Broken, Prompt, Run};
+use super::{ask, customs, denied, invoke_as, messages, text, Attempt, Broken, Prompt, Run};
 use crate::context::E2eContext;
 
 pub const ID: &str = crate::scenarios::persistent_state::ID;
-/// The origin annotation the appending hook stamps on each step.
+/// The origin annotation the appending hook stamps on the step it appends to.
 pub const ANNOTATION: &str = "e2e_mechanism_probe";
 
-/// The message the `pre_generate` probe appends on every step.
+/// The message the `pre_generate` probe appends once, on the first step; the
+/// scenario's definition carries it, since every later prompt replays it.
 pub fn marker(run_id: &str) -> String {
     format!("[e2e mechanism probe {run_id}] This line needs no action or reply.")
 }
@@ -46,25 +46,29 @@ pub(super) async fn capture(
     resend: Option<Value>,
     prompts: &[Prompt],
     probes: &mut BTreeMap<String, Value>,
-) -> Result<()> {
+) {
     let mut chokepoint = Vec::new();
     for (function_id, arguments) in chokepoint_probes(attempt.run_id) {
-        let reply = invoke_as(context, attempt.session_id, function_id, arguments).await?;
+        let reply = invoke_as(context, attempt.session_id, function_id, arguments).await;
         chokepoint.push(json!({"function_id": function_id, "denied": denied(&reply),
                                "timed_out": reply["timed_out"] == true}));
     }
     probes.insert("chokepoint".into(), json!(chokepoint));
     probes.insert(
         "filesystem_info".into(),
-        context
-            .trigger_value("harness::filesystem::info", json!({}))
-            .await?,
+        ask(context, "harness::filesystem::info", json!({})).await,
     );
-    if context.function_exists("compose::status").await? {
-        let reply = invoke_as(context, attempt.session_id, "compose::status", json!({})).await?;
+    // Without a compose worker there is nothing to route to.
+    if context
+        .function_exists("compose::status")
+        .await
+        .unwrap_or(false)
+    {
+        let reply = invoke_as(context, attempt.session_id, "compose::status", json!({})).await;
         probes.insert(
             "compose_status".into(),
-            json!({"denied": denied(&reply), "is_error": reply["is_error"]}),
+            json!({"denied": denied(&reply), "is_error": reply["is_error"],
+                   "timed_out": reply["timed_out"] == true}),
         );
     }
     probes.insert("resend".into(), resend.unwrap_or(Value::Null));
@@ -77,7 +81,6 @@ pub(super) async fn capture(
             .filter(|prompt| prompt.replays_append)
             .count()),
     );
-    Ok(())
 }
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
@@ -120,6 +123,15 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             ));
         }
     }
+    if let Some(error) = run
+        .probe("filesystem_info")
+        .and_then(|info| info.get("probe_error"))
+    {
+        broken.push((
+            "default_root_aid",
+            format!("harness::filesystem::info answered {error}"),
+        ));
+    }
     if let Some(root) = run
         .probe("filesystem_info")
         .and_then(|info| info["default_root"].as_str())
@@ -137,8 +149,10 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             ));
         }
     }
+    // Routed is what the chokepoint owns: compose's own failure (no project,
+    // a stopped stack) is not the Harness's, and is kept only as evidence.
     if let Some(status) = run.probe("compose_status") {
-        if status["denied"] == true || status["is_error"] != false {
+        if status["denied"] == true || status["timed_out"] == true {
             broken.push((
                 "compose_status_routed",
                 format!("compose::status answered {status}"),
@@ -223,6 +237,20 @@ mod tests {
     fn an_allow_all_session_that_kept_its_edges_keeps_every_gate() {
         assert_eq!(
             gates_of(&transcript(1, true), &probes(true)),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_compose_status_that_routed_but_failed_is_not_blamed_on_the_harness() {
+        let mut probes = probes(true);
+        probes.insert(
+            "compose_status".into(),
+            json!({"denied": false, "is_error": true}),
+        );
+
+        assert_eq!(
+            gates_of(&transcript(1, true), &probes),
             Vec::<String>::new()
         );
     }
