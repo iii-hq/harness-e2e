@@ -103,6 +103,8 @@ pub enum Check {
     },
     /// Every exchange's system prompt carries memory's section, equal to
     /// exchange 0's: a rules change arrives as an update, never as an edit.
+    /// Every exchange also sent the Harness's cacheable prompt prefix with
+    /// exchange 0's digest: memory stays in the per-session tail.
     SectionFrozen,
     /// From `exchange` on memory reads no bank and injects no block, and
     /// `exchange` carries the update saying no memory section applies.
@@ -1182,7 +1184,7 @@ pub const CASES: [Case; 29] = [
                 20,
                 Check::SectionFrozen,
                 "System prompt section never rewritten",
-                "Did every turn keep the memory section the first turn's system prompt froze?",
+                "Did every turn keep the memory section the first turn's system prompt froze, and the Harness's cacheable prompt prefix with it?",
             ),
             // Scored: the frozen prompt still says the old prefix beside the update.
             scored(

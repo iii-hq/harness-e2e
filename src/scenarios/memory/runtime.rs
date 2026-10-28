@@ -65,6 +65,8 @@ struct Run {
     strays: Vec<String>,
     /// The bank once extraction read the teacher session.
     taught: Option<Extraction>,
+    /// Each answered exchange's prompt prefix digest, in order.
+    surface_digests: Vec<Option<String>>,
 }
 
 /// A memory as memory stored it.
@@ -268,6 +270,7 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
             teacher: None,
             strays: Vec::new(),
             taught: None,
+            surface_digests: Vec::new(),
         },
     );
     prompts
@@ -781,6 +784,25 @@ pub async fn apply_changes(context: &E2eContext, case: &Case, run_id: &str, fini
     }
 }
 
+/// Keeps the digest of the cacheable prompt prefix the session's last step
+/// sent, once an exchange has its answer. A status that cannot be read keeps
+/// `None`, which the frozen-section gate fails.
+pub async fn record_surface(context: &E2eContext, run_id: &str, session_id: &str) {
+    let digest = context
+        .trigger_value("harness::status", json!({"session_id": session_id}))
+        .await
+        .ok()
+        .and_then(|status| {
+            status
+                .pointer("/context/prompt_surface_digest")?
+                .as_str()
+                .map(str::to_string)
+        });
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        run.surface_digests.push(digest);
+    }
+}
+
 /// Compacts the session and keeps the outcome's status for `snapshot`.
 pub async fn compact(context: &E2eContext, run_id: &str, session_id: &str) {
     let status = match context
@@ -804,6 +826,7 @@ pub fn snapshot(run_id: &str) -> Snapshot {
         .get(run_id)
         .map_or_else(Snapshot::default, |run| Snapshot {
             prompts: lock_unpoisoned(&run.prompts).clone(),
+            surface_digests: run.surface_digests.clone(),
             compaction: run.compaction.clone(),
             retrieval: run.retrieval,
             stored: run

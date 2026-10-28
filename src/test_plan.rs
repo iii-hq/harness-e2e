@@ -877,13 +877,18 @@ mod tests {
         let state = suite(json!({"id": "impact", "workers": ["state"]})).unwrap();
         assert_eq!(
             state.scenario_ids,
-            [&pr[..], &["contention_ledger", "timer_wake"]].concat()
+            [
+                &pr[..],
+                &["contention_ledger", "mechanical_reaction", "timer_wake"]
+            ]
+            .concat()
         );
         let impact = state.impact.as_ref().unwrap();
         assert_eq!(
             impact.matched,
             [
                 "contention_ledger",
+                "mechanical_reaction",
                 "minimal_path",
                 "persistent_state",
                 "timer_wake"
@@ -982,6 +987,7 @@ mod tests {
             json!([
                 "contention_ledger",
                 "linkly_tutorial",
+                "mechanical_reaction",
                 "minimal_path",
                 "onboarding_tour",
                 "persistent_state",

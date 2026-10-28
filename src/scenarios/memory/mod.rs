@@ -190,6 +190,7 @@ impl Scenario for Memory {
         session_id: &str,
         exchange: usize,
     ) {
+        runtime::record_surface(context, run_id, session_id).await;
         // Bank changes before the compaction, as `Case.changes` states.
         runtime::apply_changes(context, self.item(), run_id, exchange).await;
         if compacts_after(self.item(), exchange) {
@@ -207,6 +208,8 @@ impl Scenario for Memory {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> Result<Vec<CapturedDeliverable>> {
+        // The last exchange has no follow-up to record its prefix before.
+        runtime::record_surface(context, run_id, &format!("e2e_{run_id}")).await;
         let mut snapshot = runtime::snapshot(run_id);
         if cases::audits_bank_after(self.item()) {
             snapshot.bank_after =

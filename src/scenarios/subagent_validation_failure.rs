@@ -225,7 +225,9 @@ impl Scenario for SubagentValidationFailure {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<ObjectiveEvaluation> {
-        Ok(Facts::read(context, observation, run_id).await?.evaluation())
+        Ok(Facts::read(context, observation, run_id)
+            .await?
+            .evaluation())
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -389,7 +391,9 @@ fn failure_code(transcript: &Value) -> Option<String> {
         .as_array()?
         .iter()
         .rev()
-        .find(|entry| entry.pointer("/custom/custom_type").and_then(Value::as_str) == Some("error"))?
+        .find(|entry| {
+            entry.pointer("/custom/custom_type").and_then(Value::as_str) == Some("error")
+        })?
         .pointer("/custom/data/code")?
         .as_str()
         .map(str::to_string)
@@ -530,7 +534,8 @@ pub(crate) mod tests {
 
     #[test]
     fn the_failure_code_is_the_last_error_entry_of_the_transcript() {
-        let error = |code: &str| json!({"custom": {"custom_type": "error", "data": {"code": code}}});
+        let error =
+            |code: &str| json!({"custom": {"custom_type": "error", "data": {"code": code}}});
         let transcript = json!({"messages": [
             error("router/provider_transient"),
             {"message": {"role": "user"}},
