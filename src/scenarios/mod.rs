@@ -58,6 +58,7 @@ pub mod result_bounds;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
+pub mod structured_output;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod tags;
@@ -169,6 +170,13 @@ pub trait Scenario: Send + Sync {
     /// when not `Completed`.
     fn expected_root_outcome(&self) -> TurnStatus {
         TurnStatus::Completed
+    }
+    /// The turn's deliverable, sent as `options.output` on every exchange
+    /// that is not bare: `{"type": "json", "schema": …}` asks for a JSON
+    /// result, which the Harness returns as the turn's `result`. Folded into
+    /// `behavior_sha256` when `Some`.
+    fn output_contract(&self) -> Option<Value> {
+        None
     }
     /// Extra `harness::send` `options.metadata` keys, sent on every exchange
     /// beside the runner's own, which win on a clash. Part of the task, so it
@@ -662,6 +670,7 @@ scenarios! {
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
     ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
     ResultBounds = "result_bounds" => result_bounds::ResultBounds,
+    StructuredOutput = "structured_output" => structured_output::StructuredOutput,
 }
 
 impl ScenarioId {
@@ -794,6 +803,9 @@ pub(crate) fn behavior_definition(module: &dyn Scenario, case: &ScenarioCase) ->
     let outcome = module.expected_root_outcome();
     if outcome != TurnStatus::Completed {
         definition["expected_root_outcome"] = serde_json::json!(outcome);
+    }
+    if let Some(output) = module.output_contract() {
+        definition["output_contract"] = output;
     }
     let send_metadata = module.send_metadata(CONTRACT_NAMESPACE);
     if !send_metadata.is_empty() {
@@ -941,6 +953,10 @@ mod tests {
             TurnStatus::Failed
         }
 
+        fn output_contract(&self) -> Option<Value> {
+            Some(serde_json::json!({ "type": "json" }))
+        }
+
         async fn evaluate(
             &self,
             _context: &E2eContext,
@@ -951,10 +967,10 @@ mod tests {
         }
     }
 
-    /// Both change what the run asks and what counts as its end, so both are
-    /// part of the definition; a scenario that declares neither keeps its digest.
+    /// Each changes what the run asks or what counts as its end, so each is
+    /// part of the definition; a scenario that declares none keeps its digest.
     #[test]
-    fn a_bare_follow_up_and_an_expected_outcome_are_part_of_the_definition() {
+    fn a_bare_follow_up_an_expected_outcome_and_an_output_contract_are_part_of_the_definition() {
         let case = ScenarioId::MinimalPath
             .materialize("attempt-a", ScenarioId::MinimalPath.canonical_seed())
             .unwrap()
@@ -962,9 +978,14 @@ mod tests {
         let plain = behavior_definition(ScenarioId::MinimalPath.module(), &case).unwrap();
         assert!(plain.get("bare_followups").is_none());
         assert!(plain.get("expected_root_outcome").is_none());
+        assert!(plain.get("output_contract").is_none());
         let declared = behavior_definition(&BareFailingMinimalPath, &case).unwrap();
         assert_eq!(declared["bare_followups"], serde_json::json!([1]));
         assert_eq!(declared["expected_root_outcome"], "failed");
+        assert_eq!(
+            declared["output_contract"],
+            serde_json::json!({ "type": "json" })
+        );
     }
 
     /// Exchange 0 is the prompt, so follow-up `n` is exchange `n + 1`.
@@ -1013,7 +1034,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 91);
+        assert_eq!(ids.len(), 92);
     }
 
     #[test]

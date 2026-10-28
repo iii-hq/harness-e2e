@@ -2455,6 +2455,7 @@ async fn execute(
                     max_output_tokens: spec.execution.max_output_tokens,
                     max_total_tokens: spec.execution.max_total_tokens,
                     max_validation_retries: spec.execution.max_validation_retries,
+                    output: module.output_contract(),
                     functions: Some(e2e_function_policy(
                         spec,
                         module.allowed_functions(run_id),

@@ -2807,7 +2807,8 @@
         "memory_honors_do_not_keep",
         "memory_keeps_without_a_rule",
         "context_compaction",
-        "result_bounds"
+        "result_bounds",
+        "structured_output"
       ]
     },
     "ScenarioMeasurement": {

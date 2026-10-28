@@ -157,7 +157,8 @@
       "label": "Harness mechanisms",
       "scenarios": [
         "context_compaction",
-        "result_bounds"
+        "result_bounds",
+        "structured_output"
       ]
     }
   ],
