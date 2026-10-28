@@ -47,6 +47,8 @@ const DELIVERABLE_ID: &str = "router_fault_checks";
 const FAULT_MODEL: &str = "e2e-fault-model";
 const HEAL_MODEL: &str = "e2e-heal-model";
 const TURN_WAIT: Duration = Duration::from_secs(120);
+/// What every fault side session is sent; the fake provider plays the rest.
+const CASE_MESSAGE: &str = "Run the scripted exchange.";
 const STOP_WITHIN: Duration = Duration::from_secs(5);
 const CASES: [&str; 7] = [
     "orphan",
@@ -445,6 +447,10 @@ impl Scenario for RouterFaultContract {
         Some(Vec::new())
     }
 
+    fn planted_state(&self, _run_id: &str) -> Option<Value> {
+        Some(json!({ "runner_messages": { "case": CASE_MESSAGE } }))
+    }
+
     async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         mechanism::reset(run_id);
         lock_unpoisoned(ledgers()).remove(run_id);
@@ -579,7 +585,7 @@ async fn send(
             "harness::send",
             json!({
                 "session_id": session_id,
-                "message": "Run the scripted exchange.",
+                "message": CASE_MESSAGE,
                 "model": model,
                 "provider": provider,
                 "session": { "kind": crate::wire::E2E_SESSION_KIND, "title": "Harness E2E: router fault" },
@@ -862,6 +868,142 @@ mod tests {
             script(run, "orphan", 2, &unpaired),
             [Frame::Text(vec!["ORPHANED x".into()])]
         );
+    }
+
+    fn row(custom_type: &str, data: Value) -> Value {
+        json!({ "entry_id": "e_x", "custom": { "custom_type": custom_type, "data": data } })
+    }
+
+    fn reply(text_value: &str) -> Value {
+        json!({ "message": { "role": "assistant", "content": text(text_value) } })
+    }
+
+    /// `judge` on one case: `calls` stream requests, the given transcript
+    /// rows and status, and whatever else `ledger` adds.
+    fn judged(
+        case: &str,
+        calls: usize,
+        state: &str,
+        messages: Vec<Value>,
+        ledger_with: impl FnOnce(&mut Ledger),
+    ) -> bool {
+        let run = format!("judge-{case}-{calls}-{state}-{}", messages.len());
+        {
+            let shared = ledger(&run);
+            let mut shared = lock_unpoisoned(&shared);
+            shared.calls.insert(case.to_string(), calls);
+            ledger_with(&mut shared);
+        }
+        let status = json!({ "status": state, "turn_id": "t_1" });
+        let (passed, _) = judge(&run, case, Some(&status), &json!({ "messages": messages }));
+        lock_unpoisoned(ledgers()).remove(&run);
+        passed
+    }
+
+    #[test]
+    fn each_fault_case_passes_on_its_healthy_ending_only() {
+        let paired = |ledger: &mut Ledger| {
+            ledger
+                .requests
+                .insert("orphan".into(), vec![json!([]), json!([])]);
+        };
+        assert!(judged(
+            "orphan",
+            2,
+            "completed",
+            vec![reply("PAIRED")],
+            paired
+        ));
+        assert!(!judged(
+            "orphan",
+            2,
+            "completed",
+            vec![reply("ORPHANED fc_orphan_2")],
+            paired
+        ));
+
+        assert!(judged(
+            "prestream",
+            3,
+            "completed",
+            vec![reply("PRESTREAM-OK")],
+            |_| {}
+        ));
+        let visible = vec![reply("PRESTREAM-OK"), row("error", json!({ "code": "x" }))];
+        assert!(!judged("prestream", 3, "completed", visible, |_| {}));
+        assert!(!judged(
+            "prestream",
+            4,
+            "completed",
+            vec![reply("PRESTREAM-OK")],
+            |_| {}
+        ));
+
+        let permanent = || vec![row("error", json!({ "retryable": false }))];
+        assert!(judged("permanent", 1, "failed", permanent(), |_| {}));
+        assert!(!judged("permanent", 2, "failed", permanent(), |_| {}));
+
+        let resumed = || {
+            vec![
+                reply("PART-RESUME "),
+                row(
+                    "recovery",
+                    json!({ "status": "recovering", "partial_result_available": true }),
+                ),
+                row("recovery", json!({ "status": "recovered" })),
+                reply("RESUMED"),
+            ]
+        };
+        let once = |ledger: &mut Ledger| {
+            ledger.effects.insert("midstream".into(), 1);
+        };
+        let twice = |ledger: &mut Ledger| {
+            ledger.effects.insert("midstream".into(), 2);
+        };
+        assert!(judged("midstream", 3, "completed", resumed(), once));
+        assert!(!judged("midstream", 3, "completed", resumed(), twice));
+
+        let exhausted = |attempted: u64| {
+            vec![row(
+                "error",
+                json!({ "recovery": { "attempted": attempted, "outcome": "exhausted" } }),
+            )]
+        };
+        assert!(judged("exhausted", 4, "failed", exhausted(3), |_| {}));
+        assert!(!judged("exhausted", 4, "failed", exhausted(2), |_| {}));
+        assert!(!judged("exhausted", 3, "failed", exhausted(3), |_| {}));
+
+        let aborted = |request: &'static str| {
+            move |ledger: &mut Ledger| {
+                ledger.aborts.push(request.into());
+                ledger.stop_ended = Some(Instant::now());
+            }
+        };
+        assert!(judged("stop", 1, "cancelled", vec![], aborted("t_1:0")));
+        assert!(!judged("stop", 1, "cancelled", vec![], aborted("t_0:0")));
+        assert!(!judged("stop", 1, "completed", vec![], aborted("t_1:0")));
+
+        let overflow = |class: &str| vec![row("error", json!({ "class": class }))];
+        assert!(judged(
+            "overflow",
+            1,
+            "failed",
+            overflow("llm.context_overflow"),
+            |_| {}
+        ));
+        assert!(!judged(
+            "overflow",
+            1,
+            "failed",
+            overflow("llm.provider_error"),
+            |_| {}
+        ));
+    }
+
+    #[test]
+    fn the_case_message_is_part_of_the_definition() {
+        let planted = RouterFaultContract.planted_state("run").unwrap();
+        assert_eq!(planted["runner_messages"]["case"], CASE_MESSAGE);
     }
 
     #[test]

@@ -1,7 +1,7 @@
-//! `subtree_deletion` — deleting a sub-agent's subtree under a live parent.
-//! Between the parent's two exchanges the runner builds parent P → child C →
-//! grandchild G with direct `harness::spawn` calls, each child answering one
-//! line, then:
+//! `subtree_deletion` — deleting a sub-agent's subtree while its parent
+//! session lives on. Between the parent's two exchanges, with P idle (its
+//! first turn has ended), the runner builds parent P → child C → grandchild
+//! G with direct `harness::spawn` calls, each child answering one line, then:
 //!
 //! - `harness::delete-session-tree(C)` returns the `delete_<sha256(C)>`
 //!   operation, which completes having deleted exactly C and G, both gone
@@ -11,7 +11,8 @@
 //! - a third child D deleted directly with `session::delete` loses its
 //!   `harness::status` record (`harness::on-session-deleted`).
 //!
-//! P's second exchange then has to complete as usual.
+//! P's second exchange then has to complete as usual. A delete while P's
+//! own turn runs or waits on C is not exercised here.
 
 use std::time::Duration;
 
@@ -29,6 +30,8 @@ use super::{
 pub const ID: &str = "subtree_deletion";
 const DELIVERABLE_ID: &str = "subtree_deletion_checks";
 const WAIT: Duration = Duration::from_secs(150);
+const CHILD_TASK: &str =
+    "Reply with exactly `CHILD-OK` and nothing else. Do not call any function.";
 
 const DELETED: AssessmentSpec = AssessmentSpec::gate(
     "subtree_deleted",
@@ -140,6 +143,11 @@ impl Scenario for SubtreeDeletion {
         Some(Vec::new())
     }
 
+    /// What the runner tells the children it spawns is part of the task.
+    fn planted_state(&self, _run_id: &str) -> Option<Value> {
+        Some(json!({ "runner_messages": { "child_task": CHILD_TASK } }))
+    }
+
     async fn setup(&self, _context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         mechanism::reset(run_id);
         for name in ["c", "g", "d"] {
@@ -202,15 +210,16 @@ impl Scenario for SubtreeDeletion {
             ));
         }
         let checks = mechanism::observed_checks(observation, run_id);
-        // Children that never finished their one line say nothing about deletion.
-        if checks
+        // A child whose provider dropped its one line says nothing about
+        // deletion; any other fault building the tree is the Harness's.
+        if let Some(check) = checks
             .iter()
-            .any(|check| check.id == "tree_built" && !check.passed)
+            .find(|check| check.id == "children_answered" && !check.passed)
         {
             return Ok(assessment::prerequisite_failure(
                 ASSESSMENTS,
-                "tree_built",
-                "the child or grandchild never completed",
+                "children_answered",
+                format!("a child's provider dropped its turn: {}", check.detail),
             ));
         }
         Ok(assessment::build_evaluation([
@@ -254,7 +263,7 @@ async fn spawn(
         .trigger_value(
             "harness::spawn",
             json!({
-                "task": "Reply with exactly `CHILD-OK` and nothing else. Do not call any function.",
+                "task": CHILD_TASK,
                 "session_id": session_id,
                 "parent_session_id": parent,
                 "model": route.0,
@@ -305,9 +314,16 @@ async fn delete_subtree(
                 .map_or_else(|e| format!("{e:#}"), |_| "ok".into()),
             status.as_ref().map(|status| status["status"].clone())
         ));
-        if !status.is_some_and(|status| status["status"] == "completed") {
-            record(run_id, "tree_built", false, built.join("; "));
-            return;
+        match child_outcome(&status) {
+            ChildOutcome::Answered => {}
+            ChildOutcome::ModelSilent => {
+                record(run_id, "children_answered", false, built.join("; "));
+                return;
+            }
+            ChildOutcome::HarnessFault => {
+                record(run_id, "tree_built", false, built.join("; "));
+                return;
+            }
         }
     }
     let tree = context
@@ -477,6 +493,29 @@ async fn delete_subtree(
     );
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ChildOutcome {
+    Answered,
+    /// The provider dropped the child's turn: says nothing about the Harness.
+    ModelSilent,
+    /// A spawn error, a turn that failed for another reason or never ended.
+    HarnessFault,
+}
+
+fn child_outcome(status: &Option<Value>) -> ChildOutcome {
+    let Some(status) = status else {
+        return ChildOutcome::HarnessFault;
+    };
+    let transport = status["result_error"]
+        .as_str()
+        .is_some_and(|reason| crate::suite::PROVIDER_TRANSPORT_FAILURES.contains(&reason));
+    match status["status"].as_str() {
+        Some("completed") => ChildOutcome::Answered,
+        Some("failed") if transport => ChildOutcome::ModelSilent,
+        _ => ChildOutcome::HarnessFault,
+    }
+}
+
 fn tree_members(tree: &Value) -> Vec<String> {
     tree["sessions"]
         .as_array()
@@ -498,8 +537,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_child_that_never_finished_leaves_the_run_undetermined() {
+    async fn evaluate_with(run_id: &str, check: &str) -> ObjectiveEvaluation {
         let observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::SubtreeDeletion,
             "control",
@@ -507,17 +545,64 @@ mod tests {
             "ACK",
             Vec::new(),
         );
-        record("never-built", "tree_built", false, "child failed");
+        record(run_id, check, false, "child failed");
         let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
         let evaluation = SubtreeDeletion
-            .evaluate(&context, &observation, "never-built")
+            .evaluate(&context, &observation, run_id)
             .await
             .unwrap();
+        mechanism::reset(run_id);
+        evaluation
+    }
+
+    #[tokio::test]
+    async fn a_child_whose_model_never_answered_leaves_the_run_undetermined() {
+        let evaluation = evaluate_with("never-answered", "children_answered").await;
         assert_eq!(
             evaluation.completion,
             Some(crate::report::CompletionState::Undetermined)
         );
-        mechanism::reset("never-built");
+    }
+
+    /// The runner builds the tree itself, so a spawn or session-tree fault is
+    /// the Harness's and fails the deletion criterion.
+    #[tokio::test]
+    async fn a_tree_the_harness_could_not_build_fails_the_deletion() {
+        let evaluation = evaluate_with("never-built", "tree_built").await;
+        assert_ne!(
+            evaluation.completion,
+            Some(crate::report::CompletionState::Undetermined)
+        );
+        let deleted = evaluation
+            .awards
+            .iter()
+            .find(|award| award.id == "subtree_deleted")
+            .unwrap();
+        assert_eq!(deleted.awarded, Some(0));
+    }
+
+    #[test]
+    fn a_failed_child_turn_is_the_model_s_only_when_the_provider_dropped_it() {
+        let failed = |error: &str| json!({ "status": "failed", "result_error": error });
+        assert_eq!(
+            child_outcome(&Some(json!({ "status": "completed" }))),
+            ChildOutcome::Answered
+        );
+        assert_eq!(
+            child_outcome(&Some(failed(crate::suite::PROVIDER_TRANSPORT_FAILURES[0]))),
+            ChildOutcome::ModelSilent
+        );
+        assert_eq!(
+            child_outcome(&Some(failed("harness.step_failed"))),
+            ChildOutcome::HarnessFault
+        );
+        assert_eq!(child_outcome(&None), ChildOutcome::HarnessFault);
+    }
+
+    #[test]
+    fn the_child_task_is_part_of_the_definition() {
+        let planted = SubtreeDeletion.planted_state("run").unwrap();
+        assert_eq!(planted["runner_messages"]["child_task"], CHILD_TASK);
     }
 
     #[test]

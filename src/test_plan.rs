@@ -945,8 +945,24 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:5a72fa263490433bb91e41bc311c90d11667a2a03fa19b1bc828c95b0fbd5776"
+            "sha256:d47ba325434c487c2148d1823815e4e79e66a76b9b928c22cfda02e27fb3b626"
         );
+    }
+
+    /// Scenarios that change what every session on the stack sees say so
+    /// where the catalog lists what a scenario needs.
+    #[test]
+    fn stack_wide_scenarios_require_a_disposable_stack() {
+        let plan = embedded().unwrap();
+        for id in ["prompt_layers", "router_fault_contract"] {
+            let requirements = plan.requirements.get(id).cloned().unwrap_or_default();
+            assert!(
+                requirements
+                    .iter()
+                    .any(|requirement| requirement.starts_with("A disposable stack")),
+                "{id}: {requirements:?}"
+            );
+        }
     }
 
     #[test]

@@ -155,8 +155,11 @@ impl Scenario for SessionContinuity {
                 max_turns: Some(6),
                 max_output_tokens: Some(2_048),
                 // No token budget: a send naming only the session does not
-                // keep `max_output_tokens`, so its preflight reserves the
-                // model's whole output and a budget would refuse the turn.
+                // keep `max_output_tokens` (harness send.rs reads only the
+                // request's), so its preflight reserves the model's whole
+                // output and a budget would refuse the turn.
+                // shortcut: restore `Some(80_000)` once the Harness inherits
+                // `max_output_tokens` on a session-only send.
                 max_total_tokens: None,
                 stuck_timeout_seconds: 240,
                 max_validation_retries: None,
@@ -183,7 +186,11 @@ impl Scenario for SessionContinuity {
     }
 
     fn planted_state(&self, run_id: &str) -> Option<Value> {
-        Some(json!({ "files": { MARKER_FILE: code(run_id, "file") } }))
+        // The keyed send goes out from `before_followup`, not as a follow-up.
+        Some(json!({
+            "files": { MARKER_FILE: code(run_id, "file") },
+            "runner_messages": { "keyed": keyed_message(run_id) },
+        }))
     }
 
     async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -508,6 +515,12 @@ mod tests {
             .unwrap()
             .insert(2, duplicate);
         assert_eq!(failing(&transcript), ["one_idem_entry"]);
+    }
+
+    #[test]
+    fn the_keyed_message_is_part_of_the_definition() {
+        let planted = SessionContinuity.planted_state(RUN).unwrap();
+        assert_eq!(planted["runner_messages"]["keyed"], keyed_message(RUN));
     }
 
     #[test]

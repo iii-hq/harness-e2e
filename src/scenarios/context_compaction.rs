@@ -10,8 +10,9 @@
 //!   entry, and a resend with the same key is deduplicated;
 //! - in `capture`: one `e_<cmp>_outcome` record with `source: command`, the
 //!   `harness::compaction` events started then completed with no summary,
-//!   the held call still paired with its result, an aged prune of the long
-//!   early result, and a side session whose prompt overflows the window
+//!   the held call still paired with its result, `context::prune` called
+//!   on the stored transcript aging out the long early result (the prune
+//!   the Harness runs during context assembly is not observed), and a side session whose prompt overflows the window
 //!   failing as `harness.context_overflow` before any model call.
 
 use std::sync::Arc;
@@ -73,7 +74,7 @@ const OVERFLOW: AssessmentSpec = AssessmentSpec::gate(
 const PRUNE: AssessmentSpec = AssessmentSpec::gate(
     "aged_prune",
     15,
-    "Did `context::prune` over the transcript replace the long early result with a placeholder while keeping the latest result and every message?",
+    "Did `context::prune`, called by the runner on the stored transcript with fixed options, replace the long early result with a placeholder while keeping the latest result and every message?",
 )
 .labeled("Aged prune drops the old long result only");
 const ASSESSMENTS: &[AssessmentSpec] =
@@ -190,6 +191,15 @@ impl Scenario for ContextCompaction {
 
     fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
         Some(self.required_functions(run_id))
+    }
+
+    /// What the runner sends the session and the overflow side session; the
+    /// 4 MiB overflow prompt by its digest.
+    fn planted_state(&self, _run_id: &str) -> Option<Value> {
+        Some(json!({ "runner_messages": {
+            "compact": "/compact",
+            "overflow_sha256": crate::artifact::sha256_bytes(overflow_message().as_bytes()),
+        } }))
     }
 
     async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
@@ -590,6 +600,12 @@ fn prune_outcome(messages: &[Value], response: &Value, run_id: &str) -> (bool, S
     )
 }
 
+fn overflow_message() -> String {
+    (0..OVERFLOW_BYTES / 9)
+        .map(|index| format!("{:08x} ", super::stable_seed(&index.to_string()) as u32))
+        .collect()
+}
+
 /// A fresh side session whose one prompt cannot fit the window.
 async fn overflow_check(context: &E2eContext, transcript: &Value, run_id: &str) {
     let Some((model, provider)) = mechanism::subject_route(transcript) else {
@@ -603,9 +619,7 @@ async fn overflow_check(context: &E2eContext, transcript: &Value, run_id: &str) 
     };
     let session_id = overflow_session(run_id);
     mechanism::keep_session(run_id, &session_id);
-    let message: String = (0..OVERFLOW_BYTES / 9)
-        .map(|index| format!("{:08x} ", super::stable_seed(&index.to_string()) as u32))
-        .collect();
+    let message = overflow_message();
     let sent = context
         .trigger_value(
             "harness::send",
@@ -847,6 +861,16 @@ mod tests {
         assert_eq!(
             evaluation.completion,
             Some(crate::report::CompletionState::Undetermined)
+        );
+    }
+
+    #[test]
+    fn the_runner_messages_are_part_of_the_definition() {
+        let planted = ContextCompaction.planted_state(RUN).unwrap();
+        assert_eq!(planted["runner_messages"]["compact"], "/compact");
+        assert_eq!(
+            planted["runner_messages"]["overflow_sha256"],
+            crate::artifact::sha256_bytes(overflow_message().as_bytes())
         );
     }
 
