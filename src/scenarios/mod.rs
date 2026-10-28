@@ -27,6 +27,7 @@ pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
 pub mod database_migration_recovery;
 pub mod depth_ladder;
+pub mod dispatch_pipeline;
 mod domain;
 pub mod engineering_endurance_ladder;
 pub mod fanout_ladder;
@@ -671,6 +672,7 @@ scenarios! {
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
     HarnessContractProbe = "harness_contract_probe" => harness_contract_probe::HarnessContractProbe,
+    DispatchPipeline = "dispatch_pipeline" => dispatch_pipeline::DispatchPipeline,
     TurnFailureSurface = "turn_failure_surface" => turn_failure_surface::TurnFailureSurface,
 }
 
