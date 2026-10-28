@@ -2512,6 +2512,7 @@ async fn execute(
         report.metrics = metrics.clone();
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
+    module.after_dialogue(context, run_id, session_id).await;
     let terminal_status = match context
         .trigger::<_, Option<StatusReport>>(
             "harness::status",
