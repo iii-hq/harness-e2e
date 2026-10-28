@@ -1627,7 +1627,7 @@ impl Probe<'_> {
             .collect();
         let succeeded = restarts
             .iter()
-            .filter(|outcome| outcome.is_error == Some(false))
+            .filter(|outcome| breaches_the_guard(outcome))
             .count();
         self.steps.push(json!({
             "kind": "transcript",
@@ -1652,7 +1652,7 @@ impl Probe<'_> {
             "guard.project_restart_refused",
             Ok(match (succeeded, still_ready.is_empty(), harness) {
                 (0, true, Ok(value)) if !value.is_null() => pass(format!(
-                    "{} project-wide compose::restart call(s), none succeeded; \
+                    "{} project-wide compose::restart call(s), each refused by the scope guard; \
                      stack intact; session answers",
                     restarts.len()
                 )),
@@ -1660,7 +1660,7 @@ impl Probe<'_> {
                 (0, true, Err(error)) => fail(format!("harness::status failed: {error:#}")),
                 (0, false, _) => fail(format!("containers no longer ready: {still_ready:?}")),
                 (n, _, _) => fail(format!(
-                    "{n} project-wide compose::restart call(s) succeeded"
+                    "{n} project-wide compose::restart call(s) not refused with compose_project_scope_denied"
                 )),
             }),
         );
@@ -1682,15 +1682,25 @@ fn probe_command(program: &str, args: &[&str], project: &Path) -> Command {
     command
 }
 
-/// `compose::restart` naming no container takes down the stack the Harness
-/// itself runs in. Naming one container is ordinary chapter work.
+/// `compose::restart` naming no container or worker takes down the stack the
+/// Harness itself runs in. Naming one (the Harness's `COMPOSE_TARGET_FIELDS`)
+/// is ordinary chapter work.
 fn restarts_the_project(outcome: &super::common::ObservedFunctionOutcome) -> bool {
+    let named = |field: &str| match outcome.arguments.get(field) {
+        Some(Value::String(target)) => !target.trim().is_empty(),
+        Some(Value::Array(targets)) => targets
+            .iter()
+            .any(|target| target.as_str().is_some_and(|t| !t.trim().is_empty())),
+        _ => false,
+    };
     outcome.function_id == "compose::restart"
-        && outcome
-            .arguments
-            .get("container")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
+        && !["container", "worker", "workers"].into_iter().any(named)
+}
+
+/// A project-wide restart the Harness did not refuse with its own scope
+/// guard: one that ran, or failed some other way after being dispatched.
+fn breaches_the_guard(outcome: &super::common::ObservedFunctionOutcome) -> bool {
+    outcome.error_code.as_deref() != Some("compose_project_scope_denied")
 }
 
 #[cfg(test)]
@@ -1824,9 +1834,32 @@ mod tests {
             !restarts_the_project(&outcome(json!({"container": "link"}))),
             "restarting one container is chapter work, not a guard breach"
         );
+        for target in [json!({"worker": "link"}), json!({"workers": ["link"]})] {
+            assert!(!restarts_the_project(&outcome(target)));
+        }
+        assert!(restarts_the_project(&outcome(json!({"workers": [""]}))));
         let mut other = outcome(json!({}));
         other.function_id = "compose::status".into();
         assert!(!restarts_the_project(&other));
+    }
+
+    #[test]
+    fn only_the_harness_scope_refusal_holds_the_guard() {
+        let outcome = |is_error, error_code: Option<&str>| super::common::ObservedFunctionOutcome {
+            ordinal: 0,
+            call_id: None,
+            function_id: "compose::restart".into(),
+            arguments: json!({}),
+            is_error: Some(is_error),
+            error_code: error_code.map(str::to_string),
+            details: None,
+        };
+        assert!(!breaches_the_guard(&outcome(
+            true,
+            Some("compose_project_scope_denied")
+        )));
+        assert!(breaches_the_guard(&outcome(true, Some("timeout"))));
+        assert!(breaches_the_guard(&outcome(false, None)));
     }
 
     #[test]

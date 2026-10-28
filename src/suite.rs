@@ -2406,6 +2406,15 @@ async fn execute(
         .map_err(|error| journal_checkpoint_failure(FailurePhase::Execute, error.to_string()))?;
     ensure_not_cancelled(control)
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    let mut armed = crate::mechanism_gates::arm(
+        context,
+        spec.id,
+        session_id,
+        run_id,
+        subject.agent.as_deref(),
+    )
+    .await
+    .map_err(|error| scenario_setup_failure(format!("arm the mechanism gates: {error:#}")))?;
     context
         .bind_turn_completed()
         .await
@@ -2421,10 +2430,7 @@ async fn execute(
                 .await;
         }
         context.drain_turn_completed_events();
-        let response: SendResponse = context
-            .trigger(
-                "harness::send",
-                SendRequest {
+        let request = SendRequest {
                     session_id: Some(session_id.to_string()),
                     message: MessageInput::Text(message),
                     model: Some(subject.model.clone()),
@@ -2461,8 +2467,9 @@ async fn execute(
                         )),
                         metadata: options_metadata.clone(),
                     }),
-                },
-            )
+                };
+        let response: SendResponse = context
+            .trigger("harness::send", request.clone())
             .await
             .map_err(subject_dispatch_failure)?;
         if !response.accepted
@@ -2477,6 +2484,9 @@ async fn execute(
                     "harness::send exchange {exchange} returned an unexpected response: {response:?}"
                 ),
             ));
+        }
+        if exchange == 0 && armed.resends_first_send() {
+            armed.resend(context, &response.turn_id, request).await;
         }
         metrics = Some(
             match context
@@ -2588,6 +2598,30 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
+    // After the evaluation: the probes register and remove bindings the
+    // scenario's own criteria would count.
+    report.mechanism_evidence = crate::mechanism_gates::capture(
+        context,
+        armed,
+        &crate::mechanism_gates::Attempt {
+            run_id,
+            session_id,
+            filesystem_root: spec.filesystem_root.as_deref(),
+            transcript: &observation.transcript,
+            metrics: &observation.metrics,
+            terminal_status: report
+                .terminal_status
+                .as_ref()
+                .and_then(|status| serde_json::to_value(status).ok()),
+        },
+    )
+    .await
+    .map_err(|error| {
+        collection_failure(
+            FailurePhase::Collect,
+            format!("probe the mechanism gates: {error:#}"),
+        )
+    })?;
     apply_objective_evaluation(spec, report, objective)
 }
 
@@ -2690,9 +2724,10 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 }
 
 /// Checks the Harness invariants. Unresolved context limits make the
-/// measurement untrustworthy, an infrastructure error the slot re-runs. A
-/// lost function result is incomplete like a failed gate, whatever the agent
-/// delivered; the score stays what the criteria awarded.
+/// measurement untrustworthy, an infrastructure error the slot re-runs. Any
+/// other broken invariant (a lost function result, a mechanism gate) is
+/// incomplete like a failed gate, whatever the agent delivered; the score
+/// stays what the criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -2708,7 +2743,10 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             .join("; ")
     };
     let unresolved = broken(HarnessInvariant::FallbackContextLimits);
-    let lost = broken(HarnessInvariant::LostFunctionResult);
+    let defective = report
+        .harness_violations
+        .iter()
+        .any(|violation| violation.invariant != HarnessInvariant::FallbackContextLimits);
     if !unresolved.is_empty() {
         report.push_typed_failure(
             RunStatus::InfrastructureError,
@@ -2722,7 +2760,7 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             CompletionState::Undetermined,
             EvaluatorAvailability::Unavailable,
         );
-    } else if !lost.is_empty() {
+    } else if defective {
         report.set_completion(
             CompletionState::TaskIncomplete,
             EvaluatorAvailability::Available,
@@ -4800,6 +4838,34 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_broken_mechanism_gate_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.mechanism_evidence = Some(crate::mechanism_gates::MechanismEvidence {
+            scenario: "persistent_state".into(),
+            probes: [(
+                "chokepoint".to_string(),
+                serde_json::json!([
+                    { "function_id": "harness::state::get", "denied": false, "timed_out": false },
+                ]),
+            )]
+            .into(),
+        });
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::MechanismGate
+        );
+        assert!(report.harness_violations[0]
+            .detail
+            .starts_with("chokepoint_denies: \"harness::state::get\""));
     }
 
     #[test]

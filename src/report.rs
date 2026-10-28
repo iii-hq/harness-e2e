@@ -844,6 +844,10 @@ pub struct E2eRunReport {
     /// costs the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
+    /// What the runner observed and probed for the scenario's mechanism
+    /// gates, before teardown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism_evidence: Option<crate::mechanism_gates::MechanismEvidence>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -900,6 +904,7 @@ impl E2eRunReport {
             failures: Vec::new(),
             audit: None,
             harness_violations: Vec::new(),
+            mechanism_evidence: None,
             terminal_status: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),

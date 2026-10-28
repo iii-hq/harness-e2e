@@ -128,6 +128,16 @@ records what broke.
   can be trusted. It is an infrastructure error (`context_limits_unresolved`)
   the slot re-runs.
 
+The scenarios that exercise a Harness mechanism also gate the mechanism itself
+(`src/mechanism_gates/`): `context_pressure` its compactions, `contention_ledger`
+its spawns, leaf wall and barrier, `timer_wake` its wake, `tool_contract_recovery`
+its dispatch policy, `validation_self_repair` its validator binding,
+`persistent_state` its invocation chokepoint, `shell_coder_sandbox` its
+filesystem stamp, and a run under an agent profile that profile. The runner
+arms observers before the prompt and probes the stack before teardown; the
+run's `mechanism_evidence` keeps what they saw. A broken gate is a
+`mechanism_gate` violation: incomplete, like a failed gate, and the score stays.
+
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches
 the migration exactly"). The description is part of the behavior digest and

@@ -992,6 +992,11 @@ fn integer_field(row: &Value, field: &str) -> Option<i64> {
         .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
 }
 
+/// The label of the barrier wake, for the mechanism gates.
+pub(crate) fn barrier_label(run_id: &str) -> String {
+    Names::new(run_id).complete_label
+}
+
 struct Names {
     table_prefix: String,
     root_session: String,
