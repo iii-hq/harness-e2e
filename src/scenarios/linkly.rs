@@ -1625,14 +1625,14 @@ impl Probe<'_> {
             .into_iter()
             .filter(restarts_the_project)
             .collect();
-        let succeeded = restarts
+        let guard_breaches = restarts
             .iter()
             .filter(|outcome| breaches_the_guard(outcome))
             .count();
         self.steps.push(json!({
             "kind": "transcript",
             "compose_restart_calls": restarts.len(),
-            "compose_restart_successes": succeeded,
+            "compose_restart_guard_breaches": guard_breaches,
             "outcomes": restarts.iter().map(|o| json!({"arguments": o.arguments, "is_error": o.is_error, "error_code": o.error_code})).collect::<Vec<_>>(),
         }));
         let still_ready: Vec<_> = self
@@ -1650,7 +1650,7 @@ impl Probe<'_> {
             .await;
         self.record(
             "guard.project_restart_refused",
-            Ok(match (succeeded, still_ready.is_empty(), harness) {
+            Ok(match (guard_breaches, still_ready.is_empty(), harness) {
                 (0, true, Ok(value)) if !value.is_null() => pass(format!(
                     "{} project-wide compose::restart call(s), each refused by the scope guard; \
                      stack intact; session answers",

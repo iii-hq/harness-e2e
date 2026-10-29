@@ -36,6 +36,20 @@ fn validator(transcript: &Value) -> Option<(String, Value)> {
         })
 }
 
+/// Whether the subject itself removed this validator: a failed call, or one
+/// for another subscription, leaves it for the probes.
+fn unregistered_by_subject(transcript: &Value, subscription: &str) -> bool {
+    function_outcomes(transcript).iter().any(|outcome| {
+        outcome.function_id == "engine::unregister_trigger"
+            && outcome.arguments["id"] == subscription
+            && outcome.is_error == Some(false)
+            && outcome
+                .details
+                .as_ref()
+                .is_some_and(|details| details["removed"] == true)
+    })
+}
+
 /// Unregisters the validator twice, unless the subject already did.
 pub(super) async fn capture(
     context: &E2eContext,
@@ -51,29 +65,27 @@ pub(super) async fn capture(
             "max_validation_retries": status["max_validation_retries"],
         }),
     );
-    let unregistered_by_subject = function_outcomes(attempt.transcript)
-        .iter()
-        .any(|outcome| outcome.function_id.contains("unregister"));
     let Some((subscription, _)) = validator(attempt.transcript) else {
         return;
     };
-    if unregistered_by_subject {
+    if unregistered_by_subject(attempt.transcript, &subscription) {
         return;
     }
     // The session's own path: the console's `harness::triggers::unregister`
     // does not reach an agent-registered validator.
-    let mut removed = Vec::new();
+    let mut replies = Vec::new();
     for _ in 0..2 {
-        let reply = invoke_as(
-            context,
-            attempt.session_id,
-            "engine::unregister_trigger",
-            json!({"id": subscription}),
-        )
-        .await;
-        removed.push(reply["details"]["removed"].clone());
+        replies.push(
+            invoke_as(
+                context,
+                attempt.session_id,
+                "engine::unregister_trigger",
+                json!({"id": subscription}),
+            )
+            .await,
+        );
     }
-    probes.insert("unregister".into(), json!(removed));
+    probes.insert("unregister".into(), json!(replies));
 }
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
@@ -92,18 +104,27 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             format!("registration returned {details}"),
         ));
     }
-    if let Some(removed) = run.probe("unregister") {
-        if removed != &json!([true, false]) {
+    if let Some(replies) = run.probe("unregister") {
+        let removed: Vec<&Value> = replies
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|reply| &reply["details"]["removed"])
+            .collect();
+        if removed != [&Value::Bool(true), &Value::Bool(false)] {
             broken.push((
                 "validator_unregistered_once",
-                format!("two unregisters answered {removed}"),
+                format!("two unregisters answered {replies}"),
             ));
         }
     }
-    if let Some(status) = run
-        .probe("status")
-        .filter(|status| !status["turn_id"].is_null())
-    {
+    let status = run.probe("status");
+    if status.is_some_and(|status| status["turn_id"].is_null()) {
+        broken.push((
+            "validation_retries_counted",
+            "the terminal status reported no turn_id".into(),
+        ));
+    } else if let Some(status) = status {
         let turn = status["turn_id"].as_str();
         let nudges = messages(run.transcript)
             .iter()
@@ -162,7 +183,7 @@ mod tests {
 
     #[test]
     fn a_counted_session_bound_validator_removed_once_keeps_every_gate() {
-        let probes = json!({"unregister": [true, false],
+        let probes = json!({"unregister": [{"details": {"removed": true}}, {"details": {"removed": false}}],
             "status": {"turn_id": "t1", "validation_retries": 1, "max_validation_retries": 2}});
 
         assert_eq!(
@@ -173,7 +194,7 @@ mod tests {
 
     #[test]
     fn a_miscounted_unbound_or_sticky_validator_is_flagged() {
-        let probes = json!({"unregister": [true, true],
+        let probes = json!({"unregister": [{"details": {"removed": true}}, {"details": {"removed": true}}],
             "status": {"turn_id": "t1", "validation_retries": 1, "max_validation_retries": 2}});
 
         let broken = gates_of(&transcript("sub_1", 3), probes);
@@ -182,11 +203,56 @@ mod tests {
         assert!(broken[0].starts_with("validator_binding"));
         assert_eq!(
             broken[1],
-            "validator_unregistered_once: two unregisters answered [true,true]"
+            r#"validator_unregistered_once: two unregisters answered [{"details":{"removed":true}},{"details":{"removed":true}}]"#
         );
         assert_eq!(
             broken[2],
             "validation_retries_counted: 3 nudge(s) in the last turn, status counts 1 of at most 2"
+        );
+    }
+
+    fn with_unregister(mut transcript: Value, id: &str, is_error: bool, removed: bool) -> Value {
+        transcript["messages"].as_array_mut().unwrap().extend([
+            json!({"entry_id": "e_t1_1_assistant", "message": {"role": "assistant", "content": [{
+                "type": "function_call", "id": "c2", "function_id": "agent_trigger",
+                "arguments": {"function": "engine::unregister_trigger", "payload": {"id": id}}}]}}),
+            json!({"entry_id": "e_t1_c2", "message": {"role": "function_result", "function_call_id": "c2",
+                "function_id": "engine::unregister_trigger", "is_error": is_error,
+                "details": {"removed": removed}}}),
+        ]);
+        transcript
+    }
+
+    #[test]
+    fn only_the_subjects_own_successful_removal_skips_the_probes() {
+        let removed = with_unregister(transcript(POSTHOOK, 0), POSTHOOK, false, true);
+        let failed = with_unregister(transcript(POSTHOOK, 0), POSTHOOK, true, false);
+        let other = with_unregister(transcript(POSTHOOK, 0), "sub_other", false, true);
+
+        assert!(unregistered_by_subject(&removed, POSTHOOK));
+        assert!(!unregistered_by_subject(&failed, POSTHOOK));
+        assert!(!unregistered_by_subject(&other, POSTHOOK));
+    }
+
+    #[test]
+    fn a_timed_out_unregister_keeps_its_cause() {
+        let probes = json!({"unregister": [{"details": {"removed": true}}, {"timed_out": true}]});
+
+        assert_eq!(
+            gates_of(&transcript(POSTHOOK, 0), probes),
+            vec![
+                r#"validator_unregistered_once: two unregisters answered [{"details":{"removed":true}},{"timed_out":true}]"#
+            ]
+        );
+    }
+
+    #[test]
+    fn a_status_without_a_turn_id_breaks_the_retry_gate() {
+        let probes = json!({"status": {"turn_id": null, "validation_retries": 0}});
+
+        assert_eq!(
+            gates_of(&transcript(POSTHOOK, 1), probes),
+            vec!["validation_retries_counted: the terminal status reported no turn_id"]
         );
     }
 
