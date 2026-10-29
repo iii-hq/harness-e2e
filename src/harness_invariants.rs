@@ -43,6 +43,17 @@ pub enum HarnessInvariant {
     UnrecoveredTransientResume,
     /// A turn resumed more often than its `max_transient_resumes`.
     TransientResumesOverLimit,
+    /// A `trigger_fired` record has an outcome outside `TriggerOutcome`, or
+    /// retired its binding without a `retirement_reason`.
+    MalformedTriggerRecord,
+    /// A wake binding's `delivered` records and the `e_fire_` entries it
+    /// injected differ in number: a wake was lost or doubled.
+    WakeDeliveryMismatch,
+    /// A `once` binding was delivered more than once.
+    OnceBindingRedelivered,
+    /// A binding of the run outlived `harness::teardown`, on the engine or in
+    /// the binding store.
+    LeakedTriggerBinding,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -69,6 +80,12 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
     violations.extend(crate::transient_recovery::violations(
         report.transient_recovery.as_deref().unwrap_or_default(),
     ));
+    violations.extend(
+        report
+            .trigger_bindings
+            .iter()
+            .flat_map(|bindings| bindings.violations.iter().cloned()),
+    );
     violations
 }
 

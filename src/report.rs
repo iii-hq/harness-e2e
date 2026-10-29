@@ -844,6 +844,10 @@ pub struct E2eRunReport {
     /// costs the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
+    /// The session tree's trigger bindings and what teardown left of them.
+    /// Absent on a report written before it, or a composite or adaptive run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_bindings: Option<crate::trigger_bindings::TriggerBindings>,
     /// The turns that resumed after a stream cut, in every session of the
     /// tree. Absent when the transcripts were not read: a report written
     /// before it, or a composite or adaptive run.
@@ -910,6 +914,7 @@ impl E2eRunReport {
             failures: Vec::new(),
             audit: None,
             harness_violations: Vec::new(),
+            trigger_bindings: None,
             transient_recovery: None,
             terminal_status: None,
             child_transcripts: Default::default(),
@@ -1579,7 +1584,7 @@ fn observed_wake_resumes(transcript: Option<&Value>) -> Option<u64> {
                         custom.pointer("/data/target").and_then(Value::as_str),
                         Some("harness::send" | "notify")
                     )
-                    && custom.pointer("/data/note").is_none_or(Value::is_null)
+                    && custom.pointer("/data/outcome").and_then(Value::as_str) == Some("delivered")
             })
             .count()
             .try_into()
@@ -5024,6 +5029,26 @@ mod tests {
             .unavailable
             .contains_key("processed_prompt_tokens"));
         assert!(efficiency.unavailable.contains_key("peak_context_tokens"));
+    }
+
+    #[test]
+    fn a_wake_resume_is_a_delivered_wake_record_whatever_its_note() {
+        let fired = |target: &str, outcome: &str, note: Option<&str>| {
+            serde_json::json!({"custom": {"custom_type": "trigger_fired", "data": {
+                "target": target, "outcome": outcome, "note": note,
+            }}})
+        };
+        let transcript = serde_json::json!({"messages": [
+            fired("harness::send", "delivered", None),
+            // A wake delivered with a note still woke the session.
+            fired("harness::send", "delivered", Some("condition passed")),
+            // Lifecycle and skip records carry no note and woke nothing.
+            fired("harness::send", "expired", None),
+            fired("harness::send", "skipped", None),
+            fired("state::set", "delivered", None),
+        ]});
+
+        assert_eq!(observed_wake_resumes(Some(&transcript)), Some(2));
     }
 
     #[test]

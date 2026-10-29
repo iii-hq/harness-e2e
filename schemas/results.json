@@ -1069,6 +1069,17 @@
             "$ref": "#/definitions/TurnRecovery"
           }
         },
+        "trigger_bindings": {
+          "description": "The session tree's trigger bindings and what teardown left of them. Absent on a report written before it, or a composite or adaptive run.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TriggerBindings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -1652,6 +1663,34 @@
           "type": "string",
           "enum": [
             "transient_resumes_over_limit"
+          ]
+        },
+        {
+          "description": "A `trigger_fired` record has an outcome outside `TriggerOutcome`, or retired its binding without a `retirement_reason`.",
+          "type": "string",
+          "enum": [
+            "malformed_trigger_record"
+          ]
+        },
+        {
+          "description": "A wake binding's `delivered` records and the `e_fire_` entries it injected differ in number: a wake was lost or doubled.",
+          "type": "string",
+          "enum": [
+            "wake_delivery_mismatch"
+          ]
+        },
+        {
+          "description": "A `once` binding was delivered more than once.",
+          "type": "string",
+          "enum": [
+            "once_binding_redelivered"
+          ]
+        },
+        {
+          "description": "A binding of the run outlived `harness::teardown`, on the engine or in the binding store.",
+          "type": "string",
+          "enum": [
+            "leaked_trigger_binding"
           ]
         }
       ]
@@ -3370,6 +3409,47 @@
         "valid",
         "technical_invalid"
       ]
+    },
+    "TriggerBindings": {
+      "type": "object",
+      "required": [
+        "fired",
+        "subscriptions"
+      ],
+      "properties": {
+        "fired": {
+          "description": "The tree's `trigger_fired` records by `outcome` (`missing` without one).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          }
+        },
+        "subscriptions": {
+          "description": "Every binding the session tree owned before teardown or named in a `trigger_fired` record or a wake.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "teardown_removed": {
+          "description": "The bindings `harness::teardown` removed; absent when it did not answer.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HarnessViolation"
+          }
+        }
+      }
     },
     "TurnRecovery": {
       "description": "One turn's recovery rows.",

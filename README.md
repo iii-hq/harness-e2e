@@ -127,6 +127,14 @@ what broke.
   exceeds the turn's `max_transient_resumes`: incomplete, the same way. The
   run's `transient_recovery` lists each turn's recovery rows, and
   `efficiency.transient_resumes` counts them over every session and turn.
+- The session tree's trigger bindings keep their contract, read from the
+  `trigger_fired` records of every session in `metrics.by_session`: each
+  `outcome` is a known one and a retirement names its reason, a wake's
+  `delivered` records match the `e_fire_` entries it injected, a `once`
+  binding is delivered at most once, and after `harness::teardown` no session
+  lists a binding and no engine trigger delivers one. A broken one is
+  incomplete, like a failed gate; the run's `trigger_bindings` keeps the
+  counts by outcome and what teardown removed.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there

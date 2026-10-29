@@ -1407,15 +1407,36 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             ),
         );
     }
-    if let Err(error) = context.teardown(&session_id).await {
-        report.push_failure(
+    match context.teardown(&session_id).await {
+        Ok(removed) => {
+            if let Some(mut bindings) = report.trigger_bindings.take() {
+                bindings.teardown_removed = Some(removed);
+                let sessions =
+                    crate::trigger_bindings::sessions(&session_id, report.metrics.as_deref());
+                let verified =
+                    crate::trigger_bindings::verify_teardown(context, &sessions, &mut bindings)
+                        .await;
+                report.trigger_bindings = Some(bindings);
+                if let Err(error) = verified {
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Cleanup,
+                        format!(
+                            "scenario '{}': verify the teardown of trigger bindings: {error:#}",
+                            spec.id
+                        ),
+                    );
+                }
+            }
+        }
+        Err(error) => report.push_failure(
             RunStatus::InfrastructureError,
             FailurePhase::Cleanup,
             format!(
                 "scenario '{}': harness::teardown failed: {error:#}",
                 spec.id
             ),
-        );
+        ),
     }
     if let Err(error) = module.cleanup(context, &attempt_id).await {
         let failure = cleanup_failure(format!(
@@ -2571,6 +2592,21 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
+    report.trigger_bindings = Some(
+        crate::trigger_bindings::collect(
+            context,
+            session_id,
+            &observation.transcript,
+            &observation.metrics,
+        )
+        .await
+        .map_err(|error| {
+            collection_failure(
+                FailurePhase::Collect,
+                format!("collect the trigger bindings: {error:#}"),
+            )
+        })?,
+    );
     // Only the usage invariants read them; without them they judge fewer
     // children and leave a nulled total unjudged, so a failed fetch must not
     // void the run's outcome.
@@ -2719,9 +2755,9 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// Checks the Harness invariants. Unresolved context limits make the
 /// measurement untrustworthy, an infrastructure error the slot re-runs. Any
 /// other broken invariant (a lost function result, unmetered or misaccounted
-/// usage, a misrouted model, a lost transient recovery) is incomplete like a
-/// failed gate, whatever the agent delivered; the score stays what the
-/// criteria awarded.
+/// usage, a misrouted model, a lost transient recovery, a trigger binding out
+/// of contract) is incomplete like a failed gate, whatever the agent delivered;
+/// the score stays what the criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -4838,6 +4874,29 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_binding_left_after_teardown_leaves_a_passed_run_incomplete() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.trigger_bindings = Some(crate::trigger_bindings::TriggerBindings {
+            violations: crate::trigger_bindings::leaks(
+                &["sub_a".to_string()].into(),
+                &[("t1".into(), "sub_a".into())],
+                &[],
+            ),
+            ..Default::default()
+        });
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::LeakedTriggerBinding
+        );
     }
 
     #[test]
