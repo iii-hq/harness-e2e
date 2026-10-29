@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
-use super::assessment::{self, AssessmentSpec};
+use super::assessment::{self, AssessmentOutcome, AssessmentSpec};
 use super::common::{self, ObservedFunctionCall};
 use super::validation_loop::suffix;
 use super::{
@@ -527,6 +527,19 @@ fn root_compactions(observation: &ScenarioObservation) -> usize {
         })
 }
 
+/// The charter gate: a charter otherwise kept is unverified, not passed, when
+/// whether the load needed a compaction is unknown.
+fn charter_outcome(
+    held: bool,
+    compacted_if_needed: Option<bool>,
+    details: String,
+) -> AssessmentOutcome {
+    match compacted_if_needed {
+        None if held => CHARTER_PRESERVED.unverified(details),
+        _ => CHARTER_PRESERVED.full_or_zero(held && compacted_if_needed == Some(true), details),
+    }
+}
+
 /// Report budget: the expected report plus slack, so pasting document text
 /// forfeits the conciseness signal without failing a gate.
 fn report_budget_chars(segments: u32) -> usize {
@@ -554,9 +567,15 @@ fn evaluate_rung(
     });
     // A window that fits only part of the load and no compaction: the
     // context manager was never exercised, whatever the peak shows.
+    // No window reported and no compaction: whether one was needed is unknown.
     let compactions = root_compactions(observation);
-    let compacted_if_needed =
-        compactions > 0 || usable.is_none_or(|usable| usable >= UNCOMPACTED_LOAD_TOKENS);
+    let compacted_if_needed = match usable {
+        _ if compactions > 0 => Some(true),
+        Some(usable) => Some(usable >= UNCOMPACTED_LOAD_TOKENS),
+        None => None,
+    };
+    let charter_held =
+        ingestion.charter_before_documents && report.charter_preserved && within_window;
     let response_chars = observation.response.chars().count();
     let concise = report.header
         && report.charter_preserved
@@ -564,11 +583,9 @@ fn evaluate_rung(
         && response_chars <= report_budget_chars(segments);
 
     Ok(assessment::build_evaluation([
-        CHARTER_PRESERVED.full_or_zero(
-            ingestion.charter_before_documents
-                && report.charter_preserved
-                && within_window
-                && compacted_if_needed,
+        charter_outcome(
+            charter_held,
+            compacted_if_needed,
             format!(
                 "charter_read_only_before_documents={} (charter_calls={}), charter_values_in_report={}, \
                  within_usable_window={within_window} (peak root prompt {}, usable window {}), \
@@ -797,7 +814,11 @@ pub(crate) mod tests {
         let observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::ContextPressure,
             run_id,
-            json!({ "messages": [{ "message": { "role": "assistant", "content": blocks } }] }),
+            // No window snapshot here: a compaction record settles the gate.
+            json!({ "messages": [
+                { "message": { "role": "assistant", "content": blocks } },
+                { "custom": { "custom_type": "compaction" } },
+            ] }),
             response,
             Vec::new(),
         );
@@ -992,6 +1013,10 @@ pub(crate) mod tests {
             completion(&compacted(unreported)),
             CompletionState::Completed
         );
+        // No window reported and no compaction: whether the load needed one is
+        // unknown, so the run is undetermined rather than completed.
+        let windowless = observe(&[Some(120_000)], 120_000, None);
+        assert_eq!(completion(&windowless), CompletionState::Undetermined);
         // The regression's window holds the whole load: nothing to compact.
         assert_eq!(
             completion(&observe(&[Some(256_135)], 256_135, Some(596_000))),
