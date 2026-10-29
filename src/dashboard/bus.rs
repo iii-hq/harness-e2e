@@ -1482,7 +1482,7 @@ mod response_contract_tests {
         assert_eq!(point["release"], "1.8.31");
         assert_eq!(
             keys(&point["measures"]),
-            "cache_read_tokens_mean,cache_write_tokens_mean,compactions_mean,completed,cost_usd_mean,duration_ms_mean,function_call_errors,function_calls,function_calls_mean,input_tokens_mean,output_tokens_mean,peak_context_fill_mean,planned,reasoning_tokens_mean,samples,score_mean,technical_retries_mean,turns_mean,validation_retries_mean"
+            "agent_trigger_no_target_mean,arguments_truncated_incomplete_json_mean,arguments_truncated_invalid_json_mean,arguments_truncated_max_output_tokens_mean,cache_read_tokens_mean,cache_write_tokens_mean,compactions_mean,completed,cost_usd_mean,duplicate_entry_events_mean,duration_ms_mean,error_spans_mean,function_call_errors,function_calls,function_calls_mean,functions_info_repeats_mean,hook_guidance_tokens_mean,hook_notices_mean,injected_prompt_tokens_mean,input_tokens_mean,output_tokens_mean,peak_context_fill_mean,planned,prefix_divergences_mean,reasoning_tokens_mean,reconciled_calls_mean,reconciled_p95_ms_mean,registry_notices_mean,repeated_failure_mean,samples,score_mean,sweep_resolved_calls_mean,technical_retries_mean,trace_spans_mean,turns_mean,validation_retries_mean"
         );
         assert_eq!(
             point["tests"],

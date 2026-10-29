@@ -327,6 +327,25 @@ async fn run_minimal_path(live: &Live) {
         run.score.is_some(),
         "a technically valid run carries the sum of its evaluated criteria"
     );
+    let lifecycle = run
+        .turn_lifecycle
+        .as_ref()
+        .expect("a native run captures its turn lifecycle before teardown");
+    assert!(
+        lifecycle
+            .events
+            .iter()
+            .any(|event| event.kind == harness_e2e::turn_lifecycle::TurnEventKind::Started),
+        "the turn-started binding delivered: {:?}",
+        lifecycle.events
+    );
+    assert!(
+        lifecycle
+            .sessions
+            .iter()
+            .all(|session| session.meta.is_some()),
+        "session::get read every session back"
+    );
 
     let listed_after: ResultsListResponse = live
         .context

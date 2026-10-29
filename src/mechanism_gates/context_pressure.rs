@@ -290,6 +290,7 @@ mod tests {
                 reasoning_tokens: None,
                 cost_usd: None,
                 context: Some(json!({"usable": usable, "compacted": compacted})),
+                by_model: Vec::new(),
             }],
             traces: None,
         })

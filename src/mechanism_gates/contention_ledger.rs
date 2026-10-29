@@ -494,6 +494,7 @@ mod tests {
             reasoning_tokens: None,
             cost_usd: None,
             context: None,
+            by_model: Vec::new(),
         };
         Observed::from_normalized(SessionMetricsPayload {
             root_session_id: "root".into(),
