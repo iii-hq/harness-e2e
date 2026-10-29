@@ -326,6 +326,14 @@ fn session_state(evidence: &TurnLifecycleEvidence, attempt_id: &str) -> Vec<Harn
     let Some(root) = evidence.sessions.first() else {
         return violations;
     };
+    let expected_outcome = evidence
+        .scenario
+        .parse::<crate::scenarios::ScenarioId>()
+        .map(|id| id.module().expected_root_outcome());
+    let root_status = match expected_outcome {
+        Ok(crate::wire::TurnStatus::Failed) => "error",
+        _ => "done",
+    };
     for (index, session) in evidence.sessions.iter().enumerate() {
         let id = &session.session_id;
         let Some(meta) = session.meta.as_ref() else {
@@ -336,10 +344,10 @@ fn session_state(evidence: &TurnLifecycleEvidence, attempt_id: &str) -> Vec<Harn
             continue;
         };
         let status = text(meta, "/status");
-        // The root's turns all completed, or the run would not have passed; a
-        // child that failed on its own projects to `error`.
+        // The root's turns all ended as the scenario expects, or the run would
+        // not have passed; a child that failed on its own projects to `error`.
         let expected: &[&str] = if index == 0 {
-            &["done"]
+            &[root_status]
         } else {
             &["done", "error"]
         };
@@ -656,6 +664,33 @@ mod tests {
                     "session child reads back /metadata/depth = 2, not 1".into()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn a_root_expected_to_fail_settles_error() {
+        let evidence = |status: &str| {
+            let mut meta = root_meta();
+            meta["status"] = json!(status);
+            meta["title"] = json!(session_title("turn_failure_surface"));
+            meta["metadata"]["e2e_scenario"] = json!("turn_failure_surface");
+            TurnLifecycleEvidence::new(
+                "turn_failure_surface",
+                Vec::new(),
+                Vec::new(),
+                vec![session("root", &[], meta)],
+            )
+        };
+        assert!(session_state(&evidence("error"), "attempt").is_empty());
+        assert_eq!(
+            session_state(&evidence("done"), "attempt")
+                .into_iter()
+                .map(|v| (v.invariant, v.detail))
+                .collect::<Vec<_>>(),
+            [(
+                HarnessInvariant::SessionStatus,
+                "session root is done 5s after its tree completed, not error".into()
+            )]
         );
     }
 
