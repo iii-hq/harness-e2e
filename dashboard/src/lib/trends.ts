@@ -1122,7 +1122,7 @@ export const TREND_METRICS: TrendMetric[] = [
     id: 'reconciled_p95_ms',
     tier: 'more',
     label: 'Reconciliation p95',
-    note: 'judge::evaluate round trips, root session; audited past 2.5 s',
+    note: "judge::evaluate round trips, root session, mean of each run's p95; a run past 2.5 s is audited",
     better: 'lower',
     value: measure('reconciled_p95_ms_mean'),
     figure: formatDuration,

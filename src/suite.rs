@@ -2590,6 +2590,8 @@ async fn execute(
                         wait_for_stopped_turn(context, session_id).await;
                     }
                     capture_partial_observation(context, session_id, report).await;
+                    // A subject failure still counts in Trends.
+                    capture_harness_trends(context, session_id, report, HARNESS_TREND_READS).await;
                     capture_failed_subject_assets(
                         context, module, spec, case, session_id, output, control, report,
                     )
@@ -2707,7 +2709,7 @@ async fn execute(
             .await
             .map_err(prompt_surface_failure)?,
     );
-    capture_harness_trends(context, session_id, report).await;
+    capture_harness_trends(context, session_id, report, HARNESS_TREND_READS).await;
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
@@ -3180,15 +3182,36 @@ async fn capture_partial_observation(
     }
 }
 
-/// Trend inputs only: a read that fails leaves its metric absent.
-async fn capture_harness_trends(context: &E2eContext, session_id: &str, report: &mut E2eRunReport) {
-    match context.injected_prompt_tokens(session_id).await {
-        Ok(tokens) => report.injected_prompt_tokens = Some(tokens),
-        Err(error) => tracing::warn!(session_id, %error, "could not read injected prompt parts"),
-    }
-    match context.judge_call_ms(session_id).await {
-        Ok(durations) => report.reconciliation_judge_ms = Some(durations),
-        Err(error) => tracing::warn!(session_id, %error, "could not read judge call spans"),
+/// How long the optional trend reads may take together: each read alone may
+/// retry for its whole invocation timeout.
+const HARNESS_TREND_READS: Duration = Duration::from_secs(30);
+
+/// Trend inputs only: a read that fails, or is still running at `deadline`,
+/// leaves its metric absent.
+async fn capture_harness_trends(
+    context: &E2eContext,
+    session_id: &str,
+    report: &mut E2eRunReport,
+    deadline: Duration,
+) {
+    let reads = async {
+        match context.injected_prompt_tokens(session_id).await {
+            Ok(tokens) => report.injected_prompt_tokens = Some(tokens),
+            Err(error) => {
+                tracing::warn!(session_id, %error, "could not read injected prompt parts")
+            }
+        }
+        match context.judge_call_ms(session_id).await {
+            Ok(durations) => report.reconciliation_judge_ms = Some(durations),
+            Err(error) => tracing::warn!(session_id, %error, "could not read judge call spans"),
+        }
+    };
+    if tokio::time::timeout(deadline, reads).await.is_err() {
+        tracing::warn!(
+            session_id,
+            ?deadline,
+            "the Harness trend reads did not finish in time"
+        );
     }
 }
 
@@ -5228,6 +5251,36 @@ mod tests {
             &mut gated,
         );
         assert!(gated.harness_violations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn trend_reads_an_engine_does_not_answer_end_at_their_deadline() {
+        use futures_util::StreamExt;
+        // An engine that takes every invocation and answers none: each read
+        // alone would wait for its whole invocation timeout.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while socket.next().await.is_some() {}
+        });
+        let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
+        while client.get_connection_state() != iii_sdk::runtime::IIIConnectionState::Connected {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let context = E2eContext::from_client(client);
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            capture_harness_trends(&context, "s", &mut report, Duration::from_millis(100)),
+        )
+        .await
+        .expect("the trend reads end at their deadline");
+
+        assert_eq!(report.injected_prompt_tokens, None);
+        assert_eq!(report.reconciliation_judge_ms, None);
     }
 
     #[test]

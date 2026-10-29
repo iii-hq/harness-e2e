@@ -45,6 +45,9 @@ const NOT_FROM_TRANSCRIPT: &[&str] = &[
 /// turn runs before the next identical call is answered locally.
 const REPEATED_FAILURE_LIMIT: u32 = 2;
 
+/// The payload characters a repeated-failure violation quotes.
+const DETAIL_PAYLOAD_CHARS: usize = 200;
+
 /// Above it a run's reconciliations are flagged as slow.
 const RECONCILED_P95_ALERT_MS: f64 = 2_500.0;
 
@@ -218,11 +221,21 @@ pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
             _ => 1,
         };
         if count == REPEATED_FAILURE_LIMIT + 1 {
+            // The payload is the model's arguments, of any size, and the
+            // detail is persisted as the run's failure reason.
+            let (target, payload) = slot.1.split_once(' ').unwrap_or((&slot.1, ""));
+            let mut shown = payload
+                .chars()
+                .take(DETAIL_PAYLOAD_CHARS)
+                .collect::<String>();
+            if shown.len() < payload.len() {
+                shown.push('…');
+            }
             violations.push(HarnessViolation {
                 invariant: HarnessInvariant::RepeatedFailureExecuted,
                 detail: format!(
-                    "turn {} ran {} into the same error {count} times",
-                    slot.0, slot.1
+                    "turn {} ran {target} {shown} into the same error {count} times",
+                    slot.0
                 ),
             });
         }
@@ -588,6 +601,28 @@ mod tests {
             "{}",
             violations[0].detail
         );
+    }
+
+    #[test]
+    fn a_repeat_names_its_target_and_bounds_the_payload() {
+        let long = json!({ "content": "x".repeat(10_000) });
+        let report = passed(json!([
+            assistant("t1", 0, vec![call("c1", "a::b", long.clone())]),
+            failed("t1", "c1", 1, "boom"),
+            assistant("t1", 2, vec![call("c2", "a::b", long.clone())]),
+            failed("t1", "c2", 3, "boom"),
+            assistant("t1", 4, vec![call("c3", "a::b", long)]),
+            failed("t1", "c3", 5, "boom"),
+        ]));
+
+        let detail = &repeated_failures(&report)[0].detail;
+
+        assert!(detail.contains("ran a::b {"), "{detail}");
+        assert!(
+            detail.ends_with("… into the same error 3 times"),
+            "{detail}"
+        );
+        assert!(detail.chars().count() < 300, "{}", detail.len());
     }
 
     #[test]
