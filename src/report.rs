@@ -856,6 +856,9 @@ pub struct E2eRunReport {
     /// The Harness configuration and routing the run started from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_preflight: Option<crate::prompt_surface::HarnessPreflight>,
+    /// The turn events and session state the Harness invariants judge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_lifecycle: Option<crate::turn_lifecycle::TurnLifecycleEvidence>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -923,6 +926,7 @@ impl E2eRunReport {
             trigger_bindings: None,
             transient_recovery: None,
             harness_preflight: None,
+            turn_lifecycle: None,
             terminal_status: None,
             child_transcripts: Default::default(),
             prompt_surface: None,

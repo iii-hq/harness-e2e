@@ -65,6 +65,16 @@ pub enum HarnessInvariant {
     /// A turn record holds its prompt inline, or names a body the prompt
     /// store does not hold under that hash.
     PromptRefBroken,
+    /// The turn events broke their contract: a root turn did not start exactly
+    /// once, a turn never completed, a sent turn completed only through the
+    /// status poll, or a completion's `terminal` contradicts the wakes.
+    TurnEvents,
+    /// A session of the completed tree is not `done` (a child may be `error`,
+    /// and a root whose scenario expects a failed turn must be).
+    SessionStatus,
+    /// `session::get` lost a session or reads back other than what was sent:
+    /// the root's kind, title and run metadata, a child's kind and parent link.
+    SessionReadBack,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -98,6 +108,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
             .flat_map(|bindings| bindings.violations.iter().cloned()),
     );
     violations.extend(crate::prompt_surface::violations(report, subject));
+    violations.extend(crate::turn_lifecycle::violations(report));
     violations
 }
 

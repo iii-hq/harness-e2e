@@ -28,6 +28,7 @@ pub mod suite;
 pub mod test_plan;
 pub mod transient_recovery;
 pub mod trigger_bindings;
+pub mod turn_lifecycle;
 pub mod usage_invariants;
 pub mod verdict;
 pub mod wire;
