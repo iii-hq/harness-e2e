@@ -11,32 +11,41 @@ use serde_json::Value;
 use crate::assessment::{AssessmentKind, AssessmentPolicy};
 use crate::context::E2eContext;
 use crate::report::CompletionState;
-use crate::wire::SessionMetricsResponse;
+use crate::wire::{SessionMetricsResponse, TurnStatus};
 
 pub mod alertmanager_route_match;
+pub mod approval_roundtrip;
+pub mod ask_handshake;
 mod assessment;
+pub mod binding_contract_probe;
 pub mod browser_cross_site;
+pub mod call_guards;
 pub mod chess_engine;
 pub mod chess_engine_build;
 pub mod chess_play_ladder;
 pub mod cleanup_under_failure;
 pub mod common;
 pub mod contention_ledger;
+pub mod context_compaction;
 pub mod context_pressure;
 pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
 pub mod database_migration_recovery;
 pub mod depth_ladder;
+pub mod dispatch_pipeline;
 mod domain;
 pub mod engineering_endurance_ladder;
 pub mod fanout_ladder;
 pub(crate) mod fixture;
 pub mod git_regression_forensics;
+pub mod harness_contract_probe;
 pub mod incident_response;
 pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
+pub mod long_transcript_tail;
 pub mod mechanical_reaction;
+mod mechanism;
 pub mod memory;
 pub mod minimal_path;
 pub mod moving_target;
@@ -45,24 +54,35 @@ pub mod performance_regression;
 pub mod persistent_state;
 pub mod poison_message;
 pub mod policy_bound_action;
+pub(crate) mod probe;
 pub mod prompt_injection_resilience;
+pub mod prompt_layers;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
 pub mod registry;
 mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
+pub mod restart_recovery;
+pub mod result_bounds;
+pub mod router_fault_contract;
 pub mod secret_hygiene;
 pub mod sequential_pipeline;
+pub mod session_continuity;
 pub mod shell_coder_sandbox;
+pub mod spawn_depth_cap;
+pub mod steer_and_stop;
+pub mod structured_output;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
+pub mod subtree_deletion;
 pub mod tags;
 pub mod timer_wake;
 pub mod todo_worker;
 pub mod tool_contract_recovery;
 pub mod trend_blog;
 pub mod trending_topics_build;
+pub mod turn_failure_surface;
 pub mod typescript_chat_service;
 pub mod validation_chain;
 pub mod validation_hook;
@@ -144,6 +164,36 @@ pub trait Scenario: Send + Sync {
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         Vec::new()
     }
+    /// Whether follow-up `followup` (an index into `dialogue_followups`) goes
+    /// out bare: only `session_id` and `message`, with no model, provider,
+    /// options or idempotency key. The session keeps its provider, model,
+    /// functions, reasoning, prompt, token and cost budgets and `fs_scope`,
+    /// but not the rest of `spec.execution` or `send_metadata`: `max_turns`
+    /// and `max_validation_retries` fall back to the Harness defaults, and
+    /// `max_output_tokens`, `output` and `options.metadata` go unset.
+    /// Folded into `behavior_sha256` when any follow-up is bare.
+    fn bare_followup(&self, _followup: usize) -> bool {
+        false
+    }
+    /// How every root turn the runner waits on is meant to end: `Completed`,
+    /// or `Failed` or `Cancelled` for a scenario that drives the root into
+    /// that outcome on purpose. It holds for every exchange, so a dialogue
+    /// whose turns end differently cannot be declared. A root turn that ends
+    /// any other way fails the run, as a `Failed` or `Cancelled` one does
+    /// under the default, and so does a provider transport failure. Any other
+    /// failure ends the wait, whatever caused it: `evaluate` checks the cause
+    /// (`harness::status`'s `result_error`). Folded into `behavior_sha256`
+    /// when not `Completed`.
+    fn expected_root_outcome(&self) -> TurnStatus {
+        TurnStatus::Completed
+    }
+    /// The turn's deliverable, sent as `options.output` on every exchange
+    /// that is not bare: `{"type": "json", "schema": …}` asks for a JSON
+    /// result, which the Harness returns as the turn's `result`. Folded into
+    /// `behavior_sha256` when `Some`.
+    fn output_contract(&self) -> Option<Value> {
+        None
+    }
     /// Extra `harness::send` `options.metadata` keys, sent on every exchange
     /// beside the runner's own, which win on a clash. Part of the task, so it
     /// is folded into `behavior_sha256` when non-empty.
@@ -167,6 +217,9 @@ pub trait Scenario: Send + Sync {
         _exchange: usize,
     ) {
     }
+    /// Called once the last exchange has its answer, before the runner reads
+    /// `harness::status`, so a probe can read state that read would change.
+    async fn after_dialogue(&self, _context: &E2eContext, _run_id: &str, _session_id: &str) {}
     /// The attempt-owned filesystem root that `setup` prepared for the
     /// subject, when the scenario allocates one.
     fn prepared_root(&self, _run_id: &str) -> Result<Option<PathBuf>> {
@@ -292,7 +345,7 @@ pub struct ExecutionPolicy {
 }
 
 impl ExecutionPolicy {
-    fn validate(self, scenario_id: &str) -> Result<()> {
+    fn validate(self, scenario_id: &str, expected_outcome: TurnStatus) -> Result<()> {
         if self.max_turns == Some(0) {
             bail!("scenario '{scenario_id}': execution.max_turns=0; expected None (unbounded) or at least 1");
         }
@@ -309,10 +362,14 @@ impl ExecutionPolicy {
                 "scenario '{scenario_id}': execution.stuck_timeout_seconds=0; expected at least 1"
             );
         }
-        if self.max_output_tokens.is_some_and(|max_output_tokens| {
-            self.max_total_tokens
-                .is_some_and(|max_total_tokens| max_total_tokens < max_output_tokens)
-        }) {
+        // A root meant to fail may carry a budget that cannot fit its own
+        // output cap: the Harness refusing it is what such a scenario tests.
+        if expected_outcome == TurnStatus::Completed
+            && self.max_output_tokens.is_some_and(|max_output_tokens| {
+                self.max_total_tokens
+                    .is_some_and(|max_total_tokens| max_total_tokens < max_output_tokens)
+            })
+        {
             let max_output_tokens = self.max_output_tokens.expect("checked above");
             let max_total_tokens = self.max_total_tokens.expect("checked above");
             bail!(
@@ -342,7 +399,8 @@ pub struct MaterializedScenario {
 
 impl MaterializedScenario {
     pub fn validate(&self) -> Result<()> {
-        self.spec.validate()?;
+        self.spec
+            .validate_expecting(self.module.expected_root_outcome())?;
         // A scenario module materializes an unsealed case; `ScenarioId::materialize`
         // seals it with the definition digest before the case leaves the crate.
         self.case.validate_shape()?;
@@ -363,13 +421,18 @@ impl MaterializedScenario {
 
 impl ScenarioSpec {
     pub fn validate(&self) -> Result<()> {
+        self.validate_expecting(TurnStatus::Completed)
+    }
+
+    /// `validate` for a scenario whose root turns end as `expected_outcome`.
+    pub fn validate_expecting(&self, expected_outcome: TurnStatus) -> Result<()> {
         if self.prompt.trim().is_empty() {
             bail!(
                 "scenario '{}': prompt is empty after trimming; provide a non-empty task prompt",
                 self.id
             );
         }
-        self.execution.validate(self.id)?;
+        self.execution.validate(self.id, expected_outcome)?;
         let mut ids = HashMap::new();
         for (index, criterion) in self.criteria.iter().enumerate() {
             if criterion.id.trim().is_empty() {
@@ -634,6 +697,25 @@ scenarios! {
     MemoryLearnFromLongMessage = "memory_learn_from_long_message" => memory::Memory(26),
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
+    SpawnDepthCap = "spawn_depth_cap" => spawn_depth_cap::SpawnDepthCap,
+    RepeatedFailureBreaker = "repeated_failure_breaker" => call_guards::RepeatedFailureBreaker,
+    TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
+    RestartRecovery = "restart_recovery" => restart_recovery::RestartRecovery,
+    ApprovalRoundtrip = "approval_roundtrip" => approval_roundtrip::ApprovalRoundtrip,
+    HarnessContractProbe = "harness_contract_probe" => harness_contract_probe::HarnessContractProbe,
+    DispatchPipeline = "dispatch_pipeline" => dispatch_pipeline::DispatchPipeline,
+    BindingContractProbe = "binding_contract_probe" => binding_contract_probe::BindingContractProbe,
+    TurnFailureSurface = "turn_failure_surface" => turn_failure_surface::TurnFailureSurface,
+    ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
+    ResultBounds = "result_bounds" => result_bounds::ResultBounds,
+    StructuredOutput = "structured_output" => structured_output::StructuredOutput,
+    AskHandshake = "ask_handshake" => ask_handshake::AskHandshake,
+    LongTranscriptTail = "long_transcript_tail" => long_transcript_tail::LongTranscriptTail,
+    SubtreeDeletion = "subtree_deletion" => subtree_deletion::SubtreeDeletion,
+    SessionContinuity = "session_continuity" => session_continuity::SessionContinuity,
+    SteerAndStop = "steer_and_stop" => steer_and_stop::SteerAndStop,
+    RouterFaultContract = "router_fault_contract" => router_fault_contract::RouterFaultContract,
+    PromptLayers = "prompt_layers" => prompt_layers::PromptLayers,
 }
 
 impl ScenarioId {
@@ -709,14 +791,19 @@ pub const CONTRACT_NAMESPACE: &str = "contract";
 /// bounded, how it is scored, and the case-independent contract. Seed-specific
 /// inputs are excluded so every seed of one definition shares the digest.
 pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
-    crate::artifact::sha256_value(&behavior_definition(id, case)?)
+    crate::artifact::sha256_value(&behavior_definition(id.module(), case)?)
+}
+
+/// Whether exchange `exchange` (0 is the prompt) goes out bare.
+pub(crate) fn sends_bare(module: &dyn Scenario, exchange: usize) -> bool {
+    exchange > 0 && module.bare_followup(exchange - 1)
 }
 
 /// The JSON that `behavior_sha256` hashes.
-pub(crate) fn behavior_definition(id: ScenarioId, case: &ScenarioCase) -> Result<Value> {
-    let spec = id.spec(CONTRACT_NAMESPACE);
+pub(crate) fn behavior_definition(module: &dyn Scenario, case: &ScenarioCase) -> Result<Value> {
+    let spec = module.spec(CONTRACT_NAMESPACE);
     let mut definition = serde_json::json!({
-        "scenario_id": id.as_str(),
+        "scenario_id": module.id(),
         "prompt": spec.prompt,
         "execution": spec.execution,
         "denied_functions": spec.denied_functions,
@@ -745,13 +832,25 @@ pub(crate) fn behavior_definition(id: ScenarioId, case: &ScenarioCase) -> Result
     });
     // What the subject may call and what it is told next change the task;
     // written only when a scenario declares them, like `gate` above.
-    let module = id.module();
     if let Some(functions) = module.allowed_functions(CONTRACT_NAMESPACE) {
         definition["allowed_functions"] = serde_json::json!(functions);
     }
     let followups = module.dialogue_followups(CONTRACT_NAMESPACE);
     if !followups.is_empty() {
         definition["dialogue_followups"] = serde_json::json!(followups);
+    }
+    let bare: Vec<usize> = (0..followups.len())
+        .filter(|&followup| module.bare_followup(followup))
+        .collect();
+    if !bare.is_empty() {
+        definition["bare_followups"] = serde_json::json!(bare);
+    }
+    let outcome = module.expected_root_outcome();
+    if outcome != TurnStatus::Completed {
+        definition["expected_root_outcome"] = serde_json::json!(outcome);
+    }
+    if let Some(output) = module.output_contract() {
+        definition["output_contract"] = output;
     }
     let send_metadata = module.send_metadata(CONTRACT_NAMESPACE);
     if !send_metadata.is_empty() {
@@ -760,7 +859,7 @@ pub(crate) fn behavior_definition(id: ScenarioId, case: &ScenarioCase) -> Result
     if let Some(planted) = module.planted_state(CONTRACT_NAMESPACE) {
         definition["planted_state"] = planted;
     }
-    if let Some(append) = crate::mechanism_gates::prompt_append(id.as_str(), CONTRACT_NAMESPACE) {
+    if let Some(append) = crate::mechanism_gates::prompt_append(module.id(), CONTRACT_NAMESPACE) {
         definition["pre_generate_append"] = append.into();
     }
     let run_dir = std::env::var_os("HARNESS_E2E_RUN_DIR")
@@ -873,6 +972,80 @@ mod tests {
         }
     }
 
+    /// minimal_path with a bare follow-up and a root meant to fail.
+    struct BareFailingMinimalPath;
+
+    #[async_trait]
+    impl Scenario for BareFailingMinimalPath {
+        fn id(&self) -> &'static str {
+            "minimal_path"
+        }
+
+        fn case(&self, seed: u64) -> Result<ScenarioCase> {
+            ScenarioId::MinimalPath.module().case(seed)
+        }
+
+        fn spec(&self, run_id: &str) -> ScenarioSpec {
+            ScenarioId::MinimalPath.spec(run_id)
+        }
+
+        fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
+            vec!["Answer again.".into(), "Once more.".into()]
+        }
+
+        fn bare_followup(&self, followup: usize) -> bool {
+            followup == 1
+        }
+
+        fn expected_root_outcome(&self) -> TurnStatus {
+            TurnStatus::Failed
+        }
+
+        fn output_contract(&self) -> Option<Value> {
+            Some(serde_json::json!({ "type": "json" }))
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            _observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> Result<ObjectiveEvaluation> {
+            unreachable!("the definition test never evaluates")
+        }
+    }
+
+    /// Each changes what the run asks or what counts as its end, so each is
+    /// part of the definition; a scenario that declares none keeps its digest.
+    #[test]
+    fn a_bare_follow_up_an_expected_outcome_and_an_output_contract_are_part_of_the_definition() {
+        let case = ScenarioId::MinimalPath
+            .materialize("attempt-a", ScenarioId::MinimalPath.canonical_seed())
+            .unwrap()
+            .case;
+        let plain = behavior_definition(ScenarioId::MinimalPath.module(), &case).unwrap();
+        assert!(plain.get("bare_followups").is_none());
+        assert!(plain.get("expected_root_outcome").is_none());
+        assert!(plain.get("output_contract").is_none());
+        let declared = behavior_definition(&BareFailingMinimalPath, &case).unwrap();
+        assert_eq!(declared["bare_followups"], serde_json::json!([1]));
+        assert_eq!(declared["expected_root_outcome"], "failed");
+        assert_eq!(
+            declared["output_contract"],
+            serde_json::json!({ "type": "json" })
+        );
+    }
+
+    /// Exchange 0 is the prompt, so follow-up `n` is exchange `n + 1`.
+    #[test]
+    fn a_bare_follow_up_is_the_exchange_after_its_index() {
+        let bare: Vec<bool> = (0..3)
+            .map(|exchange| sends_bare(&BareFailingMinimalPath, exchange))
+            .collect();
+        assert_eq!(bare, [false, false, true]);
+        assert!(!(0..3).any(|exchange| sends_bare(ScenarioId::MinimalPath.module(), exchange)));
+    }
+
     #[tokio::test]
     async fn the_default_capture_refuses_to_capture_nothing() {
         let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
@@ -900,16 +1073,19 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_eighty_nine_unique_valid_scenarios() {
+    fn registry_contains_every_unique_valid_scenario() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
-            scenario.spec("run").validate().unwrap();
+            scenario
+                .spec("run")
+                .validate_expecting(scenario.module().expected_root_outcome())
+                .unwrap();
             scenario
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 89);
+        assert_eq!(ids.len(), 108);
     }
 
     #[test]
@@ -1230,7 +1406,7 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
                 .materialize("attempt-a", id.canonical_seed())
                 .unwrap()
                 .case;
-            behavior_definition(id, &case).unwrap()
+            behavior_definition(id.module(), &case).unwrap()
         };
 
         assert!(
@@ -1262,7 +1438,7 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
             let materialized = scenario
                 .materialize("attempt-a", scenario.canonical_seed())
                 .unwrap();
-            let definition = behavior_definition(scenario, &materialized.case).unwrap();
+            let definition = behavior_definition(scenario.module(), &materialized.case).unwrap();
             assert_eq!(
                 definition["send_metadata"],
                 serde_json::json!({"memory_bank": "e2e-contract"}),
