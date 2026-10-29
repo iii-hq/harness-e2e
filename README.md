@@ -122,6 +122,19 @@ what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
+- A transient resume, in any session of the tree, has no `recovered` row of
+  its attempt or a later one while its turn neither failed nor stopped, or
+  exceeds the turn's `max_transient_resumes`: incomplete, the same way. The
+  run's `transient_recovery` lists each turn's recovery rows, and
+  `efficiency.transient_resumes` counts them over every session and turn.
+- The session tree's trigger bindings keep their contract, read from the
+  `trigger_fired` records of every session in `metrics.by_session`: each
+  `outcome` is a known one and a retirement names its reason, a wake's
+  `delivered` records match the `e_fire_` entries it injected, a `once`
+  binding is delivered at most once, and after `harness::teardown` no session
+  lists a binding and no engine trigger delivers one. A broken one is
+  incomplete, like a failed gate; the run's `trigger_bindings` keeps the
+  counts by outcome and what teardown removed.
 - The prompt surface drifted, read before teardown from the root and every
   session `metrics.by_session` names (`src/prompt_surface.rs`): incomplete,
   and the score stays. A read of that surface that fails is an
@@ -150,6 +163,24 @@ what broke.
   tokens: the router could not resolve the model, so nothing measured there
   can be trusted. It is an infrastructure error (`context_limits_unresolved`)
   the slot re-runs.
+- Usage goes unmetered (`usage_unmetered`): a run that generated counted no
+  input or output tokens, or a priced subject's such run counted no cost, or a
+  generation that ended or called a function carries no usage. Aborted, failed and cut-off
+  generations are exempt.
+- Usage is misaccounted (`usage_misaccounted`): the session costs do not add
+  up to the total, a session's running cost is more than 1% off its metered
+  cost, or `free` is not what the window leaves.
+- A generation ran off its route (`model_misrouted`): a root generation not on
+  the subject's provider and model, or a child not on the model its spawn
+  named, else its parent's, with the provider its spawn named, else its
+  parent's. Sessions on an agent profile's route are not judged.
+- A session that runs with the subject's thinking switch off (`--thinking
+  off`) still reasoned (`reasoning_while_disabled`): reasoning tokens or a
+  non-empty thinking block. Children inherit the switch unless their spawn
+  names a thinking level; sessions on an agent profile are not judged.
+
+  Each of these leaves the run incomplete and keeps its score, like a lost
+  function result.
 
 Before a native run's first send, a preflight reads the Harness without a model
 call and records `harness_preflight`: the SHA-256 of the Harness's
