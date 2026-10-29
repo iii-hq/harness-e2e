@@ -118,7 +118,8 @@ pub(super) async fn capture(
             let reply = invoke_as(context, &leaf, function_id, json!({})).await;
             wall.push(json!({"function_id": function_id, "denied": denied(&reply)}));
         }
-        // Every child keeps contract discovery, whatever its spawn narrowed.
+        // Every child keeps contract discovery, whatever its spawn narrowed:
+        // the control must answer, not merely escape `policy_denied`.
         let control = invoke_as(
             context,
             &leaf,
@@ -128,6 +129,7 @@ pub(super) async fn capture(
         .await;
         wall.push(json!({
             "function_id": "engine::functions::info", "denied": denied(&control), "control": true,
+            "answered": control["is_error"] == false,
         }));
         probes.insert("leaf_wall".into(), json!(wall));
         probes.insert("leaf_bindings".into(), leaf_bindings(context, &leaf).await);
@@ -200,6 +202,8 @@ async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Value {
         "wake_denied": denied(&wake),
         "wake_window_ms": window,
         "unregistered": unregistered,
+        // A failed listing reads as nothing kept: the gate must not trust it.
+        "listed": listed["subscriptions"].is_array(),
     })
 }
 
@@ -290,7 +294,7 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
         .flatten()
     {
         let control = probe["control"] == true;
-        if (probe["denied"] == true) == control {
+        if (probe["denied"] == true) == control || probe["answered"] == false {
             broken.push((
                 "leaf_wall_enforced",
                 format!(
@@ -311,6 +315,7 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             || bindings["mechanical_kept"] != false
             || !bounded
             || bindings["unregistered"] == false
+            || bindings["listed"] == false
         {
             broken.push((
                 "leaf_bindings_bounded",
@@ -628,6 +633,29 @@ mod tests {
 
         assert_eq!(broken.len(), 1, "{broken:?}");
         assert!(broken[0].starts_with("leaf_bindings_bounded"), "{broken:?}");
+    }
+
+    #[test]
+    fn a_control_or_listing_that_never_answered_is_flagged() {
+        let mut probes = probes(child());
+        probes.insert(
+            "leaf_wall".into(),
+            json!([{"function_id": "harness::spawn", "denied": true},
+                   {"function_id": "engine::functions::info", "denied": false, "control": true,
+                    "answered": false}]),
+        );
+        probes.insert(
+            "leaf_bindings".into(),
+            json!({"mechanical_refused": true, "mechanical_kept": false,
+                   "wake_registered": true, "wake_window_ms": 1_800_000, "listed": false}),
+        );
+
+        let gates: Vec<String> = gates_of(&transcript(), &probes, 2)
+            .into_iter()
+            .map(|broken| broken.split(':').next().unwrap().to_string())
+            .collect();
+
+        assert_eq!(gates, ["leaf_wall_enforced", "leaf_bindings_bounded"]);
     }
 
     #[test]
