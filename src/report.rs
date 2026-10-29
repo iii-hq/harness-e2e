@@ -848,9 +848,19 @@ pub struct E2eRunReport {
     /// Absent on a report written before it, or a composite or adaptive run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_bindings: Option<crate::trigger_bindings::TriggerBindings>,
+    /// The turns that resumed after a stream cut, in every session of the
+    /// tree. Absent when the transcripts were not read: a report written
+    /// before it, or a composite or adaptive run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_recovery: Option<Vec<crate::transient_recovery::TurnRecovery>>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
+    /// Transcripts of the descendant sessions `metrics.by_session` names, by
+    /// session id, for the usage invariants; never persisted.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub child_transcripts: BTreeMap<String, Value>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -905,7 +915,9 @@ impl E2eRunReport {
             audit: None,
             harness_violations: Vec::new(),
             trigger_bindings: None,
+            transient_recovery: None,
             terminal_status: None,
+            child_transcripts: Default::default(),
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
@@ -1229,11 +1241,18 @@ impl E2eRunReport {
                 .as_ref()
                 .map(|status| u64::from(status.validation_retries))
         });
-        let transient_resumes = metrics.totals.transient_resumes.or_else(|| {
-            self.terminal_status
-                .as_ref()
-                .map(|status| u64::from(status.transient_resumes))
-        });
+        // The recovery rows cover every session and turn; neither the metrics
+        // total nor the status (the root's last turn only) counts a child's.
+        let transient_resumes = self
+            .transient_recovery
+            .as_deref()
+            .map(crate::transient_recovery::resumes)
+            .or(metrics.totals.transient_resumes)
+            .or_else(|| {
+                self.terminal_status
+                    .as_ref()
+                    .map(|status| u64::from(status.transient_resumes))
+            });
         let wake_resumes = metrics
             .totals
             .wake_resumes
@@ -5846,6 +5865,36 @@ mod tests {
             ]
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn transient_resumes_count_every_session_and_turn_not_only_the_root_status() {
+        let recovery = |session: &str, turn: &str, recovering: Vec<u32>| {
+            crate::transient_recovery::TurnRecovery {
+                session_id: session.into(),
+                turn_id: turn.into(),
+                recovered: vec![*recovering.last().unwrap()],
+                recovering,
+                max_attempts: Some(3),
+                ended_without_result: false,
+            }
+        };
+        let mut attempt = run(100, true);
+        // A Harness total that missed the child's resume must not win.
+        let mut root_only = metrics().into_normalized();
+        root_only.totals.transient_resumes = Some(3);
+        attempt.metrics = Some(crate::wire::Observed::from_normalized(root_only));
+        // The status reports only the root's last turn.
+        attempt.terminal_status = Some(status(0, 1));
+        attempt.transient_recovery = Some(vec![
+            recovery("root", "t_1", vec![1, 2]),
+            recovery("root", "t_2", vec![1]),
+            recovery("child-a", "t_3", vec![1]),
+        ]);
+
+        attempt.update_efficiency();
+
+        assert_eq!(attempt.efficiency.unwrap().transient_resumes, Some(4));
     }
 
     fn status(validation_retries: u32, transient_resumes: u32) -> StatusReport {

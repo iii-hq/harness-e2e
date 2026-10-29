@@ -1059,6 +1059,16 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
+        "transient_recovery": {
+          "description": "The turns that resumed after a stream cut, in every session of the tree. Absent when the transcripts were not read: a report written before it, or a composite or adaptive run.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/TurnRecovery"
+          }
+        },
         "trigger_bindings": {
           "description": "The session tree's trigger bindings and what teardown left of them. Absent on a report written before it, or a composite or adaptive run.",
           "anyOf": [
@@ -1614,6 +1624,48 @@
           ]
         },
         {
+          "description": "The run's tokens or a priced run's cost were not counted, or a generation that ended or called a function carries no usage.",
+          "type": "string",
+          "enum": [
+            "usage_unmetered"
+          ]
+        },
+        {
+          "description": "The counters disagree: the sessions' costs do not add up to the total, a session's running cost drifts from its metered cost, or `free` is not what the window leaves.",
+          "type": "string",
+          "enum": [
+            "usage_misaccounted"
+          ]
+        },
+        {
+          "description": "A generation ran on a model or provider its session was not routed to.",
+          "type": "string",
+          "enum": [
+            "model_misrouted"
+          ]
+        },
+        {
+          "description": "The subject disabled thinking and still reasoned.",
+          "type": "string",
+          "enum": [
+            "reasoning_while_disabled"
+          ]
+        },
+        {
+          "description": "A transient resume in a turn that neither failed nor stopped has no `recovered` row of its attempt or a later one: the Harness lost the recovery's outcome.",
+          "type": "string",
+          "enum": [
+            "unrecovered_transient_resume"
+          ]
+        },
+        {
+          "description": "A turn resumed more often than its `max_transient_resumes`.",
+          "type": "string",
+          "enum": [
+            "transient_resumes_over_limit"
+          ]
+        },
+        {
           "description": "A `trigger_fired` record has an outcome outside `TriggerOutcome`, or retired its binding without a `retirement_reason`.",
           "type": "string",
           "enum": [
@@ -1756,6 +1808,28 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ModelUsage": {
+      "description": "The route of the steps one model generated (`harness::metrics` `by_model`); its counters stay in the raw payload. Empty from a Harness that predates it.",
+      "type": "object",
+      "required": [
+        "model",
+        "provider",
+        "turns"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       }
     },
@@ -2982,6 +3056,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3106,6 +3186,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3362,6 +3448,56 @@
           "items": {
             "$ref": "#/definitions/HarnessViolation"
           }
+        }
+      }
+    },
+    "TurnRecovery": {
+      "description": "One turn's recovery rows.",
+      "type": "object",
+      "required": [
+        "ended_without_result",
+        "recovered",
+        "recovering",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "ended_without_result": {
+          "description": "The turn failed or was stopped (`e_<turn>_error`, `e_<turn>_stopped`), so its last resume had no generation left to recover.",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "description": "The turn's `max_transient_resumes`, as its rows carry it.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "recovered": {
+          "description": "The attempt of each `recovered` row.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "recovering": {
+          "description": "The attempt of each `recovering` row: one per transient resume.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
         }
       }
     },
