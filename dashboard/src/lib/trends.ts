@@ -83,6 +83,8 @@ export type TrendMeasures = {
   /** The largest root prompt over the window the Harness fit it into, per
    *  run; above 1 the prompt went past it. */
   peak_context_fill_mean: number | null
+  /** Already-sent prompt rows rewritten without a compaction, per run. */
+  prefix_divergences_mean: number | null
   /** The counted runs behind each mean: a run without the value is left
    *  out of it. Absent from data older than it. */
   samples?: Partial<Record<TrendMean, number>>
@@ -757,6 +759,7 @@ export type TrendMetricId =
   | 'function_calls'
   | 'compactions'
   | 'peak_context'
+  | 'prefix_divergences'
 
 export type TrendMetric = {
   id: TrendMetricId
@@ -971,6 +974,17 @@ export const TREND_METRICS: TrendMetric[] = [
     figure: (value) => `${fixed1(value)}%`,
     axis: (value) => `${round1(value)}%`,
     delta: 'percent_points',
+  },
+  {
+    id: 'prefix_divergences',
+    tier: 'more',
+    label: 'Prefix rewrites',
+    note: 'sent prompt rows rewritten without a compaction, mean per run',
+    better: betterWhen('prefix_divergences'),
+    value: measure('prefix_divergences_mean'),
+    figure: fixed1,
+    axis: fixed1,
+    delta: 'points',
   },
 ]
 
@@ -1574,6 +1588,7 @@ function consolidate(
           technical_retries_mean: weighted('technical_retries_mean'),
           compactions_mean: weighted('compactions_mean'),
           peak_context_fill_mean: weighted('peak_context_fill_mean'),
+          prefix_divergences_mean: weighted('prefix_divergences_mean'),
           samples,
         }
       : null,

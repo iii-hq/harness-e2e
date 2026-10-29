@@ -200,6 +200,16 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "prefix_divergences": {
+          "description": "Already-sent rows the run's requests rewrote that no compaction explains, over every session's context snapshot: where a prefix-matching provider cache stopped reusing. Null when no session has a snapshot.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "processed_prompt_tokens": {
           "description": "Every prompt token the provider processed: input, cache reads and cache writes. `input_tokens` alone leaves the cache out, and the cache is most of a long session's prompt.",
           "default": null,

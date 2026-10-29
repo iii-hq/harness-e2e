@@ -123,6 +123,9 @@ pub struct SuiteRunConfig {
     pub execution_id: Option<String>,
     pub subject: SubjectConfig,
     pub output: PathBuf,
+    /// Stored executions a run's prompt-cache hit ratio is held against;
+    /// `None` holds no run to a baseline.
+    pub history_dir: Option<PathBuf>,
     pub scenarios: Vec<ScenarioId>,
     pub runs: u32,
     pub seed: Option<u64>,
@@ -271,6 +274,25 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .context("resolve subject model")?;
     config.subject.priced = Some(subject_model.pricing.is_some());
     config.subject.context_window = Some(subject_model.context_window);
+    let cache_baselines = match config.history_dir.clone() {
+        Some(history) => {
+            let (lane, subject) = (execution_lane(&config), config.subject.clone());
+            let (before, scenarios) = (started_at.clone(), config.scenarios.clone());
+            tokio::task::spawn_blocking(move || {
+                let setup = crate::prompt_cache::Setup {
+                    lane: &lane,
+                    model: &subject.model,
+                    provider: &subject.provider,
+                    agent: subject.agent.as_deref(),
+                };
+                let scenarios = scenarios.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+                crate::prompt_cache::baselines(&history, &setup, &before, &scenarios)
+            })
+            .await
+            .context("read prompt-cache baselines")?
+        }
+        None => Default::default(),
+    };
     let built_in_scenarios = config.scenarios.to_vec();
     let composite_definitions = built_in_scenarios
         .iter()
@@ -414,7 +436,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                 "running E2E quality scenario case"
             );
             let subject_observed = preflight_error.is_none();
-            let run = if let Some(error) = preflight_error.as_ref() {
+            let mut run = if let Some(error) = preflight_error.as_ref() {
                 preflight_failure_run(&definition.spec, error.clone())
             } else {
                 run_with_technical_retries(
@@ -431,6 +453,12 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                 )
                 .await
             };
+            if crate::prompt_cache::hold_to_baseline(
+                &mut run,
+                cache_baselines.get(scenario_id.as_str()).copied(),
+            ) {
+                run.refresh_dimensions(!definition.case.deliverable_contract.artifacts.is_empty());
+            }
             (*key, *seed, run, subject_observed)
         };
         incorporate_worker_contracts(&mut worker_contracts, &mut run);
@@ -480,12 +508,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let execution = ExecutionIdentity {
         execution_id,
-        lane: config
-            .control
-            .as_ref()
-            .map(|control| control.lane.clone())
-            .or_else(|| identity::nonempty_env("HARNESS_E2E_LANE"))
-            .unwrap_or_else(|| "local".into()),
+        lane: execution_lane(&config),
         started_at,
         completed_at,
     };
@@ -531,6 +554,15 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         manifest,
         report_path,
     })
+}
+
+fn execution_lane(config: &SuiteRunConfig) -> String {
+    config
+        .control
+        .as_ref()
+        .map(|control| control.lane.clone())
+        .or_else(|| identity::nonempty_env("HARNESS_E2E_LANE"))
+        .unwrap_or_else(|| "local".into())
 }
 
 fn persist_report_preserving_observations(
@@ -2812,8 +2844,9 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// other broken invariant (a lost function result, unmetered or misaccounted
 /// usage, a misrouted model, a lost transient recovery, a trigger binding out
 /// of contract, a drifted prompt surface, a turn event or session state out of
-/// contract) is incomplete like a failed gate, whatever the agent delivered;
-/// the score stays what the criteria awarded.
+/// contract, a session without a shared prompt prefix) is incomplete like a
+/// failed gate, whatever the agent delivered; the score stays what the
+/// criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -5103,6 +5136,38 @@ mod tests {
         assert_eq!(
             report.harness_violations[0].invariant,
             crate::harness_invariants::HarnessInvariant::TurnEvents
+        );
+    }
+
+    #[test]
+    fn a_session_without_prompt_sections_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        let mut session: crate::wire::SessionUsage = serde_json::from_value(serde_json::json!({
+            "session_id": "session", "depth": 0, "turns": 1, "function_calls": 0,
+            "function_call_errors": 0,
+            "context": { "prompt_sections_fallback": "disabled" },
+        }))
+        .unwrap();
+        session.parent_session_id = None;
+        report.metrics = Some(crate::wire::Observed::from_normalized(
+            crate::wire::SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: crate::wire::SessionUsageTotals::default(),
+                by_session: vec![session],
+                traces: None,
+            },
+        ));
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::PromptSectionsFallback
         );
     }
 

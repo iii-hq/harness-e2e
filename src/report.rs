@@ -601,6 +601,12 @@ pub struct EfficiencyReport {
     /// `compacted` only says the session holds a summary now.
     #[serde(default)]
     pub compactions: Option<u64>,
+    /// Already-sent rows the run's requests rewrote that no compaction
+    /// explains, over every session's context snapshot: where a
+    /// prefix-matching provider cache stopped reusing. Null when no session
+    /// has a snapshot.
+    #[serde(default)]
+    pub prefix_divergences: Option<u64>,
     /// The Harness prompt-surface digest of each session role (`root`,
     /// `child`): data, not drift, since every Harness release changes it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1179,6 +1185,7 @@ impl E2eRunReport {
                 "peak_context_tokens",
                 "usable_context_tokens",
                 "compactions",
+                "prefix_divergences",
                 "cache_comparable",
                 "cost_usd",
                 "critical_path_ms",
@@ -1206,6 +1213,7 @@ impl E2eRunReport {
                 peak_context_tokens: None,
                 usable_context_tokens: None,
                 compactions: None,
+                prefix_divergences: None,
                 prompt_surface_digests: BTreeMap::new(),
                 cache_comparable: None,
                 cost_usd: self.cost.total_usd,
@@ -1341,6 +1349,14 @@ impl E2eRunReport {
             );
         }
         let context = context_usage(metrics, self.transcript.as_ref(), &mut unavailable);
+        let prefix_divergences =
+            crate::prompt_cache::unexpected_prefix_divergences(metrics, self.transcript.as_ref());
+        if prefix_divergences.is_none() {
+            unavailable.insert(
+                "prefix_divergences".into(),
+                "no session has a context snapshot".into(),
+            );
+        }
         let observed_complexity = observed_complexity(
             metrics,
             self.transcript.as_ref(),
@@ -1369,6 +1385,7 @@ impl E2eRunReport {
             peak_context_tokens: context.peak_context_tokens,
             usable_context_tokens: context.usable_context_tokens,
             compactions: context.compactions,
+            prefix_divergences,
             prompt_surface_digests: context.prompt_surface_digests,
             cache_comparable: context.cache_comparable,
             cost_usd: self.cost.total_usd,
@@ -1463,6 +1480,7 @@ impl E2eRunReport {
         aggregate.usable_context_tokens =
             max_optional(&attempts, |value| value.usable_context_tokens);
         aggregate.compactions = sum_optional(&attempts, |value| value.compactions);
+        aggregate.prefix_divergences = sum_optional(&attempts, |value| value.prefix_divergences);
         for attempt in &attempts {
             for (role, digests) in &attempt.prompt_surface_digests {
                 let merged = aggregate
@@ -5114,6 +5132,7 @@ mod tests {
         assert_eq!(efficiency.usable_context_tokens, Some(596_000));
         // Two compaction records, whatever the snapshot's `compacted` says.
         assert_eq!(efficiency.compactions, Some(2));
+        assert_eq!(efficiency.prefix_divergences, Some(0));
         assert_eq!(
             efficiency.prompt_surface_digests,
             BTreeMap::from([
@@ -5155,6 +5174,28 @@ mod tests {
         let efficiency = short.efficiency.unwrap();
         assert_eq!(efficiency.peak_context_tokens, None);
         assert!(efficiency.unavailable.contains_key("peak_context_tokens"));
+    }
+
+    #[test]
+    fn prefix_divergences_no_compaction_explains_are_counted_per_run() {
+        let mut attempt = run(100, true);
+        let mut metrics = (*metrics()).clone();
+        metrics.by_session[0].context = Some(serde_json::json!({ "prefix_divergences": [
+            { "turn_id": "t_1", "step": 4, "index": 0, "cause": "system_prompt" },
+            { "turn_id": "t_1", "step": 9, "index": 23 },
+        ] }));
+        attempt.metrics = Some(crate::wire::Observed::from_normalized(metrics));
+        attempt.transcript = Some(serde_json::json!({ "messages": [
+            { "entry_id": "e_t_1_4_compaction", "custom": { "custom_type": "compaction" } },
+        ] }));
+        attempt.update_efficiency();
+        assert_eq!(attempt.efficiency.unwrap().prefix_divergences, Some(1));
+
+        let mut unobserved = run(100, true);
+        unobserved.update_efficiency();
+        let efficiency = unobserved.efficiency.unwrap();
+        assert_eq!(efficiency.prefix_divergences, None);
+        assert!(efficiency.unavailable.contains_key("prefix_divergences"));
     }
 
     #[test]

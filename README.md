@@ -158,6 +158,20 @@ what broke.
     words or more (shorter ones may miss the 0.8 detector threshold).
   - `prompt_ref_broken`: `harness_turn/<sid>.options.system_prompt` is not a
     `{"$ref": "sha256:…"}`, or `harness_prompt` holds no body hashing to it.
+- A session's latest context snapshot carries `prompt_sections_fallback` (`disabled`,
+  `no_stable_prefix` or `prefix_rewritten`): its requests shared no stable
+  prompt prefix, so the provider cache reused nothing. Incomplete, and the
+  score stays.
+- A run whose root session sent more than one request served under half the
+  cache share of its scenario's baseline: the median, over the latest 7
+  executions of the same lane, model, provider and agent profile that
+  completed before this one started, of each execution's mean cache share
+  (cache reads over input, cache reads and cache writes) of its passed
+  multi-step runs that broke neither of these two cache invariants.
+  Incomplete, and the score stays. Fewer than 3 such
+  executions hold the run to no baseline. The baseline is read from the
+  history the execution is stored in (the Console's runs directory, or
+  `run --runs-dir`); a run without one is not held to it.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
@@ -229,6 +243,15 @@ when:
   model that binds thinking (any id containing `claude-opus-5-5`,
   `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`), so those
   subjects cannot run the regression.
+
+Prefix divergences, the already-sent rows a session's requests rewrote, are a
+trend before they become a gate: efficiency's `prefix_divergences` counts the
+ones no compaction explains, and Trends charts them as Prefix rewrites. A
+rewrite caused by `prune` or `system_prompt` on a step that wrote a
+`compaction` record is the context-manager making room; any other one stops
+the provider cache there. The Harness tracks sent rows in memory, so a restart
+forgets them, and a rewrite without a cause can come from a provider's wire
+mapping alone.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches

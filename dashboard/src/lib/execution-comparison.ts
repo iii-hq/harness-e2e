@@ -276,7 +276,8 @@ const BETTER_WHEN: Record<
   | 'output_tokens'
   | 'reasoning_tokens'
   | 'validation_retries'
-  | 'technical_retries',
+  | 'technical_retries'
+  | 'prefix_divergences',
   'higher' | 'lower' | 'neither'
 > = {
   score: 'higher',
@@ -301,6 +302,7 @@ const BETTER_WHEN: Record<
   reasoning_tokens: 'lower',
   validation_retries: 'lower',
   technical_retries: 'lower',
+  prefix_divergences: 'lower',
 }
 
 export function betterWhen(id: string): 'higher' | 'lower' | 'neither' {

@@ -466,6 +466,9 @@ struct RunMetrics {
     /// The largest root prompt over the window the Harness fit it into.
     #[serde(default)]
     peak_context_fill: Option<f64>,
+    /// Prefix rewrites no compaction explains.
+    #[serde(default)]
+    prefix_divergences: Option<f64>,
 }
 
 impl RunMetrics {
@@ -1251,6 +1254,7 @@ impl DashboardReadModel {
                         technical_retries: run.technical_retries,
                         compactions: run.compactions,
                         peak_context_fill: run.peak_context_fill,
+                        prefix_divergences: run.prefix_divergences,
                     }
                 }));
             }
@@ -1694,6 +1698,11 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
                 .filter(|usable| *usable > 0)?;
             Some(efficiency.peak_context_tokens? as f64 / usable as f64)
         }),
+        prefix_divergences: run
+            .efficiency
+            .as_ref()
+            .and_then(|efficiency| efficiency.prefix_divergences)
+            .map(|value| value as f64),
     }
 }
 
@@ -2410,6 +2419,7 @@ mod tests {
         run.efficiency.as_mut().unwrap().technical_attempts = 3;
         let efficiency = run.efficiency.as_mut().unwrap();
         efficiency.compactions = Some(3);
+        efficiency.prefix_divergences = Some(2);
         efficiency.peak_context_tokens = Some(64_000);
         efficiency.usable_context_tokens = Some(128_000);
         let projection = ExecutionProjection::from_stored(&StoredRun {
@@ -2445,6 +2455,7 @@ mod tests {
             (run.compactions, run.peak_context_fill),
             (Some(3.0), Some(0.5))
         );
+        assert_eq!(run.prefix_divergences, Some(2.0));
     }
 
     /// A completed record of the test report, started at `started_at`.
