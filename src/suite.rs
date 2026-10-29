@@ -1429,6 +1429,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         &mut report,
     )
     .await;
+    report.duplicate_entry_events = context.duplicate_entry_events();
     if let Err(error) = context.unbind_turn_completed().await {
         report.push_failure(
             RunStatus::InfrastructureError,
@@ -1528,7 +1529,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     finish_native_assessment(&spec, &mut report);
-    observe_harness(subject, &mut report);
+    observe_harness(subject, spec.id, &mut report);
     report.update_cost();
     report.update_efficiency();
     report.refresh_dimensions(expects_deliverables);
@@ -2495,6 +2496,7 @@ async fn execute(
         .bind_turn_completed()
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    context.count_entry_events(session_id);
     let mut messages = vec![spec.prompt.clone()];
     messages.extend(module.dialogue_followups(run_id));
     let scripted_dialogue = messages.len() > 1;
@@ -2588,6 +2590,8 @@ async fn execute(
                         wait_for_stopped_turn(context, session_id).await;
                     }
                     capture_partial_observation(context, session_id, report).await;
+                    // A subject failure still counts in Trends.
+                    capture_harness_trends(context, session_id, report, HARNESS_TREND_READS).await;
                     capture_failed_subject_assets(
                         context, module, spec, case, session_id, output, control, report,
                     )
@@ -2705,6 +2709,7 @@ async fn execute(
             .await
             .map_err(prompt_surface_failure)?,
     );
+    capture_harness_trends(context, session_id, report, HARNESS_TREND_READS).await;
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
@@ -2841,17 +2846,23 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 
 /// Checks the Harness invariants. Unresolved context limits make the
 /// measurement untrustworthy, an infrastructure error the slot re-runs. Any
-/// other broken invariant (a lost function result, unmetered or misaccounted
-/// usage, a misrouted model, a lost transient recovery, a trigger binding out
-/// of contract, a drifted prompt surface, a turn event or session state out of
-/// contract, a session without a shared prompt prefix) is incomplete like a
-/// failed gate, whatever the agent delivered; the score stays what the
-/// criteria awarded.
-fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
+/// other broken invariant (a lost function result, a call run past the
+/// repeated-failure breaker, unmetered or misaccounted usage, a misrouted
+/// model, a lost transient recovery, a trigger binding out of contract, a
+/// drifted prompt surface, a turn event or session state out of contract, a
+/// session without a shared prompt prefix) is incomplete like a failed gate,
+/// whatever the agent delivered; the score stays what the criteria awarded.
+/// On the approvals stack an approver releases every call, which bypasses the
+/// breaker, so none runs past it.
+fn observe_harness(subject: &SubjectConfig, scenario_id: &str, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
 
     report.harness_violations = crate::harness_invariants::violations(report, subject);
+    if scenario_id != crate::scenarios::approval_roundtrip::ID {
+        let repeated = crate::harness_metrics::repeated_failures(report);
+        report.harness_violations.extend(repeated);
+    }
     let broken = |invariant| {
         report
             .harness_violations
@@ -3168,6 +3179,39 @@ async fn capture_partial_observation(
                 "could not capture partial E2E transient recovery"
             ),
         }
+    }
+}
+
+/// How long the optional trend reads may take together: each read alone may
+/// retry for its whole invocation timeout.
+const HARNESS_TREND_READS: Duration = Duration::from_secs(30);
+
+/// Trend inputs only: a read that fails, or is still running at `deadline`,
+/// leaves its metric absent.
+async fn capture_harness_trends(
+    context: &E2eContext,
+    session_id: &str,
+    report: &mut E2eRunReport,
+    deadline: Duration,
+) {
+    let reads = async {
+        match context.injected_prompt_tokens(session_id).await {
+            Ok(tokens) => report.injected_prompt_tokens = Some(tokens),
+            Err(error) => {
+                tracing::warn!(session_id, %error, "could not read injected prompt parts")
+            }
+        }
+        match context.judge_call_ms(session_id).await {
+            Ok(durations) => report.reconciliation_judge_ms = Some(durations),
+            Err(error) => tracing::warn!(session_id, %error, "could not read judge call spans"),
+        }
+    };
+    if tokio::time::timeout(deadline, reads).await.is_err() {
+        tracing::warn!(
+            session_id,
+            ?deadline,
+            "the Harness trend reads did not finish in time"
+        );
     }
 }
 
@@ -4954,7 +4998,7 @@ mod tests {
             { "message": { "role": "function_result", "function_call_id": "c1" } },
         ] }));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         // Like a failed gate: still passed, incomplete, valid, scored.
         assert_eq!(report.status, RunStatus::Passed);
@@ -5013,7 +5057,7 @@ mod tests {
             ..Default::default()
         });
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5037,7 +5081,7 @@ mod tests {
             ..Default::default()
         });
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5070,7 +5114,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5092,7 +5136,7 @@ mod tests {
             ] }),
         ));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5128,7 +5172,7 @@ mod tests {
             }],
         ));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5159,7 +5203,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5169,6 +5213,74 @@ mod tests {
             report.harness_violations[0].invariant,
             crate::harness_invariants::HarnessInvariant::PromptSectionsFallback
         );
+    }
+
+    #[test]
+    fn a_failure_run_past_the_breaker_leaves_a_passed_run_incomplete() {
+        let step = |id: &str| {
+            [
+                serde_json::json!({ "message": { "role": "assistant", "content": [
+                    { "type": "function_call", "id": id, "function_id": "a::b", "arguments": {} },
+                ] } }),
+                serde_json::json!({ "origin": { "turn_id": "t1" }, "message": {
+                    "role": "function_result", "function_call_id": id, "is_error": true,
+                    "details": { "error": { "code": "invocation_failed", "message": "boom" } },
+                } }),
+            ]
+        };
+        let messages = ["c1", "c2", "c3"]
+            .iter()
+            .flat_map(|id| step(id))
+            .collect::<Vec<_>>();
+        let mut report = full_marks_run(serde_json::json!({ "messages": messages.clone() }));
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::RepeatedFailureExecuted
+        );
+
+        // Behind the approval gate an approver releases every call, past the breaker.
+        let mut gated = full_marks_run(serde_json::json!({ "messages": messages }));
+        observe_harness(
+            &harness_subject(None),
+            crate::scenarios::approval_roundtrip::ID,
+            &mut gated,
+        );
+        assert!(gated.harness_violations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn trend_reads_an_engine_does_not_answer_end_at_their_deadline() {
+        use futures_util::StreamExt;
+        // An engine that takes every invocation and answers none: each read
+        // alone would wait for its whole invocation timeout.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while socket.next().await.is_some() {}
+        });
+        let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
+        while client.get_connection_state() != iii_sdk::runtime::IIIConnectionState::Connected {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let context = E2eContext::from_client(client);
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            capture_harness_trends(&context, "s", &mut report, Duration::from_millis(100)),
+        )
+        .await
+        .expect("the trend reads end at their deadline");
+
+        assert_eq!(report.injected_prompt_tokens, None);
+        assert_eq!(report.reconciliation_judge_ms, None);
     }
 
     #[test]
@@ -5204,7 +5316,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(Some(128_000)), &mut report);
+        observe_harness(&harness_subject(Some(128_000)), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::InfrastructureError);
         assert_eq!(report.completion, CompletionState::Undetermined);

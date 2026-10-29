@@ -213,8 +213,10 @@ technically valid runs only; completed runs are counted out of the planned ones
 also carries the means of output, cache read, cache write and reasoning tokens,
 of cost, of validation and technical retries (attempts beyond the first), of
 root-session compactions, of the run's peak context over its usable window
-(`peak_context_fill_mean`, above 1 when a prompt went past it), and of the
-prompt-prefix rewrites no compaction explains (`prefix_divergences_mean`);
+(`peak_context_fill_mean`, above 1 when a prompt went past it), of the
+prompt-prefix rewrites no compaction explains (`prefix_divergences_mean`), and
+a `<name>_mean` of each Harness mechanism the runner's README lists as a trend
+(`harness_metrics::TREND_KEYS`, null when no run measured it);
 a run that lacks one is left out of that mean, and the cost is null for a model
 without pricing. A run stored before trends measured these keeps them null until
 the next start reprojects it once from its native bundle; a run whose bundle is

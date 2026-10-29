@@ -199,6 +199,10 @@ pub(super) struct TrendMeasures {
     pub peak_context_fill_mean: Option<f64>,
     /// Prefix rewrites no compaction explains, per run.
     pub prefix_divergences_mean: Option<f64>,
+    /// `<key>_mean` of each of `harness_metrics::TREND_KEYS`, null when no
+    /// run measured it.
+    #[serde(flatten)]
+    pub harness: BTreeMap<String, Option<f64>>,
     /// The counted runs behind each mean, by its name: a run without the
     /// value is left out of it, so a group weighs each mean by these.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -245,6 +249,8 @@ pub(super) struct TrendRun {
     pub compactions: Option<f64>,
     pub peak_context_fill: Option<f64>,
     pub prefix_divergences: Option<f64>,
+    /// What `harness_metrics::measure` read from the run.
+    pub harness: BTreeMap<String, f64>,
 }
 
 /// An execution of the Console that belongs to a series.
@@ -798,6 +804,15 @@ pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasur
         compactions_mean: mean_of("compactions_mean", |run| run.compactions),
         peak_context_fill_mean: mean_of("peak_context_fill_mean", |run| run.peak_context_fill),
         prefix_divergences_mean: mean_of("prefix_divergences_mean", |run| run.prefix_divergences),
+        harness: crate::harness_metrics::TREND_KEYS
+            .iter()
+            .map(|key| {
+                let name = format!("{key}_mean");
+                let values = counted.iter().map(|run| run.harness.get(*key).copied());
+                samples.insert(name.clone(), values.clone().flatten().count());
+                (name, mean(values))
+            })
+            .collect(),
         samples,
     })
 }
@@ -900,6 +915,7 @@ pub(super) mod tests {
             compactions: Some(2.0),
             peak_context_fill: Some(0.5),
             prefix_divergences: Some(1.0),
+            harness: BTreeMap::from([("error_spans".to_owned(), 3.0)]),
         }
     }
 
@@ -959,6 +975,13 @@ pub(super) mod tests {
         assert_eq!(measures.compactions_mean, Some(2.0));
         assert_eq!(measures.peak_context_fill_mean, Some(0.5));
         assert_eq!(measures.prefix_divergences_mean, Some(1.0));
+        assert_eq!(measures.harness["error_spans_mean"], Some(3.0));
+        // Every Harness mean is in the point, null when no run measured it.
+        assert_eq!(measures.harness["reconciled_p95_ms_mean"], None);
+        assert_eq!(
+            measures.harness.len(),
+            crate::harness_metrics::TREND_KEYS.len()
+        );
         assert_eq!(measures.validation_retries_mean, Some(1.0));
         assert_eq!(measures.technical_retries_mean, Some(0.0));
         let invalid = &point.tests[12];

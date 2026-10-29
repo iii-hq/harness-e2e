@@ -122,6 +122,17 @@ what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
+- A turn of the root session ran one call (same target, same payload, its
+  `agent_trigger` description aside) into the same error more than twice: the
+  repeated-failure breaker answers the third locally, so the run went past it.
+  Incomplete, and the score stays. A success between them, a different error
+  or another turn starts the count over, as in the Harness. Only results the
+  breaker notes count: not those of `harness::spawn`, `harness::ask` or
+  `submit_result`, not the turn loop's own refusals, and not a result the
+  sweep, a stop or a restart supplied. A call an approver released also
+  bypasses the breaker but looks dispatched in the transcript, so
+  `approval_roundtrip`, where the approval gate holds every call, is not
+  checked.
 - A transient resume, in any session of the tree, has no `recovered` row of
   its attempt or a later one while its turn neither failed nor stopped, or
   exceeds the turn's `max_transient_resumes`: incomplete, the same way. The
@@ -1707,10 +1718,13 @@ Storage has no version number and no migration step. Every table records the
 fingerprint of the statements that create it. At start, the worker recreates
 tables whose fingerprint moved, in one transaction. It keeps the execution
 records, local suites and stacks, and receipts it can still read, and rebuilds
-run projections from the native bundles. Rows it cannot read, missing bundles,
-and tables this binary no longer writes (such as the retired `history_*` import
-tables and the `saved_plans` of the retired baseline/candidate plans) are
-dropped and logged as warnings. Nothing is reconstructed as a scored result. A
+run projections from the native bundles. The projection tables' fingerprints
+also carry `PROJECTION_REVISION` (`src/persistence.rs`), bumped when a run's
+dashboard projection gains a measure, so the next start reprojects every
+retained execution once; one whose bundle is gone keeps its stored projection.
+Rows it cannot read, missing bundles, and tables this binary no longer writes
+(such as the retired `history_*` import tables and the `saved_plans` of the
+retired baseline/candidate plans) are dropped and logged as warnings. Nothing is reconstructed as a scored result. A
 report written under another results contract is read with a warning.
 
 The Console's suites live in `local_suites`, its stacks in `local_stacks`, and
@@ -1754,6 +1768,35 @@ the Harness's own count of it (claude-code adds a prompt of its own) is marked
 `cache_comparable: false`, and its prompt and cache figures read as not
 comparable. The Harness prompt-surface digest of each session role is kept as
 data: it changes with every Harness release.
+
+Harness mechanisms whose numbers depend on the model or the environment are
+trends, never gates (`src/harness_metrics.rs`). Trends charts them per run under
+More. Trace and error spans cover the session tree. The rest covers the root
+session alone: `registry-changed` and hook notices, the text hooks appended as
+messages (`hook_guidance`, bytes / 4), reconciled calls, repeated
+`engine::functions::info` calls, and the calls the Harness refused without
+running them (`arguments_truncated` by cause, `agent_trigger_no_target`,
+`repeated_failure`). These read the transcript as stored, so older runs get
+them when the first start of this runner reprojects them. The stored context
+snapshot's own `hook_guidance` is not used: once the router counts the request exactly the
+Harness folds it into the system prompt and stores 0. The prompt parts hooks
+declare they inject (`injected` parts of `harness::system-prompt::get`, bytes /
+4) are read after the run; a hook that extends the system prompt without
+declaring it is not seen. Argument reconciliation leaves the Harness only for
+the judge, so its latency is the root session's `judge::evaluate` call spans
+in the engine's span store, read after the run; a run whose reconciliations
+all ran in process has no p95, and one whose p95 passes 2.5 s carries the
+advisory audit flag `audit_slow_reconciled_calls`. A native run also counts
+the root session's `session::message-added` deliveries past the first of each
+entry (`duplicate_entry_events`): delivery is at-least-once. Runs stored
+before these reads have none of the three. The two reads after the run take
+30 s at most together, also after a subject failure, and a read that fails or
+runs out leaves its measure absent. Of the `harness::sweep-pending`
+counters only the root session's share of `resolved` is charted
+(`sweep_resolved_calls`, results with the `pending_timeout` error): the sweep
+runs from the stack's cron over every session of the stack and returns its
+counters only to the cron, and `redriven`, `converted` and `prompts_collected`
+leave nothing in a transcript.
 
 ## Evidence
 

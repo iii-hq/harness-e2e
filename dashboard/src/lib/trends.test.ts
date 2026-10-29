@@ -20,6 +20,7 @@ import {
   emptyText,
   groupFromParams,
   groupPoints,
+  HARNESS_MEANS,
   laneLabel,
   majorsFirst,
   modelChoices,
@@ -259,6 +260,22 @@ describe('measures', () => {
       'compactions',
       'peak_context',
       'prefix_divergences',
+      'trace_spans',
+      'error_spans',
+      'registry_notices',
+      'hook_notices',
+      'reconciled_calls',
+      'functions_info_repeats',
+      'duplicate_entry_events',
+      'arguments_truncated_invalid_json',
+      'arguments_truncated_incomplete_json',
+      'arguments_truncated_max_output_tokens',
+      'agent_trigger_no_target',
+      'repeated_failure',
+      'sweep_resolved_calls',
+      'hook_guidance_tokens',
+      'injected_prompt_tokens',
+      'reconciled_p95_ms',
     ])
   })
 
@@ -274,6 +291,21 @@ describe('measures', () => {
     expect(rewrites.value(point)).toBe(0.5)
     expect(rewrites.better).toBe('lower')
     expect(rewrites.value(regression[0])).toBeNull()
+  })
+
+  it('reads each Harness mechanism by its mean, and none from data without it', () => {
+    const point = {
+      ...regression[0],
+      measures: {
+        ...regression[0].measures,
+        error_spans_mean: 2.5,
+        reconciled_p95_ms_mean: 3_100,
+      } as TrendMeasures,
+    }
+    expect(metric('error_spans').value(point)).toBe(2.5)
+    expect(metric('reconciled_p95_ms').figure(3_100, point)).toBe('3.1s')
+    expect(metric('error_spans').value(regression[0])).toBeNull()
+    expect(metric('injected_prompt_tokens').note).toContain('declare')
   })
 
   it('reads compactions per run and the peak context as a share of the window', () => {
@@ -588,7 +620,7 @@ describe('grouping', () => {
     expect(keys).toHaveLength(19)
     // The group says how many runs each of its means is over.
     expect(Object.keys(grouped.measures ?? {}).sort()).toEqual(
-      [...keys, 'samples'].sort(),
+      [...keys, ...HARNESS_MEANS, 'samples'].sort(),
     )
     expect(grouped.measures?.output_tokens_mean).toBe(400)
     expect(grouped.measures?.validation_retries_mean).toBe(1.5)
@@ -606,7 +638,8 @@ describe('grouping', () => {
         measures: {
           ...(one.measures as TrendMeasures),
           peak_context_fill_mean: 1,
-          samples: { peak_context_fill_mean: 1 },
+          repeated_failure_mean: 3,
+          samples: { peak_context_fill_mean: 1, repeated_failure_mean: 1 },
         },
       },
       {
@@ -616,7 +649,8 @@ describe('grouping', () => {
         measures: {
           ...(two.measures as TrendMeasures),
           peak_context_fill_mean: 0,
-          samples: { peak_context_fill_mean: 1 },
+          repeated_failure_mean: 0,
+          samples: { peak_context_fill_mean: 1, repeated_failure_mean: 2 },
         },
       },
     ]
@@ -624,6 +658,7 @@ describe('grouping', () => {
     // One of ten counted runs measured its peak: weighed by ten, 90.9%.
     expect(grouped.measures?.peak_context_fill_mean).toBe(0.5)
     expect(grouped.measures?.samples?.peak_context_fill_mean).toBe(2)
+    expect(grouped.measures?.repeated_failure_mean).toBe(1)
   })
 
   it('says a day mixed versions, and a day with no counted run has no measures', () => {

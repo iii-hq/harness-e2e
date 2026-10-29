@@ -865,6 +865,18 @@ pub struct E2eRunReport {
     /// The turn events and session state the Harness invariants judge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_lifecycle: Option<crate::turn_lifecycle::TurnLifecycleEvidence>,
+    /// `session::message-added` deliveries of the root session past the
+    /// first of each entry; absent when the run did not count them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_entry_events: Option<u64>,
+    /// Tokens (bytes / 4) of the prompt parts `pre_generate` hooks declare
+    /// they inject into the root session; absent when they were not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injected_prompt_tokens: Option<u64>,
+    /// Milliseconds of each of the root session's `judge::evaluate` calls,
+    /// the round trip of argument reconciliation; absent when not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_judge_ms: Option<Vec<f64>>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -933,6 +945,9 @@ impl E2eRunReport {
             transient_recovery: None,
             harness_preflight: None,
             turn_lifecycle: None,
+            duplicate_entry_events: None,
+            injected_prompt_tokens: None,
+            reconciliation_judge_ms: None,
             terminal_status: None,
             child_transcripts: Default::default(),
             prompt_surface: None,

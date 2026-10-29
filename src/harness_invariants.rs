@@ -81,6 +81,9 @@ pub enum HarnessInvariant {
     /// A multi-step run's cache-hit ratio fell below half the median of its
     /// setup's latest executions.
     PromptCacheRegressed,
+    /// A turn ran one call into the same error more than twice: the
+    /// repeated-failure breaker answers the third locally.
+    RepeatedFailureExecuted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

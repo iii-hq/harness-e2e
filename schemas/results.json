@@ -532,6 +532,13 @@
           "enum": [
             "context_over_window"
           ]
+        },
+        {
+          "description": "The run's reconciled calls took more than 2.5 s at the p95.",
+          "type": "string",
+          "enum": [
+            "slow_reconciled_calls"
+          ]
         }
       ]
     },
@@ -963,6 +970,15 @@
             "$ref": "#/definitions/DimensionReport"
           }
         },
+        "duplicate_entry_events": {
+          "description": "`session::message-added` deliveries of the root session past the first of each entry; absent when the run did not count them.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "efficiency": {
           "anyOf": [
             {
@@ -1006,6 +1022,15 @@
             "$ref": "#/definitions/HarnessViolation"
           }
         },
+        "injected_prompt_tokens": {
+          "description": "Tokens (bytes / 4) of the prompt parts `pre_generate` hooks declare they inject into the root session; absent when they were not read.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "metrics": {
           "anyOf": [
             {
@@ -1018,6 +1043,17 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "reconciliation_judge_ms": {
+          "description": "Milliseconds of each of the root session's `judge::evaluate` calls, the round trip of argument reconciliation; absent when not read.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
         },
         "retry_attempts": {
           "type": "array",
@@ -1786,6 +1822,13 @@
           "type": "string",
           "enum": [
             "prompt_cache_regressed"
+          ]
+        },
+        {
+          "description": "A turn ran one call into the same error more than twice: the repeated-failure breaker answers the third locally.",
+          "type": "string",
+          "enum": [
+            "repeated_failure_executed"
           ]
         }
       ]

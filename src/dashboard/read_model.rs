@@ -469,6 +469,9 @@ struct RunMetrics {
     /// Prefix rewrites no compaction explains.
     #[serde(default)]
     prefix_divergences: Option<f64>,
+    /// Harness mechanisms Trends charts, by `harness_metrics::TREND_KEYS`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    harness: BTreeMap<String, f64>,
 }
 
 impl RunMetrics {
@@ -1255,6 +1258,7 @@ impl DashboardReadModel {
                         compactions: run.compactions,
                         peak_context_fill: run.peak_context_fill,
                         prefix_divergences: run.prefix_divergences,
+                        harness: run.harness.clone(),
                     }
                 }));
             }
@@ -1703,6 +1707,7 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
             .as_ref()
             .and_then(|efficiency| efficiency.prefix_divergences)
             .map(|value| value as f64),
+        harness: crate::harness_metrics::measure(run),
     }
 }
 
@@ -2412,9 +2417,12 @@ mod tests {
                     ..SessionUsageTotals::default()
                 },
                 by_session: Vec::new(),
-                traces: None,
+                traces: Some(json!({ "span_count": 40, "error_span_count": 2 })),
             },
         ));
+        run.transcript = Some(json!({ "messages": [
+            { "custom": { "custom_type": "model_notice", "data": { "kind": "registry-changed" } } },
+        ] }));
         run.update_efficiency();
         run.efficiency.as_mut().unwrap().technical_attempts = 3;
         let efficiency = run.efficiency.as_mut().unwrap();
@@ -2454,6 +2462,14 @@ mod tests {
         assert_eq!(
             (run.compactions, run.peak_context_fill),
             (Some(3.0), Some(0.5))
+        );
+        assert_eq!(
+            (
+                run.harness["error_spans"],
+                run.harness["registry_notices"],
+                run.harness["repeated_failure"]
+            ),
+            (2.0, 1.0, 0.0)
         );
         assert_eq!(run.prefix_divergences, Some(2.0));
     }
