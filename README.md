@@ -135,6 +135,29 @@ what broke.
   lists a binding and no engine trigger delivers one. A broken one is
   incomplete, like a failed gate; the run's `trigger_bindings` keeps the
   counts by outcome and what teardown removed.
+- The prompt surface drifted, read before teardown from the root and every
+  session `metrics.by_session` names (`src/prompt_surface.rs`): incomplete,
+  and the score stays. A read of that surface that fails is an
+  infrastructure error (`prompt_surface_collection_failed`) the slot re-runs.
+  - `frozen_prompt_drift`: the root's `harness::system-prompt::get` built-in
+    layer is not the `default_only` one opening with `You are an iii agent
+    worker.` (for an `--agent` subject, the profile's `system_prompt`
+    followed by the `<preloaded_functions>` and `<preloaded_skills>` blocks
+    it declares); a child is held to the default only when its
+    `harness::spawn` named no `agent` and no `options.system_prompt` and its
+    parent ran no profile (a profiled parent's plain spawn continues it).
+  - `runtime_context_malformed`: the frozen `runtime_context` aid does not
+    open with `Your session id is <id>.`, names a working directory other
+    than the one sent (else `harness::filesystem::info.default_root`, with
+    the `(default directory, not an access boundary)` suffix under
+    `configured_roots`), has other than one `Co-authored-by` line, or shows
+    the dispatch-policy line on an unrestricted policy (or omits it on a
+    narrowed one).
+  - `response_language_mispinned`: the root session's
+    `metadata.response_language` is not `eng`, or is unset on a prompt of 20
+    words or more (shorter ones may miss the 0.8 detector threshold).
+  - `prompt_ref_broken`: `harness_turn/<sid>.options.system_prompt` is not a
+    `{"$ref": "sha256:…"}`, or `harness_prompt` holds no body hashing to it.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
@@ -158,6 +181,29 @@ what broke.
 
   Each of these leaves the run incomplete and keeps its score, like a lost
   function result.
+
+Before a native run's first send, a preflight reads the Harness without a model
+call and records `harness_preflight`: the SHA-256 of the Harness's
+`configuration::get` entry and the `router::route` candidates for the subject
+model with no provider pinned. It refuses the run as an infrastructure error
+when:
+
+- the default `engine::functions::list` lacks a function the Harness
+  `register`s, a `register_internal` one is not registered, or
+  `engine::triggers::list` lacks `harness::ready`, `harness::turn-started`,
+  `harness::compaction`, `timer` or one of the six `harness::hook::*` types
+  (`harness_not_ready`, re-run in the same slot);
+- an internal function is on the default catalog, a retired key
+  (`provider_identity_prompt`, `permissions`, `providers`) is still set,
+  `max_validation_retries` is not 2, `max_children` not 8, `max_depth` not 3
+  (16, 6 and 1 are the executor's `fanout_ladder`, `depth_ladder` and
+  `spawn_depth_cap` stamps),
+  `default_max_turns` not 500, `prompt_cache_sections` or `co_author` not
+  true, or `harness::context-policy` does not allow pruning for the subject
+  model (`harness_misconfigured`, not re-run). The Harness never prunes a
+  model that binds thinking (any id containing `claude-opus-5-5`,
+  `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`), so those
+  subjects cannot run the regression.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches

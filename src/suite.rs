@@ -2384,6 +2384,33 @@ impl RunFailure {
     }
 }
 
+/// A failed read of the prompt surface after the turn: the engine's state
+/// reads it makes are idempotent, and preflight already rejected a Harness
+/// missing them, so the slot reruns.
+fn prompt_surface_failure(error: anyhow::Error) -> RunFailure {
+    RunFailure::retryable(
+        RunStatus::InfrastructureError,
+        FailurePhase::Collect,
+        "prompt_surface_collection_failed",
+        format!("capture the prompt surface: {error:#}"),
+    )
+}
+
+fn preflight_failure(failure: crate::prompt_surface::PreflightFailure) -> RunFailure {
+    let message = format!("Harness preflight: {}", failure.message);
+    let mut run_failure = RunFailure::retryable(
+        RunStatus::InfrastructureError,
+        FailurePhase::Setup,
+        failure.code,
+        message,
+    );
+    // A misconfigured stack stays misconfigured on a re-run.
+    if failure.code == crate::prompt_surface::HARNESS_MISCONFIGURED {
+        run_failure.retry_scope = crate::report::RetryScope::None;
+    }
+    run_failure
+}
+
 async fn execute(
     context: &E2eContext,
     request: ExecutionRequest<'_>,
@@ -2401,6 +2428,11 @@ async fn execute(
         output,
     } = request;
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
+    report.harness_preflight = Some(
+        crate::prompt_surface::preflight(context, subject)
+            .await
+            .map_err(preflight_failure)?,
+    );
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     module
         .setup(context, run_id)
@@ -2618,6 +2650,15 @@ async fn execute(
             "could not capture descendant transcripts"
         ),
     }
+    let sent_root = options_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.pointer("/fs_scope/root"))
+        .and_then(serde_json::Value::as_str);
+    report.prompt_surface = Some(
+        crate::prompt_surface::collect(context, subject, report, sent_root)
+            .await
+            .map_err(prompt_surface_failure)?,
+    );
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
@@ -2756,8 +2797,8 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// measurement untrustworthy, an infrastructure error the slot re-runs. Any
 /// other broken invariant (a lost function result, unmetered or misaccounted
 /// usage, a misrouted model, a lost transient recovery, a trigger binding out
-/// of contract) is incomplete like a failed gate, whatever the agent delivered;
-/// the score stays what the criteria awarded.
+/// of contract, a drifted prompt surface) is incomplete like a failed gate,
+/// whatever the agent delivered; the score stays what the criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -4874,6 +4915,66 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_not_ready_harness_reruns_the_slot_and_a_misconfigured_one_does_not() {
+        use crate::prompt_surface::{PreflightFailure, HARNESS_MISCONFIGURED, HARNESS_NOT_READY};
+        let failure = |code| {
+            preflight_failure(PreflightFailure {
+                code,
+                message: "m".into(),
+            })
+        };
+
+        let not_ready = failure(HARNESS_NOT_READY);
+        let misconfigured = failure(HARNESS_MISCONFIGURED);
+
+        assert_eq!(not_ready.status, RunStatus::InfrastructureError);
+        assert_eq!(not_ready.code, HARNESS_NOT_READY);
+        assert_eq!(not_ready.message, "Harness preflight: m");
+        assert_eq!(not_ready.retry_scope, crate::report::RetryScope::SameSlot);
+        assert_eq!(misconfigured.code, HARNESS_MISCONFIGURED);
+        assert_eq!(misconfigured.retry_scope, crate::report::RetryScope::None);
+    }
+
+    #[test]
+    fn a_failed_prompt_surface_read_reruns_the_slot() {
+        let failure = prompt_surface_failure(anyhow::anyhow!("state::get timed out"));
+
+        assert_eq!(failure.status, RunStatus::InfrastructureError);
+        assert_eq!(failure.code, "prompt_surface_collection_failed");
+        assert_eq!(failure.retry_scope, crate::report::RetryScope::SameSlot);
+        assert_eq!(
+            failure.message,
+            "capture the prompt surface: state::get timed out"
+        );
+    }
+
+    #[test]
+    fn a_drifted_prompt_surface_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.prompt_surface = Some(crate::prompt_surface::PromptSurface {
+            default_prompt: Some("You are an iii agent worker.".into()),
+            response_language: Some("eng".into()),
+            sessions: vec![crate::prompt_surface::SessionSurface {
+                session_id: "session".into(),
+                frozen_prompt: Some("You are CUSTOM.".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::FrozenPromptDrift
+        );
     }
 
     #[test]

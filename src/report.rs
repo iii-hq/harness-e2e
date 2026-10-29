@@ -853,6 +853,9 @@ pub struct E2eRunReport {
     /// before it, or a composite or adaptive run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transient_recovery: Option<Vec<crate::transient_recovery::TurnRecovery>>,
+    /// The Harness configuration and routing the run started from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_preflight: Option<crate::prompt_surface::HarnessPreflight>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -861,6 +864,9 @@ pub struct E2eRunReport {
     #[serde(skip)]
     #[schemars(skip)]
     pub child_transcripts: BTreeMap<String, Value>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub prompt_surface: Option<crate::prompt_surface::PromptSurface>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -916,8 +922,10 @@ impl E2eRunReport {
             harness_violations: Vec::new(),
             trigger_bindings: None,
             transient_recovery: None,
+            harness_preflight: None,
             terminal_status: None,
             child_transcripts: Default::default(),
+            prompt_surface: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,

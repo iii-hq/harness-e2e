@@ -54,6 +54,17 @@ pub enum HarnessInvariant {
     /// A binding of the run outlived `harness::teardown`, on the engine or in
     /// the binding store.
     LeakedTriggerBinding,
+    /// A session froze a built-in prompt other than the default identity (or
+    /// the subject's agent profile prompt).
+    FrozenPromptDrift,
+    /// The runtime context frozen into a session's prompt misnames the
+    /// session, the working directory, the co-author or the dispatch policy.
+    RuntimeContextMalformed,
+    /// An English prompt pinned another response language, or none.
+    ResponseLanguageMispinned,
+    /// A turn record holds its prompt inline, or names a body the prompt
+    /// store does not hold under that hash.
+    PromptRefBroken,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -86,6 +97,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
             .iter()
             .flat_map(|bindings| bindings.violations.iter().cloned()),
     );
+    violations.extend(crate::prompt_surface::violations(report, subject));
     violations
 }
 
