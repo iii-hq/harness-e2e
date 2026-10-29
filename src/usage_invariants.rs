@@ -60,7 +60,16 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
     } else {
         usize::MAX
     };
-    let mut violations = metering(metrics, subject, unreported);
+    // A turn refused before its first generation (`turn_failure_surface`)
+    // rightly counts nothing.
+    let generated = transcripts
+        .iter()
+        .any(|(_, transcript)| generations(transcript).next().is_some());
+    let mut violations = if generated {
+        metering(metrics, subject, unreported)
+    } else {
+        Vec::new()
+    };
     violations.extend(
         transcripts
             .iter()
@@ -716,6 +725,20 @@ mod tests {
             HarnessInvariant::UsageUnmetered,
             "0 input tokens",
         );
+    }
+
+    #[test]
+    fn a_run_refused_before_any_generation_counts_nothing_and_is_metered() {
+        let violations = Run::new()
+            .set("root", "/messages", json!([]))
+            .set("child", "", Value::Null)
+            .set("metrics", "/totals/input_tokens", json!(0))
+            .set("metrics", "/totals/output_tokens", json!(0))
+            .set("metrics", "/totals/cost_usd", Value::Null)
+            .set("metrics", "/by_session", json!([]))
+            .check(&subject());
+
+        assert_eq!(violations, []);
     }
 
     #[test]
