@@ -18,6 +18,7 @@ use tokio::sync::watch;
 
 use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::report::ObservedWorkerContract;
+use crate::turn_lifecycle::{self, TurnEvent, TurnEventKind, TurnLog};
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
     StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
@@ -31,7 +32,8 @@ const READ_TRANSPORT_BACKOFF: Duration = Duration::from_millis(100);
 pub struct E2eContext {
     client: IIIClient,
     hub: ObserveHub,
-    binding: Mutex<Option<Trigger>>,
+    turn_log: TurnLog,
+    bindings: Mutex<Vec<Trigger>>,
     execution_outputs: Mutex<HashMap<&'static str, Option<ExecutionOutput>>>,
 }
 
@@ -58,7 +60,8 @@ impl E2eContext {
         Self {
             client,
             hub: ObserveHub::new(),
-            binding: Mutex::new(None),
+            turn_log: TurnLog::default(),
+            bindings: Mutex::new(Vec::new()),
             execution_outputs: Mutex::new(HashMap::new()),
         }
     }
@@ -83,7 +86,8 @@ impl E2eContext {
         let context = Self {
             client,
             hub: ObserveHub::new(),
-            binding: Mutex::new(None),
+            turn_log: TurnLog::default(),
+            bindings: Mutex::new(Vec::new()),
             execution_outputs: Mutex::new(HashMap::new()),
         };
         context.wait_until_ready().await?;
@@ -222,6 +226,11 @@ impl E2eContext {
         self.hub.drain();
     }
 
+    /// Every turn event since the last bind, before any dedupe.
+    pub(crate) fn turn_log(&self) -> &TurnLog {
+        &self.turn_log
+    }
+
     pub async fn runtime_versions(&self) -> Result<RuntimeVersions> {
         let health = self
             .trigger_value("engine::health::check", json!({}))
@@ -258,6 +267,7 @@ impl E2eContext {
     pub async fn bind_turn_completed(&self) -> Result<()> {
         self.unbind_turn_completed().await.ok();
         self.hub.drain();
+        self.turn_log.clear();
         let listed = self
             .trigger_value(
                 "engine::triggers::list",
@@ -265,22 +275,21 @@ impl E2eContext {
             )
             .await
             .context("discover harness::turn-completed trigger type")?;
-        if !observe::turn_completed_available(&listed) {
-            return Err(observe::missing_turn_completed_trigger());
-        }
         // Observation is a worker-owned subscription in the stack namespace.
         // engine::register_trigger creates a durable binding in default instead.
-        let binding = self.client.register_trigger(RegisterTriggerInput::new(
-            observe::TURN_COMPLETED_TRIGGER,
-            observe::SINK_FUNCTION_ID,
-            json!({}),
-        ))?;
-        *self.lock_binding() = Some(binding);
+        for (trigger_type, function_id) in turn_bindings(&listed)? {
+            let binding = self.client.register_trigger(RegisterTriggerInput::new(
+                trigger_type,
+                function_id,
+                json!({}),
+            ))?;
+            self.lock_bindings().push(binding);
+        }
         Ok(())
     }
 
     pub async fn unbind_turn_completed(&self) -> Result<()> {
-        if let Some(binding) = self.lock_binding().take() {
+        for binding in self.lock_bindings().drain(..) {
             binding.unregister();
         }
         self.hub.drain();
@@ -479,13 +488,23 @@ impl E2eContext {
 
     fn register_observation_sink(&self) {
         let hub = self.hub.clone();
+        let log = self.turn_log.clone();
         self.client.register_function(
             observe::SINK_FUNCTION_ID,
             RegisterFunction::new_async(move |payload: Value| {
                 let hub = hub.clone();
+                let log = log.clone();
                 async move {
                     match serde_json::from_value::<TurnCompletedEvent>(payload) {
-                        Ok(event) => hub.push(event),
+                        Ok(event) => {
+                            log.push(TurnEvent {
+                                kind: TurnEventKind::Completed,
+                                session_id: event.session_id.clone(),
+                                turn_id: event.turn_id.clone(),
+                                terminal: Some(event.terminal),
+                            });
+                            hub.push(event);
+                        }
                         Err(error) => tracing::warn!(
                             %error,
                             "ignored malformed harness::turn-completed payload"
@@ -499,10 +518,28 @@ impl E2eContext {
             .description("Internal harness::turn-completed sink for E2E session-tree observation.")
             .metadata(json!({ "internal": true })),
         );
+        let log = self.turn_log.clone();
+        self.client.register_function(
+            turn_lifecycle::STARTED_SINK_FUNCTION_ID,
+            RegisterFunction::new_async(move |payload: Value| {
+                let log = log.clone();
+                async move {
+                    match TurnEvent::started(&payload) {
+                        Some(event) => log.push(event),
+                        None => tracing::warn!("ignored malformed harness::turn-started payload"),
+                    }
+                    Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
+                        accepted: true,
+                    })
+                }
+            })
+            .description("Internal harness::turn-started sink for E2E turn-lifecycle evidence.")
+            .metadata(json!({ "internal": true })),
+        );
     }
 
-    fn lock_binding(&self) -> std::sync::MutexGuard<'_, Option<Trigger>> {
-        self.binding
+    fn lock_bindings(&self) -> std::sync::MutexGuard<'_, Vec<Trigger>> {
+        self.bindings
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -655,11 +692,33 @@ fn is_retryable_read(function_id: &str) -> bool {
             | "harness::metrics"
             | "harness::session-tree"
             | "session::messages"
+            | "session::get"
             | "engine::functions::list"
             | "engine::functions::info"
             | "router::models::get"
             | "router::models::list"
     )
+}
+
+/// The turn-event bindings a run needs, or unsupported when the stack does not
+/// list one of their trigger types.
+fn turn_bindings(listed: &Value) -> Result<[(&'static str, &'static str); 2]> {
+    if !observe::turn_completed_available(listed) {
+        return Err(observe::missing_turn_completed_trigger());
+    }
+    if !observe::trigger_type_ids(listed).any(|id| id == turn_lifecycle::TURN_STARTED_TRIGGER) {
+        bail!(
+            "unsupported: required trigger type {} is not registered",
+            turn_lifecycle::TURN_STARTED_TRIGGER
+        );
+    }
+    Ok([
+        (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
+        (
+            turn_lifecycle::TURN_STARTED_TRIGGER,
+            turn_lifecycle::STARTED_SINK_FUNCTION_ID,
+        ),
+    ])
 }
 
 async fn invoke_with_transport_retries<F, Fut>(
@@ -954,6 +1013,7 @@ mod tests {
             "harness::metrics",
             "harness::session-tree",
             "session::messages",
+            "session::get",
             "engine::functions::list",
             "engine::functions::info",
             "router::models::get",
@@ -974,6 +1034,36 @@ mod tests {
             "unknown::read",
         ] {
             assert!(!is_retryable_read(function_id), "{function_id}");
+        }
+    }
+
+    #[test]
+    fn a_run_binds_both_turn_events_and_refuses_a_stack_missing_either() {
+        let completed = json!({ "id": observe::TURN_COMPLETED_TRIGGER });
+        let started = json!({ "id": turn_lifecycle::TURN_STARTED_TRIGGER });
+        assert_eq!(
+            turn_bindings(&json!({ "triggers": [completed, started] })).unwrap(),
+            [
+                (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
+                (
+                    turn_lifecycle::TURN_STARTED_TRIGGER,
+                    turn_lifecycle::STARTED_SINK_FUNCTION_ID
+                ),
+            ]
+        );
+        for (listed, missing) in [
+            (
+                json!({ "triggers": [started] }),
+                observe::TURN_COMPLETED_TRIGGER,
+            ),
+            (
+                json!({ "triggers": [completed] }),
+                turn_lifecycle::TURN_STARTED_TRIGGER,
+            ),
+        ] {
+            let error = turn_bindings(&listed).unwrap_err().to_string();
+            assert!(error.starts_with("unsupported"), "{error}");
+            assert!(error.contains(missing), "{error}");
         }
     }
 
