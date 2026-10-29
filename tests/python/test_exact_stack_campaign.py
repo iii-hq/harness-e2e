@@ -1092,6 +1092,8 @@ fail() {
             (["fanout_ladder"], {"max_children": 16}),
             (["depth_ladder"], {"max_depth": 6}),
             (["fanout_ladder", "depth_ladder"], {"max_children": 16, "max_depth": 6}),
+            (["spawn_depth_cap"], {"max_depth": 1}),
+            (["spawn_depth_cap", "depth_ladder"], {"max_depth": 6}),
         ):
             with self.subTest(scenarios=scenarios), tempfile.TemporaryDirectory() as directory:
                 contract = campaign_contract()

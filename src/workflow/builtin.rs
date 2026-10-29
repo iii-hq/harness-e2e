@@ -412,6 +412,7 @@ impl StepExecutor for HarnessStepExecutor {
                         max_output_tokens: config.max_output_tokens,
                         max_total_tokens: config.max_total_tokens,
                         max_validation_retries: None,
+                        output: None,
                         functions: Some(FunctionPolicy {
                             allow: vec!["*".into()],
                             deny: vec!["e2e::*".into()],
@@ -581,6 +582,7 @@ impl StepExecutor for BoundedHarnessStepExecutor {
                         max_output_tokens: config.max_output_tokens,
                         max_total_tokens: config.max_total_tokens,
                         max_validation_retries: None,
+                        output: None,
                         functions: Some(functions),
                         metadata,
                     }),

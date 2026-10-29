@@ -256,11 +256,12 @@ fn surface_problems(
 /// it accepts. A knob the entry leaves out takes the Harness default.
 fn configuration_problems(value: &Value) -> Vec<String> {
     // The default, plus the stamp scripts/exact_stack_campaign.py puts on a
-    // stack that runs fanout_ladder (max_children 16) or depth_ladder (max_depth 6).
+    // stack that runs fanout_ladder (max_children 16), depth_ladder (max_depth 6)
+    // or spawn_depth_cap (max_depth 1).
     let knobs = [
         ("max_validation_retries", vec![json!(2)]),
         ("max_children", vec![json!(8), json!(16)]),
-        ("max_depth", vec![json!(3), json!(6)]),
+        ("max_depth", vec![json!(3), json!(6), json!(1)]),
         ("default_max_turns", vec![json!(500)]),
         ("prompt_cache_sections", vec![json!(true)]),
         ("co_author", vec![json!(true)]),
@@ -1138,6 +1139,8 @@ mod tests {
         let mut stamped = live.clone();
         stamped["max_children"] = json!(16);
         stamped["max_depth"] = json!(6);
+        let mut depth_capped = live.clone();
+        depth_capped["max_depth"] = json!(1);
         let mut drifted = live.clone();
         drifted["max_validation_retries"] = json!(5);
         drifted["co_author"] = json!(false);
@@ -1145,6 +1148,7 @@ mod tests {
 
         assert_eq!(configuration_problems(&live), Vec::<String>::new());
         assert_eq!(configuration_problems(&stamped), Vec::<String>::new());
+        assert_eq!(configuration_problems(&depth_capped), Vec::<String>::new());
         assert_eq!(configuration_problems(&json!({})), Vec::<String>::new());
         assert_eq!(
             configuration_problems(&drifted),
