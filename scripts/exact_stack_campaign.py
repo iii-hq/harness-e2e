@@ -743,6 +743,10 @@ def project_scaffold(
     harness_override = {}
     if "fanout_ladder" in scenarios:
         harness_override["max_children"] = 16
+    # spawn_depth_cap reads the cap it proves; 1 is the cheapest that still
+    # refuses a spawn. depth_ladder needs 6 and wins when both run.
+    if "spawn_depth_cap" in scenarios:
+        harness_override["max_depth"] = 1
     if "depth_ladder" in scenarios:
         harness_override["max_depth"] = 6
 
