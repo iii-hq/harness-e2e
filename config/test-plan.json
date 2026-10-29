@@ -117,6 +117,16 @@
       ]
     },
     {
+      "id": "m12",
+      "label": "Harness contract",
+      "scenarios": [
+        "harness_contract_probe",
+        "dispatch_pipeline",
+        "binding_contract_probe",
+        "turn_failure_surface"
+      ]
+    },
+    {
       "id": "memory",
       "label": "Memory injection",
       "scenarios": [
@@ -267,7 +277,7 @@
     {
       "id": "regression",
       "label": "Core runtime regression",
-      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Thirteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
+      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Thirteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Four more probe the Harness's own contract for under a cent each: the sends harness::send must refuse, every stage of a function call, trigger bindings from registration to teardown, and how a refused turn fails. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -287,7 +297,11 @@
         "spawn_depth_cap",
         "repeated_failure_breaker",
         "truncated_call_guard",
-        "restart_recovery"
+        "restart_recovery",
+        "harness_contract_probe",
+        "dispatch_pipeline",
+        "binding_contract_probe",
+        "turn_failure_surface"
       ],
       "repetitions": 11,
       "technical_retries": 1,
@@ -483,7 +497,7 @@
     {
       "id": "null-canary",
       "label": "Null agent canary",
-      "purpose": "Proves that no Core runtime regression test, nor the minimal state write, gives points or a completion to an agent that does nothing: run with the null-agent profile, which answers done and calls no function, every test must score 0 and stay incomplete, and any point or completion is a hole in that test's evaluator.",
+      "purpose": "Proves that no Core runtime regression task, nor the minimal state write, gives points or a completion to an agent that does nothing: run with the null-agent profile, which answers done and calls no function, every test must score 0 and stay incomplete, and any point or completion is a hole in that test's evaluator. The regression's four Harness contract probes stay out: they score the Harness, which a null agent cannot fail.",
       "metrics": [
         "deliverable_success",
         "completion_rate",
@@ -513,7 +527,7 @@
     {
       "id": "regression-x11",
       "label": "Core runtime regression ×11 (harness comparison)",
-      "purpose": "To compare two Harness versions, the thirteen Core runtime regression tests run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
+      "purpose": "To compare two Harness versions, the thirteen Core runtime regression tests (not its four Harness contract probes) run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
       "metrics": [
         "execution_reliability",
         "completion_rate",

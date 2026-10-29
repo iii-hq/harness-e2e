@@ -17,6 +17,7 @@ pub mod alertmanager_route_match;
 pub mod approval_roundtrip;
 pub mod ask_handshake;
 mod assessment;
+pub mod binding_contract_probe;
 pub mod browser_cross_site;
 pub mod call_guards;
 pub mod chess_engine;
@@ -31,11 +32,13 @@ pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
 pub mod database_migration_recovery;
 pub mod depth_ladder;
+pub mod dispatch_pipeline;
 mod domain;
 pub mod engineering_endurance_ladder;
 pub mod fanout_ladder;
 pub(crate) mod fixture;
 pub mod git_regression_forensics;
+pub mod harness_contract_probe;
 pub mod incident_response;
 pub mod insert_record;
 pub mod kanban;
@@ -51,6 +54,7 @@ pub mod performance_regression;
 pub mod persistent_state;
 pub mod poison_message;
 pub mod policy_bound_action;
+pub(crate) mod probe;
 pub mod prompt_injection_resilience;
 pub mod prompt_layers;
 pub mod quorum_fan_in;
@@ -78,6 +82,7 @@ pub mod todo_worker;
 pub mod tool_contract_recovery;
 pub mod trend_blog;
 pub mod trending_topics_build;
+pub mod turn_failure_surface;
 pub mod typescript_chat_service;
 pub mod validation_chain;
 pub mod validation_hook;
@@ -340,7 +345,7 @@ pub struct ExecutionPolicy {
 }
 
 impl ExecutionPolicy {
-    fn validate(self, scenario_id: &str) -> Result<()> {
+    fn validate(self, scenario_id: &str, expected_outcome: TurnStatus) -> Result<()> {
         if self.max_turns == Some(0) {
             bail!("scenario '{scenario_id}': execution.max_turns=0; expected None (unbounded) or at least 1");
         }
@@ -357,10 +362,14 @@ impl ExecutionPolicy {
                 "scenario '{scenario_id}': execution.stuck_timeout_seconds=0; expected at least 1"
             );
         }
-        if self.max_output_tokens.is_some_and(|max_output_tokens| {
-            self.max_total_tokens
-                .is_some_and(|max_total_tokens| max_total_tokens < max_output_tokens)
-        }) {
+        // A root meant to fail may carry a budget that cannot fit its own
+        // output cap: the Harness refusing it is what such a scenario tests.
+        if expected_outcome == TurnStatus::Completed
+            && self.max_output_tokens.is_some_and(|max_output_tokens| {
+                self.max_total_tokens
+                    .is_some_and(|max_total_tokens| max_total_tokens < max_output_tokens)
+            })
+        {
             let max_output_tokens = self.max_output_tokens.expect("checked above");
             let max_total_tokens = self.max_total_tokens.expect("checked above");
             bail!(
@@ -390,7 +399,8 @@ pub struct MaterializedScenario {
 
 impl MaterializedScenario {
     pub fn validate(&self) -> Result<()> {
-        self.spec.validate()?;
+        self.spec
+            .validate_expecting(self.module.expected_root_outcome())?;
         // A scenario module materializes an unsealed case; `ScenarioId::materialize`
         // seals it with the definition digest before the case leaves the crate.
         self.case.validate_shape()?;
@@ -411,13 +421,18 @@ impl MaterializedScenario {
 
 impl ScenarioSpec {
     pub fn validate(&self) -> Result<()> {
+        self.validate_expecting(TurnStatus::Completed)
+    }
+
+    /// `validate` for a scenario whose root turns end as `expected_outcome`.
+    pub fn validate_expecting(&self, expected_outcome: TurnStatus) -> Result<()> {
         if self.prompt.trim().is_empty() {
             bail!(
                 "scenario '{}': prompt is empty after trimming; provide a non-empty task prompt",
                 self.id
             );
         }
-        self.execution.validate(self.id)?;
+        self.execution.validate(self.id, expected_outcome)?;
         let mut ids = HashMap::new();
         for (index, criterion) in self.criteria.iter().enumerate() {
             if criterion.id.trim().is_empty() {
@@ -687,6 +702,10 @@ scenarios! {
     TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
     RestartRecovery = "restart_recovery" => restart_recovery::RestartRecovery,
     ApprovalRoundtrip = "approval_roundtrip" => approval_roundtrip::ApprovalRoundtrip,
+    HarnessContractProbe = "harness_contract_probe" => harness_contract_probe::HarnessContractProbe,
+    DispatchPipeline = "dispatch_pipeline" => dispatch_pipeline::DispatchPipeline,
+    BindingContractProbe = "binding_contract_probe" => binding_contract_probe::BindingContractProbe,
+    TurnFailureSurface = "turn_failure_surface" => turn_failure_surface::TurnFailureSurface,
     ContextCompaction = "context_compaction" => context_compaction::ContextCompaction,
     ResultBounds = "result_bounds" => result_bounds::ResultBounds,
     StructuredOutput = "structured_output" => structured_output::StructuredOutput,
@@ -1055,12 +1074,15 @@ mod tests {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
-            scenario.spec("run").validate().unwrap();
+            scenario
+                .spec("run")
+                .validate_expecting(scenario.module().expected_root_outcome())
+                .unwrap();
             scenario
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 104);
+        assert_eq!(ids.len(), 108);
     }
 
     #[test]

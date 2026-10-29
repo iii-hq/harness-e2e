@@ -282,6 +282,13 @@ impl ScenarioId {
                 // Compose; the store the restart must keep is session-manager's.
                 Self::RestartRecovery => (&[W::SessionManager, W::State], A::Scheduling, &[]),
                 Self::ApprovalRoundtrip => (&[W::ApprovalGate], A::Security, &[]),
+                // The Harness contract probes: the runner, not the subject,
+                // drives the Harness, so the only worker is the one whose
+                // events fire the bindings under test.
+                Self::HarnessContractProbe | Self::DispatchPipeline | Self::TurnFailureSurface => {
+                    (&[], A::CoreLoop, &[])
+                }
+                Self::BindingContractProbe => (&[W::State], A::Scheduling, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {
@@ -328,12 +335,15 @@ mod tests {
             harness_only,
             BTreeSet::from([
                 "context_pressure",
+                "dispatch_pipeline",
+                "harness_contract_probe",
                 "prompt_injection_resilience",
                 "registry_implementation",
                 "registry_verification",
                 "repeated_failure_breaker",
                 "trending_topics_build",
                 "truncated_call_guard",
+                "turn_failure_surface",
             ])
         );
     }

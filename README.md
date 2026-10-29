@@ -249,7 +249,8 @@ Featured suites:
 
 `config/test-plan.json` groups the catalog into modules (state, context,
 wakes, coordination, software engineering, integration, security, adaptive
-operations, continuous engineering, and the incremental Kanban application)
+operations, continuous engineering, the Harness contract, the Harness
+mechanisms, and the incremental Kanban application)
 plus a diagnostic set that suites can opt into.
 
 ## Test plans
@@ -260,12 +261,12 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | ID | Purpose |
 | --- | --- | --- |
-| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
-| Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
+| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, plus four probes of the Harness's own contract, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
+| Null agent canary | `null-canary` | The regression's agent tasks run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
 | Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | All 14 cases nine independent times, on demand when a Harness release is judged, to compare two Harness versions. |
-| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
+| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression's thirteen agent tasks eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Context capacity (compaction) | `context-capacity` | Kanban chapters 1, 4 and 7 and context pressure, on the `context-capacity` stack. |
 | Human approval of agent calls | `approvals` | One approved and one denied call through the approval gate, on the `approvals` stack. |
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
@@ -308,7 +309,7 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 143 jobs, nine at a time.
+`regression` runs eleven (`-r01` to `-r11`): 187 jobs, nine at a time.
 
 Four of the regression's tests check a Harness mechanism the model has to set
 in motion. `spawn_depth_cap` reads the Harness's `max_depth` from its
@@ -329,11 +330,27 @@ shared stack. It reads the session's status before the runner's
 `harness::status`, which would repair a lost projection, and counts that read
 only when the runner's wait ended on the turn's terminal event.
 
-The `null-canary` suite runs the regression's thirteen tests and `minimal_path`
+Four more of the regression's seventeen tests probe the Harness's own
+contract rather than an agent's work: `harness_contract_probe` (the sends
+`harness::send` must refuse, and the two output caps it must accept),
+`dispatch_pipeline` (policy, hook chain, result normalization, hook holds and
+discovery of a function call), `binding_contract_probe` (trigger bindings:
+refusals, call bindings, wakes, the cap of 64 and teardown) and
+`turn_failure_surface` (a turn refused by its budget preflight or a `pre_turn`
+hook fails at zero tokens). The runner drives them directly, so each costs
+less than a cent: one to six short turns, or none. Their hooks bind only the
+run's own fixtures and sessions. `turn_failure_surface` declares
+`expected_root_outcome = Failed`, and `harness_contract_probe` and
+`binding_contract_probe` end with a bare follow-up, so the turns a probe
+started are counted in the run's usage.
+
+The `null-canary` suite runs the regression's thirteen agent tasks and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no
 technical retries, and is meant to run as the `null-agent` Directory profile
 ([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
-`done` and calls no function. The executor copies `config/agents/` into the
+`done` and calls no function. The four Harness contract probes stay out:
+they score the Harness, which an agent that does nothing cannot fail. The
+executor copies `config/agents/` into the
 project's agents folder whenever an execution names a profile. Every run must
 score 0 and stay `task_incomplete`; a point or a completion is a hole in that
 test's evaluator, and a function call means the agent disobeyed, not that the
@@ -373,6 +390,9 @@ it names:
   controls of `scripts/kanban_eval/run.py` need Docker and the fixture and run
   by hand.
 - Linkly and onboarding: no CI control.
+- The four Harness contract probes: no CI control. Their subject is the
+  Harness, not the agent; each scenario's unit tests score failing probe
+  records offline.
 
 The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 `case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`

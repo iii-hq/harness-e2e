@@ -4617,7 +4617,7 @@ esac"#,
     #[tokio::test]
     async fn native_coordination_covers_every_suite_of_the_master_plan() {
         for (suite, expected_slots, expected_submissions) in [
-            ("regression", 143, 143),
+            ("regression", 187, 187),
             ("software-engineering", 14, 13),
             ("linkly", 1, 1),
             ("pr", 4, 4),
