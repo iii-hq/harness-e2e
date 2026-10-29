@@ -26,7 +26,7 @@ use super::score::{
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
 use crate::wire::{
-    FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
+    FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit, TurnStatus,
 };
 
 const PRE_GENERATE: &str = "harness::hook::pre-generate";
@@ -467,6 +467,7 @@ async fn teach(
                     case.id,
                     &session,
                     &response.turn_id,
+                    TurnStatus::Completed,
                     TEACHER_WAIT,
                     false,
                     None,

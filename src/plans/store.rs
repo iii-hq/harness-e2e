@@ -4617,13 +4617,13 @@ esac"#,
     #[tokio::test]
     async fn native_coordination_covers_every_suite_of_the_master_plan() {
         for (suite, expected_slots, expected_submissions) in [
-            ("regression", 110, 110),
+            ("regression", 198, 198),
             ("software-engineering", 14, 13),
             ("linkly", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
             ("software-engineering-x3", 42, 39),
-            ("null-canary", 11, 11),
+            ("null-canary", 15, 15),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));

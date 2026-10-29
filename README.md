@@ -249,7 +249,8 @@ Featured suites:
 
 `config/test-plan.json` groups the catalog into modules (state, context,
 wakes, coordination, software engineering, integration, security, adaptive
-operations, continuous engineering, and the incremental Kanban application)
+operations, continuous engineering, the Harness contract, the Harness
+mechanisms, and the incremental Kanban application)
 plus a diagnostic set that suites can opt into.
 
 ## Test plans
@@ -260,13 +261,14 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | ID | Purpose |
 | --- | --- | --- |
-| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
-| Null agent canary | `null-canary` | The regression's tests run as the `null-agent` profile: every test must score 0 and stay incomplete. |
+| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, plus four probes of the Harness's own contract, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
+| Null agent canary | `null-canary` | The regression's agent tasks run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
 | Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | All 14 cases nine independent times, on demand when a Harness release is judged, to compare two Harness versions. |
-| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
+| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression's fourteen agent tasks eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Context capacity (compaction) | `context-capacity` | Kanban chapters 1, 4 and 7 and context pressure, on the `context-capacity` stack. |
+| Human approval of agent calls | `approvals` | One approved and one denied call through the approval gate, on the `approvals` stack. |
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
 | Build Linkly from the tutorial | `linkly` | The Linkly agentic tutorial alone, on the `linkly` stack. |
 | Complete the onboarding tour | `onboarding` | The onboarding tour a new user takes, alone, on the `onboarding` stack. |
@@ -310,13 +312,48 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 110 jobs, nine at a time.
+`regression` runs eleven (`-r01` to `-r11`): 198 jobs, nine at a time.
 
-The `null-canary` suite runs the regression's ten tests and `minimal_path`
+Four of the regression's tests check a Harness mechanism the model has to set
+in motion. `spawn_depth_cap` reads the Harness's `max_depth` from its
+configuration entry and expects one session at each depth up to it and the
+next spawn refused (`harness/spawn_depth_exceeded`, `spawn depth N+1 exceeds
+max_depth N`); the executor stamps `max_depth: 1` on a stack that runs it, the
+cheapest cap that still refuses, unless `depth_ladder` needs 6.
+`repeated_failure_breaker` and `truncated_call_guard` check the two guards the
+Harness answers locally: the third identical failing call and a call whose
+arguments the output limit cut short never reach their run-scoped fixture. A
+run where the model called the fixture but never provoked the guard (it
+stopped retrying, or split the payload up front) is undetermined, with no
+score; one that never called it is incomplete. `restart_recovery` restarts
+session-manager between its first two exchanges and the Harness while its third
+waits on a held call. Every regression test runs in a stack group, and so a
+job, of its own, so the restarts reach no other test; it must never run on a
+shared stack. It reads the session's status before the runner's
+`harness::status`, which would repair a lost projection, and counts that read
+only when the runner's wait ended on the turn's terminal event.
+
+Four more of the regression's eighteen tests probe the Harness's own
+contract rather than an agent's work: `harness_contract_probe` (the sends
+`harness::send` must refuse, and the two output caps it must accept),
+`dispatch_pipeline` (policy, hook chain, result normalization, hook holds and
+discovery of a function call), `binding_contract_probe` (trigger bindings:
+refusals, call bindings, wakes, the cap of 64 and teardown) and
+`turn_failure_surface` (a turn refused by its budget preflight or a `pre_turn`
+hook fails at zero tokens). The runner drives them directly, so each costs
+less than a cent: one to six short turns, or none. Their hooks bind only the
+run's own fixtures and sessions. `turn_failure_surface` declares
+`expected_root_outcome = Failed`, and `harness_contract_probe` and
+`binding_contract_probe` end with a bare follow-up, so the turns a probe
+started are counted in the run's usage.
+
+The `null-canary` suite runs the regression's fourteen agent tasks and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no
 technical retries, and is meant to run as the `null-agent` Directory profile
 ([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
-`done` and calls no function. The executor copies `config/agents/` into the
+`done` and calls no function. The four Harness contract probes stay out:
+they score the Harness, which an agent that does nothing cannot fail. The
+executor copies `config/agents/` into the
 project's agents folder whenever an execution names a profile. Every run must
 score 0 and stay `task_incomplete`; a point or a completion is a hole in that
 test's evaluator, and a function call means the agent disobeyed, not that the
@@ -356,6 +393,9 @@ it names:
   controls of `scripts/kanban_eval/run.py` need Docker and the fixture and run
   by hand.
 - Linkly and onboarding: no CI control.
+- The four Harness contract probes: no CI control. Their subject is the
+  Harness, not the agent; each scenario's unit tests score failing probe
+  records offline.
 
 The `linkly` suite runs the Linkly tutorial alone: its eight exchanges in
 `case-linkly-tutorial`, once, with no technical retries. Run it on the `linkly`
@@ -661,6 +701,23 @@ Release Control holds the schedules; a suite here is only what to run. Beyond
 the daily `regression`, these run on their own: `memory-smoke` daily and for
 every Harness release on the `memory` stack, `harness-weekly` weekly on
 `default`, and `context-thinking` weekly as above.
+
+### Approvals
+
+The `approvals` suite runs `approval_roundtrip` once on the `approvals` stack,
+the default stack plus `approval-gate`. The gate binds the Harness's
+`pre_trigger` hook on `*` in fail_closed mode, so on that stack every call of
+every session waits for a human; no other suite can run there. The runner plays
+the human: it reads `approval::list-pending` for its own session (the
+`e2e_run_id` it stamps on the session's metadata), allows the release fixture
+and anything else the subject calls, and denies the purge fixture. The release
+must run exactly once with its receipt in one result, the purge must never run
+and answer with the reviewer's reason, and nothing may be left pending; a second
+decision on a resolved call must come back `resolved: false`.
+
+```bash
+gh workflow run exact-stack-e2e.yml -f suite=approvals -f stack=approvals -f model=deepseek/deepseek-flash
+```
 
 ### Comparing Harness versions
 

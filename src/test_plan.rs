@@ -161,11 +161,12 @@ pub struct UncoveredTag {
 }
 
 /// Left out of every selection by tag: the registry pair runs 17 to 34 min
-/// a test, and Linkly, the onboarding tour and the memory tests need a stack
-/// of their own.
+/// a test, and Linkly, the onboarding tour, the memory tests and the approval
+/// round trip need a stack of their own.
 // ponytail: a fixed list; a ceiling from run durations belongs where the
 // durations are (Release Control's deploy check).
 const IMPACT_EXCLUDED: &[ScenarioId] = &[
+    ScenarioId::ApprovalRoundtrip,
     ScenarioId::RegistryImplementation,
     ScenarioId::RegistryVerification,
     ScenarioId::LinklyTutorial,
@@ -744,14 +745,14 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 17);
+        assert_eq!(plan.suites.len(), 18);
         for (id, cases, runs) in [
-            ("regression", 10, 110),
-            ("null-canary", 11, 11),
+            ("regression", 18, 198),
+            ("null-canary", 15, 15),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
             ("software-engineering-x9", 14, 126),
-            ("regression-x11", 10, 110),
+            ("regression-x11", 14, 154),
             ("context-capacity", 4, 4),
             ("deepwork", 3, 3),
             ("linkly", 1, 1),
@@ -760,6 +761,7 @@ mod tests {
             ("after-release", 5, 5),
             ("memory", 22, 66),
             ("memory-learning", 7, 21),
+            ("approvals", 1, 1),
             ("memory-smoke", 3, 3),
             ("harness-weekly", 1, 1),
             ("context-thinking", 1, 1),
@@ -879,7 +881,14 @@ mod tests {
             state.scenario_ids,
             [
                 &pr[..],
-                &["contention_ledger", "mechanical_reaction", "timer_wake"]
+                &[
+                    "binding_contract_probe",
+                    "contention_ledger",
+                    "mechanical_reaction",
+                    "restart_recovery",
+                    "spawn_depth_cap",
+                    "timer_wake"
+                ]
             ]
             .concat()
         );
@@ -887,10 +896,13 @@ mod tests {
         assert_eq!(
             impact.matched,
             [
+                "binding_contract_probe",
                 "contention_ledger",
                 "mechanical_reaction",
                 "minimal_path",
                 "persistent_state",
+                "restart_recovery",
+                "spawn_depth_cap",
                 "timer_wake"
             ]
         );
@@ -953,8 +965,24 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:fa9539de0e3dbe59335689cf33b62b623dcbdf9f143dcaafbcf97e175e26b87a"
+            "sha256:d86b101ccf262d3b79f850ee6f6bc4428c9d71666896f6624ea4df795552fd99"
         );
+    }
+
+    /// Scenarios that change what every session on the stack sees say so
+    /// where the catalog lists what a scenario needs.
+    #[test]
+    fn stack_wide_scenarios_require_a_disposable_stack() {
+        let plan = embedded().unwrap();
+        for id in ["prompt_layers", "router_fault_contract"] {
+            let requirements = plan.requirements.get(id).cloned().unwrap_or_default();
+            assert!(
+                requirements
+                    .iter()
+                    .any(|requirement| requirement.starts_with("A disposable stack")),
+                "{id}: {requirements:?}"
+            );
+        }
     }
 
     #[test]
@@ -985,12 +1013,15 @@ mod tests {
         assert_eq!(
             coverage["workers"]["state"],
             json!([
+                "binding_contract_probe",
                 "contention_ledger",
                 "linkly_tutorial",
                 "mechanical_reaction",
                 "minimal_path",
                 "onboarding_tour",
                 "persistent_state",
+                "restart_recovery",
+                "spawn_depth_cap",
                 "timer_wake"
             ])
         );
@@ -1208,8 +1239,10 @@ mod tests {
         assert_eq!(plan.materialize("regression").unwrap().campaigns.len(), 11);
     }
 
-    /// The version-comparison suites are the daily ones with more rounds,
-    /// and the capacity lane is four tests that already exist.
+    /// The version-comparison suites are the daily ones with more rounds
+    /// (the Harness comparison without the Harness contract probes, which
+    /// score the Harness itself), and the capacity lane is four tests that
+    /// already exist.
     #[test]
     fn the_comparison_and_capacity_suites_reuse_existing_tests() {
         let plan = embedded().unwrap();
@@ -1221,12 +1254,20 @@ mod tests {
                 plan.materialize(comparison).unwrap(),
                 plan.materialize(base).unwrap(),
             );
-            assert_eq!(comparison.scenario_ids, base.scenario_ids);
+            let mut expected = base.scenario_ids.clone();
+            expected.retain(|id| {
+                !LIVE_CONTROLS
+                    .iter()
+                    .any(|(live, reason, _)| *reason == HARNESS_LIVE && live.as_str() == id)
+            });
+            assert_eq!(comparison.scenario_ids, expected);
             assert_eq!(comparison.campaigns.len(), rounds);
-            assert_eq!(
-                comparison.campaigns[0]["groups"],
-                base.campaigns[0]["groups"]
-            );
+            if expected == base.scenario_ids {
+                assert_eq!(
+                    comparison.campaigns[0]["groups"],
+                    base.campaigns[0]["groups"]
+                );
+            }
         }
         assert_eq!(
             plan.materialize("context-capacity").unwrap().scenario_ids,
@@ -1248,11 +1289,14 @@ mod tests {
     const NULL_AGENT: &str = include_str!("../config/agents/null-agent.md");
 
     /// The canary is the regression plus the minimal path (the one test the
-    /// `pr` and `after-release` suites add), run by an agent that does nothing.
+    /// `pr` and `after-release` suites add), run by an agent that does nothing;
+    /// a test whose control needs a live stack (the Harness contract probes,
+    /// which score the Harness and not the agent) stays out.
     #[test]
     fn the_null_canary_runs_the_regression_as_an_agent_that_does_nothing() {
         let plan = embedded().unwrap();
         let mut expected = plan.materialize("regression").unwrap().scenario_ids;
+        expected.retain(|id| !LIVE_CONTROLS.iter().any(|(live, _, _)| live.as_str() == id));
         expected.insert(0, ScenarioId::MinimalPath.to_string());
         assert_eq!(
             plan.materialize("null-canary").unwrap().scenario_ids,
@@ -1360,7 +1404,15 @@ mod tests {
         (ScenarioId::MemoryLearnFromLongMessage, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryHonorsDoNotKeep, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryKeepsWithoutARule, MEMORY_LIVE, &[]),
+        (ScenarioId::HarnessContractProbe, HARNESS_LIVE, &[]),
+        (ScenarioId::DispatchPipeline, HARNESS_LIVE, &[]),
+        (ScenarioId::BindingContractProbe, HARNESS_LIVE, &[]),
+        (ScenarioId::TurnFailureSurface, HARNESS_LIVE, &[]),
     ];
+    const HARNESS_LIVE: &str =
+        "capture probes the Harness's own contract on a live stack and evaluate scores that \
+         record; the subject is the Harness, not the agent, so a null agent is no control of \
+         it, and the scenario's unit tests score failing probe records offline; no CI control";
     const MEMORY_LIVE: &str =
         "capture runs live sessions against the memory worker and audits what it injected \
          into each turn; the subject is the memory worker, not the agent, so a null agent is \
@@ -1424,6 +1476,11 @@ mod tests {
             ScenarioId::AlertmanagerRouteMatch => alertmanager_route_match::tests::controls().await,
             ScenarioId::SubagentValidationFailure => subagent_validation_failure::tests::controls(),
             ScenarioId::MechanicalReaction => mechanical_reaction::tests::controls(),
+            ScenarioId::SpawnDepthCap => spawn_depth_cap::tests::controls().await,
+            ScenarioId::RepeatedFailureBreaker => call_guards::tests::breaker_controls().await,
+            ScenarioId::TruncatedCallGuard => call_guards::tests::truncation_controls().await,
+            ScenarioId::RestartRecovery => restart_recovery::tests::controls().await,
+            ScenarioId::ApprovalRoundtrip => approval_roundtrip::tests::controls().await,
             _ => return None,
         })
     }
