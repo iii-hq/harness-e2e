@@ -1059,6 +1059,16 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
+        "transient_recovery": {
+          "description": "The turns that resumed after a stream cut, in every session of the tree. Absent when the transcripts were not read: a report written before it, or a composite or adaptive run.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/TurnRecovery"
+          }
+        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -1628,6 +1638,20 @@
           "type": "string",
           "enum": [
             "reasoning_while_disabled"
+          ]
+        },
+        {
+          "description": "A transient resume in a turn that neither failed nor stopped has no `recovered` row of its attempt or a later one: the Harness lost the recovery's outcome.",
+          "type": "string",
+          "enum": [
+            "unrecovered_transient_resume"
+          ]
+        },
+        {
+          "description": "A turn resumed more often than its `max_transient_resumes`.",
+          "type": "string",
+          "enum": [
+            "transient_resumes_over_limit"
           ]
         }
       ]
@@ -3346,6 +3370,56 @@
         "valid",
         "technical_invalid"
       ]
+    },
+    "TurnRecovery": {
+      "description": "One turn's recovery rows.",
+      "type": "object",
+      "required": [
+        "ended_without_result",
+        "recovered",
+        "recovering",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "ended_without_result": {
+          "description": "The turn failed or was stopped (`e_<turn>_error`, `e_<turn>_stopped`), so its last resume had no generation left to recover.",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "description": "The turn's `max_transient_resumes`, as its rows carry it.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "recovered": {
+          "description": "The attempt of each `recovered` row.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "recovering": {
+          "description": "The attempt of each `recovering` row: one per transient resume.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
     },
     "TypedPortValue": {
       "type": "object",

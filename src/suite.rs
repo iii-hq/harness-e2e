@@ -2550,6 +2550,17 @@ async fn execute(
             error.to_string(),
         )
     })?;
+    report.transient_recovery = Some(
+        crate::transient_recovery::collect(context, session_id, &transcript, &metrics)
+            .await
+            .map_err(|error| {
+                RunFailure::new(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    format!("read the session tree's transient recovery: {error:#}"),
+                )
+            })?,
+    );
     let response = common::final_response(&transcript);
     let mut observation = ScenarioObservation {
         case: case.clone(),
@@ -2708,8 +2719,9 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// Checks the Harness invariants. Unresolved context limits make the
 /// measurement untrustworthy, an infrastructure error the slot re-runs. Any
 /// other broken invariant (a lost function result, unmetered or misaccounted
-/// usage, a misrouted model) is incomplete like a failed gate, whatever the
-/// agent delivered; the score stays what the criteria awarded.
+/// usage, a misrouted model, a lost transient recovery) is incomplete like a
+/// failed gate, whatever the agent delivered; the score stays what the
+/// criteria awarded.
 fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -3021,6 +3033,16 @@ async fn capture_partial_observation(
             %error,
             "could not capture partial E2E transcript"
         ),
+    }
+    if let (Some(metrics), Some(transcript)) = (&report.metrics, &report.transcript) {
+        match crate::transient_recovery::collect(context, session_id, transcript, metrics).await {
+            Ok(turns) => report.transient_recovery = Some(turns),
+            Err(error) => tracing::warn!(
+                session_id,
+                %error,
+                "could not capture partial E2E transient recovery"
+            ),
+        }
     }
 }
 
@@ -4849,6 +4871,28 @@ mod tests {
         assert_eq!(
             report.harness_violations[0].invariant,
             crate::harness_invariants::HarnessInvariant::ModelMisrouted
+        );
+    }
+
+    #[test]
+    fn an_unrecovered_transient_resume_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.transient_recovery = Some(crate::transient_recovery::turns(
+            "child",
+            &serde_json::json!({ "messages": [
+                { "entry_id": "e_t_a_transient_recovery_1_recovering" },
+            ] }),
+        ));
+
+        observe_harness(&harness_subject(None), &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::UnrecoveredTransientResume
         );
     }
 
