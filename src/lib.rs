@@ -26,6 +26,7 @@ pub mod subscription;
 pub mod suite;
 pub mod test_plan;
 pub mod transient_recovery;
+pub mod usage_invariants;
 pub mod verdict;
 pub mod wire;
 pub mod worker;

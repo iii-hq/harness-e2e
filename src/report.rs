@@ -852,6 +852,11 @@ pub struct E2eRunReport {
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
+    /// Transcripts of the descendant sessions `metrics.by_session` names, by
+    /// session id, for the usage invariants; never persisted.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub child_transcripts: BTreeMap<String, Value>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -907,6 +912,7 @@ impl E2eRunReport {
             harness_violations: Vec::new(),
             transient_recovery: None,
             terminal_status: None,
+            child_transcripts: Default::default(),
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
