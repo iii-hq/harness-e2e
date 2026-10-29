@@ -1476,7 +1476,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     finish_native_assessment(&spec, &mut report);
-    observe_harness(subject, &mut report);
+    observe_harness(subject, spec.id, &mut report);
     report.update_cost();
     report.update_efficiency();
     report.refresh_dimensions(expects_deliverables);
@@ -2423,48 +2423,51 @@ async fn execute(
                 .await;
         }
         context.drain_turn_completed_events();
-        let response: SendResponse = context
-            .trigger(
-                "harness::send",
-                SendRequest {
-                    session_id: Some(session_id.to_string()),
-                    message: MessageInput::Text(message),
-                    model: Some(subject.model.clone()),
-                    provider: Some(subject.provider.clone()),
-                    idempotency_key: Some(format!(
-                        "e2e:{run_id}:{}:send:{exchange}",
-                        spec.id
+        let request = if crate::scenarios::sends_bare(module, exchange) {
+            SendRequest::bare(session_id, message)
+        } else {
+            SendRequest {
+                session_id: Some(session_id.to_string()),
+                message: MessageInput::Text(message),
+                model: Some(subject.model.clone()),
+                provider: Some(subject.provider.clone()),
+                idempotency_key: Some(format!(
+                    "e2e:{run_id}:{}:send:{exchange}",
+                    spec.id
+                )),
+                session: (exchange == 0).then(|| SessionInit {
+                    kind: Some(E2E_SESSION_KIND.into()),
+                    title: Some(format!("Harness E2E: {}", spec.id)),
+                    metadata: Some(json!({
+                        "e2e_run_id": run_id,
+                        "e2e_scenario": spec.id,
+                        "e2e_execution_kind": if scripted_dialogue { "scripted_dialogue" } else { "harness_turn" },
+                    })),
+                }),
+                options: Some(SendOptions {
+                    thinking_level: subject.thinking_level.clone(),
+                    provider_options: subject.provider_options.clone(),
+                    // New sessions only: the Harness refuses a profile on
+                    // an existing session, and a dialogue reuses one.
+                    agent: (exchange == 0).then(|| subject.agent.clone()).flatten(),
+                    // The Harness has no "unbounded" value and falls back to
+                    // its own default when the field is absent.
+                    max_turns: Some(spec.execution.max_turns.unwrap_or(u32::MAX)),
+                    max_cost_usd: subject_cost_cap(subject, spec.id),
+                    max_output_tokens: spec.execution.max_output_tokens,
+                    max_total_tokens: spec.execution.max_total_tokens,
+                    max_validation_retries: spec.execution.max_validation_retries,
+                    output: module.output_contract(),
+                    functions: Some(e2e_function_policy(
+                        spec,
+                        module.allowed_functions(run_id),
                     )),
-                    session: (exchange == 0).then(|| SessionInit {
-                        kind: Some(E2E_SESSION_KIND.into()),
-                        title: Some(format!("Harness E2E: {}", spec.id)),
-                        metadata: Some(json!({
-                            "e2e_run_id": run_id,
-                            "e2e_scenario": spec.id,
-                            "e2e_execution_kind": if scripted_dialogue { "scripted_dialogue" } else { "harness_turn" },
-                        })),
-                    }),
-                    options: Some(SendOptions {
-                        thinking_level: subject.thinking_level.clone(),
-                        provider_options: subject.provider_options.clone(),
-                        // New sessions only: the Harness refuses a profile on
-                        // an existing session, and a dialogue reuses one.
-                        agent: (exchange == 0).then(|| subject.agent.clone()).flatten(),
-                        // The Harness has no "unbounded" value and falls back to
-                        // its own default when the field is absent.
-                        max_turns: Some(spec.execution.max_turns.unwrap_or(u32::MAX)),
-                        max_cost_usd: subject_cost_cap(subject, spec.id),
-                        max_output_tokens: spec.execution.max_output_tokens,
-                        max_total_tokens: spec.execution.max_total_tokens,
-                        max_validation_retries: spec.execution.max_validation_retries,
-                        functions: Some(e2e_function_policy(
-                            spec,
-                            module.allowed_functions(run_id),
-                        )),
-                        metadata: options_metadata.clone(),
-                    }),
-                },
-            )
+                    metadata: options_metadata.clone(),
+                }),
+            }
+        };
+        let response: SendResponse = context
+            .trigger("harness::send", request)
             .await
             .map_err(subject_dispatch_failure)?;
         if !response.accepted
@@ -2486,6 +2489,7 @@ async fn execute(
                     spec.id,
                     session_id,
                     &response.turn_id,
+                    module.expected_root_outcome(),
                     stuck_timeout,
                     progress_interval.is_some(),
                     control.map(|control| &control.cancellation),
@@ -2511,6 +2515,7 @@ async fn execute(
         report.metrics = metrics.clone();
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
+    module.after_dialogue(context, run_id, session_id).await;
     let terminal_status = match context
         .trigger::<_, Option<StatusReport>>(
             "harness::status",
@@ -2696,14 +2701,17 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// measurement untrustworthy, an infrastructure error the slot re-runs. A
 /// lost function result, or a call run past the repeated-failure breaker, is
 /// incomplete like a failed gate, whatever the agent delivered; the score
-/// stays what the criteria awarded.
-fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
+/// stays what the criteria awarded. On the approvals stack an approver
+/// releases every call, which bypasses the breaker, so none runs past it.
+fn observe_harness(subject: &SubjectConfig, scenario_id: &str, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
 
     report.harness_violations = crate::harness_invariants::violations(report, subject);
-    let repeated = crate::harness_metrics::repeated_failures(report);
-    report.harness_violations.extend(repeated);
+    if scenario_id != crate::scenarios::approval_roundtrip::ID {
+        let repeated = crate::harness_metrics::repeated_failures(report);
+        report.harness_violations.extend(repeated);
+    }
     let broken = |invariant| {
         report
             .harness_violations
@@ -3226,7 +3234,7 @@ fn is_retryable_technical_failure(report: &E2eRunReport) -> bool {
 /// unreachable or dropped the stream, plus the router call itself failing.
 // ponytail: matches the harness's copy; read the code of the transcript's
 // error entry instead if that copy starts changing.
-const PROVIDER_TRANSPORT_FAILURES: &[&str] = &[
+pub(crate) const PROVIDER_TRANSPORT_FAILURES: &[&str] = &[
     "The selected provider is temporarily unavailable.",
     "The provider is busy right now.",
     "The response stream could not be started.",
@@ -4810,7 +4818,7 @@ mod tests {
             { "message": { "role": "function_result", "function_call_id": "c1" } },
         ] }));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         // Like a failed gate: still passed, incomplete, valid, scored.
         assert_eq!(report.status, RunStatus::Passed);
@@ -4838,9 +4846,9 @@ mod tests {
             .iter()
             .flat_map(|id| step(id))
             .collect::<Vec<_>>();
-        let mut report = full_marks_run(serde_json::json!({ "messages": messages }));
+        let mut report = full_marks_run(serde_json::json!({ "messages": messages.clone() }));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
         assert_eq!(report.score, Some(100));
@@ -4848,6 +4856,15 @@ mod tests {
             report.harness_violations[0].invariant,
             crate::harness_invariants::HarnessInvariant::RepeatedFailureExecuted
         );
+
+        // Behind the approval gate an approver releases every call, past the breaker.
+        let mut gated = full_marks_run(serde_json::json!({ "messages": messages }));
+        observe_harness(
+            &harness_subject(None),
+            crate::scenarios::approval_roundtrip::ID,
+            &mut gated,
+        );
+        assert!(gated.harness_violations.is_empty());
     }
 
     #[test]
@@ -4882,7 +4899,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(Some(128_000)), &mut report);
+        observe_harness(&harness_subject(Some(128_000)), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::InfrastructureError);
         assert_eq!(report.completion, CompletionState::Undetermined);

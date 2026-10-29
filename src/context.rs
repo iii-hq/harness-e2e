@@ -20,7 +20,7 @@ use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::report::ObservedWorkerContract;
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
-    StopResponse, TeardownResponse, TurnCompletedEvent,
+    StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
 };
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -352,16 +352,19 @@ impl E2eContext {
                 log_heartbeat,
                 cancellation,
                 expected_turn_id: None,
+                expected_outcome: TurnStatus::Completed,
             },
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn wait_for_turn(
         &self,
         scenario_id: &str,
         session_id: &str,
         turn_id: &str,
+        expected_outcome: TurnStatus,
         stuck_timeout: Duration,
         log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
@@ -380,6 +383,7 @@ impl E2eContext {
                 log_heartbeat,
                 cancellation,
                 expected_turn_id: Some(turn_id),
+                expected_outcome,
             },
         )
         .await

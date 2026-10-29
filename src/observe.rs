@@ -179,6 +179,7 @@ impl From<&SessionMetricsResponse> for MetricsProgress {
 struct ObserveMachine {
     root_session_id: String,
     expected_turn_id: Option<String>,
+    expected_outcome: TurnStatus,
     seen: HashSet<(String, String)>,
 }
 
@@ -190,10 +191,15 @@ enum EventKind {
 }
 
 impl ObserveMachine {
-    fn new(root_session_id: impl Into<String>, expected_turn_id: Option<&str>) -> Self {
+    fn new(
+        root_session_id: impl Into<String>,
+        expected_turn_id: Option<&str>,
+        expected_outcome: TurnStatus,
+    ) -> Self {
         Self {
             root_session_id: root_session_id.into(),
             expected_turn_id: expected_turn_id.map(str::to_owned),
+            expected_outcome,
             seen: HashSet::new(),
         }
     }
@@ -214,37 +220,39 @@ impl ObserveMachine {
             // from the same root are legitimate wake-driven resumptions.
             self.expected_turn_id = None;
         }
-        if event.session_id == self.root_session_id
-            && matches!(event.status, TurnStatus::Failed | TurnStatus::Cancelled)
-        {
-            return EventKind::RootFailed {
-                message: format!(
-                    "turn ended as {:?}: {}",
-                    event.status,
-                    event
-                        .result_error
-                        .as_deref()
-                        .unwrap_or("no error was reported")
-                ),
-            };
+        match unexpected_outcome(
+            event.status,
+            event.result_error.as_deref(),
+            self.expected_outcome,
+        ) {
+            Some(message) => EventKind::RootFailed { message },
+            None => EventKind::Progress,
         }
-        EventKind::Progress
     }
 }
 
-fn status_is_fatal(status: &StatusReport) -> Result<()> {
-    match status.status {
-        TurnStatus::Failed | TurnStatus::Cancelled => {
-            bail!(
-                "turn ended as {:?}: {}",
-                status.status,
-                status
-                    .result_error
-                    .as_deref()
-                    .unwrap_or("no error was reported")
-            );
-        }
-        TurnStatus::Completed | TurnStatus::Running | TurnStatus::AwaitingFunctions => Ok(()),
+/// Why a root turn that ended other than `expected` fails the run.
+fn unexpected_outcome(
+    status: TurnStatus,
+    result_error: Option<&str>,
+    expected: TurnStatus,
+) -> Option<String> {
+    // A provider that dropped the turn is never the failure a scenario drives.
+    let transport = result_error
+        .is_some_and(|reason| crate::suite::PROVIDER_TRANSPORT_FAILURES.contains(&reason));
+    if status == expected && !transport {
+        return None;
+    }
+    match status {
+        TurnStatus::Running | TurnStatus::AwaitingFunctions => None,
+        TurnStatus::Completed => Some(format!(
+            "turn ended as Completed; the scenario expects {expected:?}"
+        )),
+        // The report classifies the cause from this copy.
+        TurnStatus::Failed | TurnStatus::Cancelled => Some(format!(
+            "turn ended as {status:?}: {}",
+            result_error.unwrap_or("no error was reported")
+        )),
     }
 }
 
@@ -286,6 +294,8 @@ pub(crate) struct WaitOptions<'a> {
     pub log_heartbeat: bool,
     pub cancellation: Option<&'a watch::Receiver<bool>>,
     pub expected_turn_id: Option<&'a str>,
+    /// How the root's turns are meant to end (`Scenario::expected_root_outcome`).
+    pub expected_outcome: TurnStatus,
 }
 
 pub(crate) async fn wait_until_complete<O: TreeObserver>(
@@ -300,12 +310,13 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         log_heartbeat,
         cancellation,
         expected_turn_id,
+        expected_outcome,
     } = options;
     let started = tokio::time::Instant::now();
     let mut last_progress = started;
     let mut previous_metrics = None;
     let mut unobservable = None;
-    let mut machine = ObserveMachine::new(root_session_id, expected_turn_id);
+    let mut machine = ObserveMachine::new(root_session_id, expected_turn_id, expected_outcome);
     let mut cancellation = cancellation.cloned();
 
     loop {
@@ -355,6 +366,10 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
                         Ok(metrics) => {
                             let _ = totals_changed(&mut previous_metrics, &metrics);
                             if metrics.complete {
+                                // An expected cancellation may be the operator's stop.
+                                if event.status == TurnStatus::Cancelled {
+                                    ensure_not_cancelled(cancellation.as_ref())?;
+                                }
                                 return Ok(metrics);
                             }
                         }
@@ -390,13 +405,25 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         match observer.pull_root_status(root_session_id).await {
             Ok(Some(status)) => {
                 ensure_not_cancelled(cancellation.as_ref())?;
-                status_is_fatal(&status)?;
-                let expected_completed =
-                    machine.expected_turn_id.as_deref().is_some_and(|expected| {
-                        status.turn_id.as_deref() == Some(expected)
-                            && status.status == TurnStatus::Completed
-                    });
-                if expected_completed {
+                // An older turn that completed is not the awaited turn's outcome.
+                let older_completed = status.status == TurnStatus::Completed
+                    && machine
+                        .expected_turn_id
+                        .as_deref()
+                        .is_some_and(|expected| status.turn_id.as_deref() != Some(expected));
+                if let Some(message) = unexpected_outcome(
+                    status.status,
+                    status.result_error.as_deref(),
+                    expected_outcome,
+                )
+                .filter(|_| !older_completed)
+                {
+                    bail!("{message}");
+                }
+                let expected_ended = machine.expected_turn_id.as_deref().is_some_and(|expected| {
+                    status.turn_id.as_deref() == Some(expected) && status.status == expected_outcome
+                });
+                if expected_ended {
                     machine.expected_turn_id = None;
                     current_turn_observed = true;
                 }
@@ -541,9 +568,18 @@ mod tests {
     }
 
     fn status(turn_status: TurnStatus, expects_wake: bool) -> StatusReport {
+        root_status("turn-1", turn_status, expects_wake, None)
+    }
+
+    fn root_status(
+        turn_id: &str,
+        turn_status: TurnStatus,
+        expects_wake: bool,
+        result_error: Option<&str>,
+    ) -> StatusReport {
         StatusReport::from_normalized(StatusReportPayload {
             session_id: "root".to_string(),
-            turn_id: Some("turn-1".to_string()),
+            turn_id: Some(turn_id.to_string()),
             status: turn_status,
             step: 1,
             turn_count: 1,
@@ -552,7 +588,7 @@ mod tests {
             children: Vec::new(),
             queued: Vec::new(),
             expects_wake,
-            result_error: None,
+            result_error: result_error.map(str::to_string),
             validation_retries: 0,
             transient_resumes: 0,
         })
@@ -574,6 +610,7 @@ mod tests {
                 log_heartbeat: false,
                 cancellation,
                 expected_turn_id: None,
+                expected_outcome: TurnStatus::Completed,
             },
         )
         .await
@@ -652,8 +689,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let mut session_a = ObserveMachine::new("session-a", None);
-        let mut session_b = ObserveMachine::new("session-b", None);
+        let mut session_a = ObserveMachine::new("session-a", None, TurnStatus::Completed);
+        let mut session_b = ObserveMachine::new("session-b", None, TurnStatus::Completed);
         assert!(matches!(
             session_a.classify(&first_events[0]),
             EventKind::Progress
@@ -674,7 +711,8 @@ mod tests {
 
     #[test]
     fn scripted_dialogue_ignores_completion_from_an_older_turn() {
-        let mut machine = ObserveMachine::new("session-a", Some("turn-current"));
+        let mut machine =
+            ObserveMachine::new("session-a", Some("turn-current"), TurnStatus::Completed);
         assert!(matches!(
             machine.classify(&event(
                 "session-a",
@@ -720,6 +758,7 @@ mod tests {
                 log_heartbeat: false,
                 cancellation: None,
                 expected_turn_id: Some("turn-1"),
+                expected_outcome: TurnStatus::Completed,
             },
         );
         let drive = async {
@@ -804,6 +843,128 @@ mod tests {
         .to_string();
         assert!(error.contains("provider stopped"), "{error}");
         assert!(error.contains("Failed"), "{error}");
+    }
+
+    async fn wait_expecting(
+        observer: &Injected,
+        expected_outcome: TurnStatus,
+    ) -> Result<SessionMetricsResponse> {
+        wait_until_complete(
+            observer,
+            "turn_failure_surface",
+            "root",
+            WaitOptions {
+                stuck_timeout: Duration::from_secs(2),
+                sample_interval: Duration::from_millis(20),
+                log_heartbeat: false,
+                cancellation: None,
+                expected_turn_id: Some("turn-1"),
+                expected_outcome,
+            },
+        )
+        .await
+    }
+
+    /// A scenario that drives the root turn into a failure on purpose reads
+    /// that failure as the end of the turn, from the event or from the status.
+    #[tokio::test]
+    async fn a_root_turn_ending_as_the_scenario_expects_ends_the_wait() {
+        for expected in [TurnStatus::Failed, TurnStatus::Cancelled] {
+            let observer = Injected::new(metrics(true, 1, 0), status(expected, false));
+            observer.push(event("root", "turn-1", expected, true, Some("budget")));
+            assert!(wait_expecting(&observer, expected).await.unwrap().complete);
+
+            let polled = Injected::new(metrics(true, 1, 0), status(expected, false));
+            assert!(wait_expecting(&polled, expected).await.unwrap().complete);
+            assert!(!polled.stopped.load(Ordering::SeqCst));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_root_turn_ending_otherwise_than_expected_fails_the_run() {
+        let completed = Injected::new(metrics(true, 1, 0), status(TurnStatus::Completed, false));
+        completed.push(event("root", "turn-1", TurnStatus::Completed, true, None));
+        let error = wait_expecting(&completed, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "turn ended as Completed; the scenario expects Failed"
+        );
+
+        let polled = Injected::new(metrics(true, 1, 0), status(TurnStatus::Completed, false));
+        let error = wait_expecting(&polled, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "turn ended as Completed; the scenario expects Failed"
+        );
+
+        // Another failure keeps today's copy, which the report classifies.
+        let cancelled = Injected::new(metrics(true, 1, 0), status(TurnStatus::Cancelled, false));
+        cancelled.push(event(
+            "root",
+            "turn-1",
+            TurnStatus::Cancelled,
+            true,
+            Some("stopped"),
+        ));
+        let error = wait_expecting(&cancelled, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "turn ended as Cancelled: stopped");
+    }
+
+    /// A provider that dropped the turn is never the failure a scenario
+    /// drives, so it keeps the copy the report classifies as transport.
+    #[tokio::test]
+    async fn a_provider_transport_failure_is_not_the_expected_failure() {
+        let reason = "The provider is busy right now.";
+        let observer = Injected::new(metrics(true, 1, 0), status(TurnStatus::Failed, false));
+        observer.push(event(
+            "root",
+            "turn-1",
+            TurnStatus::Failed,
+            true,
+            Some(reason),
+        ));
+        let error = wait_expecting(&observer, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, format!("turn ended as Failed: {reason}"));
+
+        let polled = Injected::new(
+            metrics(true, 1, 0),
+            root_status("turn-1", TurnStatus::Failed, false, Some(reason)),
+        );
+        let error = wait_expecting(&polled, TurnStatus::Failed)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, format!("turn ended as Failed: {reason}"));
+    }
+
+    /// The status may still show an older turn that completed before the
+    /// awaited one starts; that is not the awaited turn's outcome.
+    #[tokio::test]
+    async fn an_older_completed_turn_does_not_fail_an_expected_failure() {
+        let observer = Injected::new(
+            metrics(false, 1, 0),
+            root_status("turn-0", TurnStatus::Completed, false, None),
+        );
+        let drive = async {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            observer.set_metrics(metrics(true, 1, 0));
+            *observer.status.lock().unwrap() =
+                root_status("turn-1", TurnStatus::Failed, false, Some("budget"));
+        };
+        let (result, _) = tokio::join!(wait_expecting(&observer, TurnStatus::Failed), drive);
+        assert!(result.unwrap().complete);
     }
 
     #[tokio::test]
@@ -930,6 +1091,33 @@ mod tests {
             Duration::from_secs(2),
             Duration::from_millis(20),
             Some(&receiver),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, crate::report::EXECUTION_CANCELLED);
+    }
+
+    /// A scenario that expects its root cancelled still reports the
+    /// operator's stop, not a finished run, when the stop ended the turn.
+    #[tokio::test]
+    async fn an_expected_cancellation_does_not_hide_the_operators_stop() {
+        let observer = Injected::new(metrics(true, 1, 0), status(TurnStatus::Cancelled, false));
+        let (sender, receiver) = watch::channel(false);
+        *observer.cancel_on_sample.lock().unwrap() = Some(sender);
+        observer.push(event("root", "turn-1", TurnStatus::Cancelled, true, None));
+        let error = wait_until_complete(
+            &observer,
+            "turn_failure_surface",
+            "root",
+            WaitOptions {
+                stuck_timeout: Duration::from_secs(2),
+                sample_interval: Duration::from_millis(20),
+                log_heartbeat: false,
+                cancellation: Some(&receiver),
+                expected_turn_id: Some("turn-1"),
+                expected_outcome: TurnStatus::Cancelled,
+            },
         )
         .await
         .unwrap_err()

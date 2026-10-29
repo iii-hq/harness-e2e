@@ -170,8 +170,8 @@ pub fn measure(run: &E2eRunReport) -> BTreeMap<String, f64> {
 /// result counts.
 /// shortcut: a call a hook held and an approver released runs through
 /// `harness::function::resolve`, which notes nothing, yet its result looks
-/// dispatched; the suite binds no approval gate (`approval::*` is denied),
-/// so read the hold from the turn record if one ever runs here.
+/// dispatched; only `approval_roundtrip` runs behind the approval gate and
+/// the suite skips it, so read the hold from the turn record if another does.
 pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     if report.status != RunStatus::Passed {
         return Vec::new();
