@@ -367,6 +367,7 @@ async fn run(args: RunArgs) -> Result<()> {
         execution_id,
         subject,
         output,
+        history_dir: args.runs_dir,
         scenarios: selected_scenarios,
         runs: args.runs,
         seed: args.seed,

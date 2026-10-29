@@ -601,6 +601,12 @@ pub struct EfficiencyReport {
     /// `compacted` only says the session holds a summary now.
     #[serde(default)]
     pub compactions: Option<u64>,
+    /// Already-sent rows the run's requests rewrote that no compaction
+    /// explains, over every session's context snapshot: where a
+    /// prefix-matching provider cache stopped reusing. Null when no session
+    /// has a snapshot.
+    #[serde(default)]
+    pub prefix_divergences: Option<u64>,
     /// The Harness prompt-surface digest of each session role (`root`,
     /// `child`): data, not drift, since every Harness release changes it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -844,6 +850,21 @@ pub struct E2eRunReport {
     /// costs the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness_violations: Vec<crate::harness_invariants::HarnessViolation>,
+    /// The session tree's trigger bindings and what teardown left of them.
+    /// Absent on a report written before it, or a composite or adaptive run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_bindings: Option<crate::trigger_bindings::TriggerBindings>,
+    /// The turns that resumed after a stream cut, in every session of the
+    /// tree. Absent when the transcripts were not read: a report written
+    /// before it, or a composite or adaptive run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_recovery: Option<Vec<crate::transient_recovery::TurnRecovery>>,
+    /// The Harness configuration and routing the run started from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_preflight: Option<crate::prompt_surface::HarnessPreflight>,
+    /// The turn events and session state the Harness invariants judge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_lifecycle: Option<crate::turn_lifecycle::TurnLifecycleEvidence>,
     /// `session::message-added` deliveries of the root session past the
     /// first of each entry; absent when the run did not count them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -859,6 +880,14 @@ pub struct E2eRunReport {
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
+    /// Transcripts of the descendant sessions `metrics.by_session` names, by
+    /// session id, for the usage invariants; never persisted.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub child_transcripts: BTreeMap<String, Value>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub prompt_surface: Option<crate::prompt_surface::PromptSurface>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -912,10 +941,16 @@ impl E2eRunReport {
             failures: Vec::new(),
             audit: None,
             harness_violations: Vec::new(),
+            trigger_bindings: None,
+            transient_recovery: None,
+            harness_preflight: None,
+            turn_lifecycle: None,
             duplicate_entry_events: None,
             injected_prompt_tokens: None,
             reconciliation_judge_ms: None,
             terminal_status: None,
+            child_transcripts: Default::default(),
+            prompt_surface: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
@@ -1165,6 +1200,7 @@ impl E2eRunReport {
                 "peak_context_tokens",
                 "usable_context_tokens",
                 "compactions",
+                "prefix_divergences",
                 "cache_comparable",
                 "cost_usd",
                 "critical_path_ms",
@@ -1192,6 +1228,7 @@ impl E2eRunReport {
                 peak_context_tokens: None,
                 usable_context_tokens: None,
                 compactions: None,
+                prefix_divergences: None,
                 prompt_surface_digests: BTreeMap::new(),
                 cache_comparable: None,
                 cost_usd: self.cost.total_usd,
@@ -1239,11 +1276,18 @@ impl E2eRunReport {
                 .as_ref()
                 .map(|status| u64::from(status.validation_retries))
         });
-        let transient_resumes = metrics.totals.transient_resumes.or_else(|| {
-            self.terminal_status
-                .as_ref()
-                .map(|status| u64::from(status.transient_resumes))
-        });
+        // The recovery rows cover every session and turn; neither the metrics
+        // total nor the status (the root's last turn only) counts a child's.
+        let transient_resumes = self
+            .transient_recovery
+            .as_deref()
+            .map(crate::transient_recovery::resumes)
+            .or(metrics.totals.transient_resumes)
+            .or_else(|| {
+                self.terminal_status
+                    .as_ref()
+                    .map(|status| u64::from(status.transient_resumes))
+            });
         let wake_resumes = metrics
             .totals
             .wake_resumes
@@ -1320,6 +1364,14 @@ impl E2eRunReport {
             );
         }
         let context = context_usage(metrics, self.transcript.as_ref(), &mut unavailable);
+        let prefix_divergences =
+            crate::prompt_cache::unexpected_prefix_divergences(metrics, self.transcript.as_ref());
+        if prefix_divergences.is_none() {
+            unavailable.insert(
+                "prefix_divergences".into(),
+                "no session has a context snapshot".into(),
+            );
+        }
         let observed_complexity = observed_complexity(
             metrics,
             self.transcript.as_ref(),
@@ -1348,6 +1400,7 @@ impl E2eRunReport {
             peak_context_tokens: context.peak_context_tokens,
             usable_context_tokens: context.usable_context_tokens,
             compactions: context.compactions,
+            prefix_divergences,
             prompt_surface_digests: context.prompt_surface_digests,
             cache_comparable: context.cache_comparable,
             cost_usd: self.cost.total_usd,
@@ -1442,6 +1495,7 @@ impl E2eRunReport {
         aggregate.usable_context_tokens =
             max_optional(&attempts, |value| value.usable_context_tokens);
         aggregate.compactions = sum_optional(&attempts, |value| value.compactions);
+        aggregate.prefix_divergences = sum_optional(&attempts, |value| value.prefix_divergences);
         for attempt in &attempts {
             for (role, digests) in &attempt.prompt_surface_digests {
                 let merged = aggregate
@@ -1575,7 +1629,7 @@ fn observed_wake_resumes(transcript: Option<&Value>) -> Option<u64> {
                         custom.pointer("/data/target").and_then(Value::as_str),
                         Some("harness::send" | "notify")
                     )
-                    && custom.pointer("/data/note").is_none_or(Value::is_null)
+                    && custom.pointer("/data/outcome").and_then(Value::as_str) == Some("delivered")
             })
             .count()
             .try_into()
@@ -5023,6 +5077,26 @@ mod tests {
     }
 
     #[test]
+    fn a_wake_resume_is_a_delivered_wake_record_whatever_its_note() {
+        let fired = |target: &str, outcome: &str, note: Option<&str>| {
+            serde_json::json!({"custom": {"custom_type": "trigger_fired", "data": {
+                "target": target, "outcome": outcome, "note": note,
+            }}})
+        };
+        let transcript = serde_json::json!({"messages": [
+            fired("harness::send", "delivered", None),
+            // A wake delivered with a note still woke the session.
+            fired("harness::send", "delivered", Some("condition passed")),
+            // Lifecycle and skip records carry no note and woke nothing.
+            fired("harness::send", "expired", None),
+            fired("harness::send", "skipped", None),
+            fired("state::set", "delivered", None),
+        ]});
+
+        assert_eq!(observed_wake_resumes(Some(&transcript)), Some(2));
+    }
+
+    #[test]
     fn context_is_measured_per_step_with_its_cache_and_compactions() {
         let usage = |input: u64, read: u64| {
             serde_json::json!({"message": {"role": "assistant", "content": [],
@@ -5073,6 +5147,7 @@ mod tests {
         assert_eq!(efficiency.usable_context_tokens, Some(596_000));
         // Two compaction records, whatever the snapshot's `compacted` says.
         assert_eq!(efficiency.compactions, Some(2));
+        assert_eq!(efficiency.prefix_divergences, Some(0));
         assert_eq!(
             efficiency.prompt_surface_digests,
             BTreeMap::from([
@@ -5114,6 +5189,28 @@ mod tests {
         let efficiency = short.efficiency.unwrap();
         assert_eq!(efficiency.peak_context_tokens, None);
         assert!(efficiency.unavailable.contains_key("peak_context_tokens"));
+    }
+
+    #[test]
+    fn prefix_divergences_no_compaction_explains_are_counted_per_run() {
+        let mut attempt = run(100, true);
+        let mut metrics = (*metrics()).clone();
+        metrics.by_session[0].context = Some(serde_json::json!({ "prefix_divergences": [
+            { "turn_id": "t_1", "step": 4, "index": 0, "cause": "system_prompt" },
+            { "turn_id": "t_1", "step": 9, "index": 23 },
+        ] }));
+        attempt.metrics = Some(crate::wire::Observed::from_normalized(metrics));
+        attempt.transcript = Some(serde_json::json!({ "messages": [
+            { "entry_id": "e_t_1_4_compaction", "custom": { "custom_type": "compaction" } },
+        ] }));
+        attempt.update_efficiency();
+        assert_eq!(attempt.efficiency.unwrap().prefix_divergences, Some(1));
+
+        let mut unobserved = run(100, true);
+        unobserved.update_efficiency();
+        let efficiency = unobserved.efficiency.unwrap();
+        assert_eq!(efficiency.prefix_divergences, None);
+        assert!(efficiency.unavailable.contains_key("prefix_divergences"));
     }
 
     #[test]
@@ -5836,6 +5933,36 @@ mod tests {
             ]
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn transient_resumes_count_every_session_and_turn_not_only_the_root_status() {
+        let recovery = |session: &str, turn: &str, recovering: Vec<u32>| {
+            crate::transient_recovery::TurnRecovery {
+                session_id: session.into(),
+                turn_id: turn.into(),
+                recovered: vec![*recovering.last().unwrap()],
+                recovering,
+                max_attempts: Some(3),
+                ended_without_result: false,
+            }
+        };
+        let mut attempt = run(100, true);
+        // A Harness total that missed the child's resume must not win.
+        let mut root_only = metrics().into_normalized();
+        root_only.totals.transient_resumes = Some(3);
+        attempt.metrics = Some(crate::wire::Observed::from_normalized(root_only));
+        // The status reports only the root's last turn.
+        attempt.terminal_status = Some(status(0, 1));
+        attempt.transient_recovery = Some(vec![
+            recovery("root", "t_1", vec![1, 2]),
+            recovery("root", "t_2", vec![1]),
+            recovery("child-a", "t_3", vec![1]),
+        ]);
+
+        attempt.update_efficiency();
+
+        assert_eq!(attempt.efficiency.unwrap().transient_resumes, Some(4));
     }
 
     fn status(validation_retries: u32, transient_resumes: u32) -> StatusReport {

@@ -116,9 +116,9 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
-Three Harness invariants hold on every native run that passed, whatever its
-gates. They belong to no scenario's digest; the run's `harness_violations`
-records what broke.
+Harness invariants hold on every native run that passed, whatever its gates.
+They belong to no scenario's digest; the run's `harness_violations` records
+what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
@@ -133,11 +133,136 @@ records what broke.
   bypasses the breaker but looks dispatched in the transcript, so
   `approval_roundtrip`, where the approval gate holds every call, is not
   checked.
+- A transient resume, in any session of the tree, has no `recovered` row of
+  its attempt or a later one while its turn neither failed nor stopped, or
+  exceeds the turn's `max_transient_resumes`: incomplete, the same way. The
+  run's `transient_recovery` lists each turn's recovery rows, and
+  `efficiency.transient_resumes` counts them over every session and turn.
+- The session tree's trigger bindings keep their contract, read from the
+  `trigger_fired` records of every session in `metrics.by_session`: each
+  `outcome` is a known one and a retirement names its reason, a wake's
+  `delivered` records match the `e_fire_` entries it injected, a `once`
+  binding is delivered at most once, and after `harness::teardown` no session
+  lists a binding and no engine trigger delivers one. A broken one is
+  incomplete, like a failed gate; the run's `trigger_bindings` keeps the
+  counts by outcome and what teardown removed.
+- The prompt surface drifted, read before teardown from the root and every
+  session `metrics.by_session` names (`src/prompt_surface.rs`): incomplete,
+  and the score stays. A read of that surface that fails is an
+  infrastructure error (`prompt_surface_collection_failed`) the slot re-runs.
+  - `frozen_prompt_drift`: the root's `harness::system-prompt::get` built-in
+    layer is not the `default_only` one opening with `You are an iii agent
+    worker.` (for an `--agent` subject, the profile's `system_prompt`
+    followed by the `<preloaded_functions>` and `<preloaded_skills>` blocks
+    it declares); a child is held to the default only when its
+    `harness::spawn` named no `agent` and no `options.system_prompt` and its
+    parent ran no profile (a profiled parent's plain spawn continues it).
+  - `runtime_context_malformed`: the frozen `runtime_context` aid does not
+    open with `Your session id is <id>.`, names a working directory other
+    than the one sent (else `harness::filesystem::info.default_root`, with
+    the `(default directory, not an access boundary)` suffix under
+    `configured_roots`), has other than one `Co-authored-by` line, or shows
+    the dispatch-policy line on an unrestricted policy (or omits it on a
+    narrowed one).
+  - `response_language_mispinned`: the root session's
+    `metadata.response_language` is not `eng`, or is unset on a prompt of 20
+    words or more (shorter ones may miss the 0.8 detector threshold).
+  - `prompt_ref_broken`: `harness_turn/<sid>.options.system_prompt` is not a
+    `{"$ref": "sha256:…"}`, or `harness_prompt` holds no body hashing to it.
+- A session's latest context snapshot carries `prompt_sections_fallback` (`disabled`,
+  `no_stable_prefix` or `prefix_rewritten`): its requests shared no stable
+  prompt prefix, so the provider cache reused nothing. Incomplete, and the
+  score stays.
+- A run whose root session sent more than one request served under half the
+  cache share of its scenario's baseline: the median, over the latest 7
+  executions of the same lane, model, provider and agent profile that
+  completed before this one started, of each execution's mean cache share
+  (cache reads over input, cache reads and cache writes) of its passed
+  multi-step runs that broke neither of these two cache invariants.
+  Incomplete, and the score stays. Fewer than 3 such
+  executions hold the run to no baseline. The baseline is read from the
+  history the execution is stored in (the Console's runs directory, or
+  `run --runs-dir`); a run without one is not held to it.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
   can be trusted. It is an infrastructure error (`context_limits_unresolved`)
   the slot re-runs.
+- Usage goes unmetered (`usage_unmetered`): a run that generated counted no
+  input or output tokens, or a priced subject's such run counted no cost, or a
+  generation that ended or called a function carries no usage. Aborted, failed and cut-off
+  generations are exempt.
+- Usage is misaccounted (`usage_misaccounted`): the session costs do not add
+  up to the total, a session's running cost is more than 1% off its metered
+  cost, or `free` is not what the window leaves.
+- A generation ran off its route (`model_misrouted`): a root generation not on
+  the subject's provider and model, or a child not on the model its spawn
+  named, else its parent's, with the provider its spawn named, else its
+  parent's. Sessions on an agent profile's route are not judged.
+- A session that runs with the subject's thinking switch off (`--thinking
+  off`) still reasoned (`reasoning_while_disabled`): reasoning tokens or a
+  non-empty thinking block. Children inherit the switch unless their spawn
+  names a thinking level; sessions on an agent profile are not judged.
+
+  Each of these leaves the run incomplete and keeps its score, like a lost
+  function result.
+- The turn events keep their contract (`turn_events`): every root turn (an
+  `origin.turn_id` of the root transcript) got exactly one
+  `harness::turn-started`, every turn of the tree at least one
+  `harness::turn-completed`, every turn the runner sent got its completion
+  event rather than ending only through the status poll, and `terminal` is
+  `false` only on a root turn a wake follows and `true` on the last one.
+  The flag is not required to be `false` before a wake, and children's flags
+  are not judged: a wake may be armed after its turn completed. Delivery is
+  at-least-once, so repeated completions are counted
+  (`duplicate_completions`), never failed.
+- Within 5 seconds of the tree completing, and before the terminal
+  `harness::status` re-projects it, `session::get` shows the root `done` (`error`
+  when the scenario expects its root turn to fail) and each child `done` or
+  `error` (`session_status`), and reads back what was
+  sent (`session_read_back`): the root's `kind` `e2e`, title and
+  `metadata.e2e_run_id` / `e2e_scenario`; each child's `kind` `e2e`,
+  `parent_session_id` and `depth`. A child may end `error` on a passed run,
+  since the root can recover from a child that failed. The children are the
+  ones `harness::metrics` walks from the root, through the same parent links,
+  so a child stored under the wrong parent is missed rather than flagged; a
+  grandchild is held to its own parent and depth 2.
+
+Each of `turn_events`, `session_status` and `session_read_back` leaves the run
+incomplete, like a lost result. The run's `turn_lifecycle` keeps the events
+and session reads they were judged on.
+
+Before a native run's first send, a preflight reads the Harness without a model
+call and records `harness_preflight`: the SHA-256 of the Harness's
+`configuration::get` entry and the `router::route` candidates for the subject
+model with no provider pinned. It refuses the run as an infrastructure error
+when:
+
+- the default `engine::functions::list` lacks a function the Harness
+  `register`s, a `register_internal` one is not registered, or
+  `engine::triggers::list` lacks `harness::ready`, `harness::turn-started`,
+  `harness::compaction`, `timer` or one of the six `harness::hook::*` types
+  (`harness_not_ready`, re-run in the same slot);
+- an internal function is on the default catalog, a retired key
+  (`provider_identity_prompt`, `permissions`, `providers`) is still set,
+  `max_validation_retries` is not 2, `max_children` not 8, `max_depth` not 3
+  (16, 6 and 1 are the executor's `fanout_ladder`, `depth_ladder` and
+  `spawn_depth_cap` stamps),
+  `default_max_turns` not 500, `prompt_cache_sections` or `co_author` not
+  true, or `harness::context-policy` does not allow pruning for the subject
+  model (`harness_misconfigured`, not re-run). The Harness never prunes a
+  model that binds thinking (any id containing `claude-opus-5-5`,
+  `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`), so those
+  subjects cannot run the regression.
+
+Prefix divergences, the already-sent rows a session's requests rewrote, are a
+trend before they become a gate: efficiency's `prefix_divergences` counts the
+ones no compaction explains, and Trends charts them as Prefix rewrites. A
+rewrite caused by `prune` or `system_prompt` on a step that wrote a
+`compaction` record is the context-manager making room; any other one stops
+the provider cache there. The Harness tracks sent rows in memory, so a restart
+forgets them, and a rewrite without a cause can come from a provider's wire
+mapping alone.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches
@@ -1615,13 +1740,14 @@ from a protected supervisor. Lane promotion is governed by
 
 The runner waits for a session tree to finish by binding
 `harness::turn-completed` to an internal sink, `e2e::on-turn-completed`, before
-`harness::send`. That sink is not a control-plane verb: it is not registered
-with `e2e::run`, `e2e::status`, or `e2e::cancel`, and it does not appear in
-`e2e::scenarios-list`. Subject policies already deny `e2e::*`.
+`harness::send`, and `harness::turn-started` to `e2e::on-turn-started` for the
+turn-event invariants. Neither sink is a control-plane verb: they are not
+registered with `e2e::run`, `e2e::status`, or `e2e::cancel`, and they do not
+appear in `e2e::scenarios-list`. Subject policies already deny `e2e::*`.
 
 A 15-second watchdog samples `harness::metrics` and one root
 `harness::status` for stuck detection, heartbeat logs, and `e2e::cancel`. If
-the trigger type is missing from `engine::triggers::list`, the run is
+either trigger type is missing from `engine::triggers::list`, the run is
 unsupported infrastructure. There is no fallback that polls `harness::status`
 or `harness::metrics`. After the tree completes, the runner still collects
 terminal status, metrics, transcripts, and deliverables.

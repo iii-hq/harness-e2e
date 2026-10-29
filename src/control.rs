@@ -790,6 +790,7 @@ impl ControlPlane {
             execution_id: None,
             subject: request.subject(),
             output: output.clone(),
+            history_dir: Some(self.inner.output_root.clone()),
             scenarios,
             runs: request.runs,
             seed: request.seed,

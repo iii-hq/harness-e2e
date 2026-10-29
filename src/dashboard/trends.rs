@@ -197,6 +197,8 @@ pub(super) struct TrendMeasures {
     pub compactions_mean: Option<f64>,
     /// The largest root prompt over the window the Harness fit it into, per run.
     pub peak_context_fill_mean: Option<f64>,
+    /// Prefix rewrites no compaction explains, per run.
+    pub prefix_divergences_mean: Option<f64>,
     /// `<key>_mean` of each of `harness_metrics::TREND_KEYS`, null when no
     /// run measured it.
     #[serde(flatten)]
@@ -246,6 +248,7 @@ pub(super) struct TrendRun {
     pub technical_retries: Option<f64>,
     pub compactions: Option<f64>,
     pub peak_context_fill: Option<f64>,
+    pub prefix_divergences: Option<f64>,
     /// What `harness_metrics::measure` read from the run.
     pub harness: BTreeMap<String, f64>,
 }
@@ -800,6 +803,7 @@ pub(super) fn measures(runs: &[&TrendRun], planned: usize) -> Option<TrendMeasur
         technical_retries_mean: mean_of("technical_retries_mean", |run| run.technical_retries),
         compactions_mean: mean_of("compactions_mean", |run| run.compactions),
         peak_context_fill_mean: mean_of("peak_context_fill_mean", |run| run.peak_context_fill),
+        prefix_divergences_mean: mean_of("prefix_divergences_mean", |run| run.prefix_divergences),
         harness: crate::harness_metrics::TREND_KEYS
             .iter()
             .map(|key| {
@@ -910,6 +914,7 @@ pub(super) mod tests {
             technical_retries: Some(0.0),
             compactions: Some(2.0),
             peak_context_fill: Some(0.5),
+            prefix_divergences: Some(1.0),
             harness: BTreeMap::from([("error_spans".to_owned(), 3.0)]),
         }
     }
@@ -969,6 +974,7 @@ pub(super) mod tests {
         assert_eq!(measures.reasoning_tokens_mean, Some(8.0));
         assert_eq!(measures.compactions_mean, Some(2.0));
         assert_eq!(measures.peak_context_fill_mean, Some(0.5));
+        assert_eq!(measures.prefix_divergences_mean, Some(1.0));
         assert_eq!(measures.harness["error_spans_mean"], Some(3.0));
         // Every Harness mean is in the point, null when no run measured it.
         assert_eq!(measures.harness["reconciled_p95_ms_mean"], None);
