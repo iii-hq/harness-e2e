@@ -1,0 +1,40 @@
+# Select suite=approvals. The default stack plus the approval gate, which the
+# Harness does not bring. The gate binds `harness::hook::pre-trigger` on `*` in
+# fail_closed mode (approval-gate src/configuration.rs), so every call of every
+# session on this stack waits for a human: no other suite runs here, and this
+# stack is never the default. Its own dependencies arrive with its package.
+# Keep the other containers in step with default.yaml.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The worker under test, with its shipped rules: anything they do not allow
+  # is held for approval, the run-scoped fixtures included.
+  approval-gate:
+    worker: package://approval-gate
+    version: latest
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s
