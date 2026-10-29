@@ -26,6 +26,45 @@ pub enum HarnessInvariant {
     /// resolve the model's limits (unreachable, or the stack names a model it
     /// does not list), so compaction fires on a fraction of the window.
     FallbackContextLimits,
+    /// The run's tokens or a priced run's cost were not counted, or a
+    /// generation that ended or called a function carries no usage.
+    UsageUnmetered,
+    /// The counters disagree: the sessions' costs do not add up to the total,
+    /// a session's running cost drifts from its metered cost, or `free` is
+    /// not what the window leaves.
+    UsageMisaccounted,
+    /// A generation ran on a model or provider its session was not routed to.
+    ModelMisrouted,
+    /// The subject disabled thinking and still reasoned.
+    ReasoningWhileDisabled,
+    /// A transient resume in a turn that neither failed nor stopped has no
+    /// `recovered` row of its attempt or a later one: the Harness lost the
+    /// recovery's outcome.
+    UnrecoveredTransientResume,
+    /// A turn resumed more often than its `max_transient_resumes`.
+    TransientResumesOverLimit,
+    /// A `trigger_fired` record has an outcome outside `TriggerOutcome`, or
+    /// retired its binding without a `retirement_reason`.
+    MalformedTriggerRecord,
+    /// A wake binding's `delivered` records and the `e_fire_` entries it
+    /// injected differ in number: a wake was lost or doubled.
+    WakeDeliveryMismatch,
+    /// A `once` binding was delivered more than once.
+    OnceBindingRedelivered,
+    /// A binding of the run outlived `harness::teardown`, on the engine or in
+    /// the binding store.
+    LeakedTriggerBinding,
+    /// A session froze a built-in prompt other than the default identity (or
+    /// the subject's agent profile prompt).
+    FrozenPromptDrift,
+    /// The runtime context frozen into a session's prompt misnames the
+    /// session, the working directory, the co-author or the dispatch policy.
+    RuntimeContextMalformed,
+    /// An English prompt pinned another response language, or none.
+    ResponseLanguageMispinned,
+    /// A turn record holds its prompt inline, or names a body the prompt
+    /// store does not hold under that hash.
+    PromptRefBroken,
     /// The turn events broke their contract: a root turn did not start exactly
     /// once, a turn never completed, a sent turn completed only through the
     /// status poll, or a completion's `terminal` contradicts the wakes.
@@ -58,6 +97,17 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
         .map_or(&[][..], Vec::as_slice);
     let mut violations = lost_function_results(messages);
     violations.extend(fallback_context_limits(report, subject));
+    violations.extend(crate::usage_invariants::violations(report, subject));
+    violations.extend(crate::transient_recovery::violations(
+        report.transient_recovery.as_deref().unwrap_or_default(),
+    ));
+    violations.extend(
+        report
+            .trigger_bindings
+            .iter()
+            .flat_map(|bindings| bindings.violations.iter().cloned()),
+    );
+    violations.extend(crate::prompt_surface::violations(report, subject));
     violations.extend(crate::turn_lifecycle::violations(report));
     violations
 }
@@ -253,13 +303,18 @@ mod tests {
                 cache_write_tokens: None,
                 reasoning_tokens: None,
                 cost_usd: None,
+                by_model: Vec::new(),
                 context: Some(context),
             })
             .collect();
         report.metrics = Some(Observed::from_normalized(SessionMetricsPayload {
             root_session_id: "root".into(),
             complete: true,
-            totals: SessionUsageTotals::default(),
+            totals: SessionUsageTotals {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                ..SessionUsageTotals::default()
+            },
             by_session,
             traces: None,
         }));

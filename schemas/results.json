@@ -988,6 +988,17 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
+        "harness_preflight": {
+          "description": "The Harness configuration and routing the run started from.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HarnessPreflight"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "harness_violations": {
           "description": "Harness invariants the run broke; README Completion says what each costs the run.",
           "type": "array",
@@ -1059,6 +1070,27 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
+        "transient_recovery": {
+          "description": "The turns that resumed after a stream cut, in every session of the tree. Absent when the transcripts were not read: a report written before it, or a composite or adaptive run.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/TurnRecovery"
+          }
+        },
+        "trigger_bindings": {
+          "description": "The session tree's trigger bindings and what teardown left of them. Absent on a report written before it, or a composite or adaptive run.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TriggerBindings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "turn_lifecycle": {
           "description": "The turn events and session state the Harness invariants judge.",
           "anyOf": [
@@ -1614,6 +1646,104 @@
           ]
         },
         {
+          "description": "The run's tokens or a priced run's cost were not counted, or a generation that ended or called a function carries no usage.",
+          "type": "string",
+          "enum": [
+            "usage_unmetered"
+          ]
+        },
+        {
+          "description": "The counters disagree: the sessions' costs do not add up to the total, a session's running cost drifts from its metered cost, or `free` is not what the window leaves.",
+          "type": "string",
+          "enum": [
+            "usage_misaccounted"
+          ]
+        },
+        {
+          "description": "A generation ran on a model or provider its session was not routed to.",
+          "type": "string",
+          "enum": [
+            "model_misrouted"
+          ]
+        },
+        {
+          "description": "The subject disabled thinking and still reasoned.",
+          "type": "string",
+          "enum": [
+            "reasoning_while_disabled"
+          ]
+        },
+        {
+          "description": "A transient resume in a turn that neither failed nor stopped has no `recovered` row of its attempt or a later one: the Harness lost the recovery's outcome.",
+          "type": "string",
+          "enum": [
+            "unrecovered_transient_resume"
+          ]
+        },
+        {
+          "description": "A turn resumed more often than its `max_transient_resumes`.",
+          "type": "string",
+          "enum": [
+            "transient_resumes_over_limit"
+          ]
+        },
+        {
+          "description": "A `trigger_fired` record has an outcome outside `TriggerOutcome`, or retired its binding without a `retirement_reason`.",
+          "type": "string",
+          "enum": [
+            "malformed_trigger_record"
+          ]
+        },
+        {
+          "description": "A wake binding's `delivered` records and the `e_fire_` entries it injected differ in number: a wake was lost or doubled.",
+          "type": "string",
+          "enum": [
+            "wake_delivery_mismatch"
+          ]
+        },
+        {
+          "description": "A `once` binding was delivered more than once.",
+          "type": "string",
+          "enum": [
+            "once_binding_redelivered"
+          ]
+        },
+        {
+          "description": "A binding of the run outlived `harness::teardown`, on the engine or in the binding store.",
+          "type": "string",
+          "enum": [
+            "leaked_trigger_binding"
+          ]
+        },
+        {
+          "description": "A session froze a built-in prompt other than the default identity (or the subject's agent profile prompt).",
+          "type": "string",
+          "enum": [
+            "frozen_prompt_drift"
+          ]
+        },
+        {
+          "description": "The runtime context frozen into a session's prompt misnames the session, the working directory, the co-author or the dispatch policy.",
+          "type": "string",
+          "enum": [
+            "runtime_context_malformed"
+          ]
+        },
+        {
+          "description": "An English prompt pinned another response language, or none.",
+          "type": "string",
+          "enum": [
+            "response_language_mispinned"
+          ]
+        },
+        {
+          "description": "A turn record holds its prompt inline, or names a body the prompt store does not hold under that hash.",
+          "type": "string",
+          "enum": [
+            "prompt_ref_broken"
+          ]
+        },
+        {
           "description": "The turn events broke their contract: a root turn did not start exactly once, a turn never completed, a sent turn completed only through the status poll, or a completion's `terminal` contradicts the wakes.",
           "type": "string",
           "enum": [
@@ -1635,6 +1765,37 @@
           ]
         }
       ]
+    },
+    "HarnessPreflight": {
+      "description": "What the preflight read of the stack the run measures.",
+      "type": "object",
+      "required": [
+        "configuration_id",
+        "configuration_sha256"
+      ],
+      "properties": {
+        "configuration_id": {
+          "description": "The Harness's configuration entry and the SHA-256 of its value.",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "route_candidates": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "route_provider": {
+          "description": "`router::route` for the subject model with no provider pinned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "HarnessViolation": {
       "type": "object",
@@ -1749,6 +1910,28 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ModelUsage": {
+      "description": "The route of the steps one model generated (`harness::metrics` `by_model`); its counters stay in the raw payload. Empty from a Harness that predates it.",
+      "type": "object",
+      "required": [
+        "model",
+        "provider",
+        "turns"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       }
     },
@@ -3023,6 +3206,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3147,6 +3336,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3365,6 +3560,47 @@
         "technical_invalid"
       ]
     },
+    "TriggerBindings": {
+      "type": "object",
+      "required": [
+        "fired",
+        "subscriptions"
+      ],
+      "properties": {
+        "fired": {
+          "description": "The tree's `trigger_fired` records by `outcome` (`missing` without one).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          }
+        },
+        "subscriptions": {
+          "description": "Every binding the session tree owned before teardown or named in a `trigger_fired` record or a wake.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "teardown_removed": {
+          "description": "The bindings `harness::teardown` removed; absent when it did not answer.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HarnessViolation"
+          }
+        }
+      }
+    },
     "TurnEvent": {
       "type": "object",
       "required": [
@@ -3435,6 +3671,56 @@
           "items": {
             "$ref": "#/definitions/SessionLifecycle"
           }
+        }
+      }
+    },
+    "TurnRecovery": {
+      "description": "One turn's recovery rows.",
+      "type": "object",
+      "required": [
+        "ended_without_result",
+        "recovered",
+        "recovering",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "ended_without_result": {
+          "description": "The turn failed or was stopped (`e_<turn>_error`, `e_<turn>_stopped`), so its last resume had no generation left to recover.",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "description": "The turn's `max_transient_resumes`, as its rows carry it.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "recovered": {
+          "description": "The attempt of each `recovered` row.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "recovering": {
+          "description": "The attempt of each `recovering` row: one per transient resume.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
         }
       }
     },

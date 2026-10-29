@@ -116,17 +116,71 @@ A scenario overrides this only when a prerequisite decides before any gate,
 such as an application that never built. The gates are part of the behavior
 digest, so changing one redefines the scenario.
 
-These Harness invariants hold on every native run that passed, whatever its
-gates. They belong to no scenario's digest; the run's `harness_violations`
-records what broke.
+Harness invariants hold on every native run that passed, whatever its gates.
+They belong to no scenario's digest; the run's `harness_violations` records
+what broke.
 
 - A message whose calls the Harness dispatched (some have a result) leaves one
   without a result: incomplete, like a failed gate, and the score stays.
+- A transient resume, in any session of the tree, has no `recovered` row of
+  its attempt or a later one while its turn neither failed nor stopped, or
+  exceeds the turn's `max_transient_resumes`: incomplete, the same way. The
+  run's `transient_recovery` lists each turn's recovery rows, and
+  `efficiency.transient_resumes` counts them over every session and turn.
+- The session tree's trigger bindings keep their contract, read from the
+  `trigger_fired` records of every session in `metrics.by_session`: each
+  `outcome` is a known one and a retirement names its reason, a wake's
+  `delivered` records match the `e_fire_` entries it injected, a `once`
+  binding is delivered at most once, and after `harness::teardown` no session
+  lists a binding and no engine trigger delivers one. A broken one is
+  incomplete, like a failed gate; the run's `trigger_bindings` keeps the
+  counts by outcome and what teardown removed.
+- The prompt surface drifted, read before teardown from the root and every
+  session `metrics.by_session` names (`src/prompt_surface.rs`): incomplete,
+  and the score stays. A read of that surface that fails is an
+  infrastructure error (`prompt_surface_collection_failed`) the slot re-runs.
+  - `frozen_prompt_drift`: the root's `harness::system-prompt::get` built-in
+    layer is not the `default_only` one opening with `You are an iii agent
+    worker.` (for an `--agent` subject, the profile's `system_prompt`
+    followed by the `<preloaded_functions>` and `<preloaded_skills>` blocks
+    it declares); a child is held to the default only when its
+    `harness::spawn` named no `agent` and no `options.system_prompt` and its
+    parent ran no profile (a profiled parent's plain spawn continues it).
+  - `runtime_context_malformed`: the frozen `runtime_context` aid does not
+    open with `Your session id is <id>.`, names a working directory other
+    than the one sent (else `harness::filesystem::info.default_root`, with
+    the `(default directory, not an access boundary)` suffix under
+    `configured_roots`), has other than one `Co-authored-by` line, or shows
+    the dispatch-policy line on an unrestricted policy (or omits it on a
+    narrowed one).
+  - `response_language_mispinned`: the root session's
+    `metadata.response_language` is not `eng`, or is unset on a prompt of 20
+    words or more (shorter ones may miss the 0.8 detector threshold).
+  - `prompt_ref_broken`: `harness_turn/<sid>.options.system_prompt` is not a
+    `{"$ref": "sha256:…"}`, or `harness_prompt` holds no body hashing to it.
 - A session on the subject model was fit into the context-manager's
   8192-token fallback limits while the catalog window is at least 32,768
   tokens: the router could not resolve the model, so nothing measured there
   can be trusted. It is an infrastructure error (`context_limits_unresolved`)
   the slot re-runs.
+- Usage goes unmetered (`usage_unmetered`): a run that generated counted no
+  input or output tokens, or a priced subject's such run counted no cost, or a
+  generation that ended or called a function carries no usage. Aborted, failed and cut-off
+  generations are exempt.
+- Usage is misaccounted (`usage_misaccounted`): the session costs do not add
+  up to the total, a session's running cost is more than 1% off its metered
+  cost, or `free` is not what the window leaves.
+- A generation ran off its route (`model_misrouted`): a root generation not on
+  the subject's provider and model, or a child not on the model its spawn
+  named, else its parent's, with the provider its spawn named, else its
+  parent's. Sessions on an agent profile's route are not judged.
+- A session that runs with the subject's thinking switch off (`--thinking
+  off`) still reasoned (`reasoning_while_disabled`): reasoning tokens or a
+  non-empty thinking block. Children inherit the switch unless their spawn
+  names a thinking level; sessions on an agent profile are not judged.
+
+  Each of these leaves the run incomplete and keeps its score, like a lost
+  function result.
 - The turn events keep their contract (`turn_events`): every root turn (an
   `origin.turn_id` of the root transcript) got exactly one
   `harness::turn-started`, every turn of the tree at least one
@@ -149,8 +203,32 @@ records what broke.
   so a child stored under the wrong parent is missed rather than flagged; a
   grandchild is held to its own parent and depth 2.
 
-Each of the last three leaves the run incomplete, like a lost result. The
-run's `turn_lifecycle` keeps the events and session reads they were judged on.
+Each of `turn_events`, `session_status` and `session_read_back` leaves the run
+incomplete, like a lost result. The run's `turn_lifecycle` keeps the events
+and session reads they were judged on.
+
+Before a native run's first send, a preflight reads the Harness without a model
+call and records `harness_preflight`: the SHA-256 of the Harness's
+`configuration::get` entry and the `router::route` candidates for the subject
+model with no provider pinned. It refuses the run as an infrastructure error
+when:
+
+- the default `engine::functions::list` lacks a function the Harness
+  `register`s, a `register_internal` one is not registered, or
+  `engine::triggers::list` lacks `harness::ready`, `harness::turn-started`,
+  `harness::compaction`, `timer` or one of the six `harness::hook::*` types
+  (`harness_not_ready`, re-run in the same slot);
+- an internal function is on the default catalog, a retired key
+  (`provider_identity_prompt`, `permissions`, `providers`) is still set,
+  `max_validation_retries` is not 2, `max_children` not 8, `max_depth` not 3
+  (16, 6 and 1 are the executor's `fanout_ladder`, `depth_ladder` and
+  `spawn_depth_cap` stamps),
+  `default_max_turns` not 500, `prompt_cache_sections` or `co_author` not
+  true, or `harness::context-policy` does not allow pruning for the subject
+  model (`harness_misconfigured`, not re-run). The Harness never prunes a
+  model that binds thinking (any id containing `claude-opus-5-5`,
+  `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`), so those
+  subjects cannot run the regression.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches

@@ -897,6 +897,7 @@ pub(crate) mod tests {
                         cache_write_tokens: None,
                         reasoning_tokens: None,
                         cost_usd: None,
+                        by_model: Vec::new(),
                         context: usable.map(|usable| json!({ "usable": usable })),
                     }],
                     traces: None,
