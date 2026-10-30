@@ -266,18 +266,40 @@ const METRICS: Array<[MetricId, string, MetricFormat]> = [
   ['function_errors', 'Function call errors', 'count'],
 ]
 
+/** The per-mechanism Harness measures Trends charts (src/harness_metrics.rs). */
+type HarnessMetricId =
+  | 'trace_spans'
+  | 'error_spans'
+  | 'registry_notices'
+  | 'hook_notices'
+  | 'reconciled_calls'
+  | 'functions_info_repeats'
+  | 'duplicate_entry_events'
+  | 'arguments_truncated_invalid_json'
+  | 'arguments_truncated_incomplete_json'
+  | 'arguments_truncated_max_output_tokens'
+  | 'agent_trigger_no_target'
+  | 'repeated_failure'
+  | 'sweep_resolved_calls'
+  | 'hook_guidance_tokens'
+  | 'injected_prompt_tokens'
+  | 'reconciled_p95_ms'
+
 /** Which way each measure is better, the one place that says it: more
  *  score, completed tasks and coverage; fewer invalid runs, tokens, cost,
  *  time, turns, retries, calls and errors (Compare.dc.html paints fewer
- *  function calls as better); cache figures neither. Only the colour follows
- *  it. */
+ *  function calls as better); cache figures neither. Of the Harness
+ *  mechanisms, fewer error spans, notices, repairs, refusals and timeouts and
+ *  less injected text are better; the trace size and hook notices are
+ *  neither. Only the colour follows it. */
 const BETTER_WHEN: Record<
   | MetricId
   | 'output_tokens'
   | 'reasoning_tokens'
   | 'validation_retries'
   | 'technical_retries'
-  | 'prefix_divergences',
+  | 'prefix_divergences'
+  | HarnessMetricId,
   'higher' | 'lower' | 'neither'
 > = {
   score: 'higher',
@@ -303,6 +325,22 @@ const BETTER_WHEN: Record<
   validation_retries: 'lower',
   technical_retries: 'lower',
   prefix_divergences: 'lower',
+  trace_spans: 'neither',
+  error_spans: 'lower',
+  registry_notices: 'lower',
+  hook_notices: 'neither',
+  reconciled_calls: 'lower',
+  functions_info_repeats: 'lower',
+  duplicate_entry_events: 'lower',
+  arguments_truncated_invalid_json: 'lower',
+  arguments_truncated_incomplete_json: 'lower',
+  arguments_truncated_max_output_tokens: 'lower',
+  agent_trigger_no_target: 'lower',
+  repeated_failure: 'lower',
+  sweep_resolved_calls: 'lower',
+  hook_guidance_tokens: 'lower',
+  injected_prompt_tokens: 'lower',
+  reconciled_p95_ms: 'lower',
 }
 
 export function betterWhen(id: string): 'higher' | 'lower' | 'neither' {
