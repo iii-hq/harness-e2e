@@ -719,10 +719,12 @@ pub(crate) fn inspection_routing(
             | "engine::registered-triggers::list"
     ) || function_id.starts_with("engine::traces::")
         || function_id.starts_with("stream::")
+        || function_id.starts_with("configuration::")
     {
-        // iii-observability and iii-stream register only in `default`, and stream
-        // items are not scoped by the caller's namespace, so this reads what a
-        // worker in the case namespace wrote.
+        // iii-observability, iii-stream and configuration register only in
+        // `default` (the Harness routes its configuration calls there too), and
+        // stream items are not scoped by the caller's namespace, so this reads
+        // what a worker in the case namespace wrote.
         ("default".into(), payload)
     } else {
         (namespace, payload)
@@ -1047,6 +1049,9 @@ mod tests {
             "engine::traces::list",
             "engine::traces::tree",
             "stream::list",
+            "configuration::get",
+            "configuration::list",
+            "configuration::set",
         ] {
             assert_eq!(
                 inspection_routing(function, Some("isolated-test".into()), json!({})),
@@ -1065,6 +1070,14 @@ mod tests {
         }
         assert_eq!(
             inspection_routing("harness::send", Some("isolated-test".into()), json!({})),
+            ("isolated-test".into(), json!({}))
+        );
+        assert_eq!(
+            inspection_routing(
+                "configuration-extra::get",
+                Some("isolated-test".into()),
+                json!({})
+            ),
             ("isolated-test".into(), json!({}))
         );
         assert_eq!(
