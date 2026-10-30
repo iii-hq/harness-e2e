@@ -222,6 +222,43 @@ describe('trends page parts', () => {
     expect(html).not.toContain('runner')
   })
 
+  it('says so when no execution on the line measured the measure', () => {
+    const metric = trendMetric('prefix_divergences')
+    const withValue = (point: TrendPoint, value: number | null) => ({
+      ...point,
+      measures: point.measures && {
+        ...point.measures,
+        prefix_divergences_mean: value,
+      },
+    })
+    const unmeasured = regression.map((point) => withValue(point, null))
+    const chart = (points: TrendPoint[]) =>
+      renderToStaticMarkup(
+        <LargeChart
+          metric={metric}
+          points={points}
+          changes={changes}
+          selected={-1}
+          baseline={-1}
+          narrow={false}
+          onPick={() => undefined}
+        />,
+      )
+    const empty = chart(unmeasured)
+    expect(empty).toContain(
+      '<p class="tr-faint tr-plot-empty">No execution on this line measured Prefix rewrites.</p>',
+    )
+    expect(empty).toContain('style="height:320px"')
+    expect(empty).not.toContain('tr-svg')
+    const measured = chart(
+      unmeasured.map((point, index) =>
+        index === 3 ? withValue(point, 1.5) : point,
+      ),
+    )
+    expect(measured).toContain('class="tr-svg"')
+    expect(measured).not.toContain('tr-plot-empty')
+  })
+
   it('draws a local execution as a hollow ring the line does not join', () => {
     const mixed = [...regression.slice(-2), seriesPoints('local')[0]]
     const large = renderToStaticMarkup(
