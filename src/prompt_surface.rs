@@ -92,6 +92,11 @@ pub struct HarnessPreflight {
     pub route_provider: Option<String>,
     #[serde(default)]
     pub route_candidates: Vec<String>,
+    /// `harness::context-policy` `allow_prune` for the subject model: false
+    /// on a model that binds thinking (Claude 5.5, Fable 5.1), which the
+    /// Harness relieves by compaction alone, never by pruning aged results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_prune: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,7 +137,7 @@ pub async fn preflight(
         .await
         .context("list trigger types")
         .map_err(PreflightFailure::not_ready)?;
-    let (missing, mut misconfigured) = surface_problems(&catalog, &registered, &triggers);
+    let (missing, misconfigured) = surface_problems(&catalog, &registered, &triggers);
     if !missing.is_empty() {
         return Err(PreflightFailure {
             code: HARNESS_NOT_READY,
@@ -142,28 +147,12 @@ pub async fn preflight(
     let (configuration_id, configuration) = harness_configuration(context)
         .await
         .map_err(PreflightFailure::not_ready)?;
-    misconfigured.extend(configuration_problems(&configuration));
     let policy = context
         .trigger_value("harness::context-policy", json!({ "model": subject.model }))
         .await
         .context("read the context policy")
         .map_err(PreflightFailure::not_ready)?;
-    // The regression's pruning measurements assume a model whose aged results
-    // may be pruned. The Harness never prunes one that binds thinking
-    // (`window.rs` `binds_thinking`), so such a subject cannot run at all.
-    if policy.get("allow_prune") != Some(&Value::Bool(true)) {
-        misconfigured.push(format!(
-            "harness::context-policy does not allow pruning for {}: a subject model that binds \
-             thinking cannot run the regression",
-            subject.model
-        ));
-    }
-    if !misconfigured.is_empty() {
-        return Err(PreflightFailure {
-            code: HARNESS_MISCONFIGURED,
-            message: misconfigured.join("; "),
-        });
-    }
+    let allow_prune = judge(misconfigured, &configuration, &policy)?;
     let route = context
         .trigger_value("router::route", json!({ "model": subject.model }))
         .await
@@ -173,6 +162,7 @@ pub async fn preflight(
         configuration_id,
         configuration_sha256: crate::artifact::sha256_value(&configuration)
             .map_err(PreflightFailure::not_ready)?,
+        allow_prune,
         route_provider: route
             .get("provider")
             .and_then(Value::as_str)
@@ -186,6 +176,25 @@ pub async fn preflight(
             .map(str::to_string)
             .collect(),
     })
+}
+
+/// Refuses a Harness configured unlike the one the regression measures, and
+/// reads what the context policy allows for the subject model. A model whose
+/// aged results the Harness never prunes still runs: no check depends on the
+/// Harness pruning during a turn (`aged_prune` calls `context::prune` itself).
+fn judge(
+    mut misconfigured: Vec<String>,
+    configuration: &Value,
+    policy: &Value,
+) -> Result<Option<bool>, PreflightFailure> {
+    misconfigured.extend(configuration_problems(configuration));
+    if !misconfigured.is_empty() {
+        return Err(PreflightFailure {
+            code: HARNESS_MISCONFIGURED,
+            message: misconfigured.join("; "),
+        });
+    }
+    Ok(policy.get("allow_prune").and_then(Value::as_bool))
 }
 
 /// The entry the Harness registered for itself (`metadata.ui_form`
@@ -1127,6 +1136,28 @@ mod tests {
             leaked,
             ["internal function harness::send is on the default catalog"]
         );
+    }
+
+    #[test]
+    fn a_subject_the_harness_never_prunes_still_runs() {
+        // A model that binds thinking (claude-haiku-5-5 on context-thinking).
+        assert_eq!(
+            judge(vec![], &json!({}), &json!({ "allow_prune": false })),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            judge(vec![], &json!({}), &json!({ "allow_prune": true })),
+            Ok(Some(true))
+        );
+        assert_eq!(judge(vec![], &json!({}), &json!({})), Ok(None));
+        let refused = judge(
+            vec![],
+            &json!({ "co_author": false }),
+            &json!({ "allow_prune": false }),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, HARNESS_MISCONFIGURED);
+        assert_eq!(refused.message, "co_author is false");
     }
 
     #[test]

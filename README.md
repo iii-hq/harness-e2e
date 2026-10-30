@@ -234,8 +234,14 @@ and session reads they were judged on.
 
 Before a native run's first send, a preflight reads the Harness without a model
 call and records `harness_preflight`: the SHA-256 of the Harness's
-`configuration::get` entry and the `router::route` candidates for the subject
-model with no provider pinned. It refuses the run as an infrastructure error
+`configuration::get` entry, the `router::route` candidates for the subject
+model with no provider pinned, and whether `harness::context-policy` allows
+pruning for that model (`allow_prune`). The Harness never prunes a model that
+binds thinking (any id containing `claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-haiku-5-5` or `claude-fable-5-1`) and relieves its context by
+compaction alone; that subject still runs, since no check depends on the
+Harness pruning during a turn (`context_compaction`'s `aged_prune` calls
+`context::prune` itself). It refuses the run as an infrastructure error
 when:
 
 - the default `engine::functions::list` lacks a function the Harness
@@ -248,12 +254,8 @@ when:
   `max_validation_retries` is not 2, `max_children` not 8, `max_depth` not 3
   (16, 6 and 1 are the executor's `fanout_ladder`, `depth_ladder` and
   `spawn_depth_cap` stamps),
-  `default_max_turns` not 500, `prompt_cache_sections` or `co_author` not
-  true, or `harness::context-policy` does not allow pruning for the subject
-  model (`harness_misconfigured`, not re-run). The Harness never prunes a
-  model that binds thinking (any id containing `claude-opus-5-5`,
-  `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`), so those
-  subjects cannot run the regression.
+  `default_max_turns` not 500, or `prompt_cache_sections` or `co_author` not
+  true (`harness_misconfigured`, not re-run).
 
 Prefix divergences, the already-sent rows a session's requests rewrote, are a
 trend before they become a gate: efficiency's `prefix_divergences` counts the
