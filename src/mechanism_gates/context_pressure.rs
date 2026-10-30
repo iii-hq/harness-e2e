@@ -15,7 +15,7 @@ pub const EMERGENCY_REFERENCE: &str = "[function result reduced for context budg
 /// The heading `assemble` renders the summary under in the system prompt.
 const SUMMARY_HEADING: &str = "# Conversation summary";
 /// The context-manager's summary template, in order.
-const TEMPLATE_HEADINGS: [&str; 8] = [
+pub(crate) const TEMPLATE_HEADINGS: [&str; 8] = [
     "## Goal",
     "## Constraints & Preferences",
     "## Progress",
@@ -26,7 +26,8 @@ const TEMPLATE_HEADINGS: [&str; 8] = [
     "## Relevant Files",
 ];
 
-fn compactions(transcript: &Value) -> Vec<&Value> {
+/// The compaction records in a transcript.
+pub(crate) fn compactions(transcript: &Value) -> Vec<&Value> {
     customs(transcript, "compaction").collect()
 }
 
@@ -433,6 +434,20 @@ mod tests {
 
     #[test]
     fn the_summary_template_needs_every_heading_in_order_and_the_charter() {
+        // The context-manager's template, pinned apart from the constant the fixtures share.
+        assert_eq!(
+            TEMPLATE_HEADINGS,
+            [
+                "## Goal",
+                "## Constraints & Preferences",
+                "## Progress",
+                "## Key Decisions",
+                "## Actions Taken",
+                "## Next Steps",
+                "## Critical Context",
+                "## Relevant Files",
+            ]
+        );
         let full = TEMPLATE_HEADINGS.join("\n- x\n") + "\nCTX-M-1";
         let swapped = full
             .replace("## Goal", "## Gx")

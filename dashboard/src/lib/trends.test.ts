@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { pointInvestigation } from '@/components/trends/PointPanel'
+import { betterWhen } from '@/lib/execution-comparison'
 import { overviewMetric } from '@/lib/release-overview'
 import {
   axisMarks,
@@ -361,6 +362,18 @@ describe('measures', () => {
       expect(metric(id).better).toBe('lower')
     for (const id of ['cache_read_tokens', 'cache_write_tokens'])
       expect(metric(id).better).toBe('neither')
+  })
+
+  it("takes the Harness mechanisms' better direction from the comparison too", () => {
+    const harness = TREND_METRICS.slice(
+      TREND_METRICS.findIndex((m) => m.id === 'trace_spans'),
+    )
+    for (const m of harness) expect(m.better).toBe(betterWhen(m.id))
+    expect(metric('trace_spans').better).toBe('neither')
+    expect(metric('hook_notices').better).toBe('neither')
+    expect(
+      harness.filter((m) => m.better !== 'lower').map((m) => m.id),
+    ).toEqual(['trace_spans', 'hook_notices'])
   })
 
   it('formats a difference as points, tests, points of a rate or a share', () => {

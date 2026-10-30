@@ -35,7 +35,11 @@ mod timer_wake;
 mod tool_contract_recovery;
 mod validation_self_repair;
 
-pub(crate) use context_pressure::{measurements as context_measurements, summary_template};
+#[cfg(test)]
+pub(crate) use context_pressure::TEMPLATE_HEADINGS;
+pub(crate) use context_pressure::{
+    compactions, measurements as context_measurements, summary_template,
+};
 
 /// The line the `pre_generate` probe adds to the scenario's prompt, which
 /// makes it part of what the subject is asked (and so of its digest).

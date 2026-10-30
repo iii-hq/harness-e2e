@@ -521,23 +521,6 @@ fn root_window(observation: &ScenarioObservation) -> (Option<u64>, Option<u64>) 
 /// cannot hold them, so the Harness must compact to finish within it.
 const UNCOMPACTED_LOAD_TOKENS: u64 = 200_000;
 
-/// Compaction records in the root session's transcript.
-fn root_compactions(observation: &ScenarioObservation) -> usize {
-    observation
-        .transcript
-        .get("messages")
-        .and_then(Value::as_array)
-        .map_or(0, |messages| {
-            messages
-                .iter()
-                .filter(|entry| {
-                    entry.pointer("/custom/custom_type").and_then(Value::as_str)
-                        == Some("compaction")
-                })
-                .count()
-        })
-}
-
 /// The charter gate: a charter otherwise kept is unverified, not passed, when
 /// whether the load needed a compaction is unknown.
 fn charter_outcome(
@@ -579,7 +562,7 @@ fn evaluate_rung(
     // A window that fits only part of the load and no compaction: the
     // context manager was never exercised, whatever the peak shows.
     // No window reported and no compaction: whether one was needed is unknown.
-    let compactions = root_compactions(observation);
+    let compactions = crate::mechanism_gates::compactions(&observation.transcript).len();
     let compacted_if_needed = match usable {
         _ if compactions > 0 => Some(true),
         Some(usable) => Some(usable >= UNCOMPACTED_LOAD_TOKENS),
@@ -827,19 +810,9 @@ pub(crate) mod tests {
     /// window: a summary in the template that carries the charter.
     fn compaction_record(run_id: &str) -> Value {
         let planted = charter(run_id);
-        let headings = [
-            "## Goal",
-            "## Constraints & Preferences",
-            "## Progress",
-            "## Key Decisions",
-            "## Actions Taken",
-            "## Next Steps",
-            "## Critical Context",
-            "## Relevant Files",
-        ];
         let summary = format!(
             "{}\n{} {} {}",
-            headings.join("\n- x\n"),
+            crate::mechanism_gates::TEMPLATE_HEADINGS.join("\n- x\n"),
             planted.mission,
             planted.checkpoint,
             planted.seal
