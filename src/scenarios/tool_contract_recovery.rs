@@ -361,6 +361,27 @@ fn fixture_snapshot(run_id: &str) -> Option<FixtureSnapshot> {
     })
 }
 
+/// What the mechanism gates read about the attempt: its policy, its stale and
+/// current ids, and what each fixture handler actually received.
+pub(crate) fn mechanism_probe(run_id: &str) -> Value {
+    let mut allowed = allowed_functions(run_id);
+    allowed.sort();
+    let handler_log = fixture_snapshot(run_id).map(|snapshot| {
+        snapshot
+            .audit
+            .iter()
+            .map(|record| json!({"function_id": record.function_id, "arguments": record.arguments}))
+            .collect::<Vec<_>>()
+    });
+    json!({
+        "allowed": allowed,
+        "legacy": legacy_function_id(run_id),
+        "replacement": schedule_function_id(run_id),
+        "fixture_ids": required_functions(run_id),
+        "handler_log": handler_log,
+    })
+}
+
 /// Remove every registration and all mutable fixture state for an attempt.
 /// Removing an absent attempt is deliberately a successful no-op.
 fn release_fixture(run_id: &str) {

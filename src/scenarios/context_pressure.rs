@@ -70,15 +70,22 @@ const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
 .labeled("Charter and segments read once, in order");
 const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
-    10,
+    5,
     "Does the report start with the CONTEXT-LADDER-REPORT header, carry the charter values and every marker, and stay within 1,024 characters plus 64 per document?",
 )
 .labeled("Report keeps the header and length limit");
+const SUMMARY_TEMPLATE: AssessmentSpec = AssessmentSpec::scored(
+    "summary_template",
+    5,
+    "Does every context summary keep the template's eight headings in order and the charter's values, or, when nothing was compacted, does the report repeat the charter?",
+)
+.labeled("Compaction summaries keep the template and the charter");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CHARTER_PRESERVED,
     NEEDLES_RECOVERED,
     INGESTION_DISCIPLINE,
     CONCISE_REPORT,
+    SUMMARY_TEMPLATE,
 ];
 
 /// A charter call (the request body is ignored).
@@ -297,6 +304,10 @@ impl Scenario for ContextPressure {
             content: json!({
                 "content": observation.response,
                 "segments": segments,
+                "measurements": crate::mechanism_gates::context_measurements(
+                    &observation.transcript,
+                    &observation.metrics,
+                ),
             })
             .into(),
             invariants: vec![
@@ -530,6 +541,12 @@ fn evaluate_rung(
     let within_window = peak.zip(usable).is_none_or(|(peak, usable)| {
         peak as f64 <= usable as f64 * (1.0 + crate::report::PROMPT_RECONCILIATION_TOLERANCE)
     });
+    // The quorum is one digit any summary may hold; the three codes are not.
+    let planted = charter(run_id);
+    let summary_kept = crate::mechanism_gates::summary_template(
+        &observation.transcript,
+        &[&planted.mission, &planted.checkpoint, &planted.seal],
+    );
     let response_chars = observation.response.chars().count();
     let concise = report.header
         && report.charter_preserved
@@ -577,6 +594,13 @@ fn evaluate_rung(
                 report_budget_chars(segments)
             ),
         ),
+        SUMMARY_TEMPLATE.full_or_zero(
+            summary_kept.unwrap_or(report.charter_preserved),
+            match summary_kept {
+                Some(kept) => format!("every compaction summary keeps the template and charter: {kept}"),
+                None => format!("nothing compacted; the report repeats the charter: {}", report.charter_preserved),
+            },
+        ),
     ]))
 }
 
@@ -588,10 +612,11 @@ fn deliverable_contract() -> DeliverableContract {
             media_type: "application/json".to_string(),
             schema: json!({
                 "type": "object",
-                "required": ["content", "segments"],
+                "required": ["content", "segments", "measurements"],
                 "properties": {
                     "content": { "type": "string" },
-                    "segments": { "type": "integer", "minimum": 1 }
+                    "segments": { "type": "integer", "minimum": 1 },
+                    "measurements": { "type": "array" }
                 },
                 "additionalProperties": false
             }),

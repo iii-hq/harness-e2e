@@ -1031,6 +1031,17 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "mechanism_evidence": {
+          "description": "What the runner observed and probed for the scenario's mechanism gates, before teardown.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MechanismEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "metrics": {
           "anyOf": [
             {
@@ -1830,6 +1841,13 @@
           "enum": [
             "repeated_failure_executed"
           ]
+        },
+        {
+          "description": "A mechanism the scenario exercises broke its contract; the detail names the gate (`crate::mechanism_gates`).",
+          "type": "string",
+          "enum": [
+            "mechanism_gate"
+          ]
         }
       ]
     },
@@ -1927,6 +1945,22 @@
           "type": "string"
         },
         "id": {
+          "type": "string"
+        }
+      }
+    },
+    "MechanismEvidence": {
+      "type": "object",
+      "required": [
+        "scenario"
+      ],
+      "properties": {
+        "probes": {
+          "description": "What the runner observed or probed for this scenario's gates, by name. A gate whose probe is absent is not judged: a replayed run has none.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "scenario": {
           "type": "string"
         }
       }

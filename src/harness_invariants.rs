@@ -84,6 +84,9 @@ pub enum HarnessInvariant {
     /// A turn ran one call into the same error more than twice: the
     /// repeated-failure breaker answers the third locally.
     RepeatedFailureExecuted,
+    /// A mechanism the scenario exercises broke its contract; the detail
+    /// names the gate (`crate::mechanism_gates`).
+    MechanismGate,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -119,6 +122,7 @@ pub fn violations(report: &E2eRunReport, subject: &SubjectConfig) -> Vec<Harness
     violations.extend(crate::prompt_surface::violations(report, subject));
     violations.extend(crate::turn_lifecycle::violations(report));
     violations.extend(crate::prompt_cache::violations(report));
+    violations.extend(crate::mechanism_gates::violations(report));
     violations
 }
 

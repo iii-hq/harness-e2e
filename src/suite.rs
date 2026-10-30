@@ -2492,6 +2492,15 @@ async fn execute(
         .map_err(|error| journal_checkpoint_failure(FailurePhase::Execute, error.to_string()))?;
     ensure_not_cancelled(control)
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    let mut armed = crate::mechanism_gates::arm(
+        context,
+        spec.id,
+        session_id,
+        run_id,
+        subject.agent.as_deref(),
+    )
+    .await
+    .map_err(|error| scenario_setup_failure(format!("arm the mechanism gates: {error:#}")))?;
     context
         .bind_turn_completed()
         .await
@@ -2553,7 +2562,7 @@ async fn execute(
             }
         };
         let response: SendResponse = context
-            .trigger("harness::send", request)
+            .trigger("harness::send", request.clone())
             .await
             .map_err(subject_dispatch_failure)?;
         if !response.accepted
@@ -2570,6 +2579,9 @@ async fn execute(
             ));
         }
         sent_turn_ids.push(response.turn_id.clone());
+        if exchange == 0 && armed.resends_first_send() {
+            armed.resend(context, &response.turn_id, request).await;
+        }
         metrics = Some(
             match context
                 .wait_for_turn(
@@ -2743,6 +2755,25 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
+    // After the evaluation: the probes register and remove bindings the
+    // scenario's own criteria would count. A probe the stack errs on is the
+    // gate's answer, never a collection failure.
+    report.mechanism_evidence = crate::mechanism_gates::capture(
+        context,
+        armed,
+        &crate::mechanism_gates::Attempt {
+            run_id,
+            session_id,
+            filesystem_root: spec.filesystem_root.as_deref(),
+            transcript: &observation.transcript,
+            metrics: &observation.metrics,
+            terminal_status: report
+                .terminal_status
+                .as_ref()
+                .and_then(|status| serde_json::to_value(status).ok()),
+        },
+    )
+    .await;
     apply_objective_evaluation(spec, report, objective)
 }
 
@@ -2850,10 +2881,10 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// repeated-failure breaker, unmetered or misaccounted usage, a misrouted
 /// model, a lost transient recovery, a trigger binding out of contract, a
 /// drifted prompt surface, a turn event or session state out of contract, a
-/// session without a shared prompt prefix) is incomplete like a failed gate,
-/// whatever the agent delivered; the score stays what the criteria awarded.
-/// On the approvals stack an approver releases every call, which bypasses the
-/// breaker, so none runs past it.
+/// session without a shared prompt prefix, a mechanism gate) is incomplete
+/// like a failed gate, whatever the agent delivered; the score stays what the
+/// criteria awarded. On the approvals stack an approver releases every call,
+/// which bypasses the breaker, so none runs past it.
 fn observe_harness(subject: &SubjectConfig, scenario_id: &str, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
@@ -5281,6 +5312,38 @@ mod tests {
 
         assert_eq!(report.injected_prompt_tokens, None);
         assert_eq!(report.reconciliation_judge_ms, None);
+    }
+
+    #[test]
+    fn a_broken_mechanism_gate_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.mechanism_evidence = Some(crate::mechanism_gates::MechanismEvidence {
+            scenario: "persistent_state".into(),
+            probes: [(
+                "chokepoint".to_string(),
+                serde_json::json!([
+                    { "function_id": "harness::state::get", "denied": false, "timed_out": false },
+                ]),
+            )]
+            .into(),
+        });
+
+        observe_harness(
+            &harness_subject(None),
+            crate::scenarios::persistent_state::ID,
+            &mut report,
+        );
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::MechanismGate
+        );
+        assert!(report.harness_violations[0]
+            .detail
+            .starts_with("chokepoint_denies: \"harness::state::get\""));
     }
 
     #[test]

@@ -544,7 +544,7 @@ impl E2eContext {
         }
     }
 
-    async fn trigger_value_with_timeout(
+    pub(crate) async fn trigger_value_with_timeout(
         &self,
         function_id: &str,
         payload: Value,

@@ -877,6 +877,10 @@ pub struct E2eRunReport {
     /// the round trip of argument reconciliation; absent when not read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconciliation_judge_ms: Option<Vec<f64>>,
+    /// What the runner observed and probed for the scenario's mechanism
+    /// gates, before teardown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism_evidence: Option<crate::mechanism_gates::MechanismEvidence>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -948,6 +952,7 @@ impl E2eRunReport {
             duplicate_entry_events: None,
             injected_prompt_tokens: None,
             reconciliation_judge_ms: None,
+            mechanism_evidence: None,
             terminal_status: None,
             child_transcripts: Default::default(),
             prompt_surface: None,

@@ -14,6 +14,7 @@ pub mod identity;
 pub mod journal;
 pub mod longitudinal;
 pub mod manifest;
+pub mod mechanism_gates;
 mod observe;
 pub mod persistence;
 pub(crate) mod plans;
