@@ -434,6 +434,20 @@ mod tests {
 
     #[test]
     fn the_summary_template_needs_every_heading_in_order_and_the_charter() {
+        // The context-manager's template, pinned apart from the constant the fixtures share.
+        assert_eq!(
+            TEMPLATE_HEADINGS,
+            [
+                "## Goal",
+                "## Constraints & Preferences",
+                "## Progress",
+                "## Key Decisions",
+                "## Actions Taken",
+                "## Next Steps",
+                "## Critical Context",
+                "## Relevant Files",
+            ]
+        );
         let full = TEMPLATE_HEADINGS.join("\n- x\n") + "\nCTX-M-1";
         let swapped = full
             .replace("## Goal", "## Gx")

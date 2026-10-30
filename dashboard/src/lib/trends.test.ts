@@ -369,6 +369,8 @@ describe('measures', () => {
       TREND_METRICS.findIndex((m) => m.id === 'trace_spans'),
     )
     for (const m of harness) expect(m.better).toBe(betterWhen(m.id))
+    expect(metric('trace_spans').better).toBe('neither')
+    expect(metric('hook_notices').better).toBe('neither')
     expect(
       harness.filter((m) => m.better !== 'lower').map((m) => m.id),
     ).toEqual(['trace_spans', 'hook_notices'])
