@@ -15,7 +15,7 @@ pub const EMERGENCY_REFERENCE: &str = "[function result reduced for context budg
 /// The heading `assemble` renders the summary under in the system prompt.
 const SUMMARY_HEADING: &str = "# Conversation summary";
 /// The context-manager's summary template, in order.
-const TEMPLATE_HEADINGS: [&str; 8] = [
+pub(crate) const TEMPLATE_HEADINGS: [&str; 8] = [
     "## Goal",
     "## Constraints & Preferences",
     "## Progress",
@@ -26,7 +26,8 @@ const TEMPLATE_HEADINGS: [&str; 8] = [
     "## Relevant Files",
 ];
 
-fn compactions(transcript: &Value) -> Vec<&Value> {
+/// The compaction records in a transcript.
+pub(crate) fn compactions(transcript: &Value) -> Vec<&Value> {
     customs(transcript, "compaction").collect()
 }
 
