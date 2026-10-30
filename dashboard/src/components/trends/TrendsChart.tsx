@@ -156,7 +156,13 @@ export function Plot({
     : undefined
   const known = values.filter((value): value is number => value !== null)
   if (known.length === 0)
-    return <div ref={ref} className="tr-plot" style={{ height }} />
+    return (
+      <div ref={ref} className="tr-plot" style={{ height }}>
+        <p className="tr-faint tr-plot-empty">
+          No execution on this line measured {metric.label}.
+        </p>
+      </div>
+    )
   const [lo, hi] = domain(metric, known, points)
   const xAt = (index: number) => g.gutter + slotX(index, points.length) * plotW
   const yAt = (value: number) => g.top + (1 - (value - lo) / (hi - lo)) * plotH

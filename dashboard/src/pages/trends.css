@@ -531,6 +531,16 @@
   margin-top: calc(var(--spacing) * 1.5);
 }
 
+.tr-plot-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  margin: 0;
+  padding: 0 calc(var(--spacing) * 4);
+  text-align: center;
+}
+
 .tr-svg {
   position: absolute;
   inset: 0;
