@@ -174,7 +174,14 @@ pub fn measure(run: &E2eRunReport) -> BTreeMap<String, f64> {
 /// shortcut: a call a hook held and an approver released runs through
 /// `harness::function::resolve`, which notes nothing, yet its result looks
 /// dispatched; only `approval_roundtrip` runs behind the approval gate and
-/// the suite skips it, so read the hold from the turn record if another does.
+/// the suite skips it. Nothing the suite collects shows the hold: the
+/// Harness drops the holding hook's annotations, the released result's
+/// origin carries only later hooks', the approval gate appends nothing to
+/// the session, and `harness::status` lists a call as pending only while it
+/// waits. Only the turn record's call checkpoint keeps `held_by` (cleared on
+/// a released spawn), and the suite reads no turn records; read it from
+/// there, or from a marker the Harness adds to the result, if another
+/// scenario runs behind the gate.
 pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     if report.status != RunStatus::Passed {
         return Vec::new();
