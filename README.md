@@ -238,11 +238,13 @@ call and records `harness_preflight`: the SHA-256 of the Harness's
 model with no provider pinned, and whether `harness::context-policy` allows
 pruning for that model (`allow_prune`). The Harness never prunes a model that
 binds thinking (any id containing `claude-opus-5-5`, `claude-sonnet-5-5`,
-`claude-haiku-5-5` or `claude-fable-5-1`) and relieves its context by
-compaction alone; that subject still runs, since no check depends on the
-Harness pruning during a turn (`context_compaction`'s `aged_prune` calls
-`context::prune` itself). It refuses the run as an infrastructure error
-when:
+`claude-haiku-5-5` or `claude-fable-5-1`): it relieves that model's context
+by compaction, and `context::assemble`'s emergency `reduce_results` pass
+still reduces tool results when a compacted request stays over budget
+(`context_pressure` observes those reductions). That subject still runs,
+since no check depends on the Harness pruning during a turn
+(`context_compaction`'s `aged_prune` calls `context::prune` itself). It
+refuses the run as an infrastructure error when:
 
 - the default `engine::functions::list` lacks a function the Harness
   `register`s, a `register_internal` one is not registered, or

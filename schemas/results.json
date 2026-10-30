@@ -1860,7 +1860,7 @@
       ],
       "properties": {
         "allow_prune": {
-          "description": "`harness::context-policy` `allow_prune` for the subject model: false on a model that binds thinking (Claude 5.5, Fable 5.1), which the Harness relieves by compaction alone, never by pruning aged results.",
+          "description": "`harness::context-policy` `allow_prune` for the subject model: false on a model that binds thinking (Claude 5.5, Fable 5.1), which the Harness never relieves by pruning aged results: only by compaction and, when a compacted request stays over budget, the emergency result reduction.",
           "type": [
             "boolean",
             "null"

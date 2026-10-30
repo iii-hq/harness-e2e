@@ -94,7 +94,9 @@ pub struct HarnessPreflight {
     pub route_candidates: Vec<String>,
     /// `harness::context-policy` `allow_prune` for the subject model: false
     /// on a model that binds thinking (Claude 5.5, Fable 5.1), which the
-    /// Harness relieves by compaction alone, never by pruning aged results.
+    /// Harness never relieves by pruning aged results: only by compaction and,
+    /// when a compacted request stays over budget, the emergency result
+    /// reduction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_prune: Option<bool>,
 }
