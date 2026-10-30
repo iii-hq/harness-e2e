@@ -1529,7 +1529,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     finish_native_assessment(&spec, &mut report);
-    observe_harness(subject, spec.id, &mut report);
+    observe_harness(subject, &mut report);
     report.update_cost();
     report.update_efficiency();
     report.refresh_dimensions(expects_deliverables);
@@ -2885,15 +2885,13 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 /// like a failed gate, whatever the agent delivered; the score stays what the
 /// criteria awarded. On the approvals stack an approver releases every call,
 /// which bypasses the breaker, so none runs past it.
-fn observe_harness(subject: &SubjectConfig, scenario_id: &str, report: &mut E2eRunReport) {
+fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
 
     report.harness_violations = crate::harness_invariants::violations(report, subject);
-    if scenario_id != crate::scenarios::approval_roundtrip::ID {
-        let repeated = crate::harness_metrics::repeated_failures(report);
-        report.harness_violations.extend(repeated);
-    }
+    let repeated = crate::harness_metrics::repeated_failures(report);
+    report.harness_violations.extend(repeated);
     let broken = |invariant| {
         report
             .harness_violations
@@ -5029,7 +5027,7 @@ mod tests {
             { "message": { "role": "function_result", "function_call_id": "c1" } },
         ] }));
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         // Like a failed gate: still passed, incomplete, valid, scored.
         assert_eq!(report.status, RunStatus::Passed);
@@ -5088,7 +5086,7 @@ mod tests {
             ..Default::default()
         });
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5112,7 +5110,7 @@ mod tests {
             ..Default::default()
         });
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5145,7 +5143,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5167,7 +5165,7 @@ mod tests {
             ] }),
         ));
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5203,7 +5201,7 @@ mod tests {
             }],
         ));
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5234,7 +5232,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5265,7 +5263,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut report = full_marks_run(serde_json::json!({ "messages": messages.clone() }));
 
-        observe_harness(&harness_subject(None), "t", &mut report);
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
         assert_eq!(report.score, Some(100));
@@ -5274,14 +5272,23 @@ mod tests {
             crate::harness_invariants::HarnessInvariant::RepeatedFailureExecuted
         );
 
-        // Behind the approval gate an approver releases every call, past the breaker.
-        let mut gated = full_marks_run(serde_json::json!({ "messages": messages }));
-        observe_harness(
-            &harness_subject(None),
-            crate::scenarios::approval_roundtrip::ID,
-            &mut gated,
-        );
-        assert!(gated.harness_violations.is_empty());
+        // Behind the approval gate an approver releases every call, past the
+        // breaker; calls the approval record does not show resolved still count.
+        let gated = |resolved: bool| {
+            let mut report = full_marks_run(serde_json::json!({ "messages": messages }));
+            let mut record = checkpoint_deliverable();
+            record.kind = "approval_record".into();
+            let decisions = ["c1", "c2", "c3"].map(|id| {
+                serde_json::json!({ "function_call_id": id, "decision": "allow", "resolved": resolved })
+            });
+            record.content =
+                CapturedDeliverableContent::Json(serde_json::json!({ "decisions": decisions }));
+            report.deliverables.push(record);
+            observe_harness(&harness_subject(None), &mut report);
+            report.harness_violations
+        };
+        assert!(gated(true).is_empty());
+        assert_eq!(gated(false).len(), 1);
     }
 
     #[tokio::test]
@@ -5328,11 +5335,7 @@ mod tests {
             .into(),
         });
 
-        observe_harness(
-            &harness_subject(None),
-            crate::scenarios::persistent_state::ID,
-            &mut report,
-        );
+        observe_harness(&harness_subject(None), &mut report);
 
         assert_eq!(report.status, RunStatus::Passed);
         assert_eq!(report.completion, CompletionState::TaskIncomplete);
@@ -5379,7 +5382,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(Some(128_000)), "t", &mut report);
+        observe_harness(&harness_subject(Some(128_000)), &mut report);
 
         assert_eq!(report.status, RunStatus::InfrastructureError);
         assert_eq!(report.completion, CompletionState::Undetermined);

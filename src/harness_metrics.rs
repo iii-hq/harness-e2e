@@ -171,17 +171,13 @@ pub fn measure(run: &E2eRunReport) -> BTreeMap<String, f64> {
 /// than twice ran past it. Like the Harness, a success clears a call's count
 /// and a different error restarts it, and only a dispatched call's own
 /// result counts.
-/// shortcut: a call a hook held and an approver released runs through
-/// `harness::function::resolve`, which notes nothing, yet its result looks
-/// dispatched; only `approval_roundtrip` runs behind the approval gate and
-/// the suite skips it. Nothing the suite collects shows the hold: the
-/// Harness drops the holding hook's annotations, the released result's
-/// origin carries only later hooks', the approval gate appends nothing to
-/// the session, and `harness::status` lists a call as pending only while it
-/// waits. Only the turn record's call checkpoint keeps `held_by` (cleared on
-/// a released spawn), and the suite reads no turn records; read it from
-/// there, or from a marker the Harness adds to the result, if another
-/// scenario runs behind the gate.
+/// A call a hook held and an approver released runs through
+/// `harness::function::resolve`, past the breaker, yet its result looks
+/// dispatched, so a call an `approval_record` deliverable records as resolved
+/// (allowed or denied, neither dispatched) does not count.
+/// shortcut: only `approval_roundtrip` records its approvals, so a hold in
+/// another scenario still counts; read `held_by` from the turn record's call
+/// checkpoint if another scenario runs behind the gate.
 pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     if report.status != RunStatus::Passed {
         return Vec::new();
@@ -189,6 +185,15 @@ pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
     let Some(messages) = messages(report.transcript.as_ref()) else {
         return Vec::new();
     };
+    let released = report
+        .deliverables
+        .iter()
+        .filter(|deliverable| deliverable.kind == "approval_record")
+        .filter_map(|deliverable| deliverable.content.as_json()?.get("decisions")?.as_array())
+        .flatten()
+        .filter(|decision| decision.get("resolved").and_then(Value::as_bool) == Some(true))
+        .filter_map(|decision| text(decision, "/function_call_id"))
+        .collect::<std::collections::BTreeSet<_>>();
     // The breaker keys a call on its target and the model's own arguments.
     let mut keys = BTreeMap::new();
     let mut failed = BTreeMap::<(&str, String), (Value, u32)>::new();
@@ -208,6 +213,7 @@ pub fn repeated_failures(report: &E2eRunReport) -> Vec<HarnessViolation> {
         if text(entry, "/message/role") != Some("function_result")
             || text(entry, "/message/details/error")
                 .is_some_and(|code| NOT_DISPATCHED.contains(&code))
+            || text(entry, "/message/function_call_id").is_some_and(|id| released.contains(id))
         {
             continue;
         }
