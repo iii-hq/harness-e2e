@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use super::{customs, error_code, invoke_as, messages, text, Attempt, Broken, Run};
 use crate::context::E2eContext;
-use crate::scenarios::common::function_outcomes;
+use crate::scenarios::common::{function_outcomes, ObservedFunctionOutcome};
 
 pub const ID: &str = crate::scenarios::tool_contract_recovery::ID;
 /// A registered, read-only function the scenario's policy does not allow:
@@ -66,6 +66,56 @@ fn received(handler: &Value, sent: &Value) -> bool {
     }
 }
 
+/// What the Harness dispatched: the model's arguments with the repairs the
+/// Harness recorded on the call's result (`origin.reconciled`), in order.
+fn dispatched_arguments(transcript: &Value, outcome: &ObservedFunctionOutcome) -> Value {
+    let mut arguments = outcome.arguments.clone();
+    let changes = messages(transcript)
+        .iter()
+        .find(|entry| {
+            text(entry, "/message/role") == Some("function_result")
+                && outcome.call_id.is_some()
+                && text(entry, "/message/function_call_id") == outcome.call_id.as_deref()
+        })
+        .and_then(|entry| entry.pointer("/origin/reconciled"))
+        .and_then(Value::as_array);
+    for change in changes.into_iter().flatten() {
+        let path = text(change, "/path").unwrap_or_default();
+        match text(change, "/kind") {
+            Some("renamed") => {
+                // The Harness writes "{parent}/{from}" unescaped: cut it, do not parse it.
+                let from = text(change, "/from").unwrap_or_default();
+                let parent = path
+                    .strip_suffix(&format!("/{from}"))
+                    .and_then(|parent| arguments.pointer_mut(parent))
+                    .and_then(Value::as_object_mut);
+                if let (Some(parent), Some(to)) = (parent, text(change, "/to")) {
+                    if let Some(value) = parent.remove(from) {
+                        parent.insert(to.to_string(), value);
+                    }
+                }
+            }
+            Some("dropped") => {
+                // `from` holds the dropped value; the key is the last segment.
+                if let Some((parent, key)) = path.rsplit_once('/') {
+                    if let Some(parent) =
+                        arguments.pointer_mut(parent).and_then(Value::as_object_mut)
+                    {
+                        parent.remove(key);
+                    }
+                }
+            }
+            Some("parsed" | "replaced") => {
+                if let Some(value) = arguments.pointer_mut(path) {
+                    *value = change["to"].clone();
+                }
+            }
+            _ => {}
+        }
+    }
+    arguments
+}
+
 fn strings(value: Option<&Value>) -> Vec<&str> {
     value
         .and_then(Value::as_array)
@@ -97,26 +147,37 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             .iter()
             .filter(|outcome| fixture_ids.contains(&outcome.function_id.as_str()))
             .filter(|outcome| outcome.is_error == Some(false))
+            .map(|outcome| {
+                (
+                    outcome.function_id.as_str(),
+                    dispatched_arguments(run.transcript, outcome),
+                )
+            })
             .collect();
-        let matched = dispatched.len() == log.len()
-            && dispatched.iter().zip(log).all(|(outcome, record)| {
-                record["function_id"] == outcome.function_id.as_str()
-                    && received(&record["arguments"], &outcome.arguments)
-            });
-        if !matched {
-            broken.push((
-                "dispatch_matches_handler",
-                format!(
-                    "the transcript dispatched {:?}, the handlers received {:?}",
-                    dispatched
-                        .iter()
-                        .map(|outcome| &outcome.function_id)
-                        .collect::<Vec<_>>(),
-                    log.iter()
-                        .map(|record| &record["function_id"])
-                        .collect::<Vec<_>>()
+        let differs = |index: usize| match (dispatched.get(index), log.get(index)) {
+            (Some((id, sent)), Some(record)) => {
+                record["function_id"] != *id || !received(&record["arguments"], sent)
+            }
+            _ => true,
+        };
+        if let Some(index) = (0..dispatched.len().max(log.len())).find(|&index| differs(index)) {
+            let detail = match (dispatched.get(index), log.get(index)) {
+                (Some((id, sent)), Some(record)) if record["function_id"] == *id => format!(
+                    "{id} was dispatched with {sent}, its handler received {}",
+                    record["arguments"]
                 ),
-            ));
+                (Some((id, sent)), Some(record)) => {
+                    format!("{id} was dispatched with {sent}, the handler log has {record}")
+                }
+                (Some((id, sent)), None) => {
+                    format!("{id} was dispatched with {sent}, no handler received it")
+                }
+                (None, record) => format!(
+                    "a handler received {} that the transcript never dispatched",
+                    record.unwrap_or(&Value::Null)
+                ),
+            };
+            broken.push(("dispatch_matches_handler", detail));
         }
     }
 
@@ -317,6 +378,62 @@ mod tests {
 
         assert_eq!(broken.len(), 1, "{broken:?}");
         assert!(broken[0].starts_with("dispatch_matches_handler"));
+    }
+
+    /// The run with its profile call sent as `sent` and the Harness's
+    /// `changes` recorded on that call's result.
+    fn reconciled(sent: Value, changes: Value) -> Vec<Value> {
+        let mut entries = recovered();
+        entries[5] = call("c3", "e2etest::profile_v2_x", sent);
+        entries[6]["origin"] = json!({"reconciled": changes, "turn_id": "t1"});
+        entries
+    }
+
+    #[test]
+    fn a_key_the_harness_renamed_before_dispatch_is_not_a_mismatch() {
+        let entries = reconciled(
+            json!({"legacy_id": "x"}),
+            json!([{"kind": "renamed", "path": "/legacy_id", "from": "legacy_id", "to": "profile_key"}]),
+        );
+        let log =
+            json!([{"function_id": "e2etest::profile_v2_x", "arguments": {"profile_key": "x"}}]);
+
+        assert_eq!(gates_of(entries, &probes(log)), Vec::<String>::new());
+    }
+
+    #[test]
+    fn values_the_harness_parsed_or_replaced_before_dispatch_are_not_a_mismatch() {
+        let entries = reconciled(
+            json!({"profile_key": "k", "event": {"minutes": "45", "zone": "utc"}, "stray": 1}),
+            json!([
+                {"kind": "parsed", "path": "/event/minutes", "from": "45", "to": 45},
+                {"kind": "replaced", "path": "/event/zone", "from": "utc", "to": "UTC"},
+                {"kind": "dropped", "path": "/stray", "from": 1},
+            ]),
+        );
+        let log = json!([{"function_id": "e2etest::profile_v2_x",
+                          "arguments": {"profile_key": "k", "event": {"minutes": 45, "zone": "UTC"}}}]);
+
+        assert_eq!(gates_of(entries, &probes(log)), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_reconciled_call_the_handler_received_differently_names_both_arguments() {
+        let entries = reconciled(
+            json!({"legacy_id": "x"}),
+            json!([{"kind": "renamed", "path": "/legacy_id", "from": "legacy_id", "to": "profile_key"}]),
+        );
+        let log =
+            json!([{"function_id": "e2etest::profile_v2_x", "arguments": {"profile_key": "y"}}]);
+
+        let broken = gates_of(entries, &probes(log));
+
+        assert_eq!(
+            broken,
+            [
+                r#"dispatch_matches_handler: e2etest::profile_v2_x was dispatched with {"profile_key":"x"}, its handler received {"profile_key":"y"}"#
+            ]
+        );
     }
 
     #[test]
