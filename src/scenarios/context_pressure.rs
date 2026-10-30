@@ -70,15 +70,22 @@ const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
 .labeled("Charter and segments read once, in order");
 const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
-    10,
+    5,
     "Does the report start with the CONTEXT-LADDER-REPORT header, carry the charter values and every marker, and stay within 1,024 characters plus 64 per document?",
 )
 .labeled("Report keeps the header and length limit");
+const SUMMARY_TEMPLATE: AssessmentSpec = AssessmentSpec::scored(
+    "summary_template",
+    5,
+    "Does every context summary keep the template's eight headings in order and the charter's values, or, when nothing was compacted, does the report repeat the charter?",
+)
+.labeled("Compaction summaries keep the template and the charter");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CHARTER_PRESERVED,
     NEEDLES_RECOVERED,
     INGESTION_DISCIPLINE,
     CONCISE_REPORT,
+    SUMMARY_TEMPLATE,
 ];
 
 /// A charter call (the request body is ignored).
@@ -297,6 +304,10 @@ impl Scenario for ContextPressure {
             content: json!({
                 "content": observation.response,
                 "segments": segments,
+                "measurements": crate::mechanism_gates::context_measurements(
+                    &observation.transcript,
+                    &observation.metrics,
+                ),
             })
             .into(),
             invariants: vec![
@@ -576,6 +587,12 @@ fn evaluate_rung(
     };
     let charter_held =
         ingestion.charter_before_documents && report.charter_preserved && within_window;
+    // The quorum is one digit any summary may hold; the three codes are not.
+    let planted = charter(run_id);
+    let summary_kept = crate::mechanism_gates::summary_template(
+        &observation.transcript,
+        &[&planted.mission, &planted.checkpoint, &planted.seal],
+    );
     let response_chars = observation.response.chars().count();
     let concise = report.header
         && report.charter_preserved
@@ -625,6 +642,13 @@ fn evaluate_rung(
                 report_budget_chars(segments)
             ),
         ),
+        SUMMARY_TEMPLATE.full_or_zero(
+            summary_kept.unwrap_or(report.charter_preserved),
+            match summary_kept {
+                Some(kept) => format!("every compaction summary keeps the template and charter: {kept}"),
+                None => format!("nothing compacted; the report repeats the charter: {}", report.charter_preserved),
+            },
+        ),
     ]))
 }
 
@@ -636,10 +660,11 @@ fn deliverable_contract() -> DeliverableContract {
             media_type: "application/json".to_string(),
             schema: json!({
                 "type": "object",
-                "required": ["content", "segments"],
+                "required": ["content", "segments", "measurements"],
                 "properties": {
                     "content": { "type": "string" },
-                    "segments": { "type": "integer", "minimum": 1 }
+                    "segments": { "type": "integer", "minimum": 1 },
+                    "measurements": { "type": "array" }
                 },
                 "additionalProperties": false
             }),
@@ -798,8 +823,34 @@ pub(crate) mod tests {
         assert!(audit.segments_exact);
     }
 
+    /// The compaction record the Harness logs once the documents fill the
+    /// window: a summary in the template that carries the charter.
+    fn compaction_record(run_id: &str) -> Value {
+        let planted = charter(run_id);
+        let headings = [
+            "## Goal",
+            "## Constraints & Preferences",
+            "## Progress",
+            "## Key Decisions",
+            "## Actions Taken",
+            "## Next Steps",
+            "## Critical Context",
+            "## Relevant Files",
+        ];
+        let summary = format!(
+            "{}\n{} {} {}",
+            headings.join("\n- x\n"),
+            planted.mission,
+            planted.checkpoint,
+            planted.seal
+        );
+        json!({ "custom": { "custom_type": "compaction", "data": { "summary": summary } } })
+    }
+
     fn evaluation_of(calls: Vec<ObservedFunctionCall>, response: &str) -> ObjectiveEvaluation {
         let run_id = "run";
+        // A delivery that read nothing never filled the window.
+        let compacted = !calls.is_empty();
         let blocks = calls
             .into_iter()
             .map(|call| {
@@ -811,14 +862,15 @@ pub(crate) mod tests {
                 })
             })
             .collect::<Vec<_>>();
+        let mut messages = vec![json!({ "message": { "role": "assistant", "content": blocks } })];
+        if compacted {
+            messages.push(compaction_record(run_id));
+        }
         let observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::ContextPressure,
             run_id,
             // No window snapshot here: a compaction record settles the gate.
-            json!({ "messages": [
-                { "message": { "role": "assistant", "content": blocks } },
-                { "custom": { "custom_type": "compaction" } },
-            ] }),
+            json!({ "messages": messages }),
             response,
             Vec::new(),
         );
@@ -949,6 +1001,7 @@ pub(crate) mod tests {
                         cache_write_tokens: None,
                         reasoning_tokens: None,
                         cost_usd: None,
+                        by_model: Vec::new(),
                         context: usable.map(|usable| json!({ "usable": usable })),
                     }],
                     traces: None,
@@ -964,7 +1017,7 @@ pub(crate) mod tests {
             observation.transcript["messages"]
                 .as_array_mut()
                 .unwrap()
-                .push(json!({ "custom": { "custom_type": "compaction" } }));
+                .push(compaction_record(run_id));
             observation
         };
         let single = |peak: u64, usable: Option<u64>| {

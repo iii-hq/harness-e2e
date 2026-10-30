@@ -532,6 +532,13 @@
           "enum": [
             "context_over_window"
           ]
+        },
+        {
+          "description": "The run's reconciled calls took more than 2.5 s at the p95.",
+          "type": "string",
+          "enum": [
+            "slow_reconciled_calls"
+          ]
         }
       ]
     },
@@ -963,6 +970,15 @@
             "$ref": "#/definitions/DimensionReport"
           }
         },
+        "duplicate_entry_events": {
+          "description": "`session::message-added` deliveries of the root session past the first of each entry; absent when the run did not count them.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "efficiency": {
           "anyOf": [
             {
@@ -988,12 +1004,43 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
+        "harness_preflight": {
+          "description": "The Harness configuration and routing the run started from.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HarnessPreflight"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "harness_violations": {
           "description": "Harness invariants the run broke; README Completion says what each costs the run.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/HarnessViolation"
           }
+        },
+        "injected_prompt_tokens": {
+          "description": "Tokens (bytes / 4) of the prompt parts `pre_generate` hooks declare they inject into the root session; absent when they were not read.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "mechanism_evidence": {
+          "description": "What the runner observed and probed for the scenario's mechanism gates, before teardown.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MechanismEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "metrics": {
           "anyOf": [
@@ -1007,6 +1054,17 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "reconciliation_judge_ms": {
+          "description": "Milliseconds of each of the root session's `judge::evaluate` calls, the round trip of argument reconciliation; absent when not read.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
         },
         "retry_attempts": {
           "type": "array",
@@ -1059,6 +1117,38 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
+        "transient_recovery": {
+          "description": "The turns that resumed after a stream cut, in every session of the tree. Absent when the transcripts were not read: a report written before it, or a composite or adaptive run.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/TurnRecovery"
+          }
+        },
+        "trigger_bindings": {
+          "description": "The session tree's trigger bindings and what teardown left of them. Absent on a report written before it, or a composite or adaptive run.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TriggerBindings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn_lifecycle": {
+          "description": "The turn events and session state the Harness invariants judge.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnLifecycleEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -1293,6 +1383,16 @@
         },
         "peak_context_tokens": {
           "description": "The largest prompt one step of the root session sent, from the usage each assistant message recorded in the transcript. Given only when the steps add up to the root session's totals.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "prefix_divergences": {
+          "description": "Already-sent rows the run's requests rewrote that no compaction explains, over every session's context snapshot: where a prefix-matching provider cache stopped reusing. Null when no session has a snapshot.",
           "default": null,
           "type": [
             "integer",
@@ -1601,8 +1701,186 @@
           "enum": [
             "fallback_context_limits"
           ]
+        },
+        {
+          "description": "The run's tokens or a priced run's cost were not counted, or a generation that ended or called a function carries no usage.",
+          "type": "string",
+          "enum": [
+            "usage_unmetered"
+          ]
+        },
+        {
+          "description": "The counters disagree: the sessions' costs do not add up to the total, a session's running cost drifts from its metered cost, or `free` is not what the window leaves.",
+          "type": "string",
+          "enum": [
+            "usage_misaccounted"
+          ]
+        },
+        {
+          "description": "A generation ran on a model or provider its session was not routed to.",
+          "type": "string",
+          "enum": [
+            "model_misrouted"
+          ]
+        },
+        {
+          "description": "The subject disabled thinking and still reasoned.",
+          "type": "string",
+          "enum": [
+            "reasoning_while_disabled"
+          ]
+        },
+        {
+          "description": "A transient resume in a turn that neither failed nor stopped has no `recovered` row of its attempt or a later one: the Harness lost the recovery's outcome.",
+          "type": "string",
+          "enum": [
+            "unrecovered_transient_resume"
+          ]
+        },
+        {
+          "description": "A turn resumed more often than its `max_transient_resumes`.",
+          "type": "string",
+          "enum": [
+            "transient_resumes_over_limit"
+          ]
+        },
+        {
+          "description": "A `trigger_fired` record has an outcome outside `TriggerOutcome`, or retired its binding without a `retirement_reason`.",
+          "type": "string",
+          "enum": [
+            "malformed_trigger_record"
+          ]
+        },
+        {
+          "description": "A wake binding's `delivered` records and the `e_fire_` entries it injected differ in number: a wake was lost or doubled.",
+          "type": "string",
+          "enum": [
+            "wake_delivery_mismatch"
+          ]
+        },
+        {
+          "description": "A `once` binding was delivered more than once.",
+          "type": "string",
+          "enum": [
+            "once_binding_redelivered"
+          ]
+        },
+        {
+          "description": "A binding of the run outlived `harness::teardown`, on the engine or in the binding store.",
+          "type": "string",
+          "enum": [
+            "leaked_trigger_binding"
+          ]
+        },
+        {
+          "description": "A session froze a built-in prompt other than the default identity (or the subject's agent profile prompt).",
+          "type": "string",
+          "enum": [
+            "frozen_prompt_drift"
+          ]
+        },
+        {
+          "description": "The runtime context frozen into a session's prompt misnames the session, the working directory, the co-author or the dispatch policy.",
+          "type": "string",
+          "enum": [
+            "runtime_context_malformed"
+          ]
+        },
+        {
+          "description": "An English prompt pinned another response language, or none.",
+          "type": "string",
+          "enum": [
+            "response_language_mispinned"
+          ]
+        },
+        {
+          "description": "A turn record holds its prompt inline, or names a body the prompt store does not hold under that hash.",
+          "type": "string",
+          "enum": [
+            "prompt_ref_broken"
+          ]
+        },
+        {
+          "description": "The turn events broke their contract: a root turn did not start exactly once, a turn never completed, a sent turn completed only through the status poll, or a completion's `terminal` contradicts the wakes.",
+          "type": "string",
+          "enum": [
+            "turn_events"
+          ]
+        },
+        {
+          "description": "A session of the completed tree is not `done` (a child may be `error`, and a root whose scenario expects a failed turn must be).",
+          "type": "string",
+          "enum": [
+            "session_status"
+          ]
+        },
+        {
+          "description": "`session::get` lost a session or reads back other than what was sent: the root's kind, title and run metadata, a child's kind and parent link.",
+          "type": "string",
+          "enum": [
+            "session_read_back"
+          ]
+        },
+        {
+          "description": "A session's requests carried no shared prompt prefix (`prompt_sections_fallback`), so the provider cache reuses nothing.",
+          "type": "string",
+          "enum": [
+            "prompt_sections_fallback"
+          ]
+        },
+        {
+          "description": "A multi-step run's cache-hit ratio fell below half the median of its setup's latest executions.",
+          "type": "string",
+          "enum": [
+            "prompt_cache_regressed"
+          ]
+        },
+        {
+          "description": "A turn ran one call into the same error more than twice: the repeated-failure breaker answers the third locally.",
+          "type": "string",
+          "enum": [
+            "repeated_failure_executed"
+          ]
+        },
+        {
+          "description": "A mechanism the scenario exercises broke its contract; the detail names the gate (`crate::mechanism_gates`).",
+          "type": "string",
+          "enum": [
+            "mechanism_gate"
+          ]
         }
       ]
+    },
+    "HarnessPreflight": {
+      "description": "What the preflight read of the stack the run measures.",
+      "type": "object",
+      "required": [
+        "configuration_id",
+        "configuration_sha256"
+      ],
+      "properties": {
+        "configuration_id": {
+          "description": "The Harness's configuration entry and the SHA-256 of its value.",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "route_candidates": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "route_provider": {
+          "description": "`router::route` for the subject model with no provider pinned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "HarnessViolation": {
       "type": "object",
@@ -1671,6 +1949,22 @@
         }
       }
     },
+    "MechanismEvidence": {
+      "type": "object",
+      "required": [
+        "scenario"
+      ],
+      "properties": {
+        "probes": {
+          "description": "What the runner observed or probed for this scenario's gates, by name. A gate whose probe is absent is not judged: a replayed run has none.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "scenario": {
+          "type": "string"
+        }
+      }
+    },
     "ModelArtifact": {
       "type": "object",
       "required": [
@@ -1717,6 +2011,28 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ModelUsage": {
+      "description": "The route of the steps one model generated (`harness::metrics` `by_model`); its counters stay in the raw payload. Empty from a Harness that predates it.",
+      "type": "object",
+      "required": [
+        "model",
+        "provider",
+        "turns"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       }
     },
@@ -2904,6 +3220,54 @@
         }
       }
     },
+    "SentTurn": {
+      "description": "A turn the runner sent, and whether its `turn-completed` had arrived once the tree settled: without it only the status poll saw the turn end. Read after the settle window, so an event the poll merely beat still counts.",
+      "type": "object",
+      "required": [
+        "completed_by_event",
+        "turn_id"
+      ],
+      "properties": {
+        "completed_by_event": {
+          "type": "boolean"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionLifecycle": {
+      "description": "One session of the tree: where the metrics place it, its turns in transcript order (`origin.turn_id` of its assistant entries) and its `session::get` meta at the end of the polling window.",
+      "type": "object",
+      "required": [
+        "depth",
+        "session_id",
+        "turn_ids"
+      ],
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "meta": true,
+        "parent_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "SessionMetricsPayload": {
       "type": "object",
       "required": [
@@ -2943,6 +3307,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3067,6 +3437,12 @@
         "turns"
       ],
       "properties": {
+        "by_model": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
         "cache_read_tokens": {
           "default": null,
           "type": [
@@ -3284,6 +3660,170 @@
         "valid",
         "technical_invalid"
       ]
+    },
+    "TriggerBindings": {
+      "type": "object",
+      "required": [
+        "fired",
+        "subscriptions"
+      ],
+      "properties": {
+        "fired": {
+          "description": "The tree's `trigger_fired` records by `outcome` (`missing` without one).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          }
+        },
+        "subscriptions": {
+          "description": "Every binding the session tree owned before teardown or named in a `trigger_fired` record or a wake.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "teardown_removed": {
+          "description": "The bindings `harness::teardown` removed; absent when it did not answer.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HarnessViolation"
+          }
+        }
+      }
+    },
+    "TurnEvent": {
+      "type": "object",
+      "required": [
+        "kind",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/TurnEventKind"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "terminal": {
+          "description": "`turn-completed` only.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
+    },
+    "TurnEventKind": {
+      "type": "string",
+      "enum": [
+        "started",
+        "completed"
+      ]
+    },
+    "TurnLifecycleEvidence": {
+      "type": "object",
+      "required": [
+        "duplicate_completions",
+        "events",
+        "scenario",
+        "sent_turns",
+        "sessions"
+      ],
+      "properties": {
+        "duplicate_completions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "events": {
+          "description": "The tree's events; delivery is at-least-once, so repeats are counted in `duplicate_completions` and never fail the run.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TurnEvent"
+          }
+        },
+        "scenario": {
+          "type": "string"
+        },
+        "sent_turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SentTurn"
+          }
+        },
+        "sessions": {
+          "description": "The root first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SessionLifecycle"
+          }
+        }
+      }
+    },
+    "TurnRecovery": {
+      "description": "One turn's recovery rows.",
+      "type": "object",
+      "required": [
+        "ended_without_result",
+        "recovered",
+        "recovering",
+        "session_id",
+        "turn_id"
+      ],
+      "properties": {
+        "ended_without_result": {
+          "description": "The turn failed or was stopped (`e_<turn>_error`, `e_<turn>_stopped`), so its last resume had no generation left to recover.",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "description": "The turn's `max_transient_resumes`, as its rows carry it.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "recovered": {
+          "description": "The attempt of each `recovered` row.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "recovering": {
+          "description": "The attempt of each `recovering` row: one per transient resume.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
     },
     "TypedPortValue": {
       "type": "object",

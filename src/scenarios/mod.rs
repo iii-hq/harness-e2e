@@ -859,6 +859,9 @@ pub(crate) fn behavior_definition(module: &dyn Scenario, case: &ScenarioCase) ->
     if let Some(planted) = module.planted_state(CONTRACT_NAMESPACE) {
         definition["planted_state"] = planted;
     }
+    if let Some(append) = crate::mechanism_gates::prompt_append(module.id(), CONTRACT_NAMESPACE) {
+        definition["pre_generate_append"] = append.into();
+    }
     let run_dir = std::env::var_os("HARNESS_E2E_RUN_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
@@ -1309,9 +1312,9 @@ kanban_c6_discussion sha256:13a56344e8e8766bae7ec28605b8d833e5d451d5b243eb0f541b
 kanban_c7_live sha256:bc319576c7fe79c380febf9f01c6725fceacc658104e2a5c27ac43a7f9af54bd
 linkly_tutorial sha256:110e730807b9f9c53f0222e1b95303af3bafc30e8347dc2011bba96658387374
 onboarding_tour sha256:0f26ffac65dc934f554b913b07de20f15f3dd8f3d046fc4305ed53b1d88c5084
-context_pressure sha256:340df05e4d3b0cc5bbc7a26d9a84e4f595845867d32fb24b81d2e1788209da7f
+context_pressure sha256:fc645c2bbe17daa2a74283d981de82a7e37acf13240adc67485cd18a34bda94e
 minimal_path sha256:d5a495f66901fd687efca985c6c78c364325551aee8eac2fa3773a7aa5d407d0
-persistent_state sha256:60196dc449c1b87a972c9db4b49b7024c0c586c93d23ad199659f376aabe40ce
+persistent_state sha256:75a648bd4238524cc3744244d12720ebab49281d9533feafd9590001e56ba785
 insert_record sha256:c3b73ca9695b2f5acecf49f0a76227f0908814b56a9951fefd05a7fcfc6ba090
 sequential_pipeline sha256:c511216e5705dd787fdd5486b6f9e26f02caa01682fecf68a195527cb113d951
 database_migration_recovery sha256:a3fe7348010503795b56dbe2b5e47bfb85801dab5fae71b7937c81b5f4abd4d9
@@ -1392,6 +1395,28 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
                 .case;
             assert_eq!(case.behavior_sha256, digest, "{id}");
         }
+    }
+
+    /// The line the mechanism probe appends to every `persistent_state` prompt
+    /// is what the subject reads, so its definition carries it.
+    #[test]
+    fn a_scenario_whose_prompt_a_mechanism_probe_extends_carries_the_extension() {
+        let definition = |id: ScenarioId| {
+            let case = id
+                .materialize("attempt-a", id.canonical_seed())
+                .unwrap()
+                .case;
+            behavior_definition(id.module(), &case).unwrap()
+        };
+
+        assert!(
+            definition(ScenarioId::PersistentState)["pre_generate_append"]
+                .as_str()
+                .is_some_and(|line| line.starts_with("[e2e mechanism probe "))
+        );
+        assert!(definition(ScenarioId::MinimalPath)
+            .get("pre_generate_append")
+            .is_none());
     }
 
     /// The bank, what `setup` plants and what the case changes later are part

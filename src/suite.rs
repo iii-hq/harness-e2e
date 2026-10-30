@@ -123,6 +123,9 @@ pub struct SuiteRunConfig {
     pub execution_id: Option<String>,
     pub subject: SubjectConfig,
     pub output: PathBuf,
+    /// Stored executions a run's prompt-cache hit ratio is held against;
+    /// `None` holds no run to a baseline.
+    pub history_dir: Option<PathBuf>,
     pub scenarios: Vec<ScenarioId>,
     pub runs: u32,
     pub seed: Option<u64>,
@@ -271,6 +274,25 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .context("resolve subject model")?;
     config.subject.priced = Some(subject_model.pricing.is_some());
     config.subject.context_window = Some(subject_model.context_window);
+    let cache_baselines = match config.history_dir.clone() {
+        Some(history) => {
+            let (lane, subject) = (execution_lane(&config), config.subject.clone());
+            let (before, scenarios) = (started_at.clone(), config.scenarios.clone());
+            tokio::task::spawn_blocking(move || {
+                let setup = crate::prompt_cache::Setup {
+                    lane: &lane,
+                    model: &subject.model,
+                    provider: &subject.provider,
+                    agent: subject.agent.as_deref(),
+                };
+                let scenarios = scenarios.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+                crate::prompt_cache::baselines(&history, &setup, &before, &scenarios)
+            })
+            .await
+            .context("read prompt-cache baselines")?
+        }
+        None => Default::default(),
+    };
     let built_in_scenarios = config.scenarios.to_vec();
     let composite_definitions = built_in_scenarios
         .iter()
@@ -414,7 +436,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                 "running E2E quality scenario case"
             );
             let subject_observed = preflight_error.is_none();
-            let run = if let Some(error) = preflight_error.as_ref() {
+            let mut run = if let Some(error) = preflight_error.as_ref() {
                 preflight_failure_run(&definition.spec, error.clone())
             } else {
                 run_with_technical_retries(
@@ -431,6 +453,12 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                 )
                 .await
             };
+            if crate::prompt_cache::hold_to_baseline(
+                &mut run,
+                cache_baselines.get(scenario_id.as_str()).copied(),
+            ) {
+                run.refresh_dimensions(!definition.case.deliverable_contract.artifacts.is_empty());
+            }
             (*key, *seed, run, subject_observed)
         };
         incorporate_worker_contracts(&mut worker_contracts, &mut run);
@@ -480,12 +508,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let execution = ExecutionIdentity {
         execution_id,
-        lane: config
-            .control
-            .as_ref()
-            .map(|control| control.lane.clone())
-            .or_else(|| identity::nonempty_env("HARNESS_E2E_LANE"))
-            .unwrap_or_else(|| "local".into()),
+        lane: execution_lane(&config),
         started_at,
         completed_at,
     };
@@ -531,6 +554,15 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         manifest,
         report_path,
     })
+}
+
+fn execution_lane(config: &SuiteRunConfig) -> String {
+    config
+        .control
+        .as_ref()
+        .map(|control| control.lane.clone())
+        .or_else(|| identity::nonempty_env("HARNESS_E2E_LANE"))
+        .unwrap_or_else(|| "local".into())
 }
 
 fn persist_report_preserving_observations(
@@ -1397,6 +1429,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         &mut report,
     )
     .await;
+    report.duplicate_entry_events = context.duplicate_entry_events();
     if let Err(error) = context.unbind_turn_completed().await {
         report.push_failure(
             RunStatus::InfrastructureError,
@@ -1407,15 +1440,36 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             ),
         );
     }
-    if let Err(error) = context.teardown(&session_id).await {
-        report.push_failure(
+    match context.teardown(&session_id).await {
+        Ok(removed) => {
+            if let Some(mut bindings) = report.trigger_bindings.take() {
+                bindings.teardown_removed = Some(removed);
+                let sessions =
+                    crate::trigger_bindings::sessions(&session_id, report.metrics.as_deref());
+                let verified =
+                    crate::trigger_bindings::verify_teardown(context, &sessions, &mut bindings)
+                        .await;
+                report.trigger_bindings = Some(bindings);
+                if let Err(error) = verified {
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Cleanup,
+                        format!(
+                            "scenario '{}': verify the teardown of trigger bindings: {error:#}",
+                            spec.id
+                        ),
+                    );
+                }
+            }
+        }
+        Err(error) => report.push_failure(
             RunStatus::InfrastructureError,
             FailurePhase::Cleanup,
             format!(
                 "scenario '{}': harness::teardown failed: {error:#}",
                 spec.id
             ),
-        );
+        ),
     }
     if let Err(error) = module.cleanup(context, &attempt_id).await {
         let failure = cleanup_failure(format!(
@@ -1475,7 +1529,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     finish_native_assessment(&spec, &mut report);
-    observe_harness(subject, &mut report);
+    observe_harness(subject, spec.id, &mut report);
     report.update_cost();
     report.update_efficiency();
     report.refresh_dimensions(expects_deliverables);
@@ -2363,6 +2417,33 @@ impl RunFailure {
     }
 }
 
+/// A failed read of the prompt surface after the turn: the engine's state
+/// reads it makes are idempotent, and preflight already rejected a Harness
+/// missing them, so the slot reruns.
+fn prompt_surface_failure(error: anyhow::Error) -> RunFailure {
+    RunFailure::retryable(
+        RunStatus::InfrastructureError,
+        FailurePhase::Collect,
+        "prompt_surface_collection_failed",
+        format!("capture the prompt surface: {error:#}"),
+    )
+}
+
+fn preflight_failure(failure: crate::prompt_surface::PreflightFailure) -> RunFailure {
+    let message = format!("Harness preflight: {}", failure.message);
+    let mut run_failure = RunFailure::retryable(
+        RunStatus::InfrastructureError,
+        FailurePhase::Setup,
+        failure.code,
+        message,
+    );
+    // A misconfigured stack stays misconfigured on a re-run.
+    if failure.code == crate::prompt_surface::HARNESS_MISCONFIGURED {
+        run_failure.retry_scope = crate::report::RetryScope::None;
+    }
+    run_failure
+}
+
 async fn execute(
     context: &E2eContext,
     request: ExecutionRequest<'_>,
@@ -2380,6 +2461,11 @@ async fn execute(
         output,
     } = request;
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
+    report.harness_preflight = Some(
+        crate::prompt_surface::preflight(context, subject)
+            .await
+            .map_err(preflight_failure)?,
+    );
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     module
         .setup(context, run_id)
@@ -2406,14 +2492,25 @@ async fn execute(
         .map_err(|error| journal_checkpoint_failure(FailurePhase::Execute, error.to_string()))?;
     ensure_not_cancelled(control)
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    let mut armed = crate::mechanism_gates::arm(
+        context,
+        spec.id,
+        session_id,
+        run_id,
+        subject.agent.as_deref(),
+    )
+    .await
+    .map_err(|error| scenario_setup_failure(format!("arm the mechanism gates: {error:#}")))?;
     context
         .bind_turn_completed()
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    context.count_entry_events(session_id);
     let mut messages = vec![spec.prompt.clone()];
     messages.extend(module.dialogue_followups(run_id));
     let scripted_dialogue = messages.len() > 1;
     let mut metrics = None;
+    let mut sent_turn_ids = Vec::new();
     for (exchange, message) in messages.into_iter().enumerate() {
         if exchange > 0 {
             module
@@ -2435,7 +2532,7 @@ async fn execute(
                 )),
                 session: (exchange == 0).then(|| SessionInit {
                     kind: Some(E2E_SESSION_KIND.into()),
-                    title: Some(format!("Harness E2E: {}", spec.id)),
+                    title: Some(crate::turn_lifecycle::session_title(spec.id)),
                     metadata: Some(json!({
                         "e2e_run_id": run_id,
                         "e2e_scenario": spec.id,
@@ -2465,7 +2562,7 @@ async fn execute(
             }
         };
         let response: SendResponse = context
-            .trigger("harness::send", request)
+            .trigger("harness::send", request.clone())
             .await
             .map_err(subject_dispatch_failure)?;
         if !response.accepted
@@ -2480,6 +2577,10 @@ async fn execute(
                     "harness::send exchange {exchange} returned an unexpected response: {response:?}"
                 ),
             ));
+        }
+        sent_turn_ids.push(response.turn_id.clone());
+        if exchange == 0 && armed.resends_first_send() {
+            armed.resend(context, &response.turn_id, request).await;
         }
         metrics = Some(
             match context
@@ -2501,6 +2602,8 @@ async fn execute(
                         wait_for_stopped_turn(context, session_id).await;
                     }
                     capture_partial_observation(context, session_id, report).await;
+                    // A subject failure still counts in Trends.
+                    capture_harness_trends(context, session_id, report, HARNESS_TREND_READS).await;
                     capture_failed_subject_assets(
                         context, module, spec, case, session_id, output, control, report,
                     )
@@ -2514,6 +2617,18 @@ async fn execute(
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
     module.after_dialogue(context, run_id, session_id).await;
+    match crate::turn_lifecycle::capture(context, spec.id, session_id, &sent_turn_ids, &metrics)
+        .await
+    {
+        Ok(lifecycle) => report.turn_lifecycle = Some(lifecycle),
+        Err(error) => {
+            capture_partial_observation(context, session_id, report).await;
+            return Err(collection_failure(
+                FailurePhase::Collect,
+                format!("capture the turn lifecycle: {error:#}"),
+            ));
+        }
+    }
     let terminal_status = match context
         .trigger::<_, Option<StatusReport>>(
             "harness::status",
@@ -2550,6 +2665,17 @@ async fn execute(
             error.to_string(),
         )
     })?;
+    report.transient_recovery = Some(
+        crate::transient_recovery::collect(context, session_id, &transcript, &metrics)
+            .await
+            .map_err(|error| {
+                RunFailure::new(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    format!("read the session tree's transient recovery: {error:#}"),
+                )
+            })?,
+    );
     let response = common::final_response(&transcript);
     let mut observation = ScenarioObservation {
         case: case.clone(),
@@ -2560,6 +2686,42 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
+    report.trigger_bindings = Some(
+        crate::trigger_bindings::collect(
+            context,
+            session_id,
+            &observation.transcript,
+            &observation.metrics,
+        )
+        .await
+        .map_err(|error| {
+            collection_failure(
+                FailurePhase::Collect,
+                format!("collect the trigger bindings: {error:#}"),
+            )
+        })?,
+    );
+    // Only the usage invariants read them; without them they judge fewer
+    // children and leave a nulled total unjudged, so a failed fetch must not
+    // void the run's outcome.
+    match crate::usage_invariants::child_transcripts(context, &observation.metrics).await {
+        Ok(transcripts) => report.child_transcripts = transcripts,
+        Err(error) => tracing::warn!(
+            session_id,
+            error = format!("{error:#}"),
+            "could not capture descendant transcripts"
+        ),
+    }
+    let sent_root = options_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.pointer("/fs_scope/root"))
+        .and_then(serde_json::Value::as_str);
+    report.prompt_surface = Some(
+        crate::prompt_surface::collect(context, subject, report, sent_root)
+            .await
+            .map_err(prompt_surface_failure)?,
+    );
+    capture_harness_trends(context, session_id, report, HARNESS_TREND_READS).await;
     if !observation.case.deliverable_contract.artifacts.is_empty() {
         let captured = module.capture(context, &observation, run_id).await;
         let captured =
@@ -2593,6 +2755,25 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
+    // After the evaluation: the probes register and remove bindings the
+    // scenario's own criteria would count. A probe the stack errs on is the
+    // gate's answer, never a collection failure.
+    report.mechanism_evidence = crate::mechanism_gates::capture(
+        context,
+        armed,
+        &crate::mechanism_gates::Attempt {
+            run_id,
+            session_id,
+            filesystem_root: spec.filesystem_root.as_deref(),
+            transcript: &observation.transcript,
+            metrics: &observation.metrics,
+            terminal_status: report
+                .terminal_status
+                .as_ref()
+                .and_then(|status| serde_json::to_value(status).ok()),
+        },
+    )
+    .await;
     apply_objective_evaluation(spec, report, objective)
 }
 
@@ -2695,14 +2876,24 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 }
 
 /// Checks the Harness invariants. Unresolved context limits make the
-/// measurement untrustworthy, an infrastructure error the slot re-runs. A
-/// lost function result is incomplete like a failed gate, whatever the agent
-/// delivered; the score stays what the criteria awarded.
-fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
+/// measurement untrustworthy, an infrastructure error the slot re-runs. Any
+/// other broken invariant (a lost function result, a call run past the
+/// repeated-failure breaker, unmetered or misaccounted usage, a misrouted
+/// model, a lost transient recovery, a trigger binding out of contract, a
+/// drifted prompt surface, a turn event or session state out of contract, a
+/// session without a shared prompt prefix, a mechanism gate) is incomplete
+/// like a failed gate, whatever the agent delivered; the score stays what the
+/// criteria awarded. On the approvals stack an approver releases every call,
+/// which bypasses the breaker, so none runs past it.
+fn observe_harness(subject: &SubjectConfig, scenario_id: &str, report: &mut E2eRunReport) {
     use crate::harness_invariants::HarnessInvariant;
     use crate::report::{CompletionState, EvaluatorAvailability};
 
     report.harness_violations = crate::harness_invariants::violations(report, subject);
+    if scenario_id != crate::scenarios::approval_roundtrip::ID {
+        let repeated = crate::harness_metrics::repeated_failures(report);
+        report.harness_violations.extend(repeated);
+    }
     let broken = |invariant| {
         report
             .harness_violations
@@ -2713,7 +2904,6 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             .join("; ")
     };
     let unresolved = broken(HarnessInvariant::FallbackContextLimits);
-    let lost = broken(HarnessInvariant::LostFunctionResult);
     if !unresolved.is_empty() {
         report.push_typed_failure(
             RunStatus::InfrastructureError,
@@ -2727,7 +2917,7 @@ fn observe_harness(subject: &SubjectConfig, report: &mut E2eRunReport) {
             CompletionState::Undetermined,
             EvaluatorAvailability::Unavailable,
         );
-    } else if !lost.is_empty() {
+    } else if !report.harness_violations.is_empty() {
         report.set_completion(
             CompletionState::TaskIncomplete,
             EvaluatorAvailability::Available,
@@ -3010,6 +3200,49 @@ async fn capture_partial_observation(
             %error,
             "could not capture partial E2E transcript"
         ),
+    }
+    if let (Some(metrics), Some(transcript)) = (&report.metrics, &report.transcript) {
+        match crate::transient_recovery::collect(context, session_id, transcript, metrics).await {
+            Ok(turns) => report.transient_recovery = Some(turns),
+            Err(error) => tracing::warn!(
+                session_id,
+                %error,
+                "could not capture partial E2E transient recovery"
+            ),
+        }
+    }
+}
+
+/// How long the optional trend reads may take together: each read alone may
+/// retry for its whole invocation timeout.
+const HARNESS_TREND_READS: Duration = Duration::from_secs(30);
+
+/// Trend inputs only: a read that fails, or is still running at `deadline`,
+/// leaves its metric absent.
+async fn capture_harness_trends(
+    context: &E2eContext,
+    session_id: &str,
+    report: &mut E2eRunReport,
+    deadline: Duration,
+) {
+    let reads = async {
+        match context.injected_prompt_tokens(session_id).await {
+            Ok(tokens) => report.injected_prompt_tokens = Some(tokens),
+            Err(error) => {
+                tracing::warn!(session_id, %error, "could not read injected prompt parts")
+            }
+        }
+        match context.judge_call_ms(session_id).await {
+            Ok(durations) => report.reconciliation_judge_ms = Some(durations),
+            Err(error) => tracing::warn!(session_id, %error, "could not read judge call spans"),
+        }
+    };
+    if tokio::time::timeout(deadline, reads).await.is_err() {
+        tracing::warn!(
+            session_id,
+            ?deadline,
+            "the Harness trend reads did not finish in time"
+        );
     }
 }
 
@@ -4796,7 +5029,7 @@ mod tests {
             { "message": { "role": "function_result", "function_call_id": "c1" } },
         ] }));
 
-        observe_harness(&harness_subject(None), &mut report);
+        observe_harness(&harness_subject(None), "t", &mut report);
 
         // Like a failed gate: still passed, incomplete, valid, scored.
         assert_eq!(report.status, RunStatus::Passed);
@@ -4805,6 +5038,312 @@ mod tests {
         assert!(report.failures.is_empty());
         assert_eq!(report.score, Some(100));
         assert!(report.harness_violations[0].detail.contains("call c2"));
+    }
+
+    #[test]
+    fn a_not_ready_harness_reruns_the_slot_and_a_misconfigured_one_does_not() {
+        use crate::prompt_surface::{PreflightFailure, HARNESS_MISCONFIGURED, HARNESS_NOT_READY};
+        let failure = |code| {
+            preflight_failure(PreflightFailure {
+                code,
+                message: "m".into(),
+            })
+        };
+
+        let not_ready = failure(HARNESS_NOT_READY);
+        let misconfigured = failure(HARNESS_MISCONFIGURED);
+
+        assert_eq!(not_ready.status, RunStatus::InfrastructureError);
+        assert_eq!(not_ready.code, HARNESS_NOT_READY);
+        assert_eq!(not_ready.message, "Harness preflight: m");
+        assert_eq!(not_ready.retry_scope, crate::report::RetryScope::SameSlot);
+        assert_eq!(misconfigured.code, HARNESS_MISCONFIGURED);
+        assert_eq!(misconfigured.retry_scope, crate::report::RetryScope::None);
+    }
+
+    #[test]
+    fn a_failed_prompt_surface_read_reruns_the_slot() {
+        let failure = prompt_surface_failure(anyhow::anyhow!("state::get timed out"));
+
+        assert_eq!(failure.status, RunStatus::InfrastructureError);
+        assert_eq!(failure.code, "prompt_surface_collection_failed");
+        assert_eq!(failure.retry_scope, crate::report::RetryScope::SameSlot);
+        assert_eq!(
+            failure.message,
+            "capture the prompt surface: state::get timed out"
+        );
+    }
+
+    #[test]
+    fn a_drifted_prompt_surface_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.prompt_surface = Some(crate::prompt_surface::PromptSurface {
+            default_prompt: Some("You are an iii agent worker.".into()),
+            response_language: Some("eng".into()),
+            sessions: vec![crate::prompt_surface::SessionSurface {
+                session_id: "session".into(),
+                frozen_prompt: Some("You are CUSTOM.".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::FrozenPromptDrift
+        );
+    }
+
+    #[test]
+    fn a_binding_left_after_teardown_leaves_a_passed_run_incomplete() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.trigger_bindings = Some(crate::trigger_bindings::TriggerBindings {
+            violations: crate::trigger_bindings::leaks(
+                &["sub_a".to_string()].into(),
+                &[("t1".into(), "sub_a".into())],
+                &[],
+            ),
+            ..Default::default()
+        });
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::LeakedTriggerBinding
+        );
+    }
+
+    #[test]
+    fn a_misrouted_generation_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [
+            { "entry_id": "e_t1_0_assistant", "message": {
+                "role": "assistant", "stop_reason": "end", "model": "other", "provider": "p",
+                "usage": { "input": 10, "output": 1 }, "content": [],
+            } },
+        ] }));
+        report.metrics = Some(crate::wire::Observed::from_normalized(
+            crate::wire::SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: crate::wire::SessionUsageTotals {
+                    input_tokens: Some(10),
+                    output_tokens: Some(1),
+                    ..Default::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            },
+        ));
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::ModelMisrouted
+        );
+    }
+
+    #[test]
+    fn an_unrecovered_transient_resume_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.transient_recovery = Some(crate::transient_recovery::turns(
+            "child",
+            &serde_json::json!({ "messages": [
+                { "entry_id": "e_t_a_transient_recovery_1_recovering" },
+            ] }),
+        ));
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::UnrecoveredTransientResume
+        );
+    }
+
+    #[test]
+    fn a_turn_without_its_completion_event_leaves_a_passed_run_incomplete() {
+        use crate::turn_lifecycle::{SentTurn, SessionLifecycle, TurnLifecycleEvidence};
+
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.turn_lifecycle = Some(TurnLifecycleEvidence::new(
+            "scenario",
+            Vec::new(),
+            vec![SentTurn {
+                turn_id: "t1".into(),
+                completed_by_event: false,
+            }],
+            vec![SessionLifecycle {
+                session_id: "session".into(),
+                parent_session_id: None,
+                depth: 0,
+                turn_ids: Vec::new(),
+                meta: Some(serde_json::json!({
+                    "status": "done", "kind": "e2e", "title": "Harness E2E: scenario",
+                    "metadata": { "e2e_run_id": report.attempt_id, "e2e_scenario": "scenario" },
+                })),
+            }],
+        ));
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::TurnEvents
+        );
+    }
+
+    #[test]
+    fn a_session_without_prompt_sections_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        let mut session: crate::wire::SessionUsage = serde_json::from_value(serde_json::json!({
+            "session_id": "session", "depth": 0, "turns": 1, "function_calls": 0,
+            "function_call_errors": 0,
+            "context": { "prompt_sections_fallback": "disabled" },
+        }))
+        .unwrap();
+        session.parent_session_id = None;
+        report.metrics = Some(crate::wire::Observed::from_normalized(
+            crate::wire::SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: crate::wire::SessionUsageTotals::default(),
+                by_session: vec![session],
+                traces: None,
+            },
+        ));
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert!(report.failures.is_empty());
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::PromptSectionsFallback
+        );
+    }
+
+    #[test]
+    fn a_failure_run_past_the_breaker_leaves_a_passed_run_incomplete() {
+        let step = |id: &str| {
+            [
+                serde_json::json!({ "message": { "role": "assistant", "content": [
+                    { "type": "function_call", "id": id, "function_id": "a::b", "arguments": {} },
+                ] } }),
+                serde_json::json!({ "origin": { "turn_id": "t1" }, "message": {
+                    "role": "function_result", "function_call_id": id, "is_error": true,
+                    "details": { "error": { "code": "invocation_failed", "message": "boom" } },
+                } }),
+            ]
+        };
+        let messages = ["c1", "c2", "c3"]
+            .iter()
+            .flat_map(|id| step(id))
+            .collect::<Vec<_>>();
+        let mut report = full_marks_run(serde_json::json!({ "messages": messages.clone() }));
+
+        observe_harness(&harness_subject(None), "t", &mut report);
+
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::RepeatedFailureExecuted
+        );
+
+        // Behind the approval gate an approver releases every call, past the breaker.
+        let mut gated = full_marks_run(serde_json::json!({ "messages": messages }));
+        observe_harness(
+            &harness_subject(None),
+            crate::scenarios::approval_roundtrip::ID,
+            &mut gated,
+        );
+        assert!(gated.harness_violations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn trend_reads_an_engine_does_not_answer_end_at_their_deadline() {
+        use futures_util::StreamExt;
+        // An engine that takes every invocation and answers none: each read
+        // alone would wait for its whole invocation timeout.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while socket.next().await.is_some() {}
+        });
+        let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
+        while client.get_connection_state() != iii_sdk::runtime::IIIConnectionState::Connected {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let context = E2eContext::from_client(client);
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            capture_harness_trends(&context, "s", &mut report, Duration::from_millis(100)),
+        )
+        .await
+        .expect("the trend reads end at their deadline");
+
+        assert_eq!(report.injected_prompt_tokens, None);
+        assert_eq!(report.reconciliation_judge_ms, None);
+    }
+
+    #[test]
+    fn a_broken_mechanism_gate_leaves_a_passed_run_incomplete_with_its_score() {
+        let mut report = full_marks_run(serde_json::json!({ "messages": [] }));
+        report.mechanism_evidence = Some(crate::mechanism_gates::MechanismEvidence {
+            scenario: "persistent_state".into(),
+            probes: [(
+                "chokepoint".to_string(),
+                serde_json::json!([
+                    { "function_id": "harness::state::get", "denied": false, "timed_out": false },
+                ]),
+            )]
+            .into(),
+        });
+
+        observe_harness(
+            &harness_subject(None),
+            crate::scenarios::persistent_state::ID,
+            &mut report,
+        );
+
+        assert_eq!(report.status, RunStatus::Passed);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(100));
+        assert_eq!(
+            report.harness_violations[0].invariant,
+            crate::harness_invariants::HarnessInvariant::MechanismGate
+        );
+        assert!(report.harness_violations[0]
+            .detail
+            .starts_with("chokepoint_denies: \"harness::state::get\""));
     }
 
     #[test]
@@ -4831,6 +5370,7 @@ mod tests {
                     cache_write_tokens: None,
                     reasoning_tokens: None,
                     cost_usd: None,
+                    by_model: Vec::new(),
                     context: Some(serde_json::json!({
                         "model": "m", "usable": 6_349, "effective_max_output_tokens": 1_024,
                     })),
@@ -4839,7 +5379,7 @@ mod tests {
             },
         ));
 
-        observe_harness(&harness_subject(Some(128_000)), &mut report);
+        observe_harness(&harness_subject(Some(128_000)), "t", &mut report);
 
         assert_eq!(report.status, RunStatus::InfrastructureError);
         assert_eq!(report.completion, CompletionState::Undetermined);

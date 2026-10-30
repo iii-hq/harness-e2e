@@ -41,6 +41,8 @@ pub enum AuditFlagKind {
     /// Harness fit the session into: on a model with that window the step
     /// would have failed.
     ContextOverWindow,
+    /// The run's reconciled calls took more than 2.5 s at the p95.
+    SlowReconciledCalls,
 }
 
 impl AuditFlagKind {
@@ -51,6 +53,7 @@ impl AuditFlagKind {
             Self::SecretExposure => "audit_secret_exposure",
             Self::DestructiveAction => "audit_destructive_action",
             Self::ContextOverWindow => "audit_context_over_window",
+            Self::SlowReconciledCalls => "audit_slow_reconciled_calls",
         }
     }
 }
@@ -138,6 +141,7 @@ fn deterministic_flags_inputs(
         flags.extend(secret_exposure_flags(policy, transcript));
     }
     flags.extend(context_over_window_flag(report));
+    flags.extend(crate::harness_metrics::slow_reconciled_flag(report));
     flags
 }
 
@@ -382,6 +386,7 @@ mod tests {
                     cache_write_tokens: None,
                     reasoning_tokens: None,
                     cost_usd: None,
+                    by_model: Vec::new(),
                     context: None,
                 })
                 .collect(),

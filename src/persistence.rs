@@ -56,6 +56,11 @@ const SCHEMA: &[&str] = &[
 
 const STORAGE_TABLE: &str = "harness_e2e_storage";
 const PROJECTION_TABLES: &[&str] = &["attempts", "runs", "artifacts", "archives"];
+/// What a run's dashboard projection holds, beyond the tables' statements.
+/// Bumping it moves the projection tables' fingerprints, so the next start
+/// reprojects every retained execution once from its native bundle: bump it
+/// when the projection gains a measure. 1: the Harness trend measures.
+const PROJECTION_REVISION: u32 = 1;
 /// Tables of layouts this runner no longer writes; dropped when found. The
 /// `history_*` tables held Release Control history imported as a parallel
 /// record; imported executions are ordinary executions now. `saved_plans`
@@ -80,9 +85,14 @@ struct TableLayout {
 }
 
 impl TableLayout {
-    /// Identity of the table layout: the statements that create it.
+    /// Identity of the table layout: the statements that create it, and for
+    /// a projection table the `PROJECTION_REVISION`.
     fn fingerprint(&self) -> String {
-        crate::artifact::sha256_bytes(self.statements.join("\n").as_bytes())
+        let mut layout = self.statements.join("\n");
+        if PROJECTION_TABLES.contains(&self.name.as_str()) {
+            layout.push_str(&format!("\n-- projection revision {PROJECTION_REVISION}"));
+        }
+        crate::artifact::sha256_bytes(layout.as_bytes())
     }
 }
 
@@ -1630,6 +1640,59 @@ pub(crate) mod tests {
                 .count(),
             count
         );
+    }
+
+    #[tokio::test]
+    async fn a_projection_written_before_the_current_revision_is_rebuilt_at_start() {
+        // The fingerprints a runner before projection revisions recorded:
+        // the statements alone.
+        let (client, server) = fake_database(move |sql| {
+            let layouts = table_layouts();
+            if sql.contains("sqlite_master") {
+                json!(layouts
+                    .iter()
+                    .map(|layout| json!({"name": layout.name}))
+                    .collect::<Vec<_>>())
+            } else if sql == format!("SELECT * FROM {STORAGE_TABLE}") {
+                json!(layouts
+                    .iter()
+                    .map(|layout| json!({"name": layout.name, "fingerprint": crate::artifact::sha256_bytes(layout.statements.join("\n").as_bytes())}))
+                    .collect::<Vec<_>>())
+            } else if sql.starts_with("SELECT * FROM executions ORDER BY") {
+                json!([record_row(
+                    &format!("{:032x}", 1),
+                    "2026-09-20T12:00:00Z",
+                    "context_pressure",
+                    ""
+                )])
+            } else {
+                panic!("unexpected start query: {sql}")
+            }
+        })
+        .await;
+        let root = tempfile::tempdir().unwrap();
+        let summary = Persistence::new(client.clone(), "harness_e2e".into(), "default".into())
+            .initialize(root.path())
+            .await
+            .unwrap();
+        let statements = transactions(client, server).await.concat();
+
+        let sql = |statement: &Value| statement["sql"].as_str().unwrap().to_owned();
+        let dropped = statements
+            .iter()
+            .filter_map(|statement| {
+                sql(statement)
+                    .strip_prefix("DROP TABLE IF EXISTS ")
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        let mut projection_tables = PROJECTION_TABLES.to_vec();
+        projection_tables.sort();
+        assert_eq!(dropped, projection_tables);
+        assert_eq!(summary["executions"], json!(1));
+        assert!(statements
+            .iter()
+            .any(|statement| sql(statement).starts_with("INSERT INTO executions")));
     }
 
     #[tokio::test]
