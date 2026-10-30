@@ -1859,6 +1859,13 @@
         "configuration_sha256"
       ],
       "properties": {
+        "allow_prune": {
+          "description": "`harness::context-policy` `allow_prune` for the subject model: false on a model that binds thinking (Claude 5.5, Fable 5.1), which the Harness never relieves by pruning aged results: only by compaction and, when a compacted request stays over budget, the emergency result reduction.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "configuration_id": {
           "description": "The Harness's configuration entry and the SHA-256 of its value.",
           "type": "string"
