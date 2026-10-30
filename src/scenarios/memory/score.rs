@@ -62,6 +62,15 @@ pub struct ExchangePrompt {
     /// when it stamped none.
     pub sha_matches: Option<bool>,
     pub memory_section: Option<String>,
+    /// The digest of the cacheable prompt prefix the Harness sent on the
+    /// exchange's last step (`harness::status` `context.prompt_surface_digest`);
+    /// `None` when it sent no split prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_digest: Option<String>,
+    /// Why the runner has no digest to compare: the status read failed, or
+    /// never ran for this exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_unread: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,6 +138,9 @@ impl Extraction {
 #[derive(Debug, Default)]
 pub struct Snapshot {
     pub prompts: Vec<PromptRecord>,
+    /// Each exchange's prompt prefix digest, in order, or why the status
+    /// could not be read.
+    pub surface_digests: Vec<Result<Option<String>, String>>,
     pub compaction: Option<String>,
     pub retrieval: Option<Retrieval>,
     /// Memory's stored text of each case seed, `None` until saved.
@@ -295,7 +307,13 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
     let prompts = observed
         .exchanges
         .iter()
-        .map(|exchange| {
+        .enumerate()
+        .map(|(index, exchange)| {
+            let (surface_digest, surface_unread) = match snapshot.surface_digests.get(index) {
+                Some(Ok(digest)) => (digest.clone(), None),
+                Some(Err(error)) => (None, Some(error.clone())),
+                None => (None, Some("no status was read after it".to_string())),
+            };
             let seen: Vec<&PromptRecord> = records
                 .iter()
                 .filter(|record| record.turn_id == exchange.turn_id && record.step == 0)
@@ -310,6 +328,8 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
                     .or(seen.last())
                     .and_then(|record| memory_section(&record.system_prompt))
                     .map(|section| if foreign(section) { WITHHELD } else { section }.to_string()),
+                surface_digest,
+                surface_unread,
             }
         })
         .collect();
@@ -769,15 +789,38 @@ fn section_frozen(evidence: &Evidence) -> (bool, String) {
         .filter(|(_, prompt)| prompt.memory_section.as_deref() != Some(first))
         .map(|(index, _)| index)
         .collect();
-    if moved.is_empty() {
+    if !moved.is_empty() {
+        return (
+            false,
+            format!("exchanges whose memory section differs from exchange 0's: {moved:?}"),
+        );
+    }
+    // The section rides in the prompt's per-session tail: a memory change
+    // that reached the cacheable prefix moves its digest, or unsplits it.
+    let Some(surface) = evidence.prompts[0].surface_digest.as_deref() else {
+        return (
+            false,
+            "exchange 0 sent no cacheable prompt prefix digest".to_string(),
+        );
+    };
+    let rewritten: Vec<usize> = evidence
+        .prompts
+        .iter()
+        .enumerate()
+        .filter(|(_, prompt)| prompt.surface_digest.as_deref() != Some(surface))
+        .map(|(index, _)| index)
+        .collect();
+    if rewritten.is_empty() {
         (
             true,
-            "every exchange kept exchange 0's memory section".to_string(),
+            "every exchange kept exchange 0's memory section and prompt prefix digest".to_string(),
         )
     } else {
         (
             false,
-            format!("exchanges whose memory section differs from exchange 0's: {moved:?}"),
+            format!(
+                "exchanges whose prompt prefix digest differs from exchange 0's: {rewritten:?}"
+            ),
         )
     }
 }
@@ -1144,6 +1187,21 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             _ => problems.push(format!("exchange {index}: the observer recorded no prompt")),
         }
     }
+    // Only the frozen-section gate reads the digests: elsewhere a failed
+    // status read costs nothing.
+    if case
+        .criteria
+        .iter()
+        .any(|criterion| criterion.check == Check::SectionFrozen)
+    {
+        for (index, prompt) in evidence.prompts.iter().enumerate() {
+            if let Some(error) = &prompt.surface_unread {
+                problems.push(format!(
+                    "exchange {index}: no prompt prefix digest was read: {error}"
+                ));
+            }
+        }
+    }
     if case.compact_before.is_some() && evidence.compaction_status.as_deref() != Some("ok") {
         problems.push(format!(
             "the forced compaction did not report ok (status: {})",
@@ -1287,12 +1345,15 @@ mod tests {
             .collect();
         Snapshot {
             prompts: records,
+            surface_digests: vec![Ok(Some(SURFACE.into())); observed.exchanges.len()],
             compaction: status.map(str::to_string),
             retrieval: Some(Retrieval::Lexical),
             changes: applied(case),
             ..Snapshot::default()
         }
     }
+
+    const SURFACE: &str = "sha256:surface";
 
     fn evidence_with(
         case: &Case,
@@ -1436,6 +1497,8 @@ mod tests {
                 recorded: true,
                 sha_matches: Some(true),
                 memory_section: Some("\n\n# Memory — bank: e2e-a\nbody".into()),
+                surface_digest: None,
+                surface_unread: Some("no status was read after it".into()),
             }
         );
         assert_eq!(
@@ -1444,6 +1507,8 @@ mod tests {
                 recorded: false,
                 sha_matches: Some(false),
                 memory_section: None,
+                surface_digest: None,
+                surface_unread: Some("no status was read after it".into()),
             }
         );
     }
@@ -1475,6 +1540,8 @@ mod tests {
                 recorded: true,
                 sha_matches: None,
                 memory_section: Some(HEADER.into()),
+                surface_digest: None,
+                surface_unread: Some("no status was read after it".into()),
             }]
         );
         assert_eq!(evaluate(case, &found).infrastructure_error, None);
@@ -2025,6 +2092,63 @@ mod tests {
         assert_eq!(score(rewritten), Some(0));
         // No section is nothing kept frozen.
         assert_eq!(score(evidence_with(case, seen(), PROMPT, None)), Some(0));
+        // Memory must not reach the Harness's cacheable prefix either: a
+        // turn whose prefix digest moved, or that sent none, rewrote it.
+        let mut moved = evidence_with(case, seen(), &frozen, None);
+        moved.prompts[2].surface_digest = Some("sha256:other".into());
+        assert_eq!(score(moved), Some(0));
+        let mut unsplit = evidence_with(case, seen(), &frozen, None);
+        unsplit.prompts[1].surface_digest = None;
+        assert_eq!(score(unsplit), Some(0));
+    }
+
+    /// A prefix digest the runner failed to read says nothing about the
+    /// Harness: the frozen-section gate cannot score it, so it reruns.
+    #[test]
+    fn an_unread_prompt_prefix_digest_is_an_infrastructure_error() {
+        let case = case_named("memory_rule_changed_mid_session");
+        let answers = vec!["a"; 1 + case.followups.len()];
+        let snapshot_of = |seen: &mut Observed| recorded(case, seen, PROMPT, Some("ok"));
+        let infrastructure = |edit: &dyn Fn(&mut Snapshot)| {
+            let mut seen = observed(&answers, vec![]);
+            let mut snapshot = snapshot_of(&mut seen);
+            edit(&mut snapshot);
+            evaluate(case, &assemble(case, RUN, seen, snapshot)).infrastructure_error
+        };
+        assert_eq!(infrastructure(&|_| {}), None);
+        // The status read failed after exchange 1.
+        let failed = infrastructure(&|snapshot| {
+            snapshot.surface_digests[1] = Err("harness::status timed out".into())
+        })
+        .unwrap();
+        assert!(
+            failed.contains("exchange 1") && failed.contains("timed out"),
+            "{failed}"
+        );
+        // The last exchange's read never ran.
+        let missing = infrastructure(&|snapshot| {
+            snapshot.surface_digests.pop();
+        })
+        .unwrap();
+        assert!(
+            missing.contains(&format!("exchange {}", case.followups.len())),
+            "{missing}"
+        );
+        // A status read fine but without a digest is the Harness's: scored.
+        assert_eq!(
+            infrastructure(&|snapshot| snapshot.surface_digests[1] = Ok(None)),
+            None
+        );
+
+        // A case that does not check the section needs no digest.
+        let recall = case_named("memory_relevant_recall");
+        let mut seen = observed(&vec!["a"; 1 + recall.followups.len()], vec![]);
+        let mut snapshot = recorded(recall, &mut seen, PROMPT, Some("ok"));
+        snapshot.surface_digests.clear();
+        assert_eq!(
+            evaluate(recall, &assemble(recall, RUN, seen, snapshot)).infrastructure_error,
+            None
+        );
     }
 
     #[test]

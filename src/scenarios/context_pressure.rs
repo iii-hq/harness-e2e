@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
-use super::assessment::{self, AssessmentSpec};
+use super::assessment::{self, AssessmentOutcome, AssessmentSpec};
 use super::common::{self, ObservedFunctionCall};
 use super::validation_loop::suffix;
 use super::{
@@ -52,7 +52,7 @@ const MAX_SEGMENTS: u32 = 48;
 const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::gate_in(
     "charter_preserved",
     40,
-    "Was the charter read only before the first document, did every root step's prompt fit the usable window, and does the final report repeat its mission, checkpoint, quorum and seal verbatim?",
+    "Was the charter read only before the first document, did every root step's prompt fit the usable window, compacting when that window cannot hold every document, and does the final report repeat its mission, checkpoint, quorum and seal verbatim?",
     EvaluationDimension::Deliverable,
 )
 .labeled("Charter kept verbatim within the usable window");
@@ -516,6 +516,41 @@ fn root_window(observation: &ScenarioObservation) -> (Option<u64>, Option<u64>) 
     (peak, usable)
 }
 
+/// The documents alone measured 221k to 231k prompt tokens in the
+/// context-capacity lane (DeepSeek, 2026-10-26): a usable window below this
+/// cannot hold them, so the Harness must compact to finish within it.
+const UNCOMPACTED_LOAD_TOKENS: u64 = 200_000;
+
+/// Compaction records in the root session's transcript.
+fn root_compactions(observation: &ScenarioObservation) -> usize {
+    observation
+        .transcript
+        .get("messages")
+        .and_then(Value::as_array)
+        .map_or(0, |messages| {
+            messages
+                .iter()
+                .filter(|entry| {
+                    entry.pointer("/custom/custom_type").and_then(Value::as_str)
+                        == Some("compaction")
+                })
+                .count()
+        })
+}
+
+/// The charter gate: a charter otherwise kept is unverified, not passed, when
+/// whether the load needed a compaction is unknown.
+fn charter_outcome(
+    held: bool,
+    compacted_if_needed: Option<bool>,
+    details: String,
+) -> AssessmentOutcome {
+    match compacted_if_needed {
+        None if held => CHARTER_PRESERVED.unverified(details),
+        _ => CHARTER_PRESERVED.full_or_zero(held && compacted_if_needed == Some(true), details),
+    }
+}
+
 /// Report budget: the expected report plus slack, so pasting document text
 /// forfeits the conciseness signal without failing a gate.
 fn report_budget_chars(segments: u32) -> usize {
@@ -541,6 +576,17 @@ fn evaluate_rung(
     let within_window = peak.zip(usable).is_none_or(|(peak, usable)| {
         peak as f64 <= usable as f64 * (1.0 + crate::report::PROMPT_RECONCILIATION_TOLERANCE)
     });
+    // A window that fits only part of the load and no compaction: the
+    // context manager was never exercised, whatever the peak shows.
+    // No window reported and no compaction: whether one was needed is unknown.
+    let compactions = root_compactions(observation);
+    let compacted_if_needed = match usable {
+        _ if compactions > 0 => Some(true),
+        Some(usable) => Some(usable >= UNCOMPACTED_LOAD_TOKENS),
+        None => None,
+    };
+    let charter_held =
+        ingestion.charter_before_documents && report.charter_preserved && within_window;
     // The quorum is one digit any summary may hold; the three codes are not.
     let planted = charter(run_id);
     let summary_kept = crate::mechanism_gates::summary_template(
@@ -554,11 +600,13 @@ fn evaluate_rung(
         && response_chars <= report_budget_chars(segments);
 
     Ok(assessment::build_evaluation([
-        CHARTER_PRESERVED.full_or_zero(
-            ingestion.charter_before_documents && report.charter_preserved && within_window,
+        charter_outcome(
+            charter_held,
+            compacted_if_needed,
             format!(
                 "charter_read_only_before_documents={} (charter_calls={}), charter_values_in_report={}, \
-                 within_usable_window={within_window} (peak root prompt {}, usable window {})",
+                 within_usable_window={within_window} (peak root prompt {}, usable window {}), \
+                 compactions={compactions} (required below a {UNCOMPACTED_LOAD_TOKENS}-token window)",
                 ingestion.charter_before_documents,
                 ingestion.charter_calls,
                 report.charter_preserved,
@@ -775,8 +823,34 @@ pub(crate) mod tests {
         assert!(audit.segments_exact);
     }
 
+    /// The compaction record the Harness logs once the documents fill the
+    /// window: a summary in the template that carries the charter.
+    fn compaction_record(run_id: &str) -> Value {
+        let planted = charter(run_id);
+        let headings = [
+            "## Goal",
+            "## Constraints & Preferences",
+            "## Progress",
+            "## Key Decisions",
+            "## Actions Taken",
+            "## Next Steps",
+            "## Critical Context",
+            "## Relevant Files",
+        ];
+        let summary = format!(
+            "{}\n{} {} {}",
+            headings.join("\n- x\n"),
+            planted.mission,
+            planted.checkpoint,
+            planted.seal
+        );
+        json!({ "custom": { "custom_type": "compaction", "data": { "summary": summary } } })
+    }
+
     fn evaluation_of(calls: Vec<ObservedFunctionCall>, response: &str) -> ObjectiveEvaluation {
         let run_id = "run";
+        // A delivery that read nothing never filled the window.
+        let compacted = !calls.is_empty();
         let blocks = calls
             .into_iter()
             .map(|call| {
@@ -788,10 +862,15 @@ pub(crate) mod tests {
                 })
             })
             .collect::<Vec<_>>();
+        let mut messages = vec![json!({ "message": { "role": "assistant", "content": blocks } })];
+        if compacted {
+            messages.push(compaction_record(run_id));
+        }
         let observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::ContextPressure,
             run_id,
-            json!({ "messages": [{ "message": { "role": "assistant", "content": blocks } }] }),
+            // No window snapshot here: a compaction record settles the gate.
+            json!({ "messages": messages }),
             response,
             Vec::new(),
         );
@@ -933,8 +1012,17 @@ pub(crate) mod tests {
         let completion = |observation: &ScenarioObservation| {
             assessment::completion(ASSESSMENTS, &evaluate_rung(observation, run_id).unwrap())
         };
-        let single =
-            |peak: u64, usable: Option<u64>| completion(&observe(&[Some(peak)], peak, usable));
+        // The root session records a compaction where the Harness compacted.
+        let compacted = |mut observation: ScenarioObservation| {
+            observation.transcript["messages"]
+                .as_array_mut()
+                .unwrap()
+                .push(compaction_record(run_id));
+            observation
+        };
+        let single = |peak: u64, usable: Option<u64>| {
+            completion(&compacted(observe(&[Some(peak)], peak, usable)))
+        };
 
         // The context-capacity lane on 2026-10-26: 256k sent into 128k.
         assert_eq!(
@@ -955,6 +1043,38 @@ pub(crate) mod tests {
         let reported = observe(&[Some(120_000), Some(256_135)], 376_135, Some(128_000));
         assert_eq!(root_window(&reported), (Some(256_135), Some(128_000)));
         assert_eq!(completion(&reported), CompletionState::TaskIncomplete);
+
+        // A window too small for the load is under pressure only once the
+        // Harness compacts: without a compaction the context manager, and
+        // the thinking a compaction strips, went untested.
+        let unpressured = observe(&[Some(120_000)], 120_000, Some(128_000));
+        assert_eq!(completion(&unpressured), CompletionState::TaskIncomplete);
+        let evaluation = evaluate_rung(&unpressured, run_id).unwrap();
+        let charter = evaluation
+            .awards
+            .iter()
+            .find(|award| award.id == CHARTER_PRESERVED.id())
+            .unwrap();
+        assert!(
+            charter.reason.contains("compactions=0"),
+            "{}",
+            charter.reason
+        );
+        // Also when the peak went unmeasured, which skips the window check.
+        assert_eq!(completion(&unreported), CompletionState::TaskIncomplete);
+        assert_eq!(
+            completion(&compacted(unreported)),
+            CompletionState::Completed
+        );
+        // No window reported and no compaction: whether the load needed one is
+        // unknown, so the run is undetermined rather than completed.
+        let windowless = observe(&[Some(120_000)], 120_000, None);
+        assert_eq!(completion(&windowless), CompletionState::Undetermined);
+        // The regression's window holds the whole load: nothing to compact.
+        assert_eq!(
+            completion(&observe(&[Some(256_135)], 256_135, Some(596_000))),
+            CompletionState::Completed
+        );
     }
 
     #[test]

@@ -277,7 +277,7 @@
     {
       "id": "regression",
       "label": "Core runtime regression",
-      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Thirteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Four more probe the Harness's own contract for under a cent each: the sends harness::send must refuse, every stage of a function call, trigger bindings from registration to teardown, and how a refused turn fails. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
+      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Fourteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness, and a sub-agent whose validator rejects it until its retries run out. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Four more probe the Harness's own contract for under a cent each: the sends harness::send must refuse, every stage of a function call, trigger bindings from registration to teardown, and how a refused turn fails. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -298,6 +298,7 @@
         "repeated_failure_breaker",
         "truncated_call_guard",
         "restart_recovery",
+        "subagent_validation_failure",
         "harness_contract_probe",
         "dispatch_pipeline",
         "binding_contract_probe",
@@ -518,7 +519,8 @@
         "spawn_depth_cap",
         "repeated_failure_breaker",
         "truncated_call_guard",
-        "restart_recovery"
+        "restart_recovery",
+        "subagent_validation_failure"
       ],
       "repetitions": 1,
       "technical_retries": 0,
@@ -527,7 +529,7 @@
     {
       "id": "regression-x11",
       "label": "Core runtime regression ×11 (harness comparison)",
-      "purpose": "To compare two Harness versions, the thirteen Core runtime regression tests (not its four Harness contract probes) run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
+      "purpose": "To compare two Harness versions, the fourteen Core runtime regression tests (not its four Harness contract probes) run eleven independent times on each, enough to rule out a quality drop of more than 5 points once failures that are not the Harness's are set aside. Decided on 2026-10-24: run on demand when a Harness release is judged, about US$3.3 a comparison for both arms on deepseek-flash, within a ceiling of about US$50 together with software-engineering-x9. Dispatch it once per arm, on the pair of stacks in stacks/harness-ab/.",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -547,7 +549,8 @@
         "spawn_depth_cap",
         "repeated_failure_breaker",
         "truncated_call_guard",
-        "restart_recovery"
+        "restart_recovery",
+        "subagent_validation_failure"
       ],
       "repetitions": 11,
       "technical_retries": 1,
@@ -623,6 +626,59 @@
       "repetitions": 3,
       "technical_retries": 1,
       "lane": "local-memory-learning"
+    },
+    {
+      "id": "memory-smoke",
+      "label": "Memory smoke",
+      "purpose": "On every Harness release and daily, does the Harness still carry what the memory worker gives a session? Three memory cases, once each: a stored fact recalled when it is relevant, a question asked again in the same session without the memory injected twice, and a rule changed mid-session that reaches the next turn as an update while the memory section and the Harness's cacheable prompt prefix stay as the first turn froze them. Runs on the memory stack. Not covered: the other memory cases, which Memory quality runs for memory releases, and what memory learns (Memory learning).",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [],
+      "scenarios": [
+        "memory_relevant_recall",
+        "memory_session_repeat",
+        "memory_rule_changed_mid_session"
+      ],
+      "repetitions": 1,
+      "technical_retries": 1,
+      "lane": "local-memory-smoke"
+    },
+    {
+      "id": "harness-weekly",
+      "label": "Harness mechanisms (weekly)",
+      "purpose": "Once a week, a Harness mechanism no daily suite reaches: a function bound to a state trigger runs on the trigger's event without the agent (a mechanical reaction), copies the whole event, and its write wakes only the session that armed it. It complements the binding checks of the daily suites. Not covered: wakes and timers (Core runtime regression).",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "modules": [],
+      "scenarios": [
+        "mechanical_reaction"
+      ],
+      "repetitions": 1,
+      "technical_retries": 1,
+      "lane": "local-harness-weekly"
+    },
+    {
+      "id": "context-thinking",
+      "label": "Context pressure with signed thinking (weekly)",
+      "purpose": "Once a week, does a compaction keep a model that signs its reasoning working? The long-session context pressure test runs on a Claude 5.5 model, which signs each thinking block over the exact prompt before it, on the context-thinking stack: the usable window is cut to about 128 thousand tokens so the session compacts, and the Anthropic provider rejects a thinking block whose prefix changed instead of dropping it. A compaction that leaves thinking signed over the history it replaced fails the run, where on any other stack the model would silently lose that reasoning. Not covered: models that do not sign thinking; scores here are comparable only with other runs of this suite.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [],
+      "scenarios": [
+        "context_pressure"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-context-thinking"
     }
   ]
 }

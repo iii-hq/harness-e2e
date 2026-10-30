@@ -65,6 +65,9 @@ struct Run {
     strays: Vec<String>,
     /// The bank once extraction read the teacher session.
     taught: Option<Extraction>,
+    /// Each answered exchange's prompt prefix digest, in order, or why the
+    /// status could not be read.
+    surface_digests: Vec<Result<Option<String>, String>>,
 }
 
 /// A memory as memory stored it.
@@ -268,6 +271,7 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
             teacher: None,
             strays: Vec::new(),
             taught: None,
+            surface_digests: Vec::new(),
         },
     );
     prompts
@@ -782,6 +786,36 @@ pub async fn apply_changes(context: &E2eContext, case: &Case, run_id: &str, fini
     }
 }
 
+/// Keeps the digest of the cacheable prompt prefix the session's last step
+/// sent, once an exchange has its answer. A status that cannot be read keeps
+/// its error, an infrastructure error at evaluation rather than a gate failed.
+pub async fn record_surface(context: &E2eContext, run_id: &str, session_id: &str) {
+    let digest = context
+        // Only the verbose status carries the context snapshot.
+        .trigger_value(
+            "harness::status",
+            json!({"session_id": session_id, "verbose": true}),
+        )
+        .await
+        .map_err(|error| format!("{error:#}"))
+        .and_then(surface_digest);
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        run.surface_digests.push(digest);
+    }
+}
+
+/// The prefix digest a verbose status report carries, if any. A null report
+/// (an unknown session) is unread, not a report without a digest.
+fn surface_digest(status: Value) -> Result<Option<String>, String> {
+    if status.is_null() {
+        return Err("harness::status returned null for the session".to_string());
+    }
+    Ok(status
+        .pointer("/context/prompt_surface_digest")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
 /// Compacts the session and keeps the outcome's status for `snapshot`.
 pub async fn compact(context: &E2eContext, run_id: &str, session_id: &str) {
     let status = match context
@@ -805,6 +839,7 @@ pub fn snapshot(run_id: &str) -> Snapshot {
         .get(run_id)
         .map_or_else(Snapshot::default, |run| Snapshot {
             prompts: lock_unpoisoned(&run.prompts).clone(),
+            surface_digests: run.surface_digests.clone(),
             compaction: run.compaction.clone(),
             retrieval: run.retrieval,
             stored: run
@@ -958,6 +993,20 @@ mod tests {
     use super::*;
     use crate::scenarios::memory::cases::{CASES, CHANGING};
     use serde_json::json;
+
+    /// A null report (the Harness does not know the session) says nothing
+    /// about the prefix, so it is an unread digest; a report without one is
+    /// the Harness's to answer for.
+    #[test]
+    fn a_null_status_report_leaves_the_prefix_digest_unread() {
+        let digest = "sha256:prefix";
+        assert_eq!(
+            surface_digest(json!({"context": {"prompt_surface_digest": digest}})),
+            Ok(Some(digest.to_string()))
+        );
+        assert_eq!(surface_digest(json!({"context": {}})), Ok(None));
+        assert!(surface_digest(Value::Null).is_err());
+    }
 
     fn input(session: &str, step: u64, prompt: &str) -> Value {
         json!({

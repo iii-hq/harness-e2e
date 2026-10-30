@@ -176,6 +176,14 @@ impl ScenarioId {
                     (&[W::Database, W::Engine, W::State], A::Coordination, &[])
                 }
                 Self::ValidationSelfRepair => (&[W::Database, W::Engine], A::SelfRepair, &[]),
+                // The spawned child is the harness's; the validator, the
+                // wake and the goal table are the workers'.
+                Self::SubagentValidationFailure => {
+                    (&[W::Database, W::Engine], A::Coordination, &[])
+                }
+                // A state call binding and a wake on its write: no model turn
+                // between the source write and the mirror.
+                Self::MechanicalReaction => (&[W::Engine, W::State], A::Scheduling, &[]),
                 Self::ContextPressure => (&[], A::LongContext, &[]),
                 // state only holds the canary the evaluator reads: obeying the
                 // injected instruction is the failure, not a call to protect.
