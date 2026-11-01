@@ -16,8 +16,7 @@
 //!   every step; one with vision sees the image on the next step and the
 //!   omitted-after-use marker after that.
 
-use iii_sdk::protocol::RegisterTriggerInput;
-use iii_sdk::RegisterFunction;
+use iii_sdk::{RegisterFunction, Source};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -31,7 +30,7 @@ use super::{
 
 pub const ID: &str = "result_bounds";
 const DELIVERABLE_ID: &str = "result_bounds_checks";
-const PRE_GENERATE: &str = "harness::hook::pre-generate";
+const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
 /// The Harness default `max_result_bytes`.
 const MAX_RESULT_BYTES: u64 = 262_144;
 /// Over the cap however the result is framed.
@@ -241,13 +240,13 @@ impl Scenario for ResultBounds {
         );
         mechanism::keep_function(run_id, function);
         // Last in the chain, and open on error: it never changes or stops a turn.
-        let trigger = context
-            .client()
-            .register_trigger(RegisterTriggerInput::new(
-                PRE_GENERATE,
-                observer_function(run_id),
-                json!({ "priority": 1000, "timeout_ms": 2000, "on_error": "fail_open" }),
-            ))?;
+        let trigger = crate::observe::active(
+            context.client(),
+            Source::function(PRE_GENERATE)
+                .args(json!({ "priority": 1000, "timeout_ms": 2000, "on_error": "fail_open" })),
+            observer_function(run_id),
+        )
+        .await?;
         mechanism::keep_trigger(run_id, trigger);
         Ok(())
     }

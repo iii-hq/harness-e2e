@@ -5,8 +5,7 @@
 //! Message-path `console:script` / `console:style` triggers. The Console owns
 //! `console:assets` subscriptions and pushes these registrations to open tabs.
 
-use iii_sdk::protocol::RegisterTriggerInput;
-use iii_sdk::{Error, IIIClient, RegisterFunction};
+use iii_sdk::{Error, IIIClient, RegisterFunction, Source};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -50,8 +49,8 @@ pub fn register(iii: &IIIClient) {
         .metadata(json!({ "internal": true })),
     );
 
-    register_asset(iii, "console:script", PAGE_PATH);
-    register_asset(iii, "console:style", STYLES_PATH);
+    register_asset(iii, "script", PAGE_PATH);
+    register_asset(iii, "style", STYLES_PATH);
 }
 
 fn content(path: &str) -> Option<UiContentResponse> {
@@ -68,17 +67,13 @@ fn content(path: &str) -> Option<UiContentResponse> {
     }
 }
 
-fn register_asset(iii: &IIIClient, trigger_type: &str, path: &str) {
-    if let Err(error) = iii.register_trigger(RegisterTriggerInput {
-        trigger_type: trigger_type.to_owned(),
-        function_id: CONTENT_FUNCTION_ID.to_owned(),
-        config: json!({ "path": path }),
-        metadata: None,
-        namespace: None,
-        trigger_namespace: None,
-    }) {
-        tracing::warn!(%error, %path, "failed to register Harness E2E Console asset");
-    }
+/// Ships one asset: the Console's `console::ui::asset` fetches its content
+/// from [`CONTENT_FUNCTION_ID`] through this observer, held by the connection.
+fn register_asset(iii: &IIIClient, kind: &str, path: &str) {
+    iii.observe(
+        Source::function("console::ui::asset").args(json!({ "kind": kind, "path": path })),
+        CONTENT_FUNCTION_ID,
+    );
 }
 
 #[cfg(test)]

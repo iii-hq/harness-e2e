@@ -459,7 +459,7 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
             };
             if exited {
                 let _ = client
-                    .trigger(iii_sdk::protocol::TriggerRequest {
+                    .call(iii_sdk::protocol::CallRequest {
                         function_id: "harness::stop".into(),
                         payload: json!({"session_id":format!("e2e_{attempt}")}),
                         action: None,

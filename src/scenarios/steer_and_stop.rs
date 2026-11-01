@@ -23,8 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use iii_sdk::protocol::RegisterTriggerInput;
-use iii_sdk::{IIIClient, RegisterFunction};
+use iii_sdk::{IIIClient, RegisterFunction, Source};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -39,7 +38,7 @@ use super::{
 
 pub const ID: &str = "steer_and_stop";
 const DELIVERABLE_ID: &str = "steer_and_stop_checks";
-const MESSAGE_QUEUED: &str = "harness::message-queued";
+const MESSAGE_QUEUED: &str = "harness::on-message-queued";
 const STEER_LABEL: &str = "steer";
 const STALE_LABEL: &str = "stale";
 /// Recorded when a side session's model never called the hold fixture.
@@ -267,13 +266,13 @@ impl Scenario for SteerAndStop {
             .metadata(json!({ "internal": true })),
         );
         mechanism::keep_function(run_id, function);
-        let trigger = context
-            .client()
-            .register_trigger(RegisterTriggerInput::new(
-                MESSAGE_QUEUED,
-                sink_function(run_id),
-                json!({ "session_id": mechanism::session_id(run_id) }),
-            ))?;
+        let trigger = crate::observe::active(
+            context.client(),
+            Source::function(MESSAGE_QUEUED)
+                .filters(json!({ "input.session_id": { "$eq": mechanism::session_id(run_id) } })),
+            sink_function(run_id),
+        )
+        .await?;
         mechanism::keep_trigger(run_id, trigger);
         Ok(())
     }

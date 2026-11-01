@@ -1,8 +1,8 @@
-//! Trigger bindings across the session tree. Every delivery attempt and
-//! lifecycle ending writes a `trigger_fired` record into the owner's
+//! Agent observer bindings across the session tree. Every delivery attempt
+//! and lifecycle ending writes an `observer_fired` record into the owner's
 //! transcript (`harness/src/subscriptions/fired.rs`); a delivered wake also
 //! injects a user entry `e_fire_<binding>_<n>` with `origin.binding` into its
-//! destination session (`functions/trigger_deliver.rs`). `harness::teardown`
+//! destination session (`functions/observer_deliver.rs`). `harness::teardown`
 //! must leave no binding behind, in the binding store or on the engine.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,7 +28,7 @@ const OUTCOMES: [&str; 6] = [
 ];
 /// The engine function every agent binding registers as; its metadata is only
 /// the `__binding` pointer.
-const DELIVER_FUNCTION: &str = "harness::trigger::deliver";
+const DELIVER_FUNCTION: &str = "harness::observer::deliver";
 /// How long teardown's engine-side unregistrations may take to land.
 const TEARDOWN_SETTLE: Duration = Duration::from_secs(5);
 const TEARDOWN_POLL: Duration = Duration::from_millis(250);
@@ -100,13 +100,19 @@ pub fn observe(transcripts: &[Value], listed: impl IntoIterator<Item = String>) 
                 bindings.subscriptions.insert(binding.to_string());
             }
         }
-        if text(entry, "/custom/custom_type") != Some("trigger_fired") {
+        // `trigger_fired` is the name transcripts written before 0.26 carry.
+        if !matches!(
+            text(entry, "/custom/custom_type"),
+            Some("observer_fired" | "trigger_fired")
+        ) {
             continue;
         }
         let Some(data) = entry.pointer("/custom/data") else {
             continue;
         };
-        let binding = text(data, "/subscription_id").unwrap_or("an unnamed binding");
+        let binding = text(data, "/observer_id")
+            .or_else(|| text(data, "/subscription_id"))
+            .unwrap_or("an unnamed binding");
         bindings.subscriptions.insert(binding.to_string());
         let outcome = text(data, "/outcome");
         *bindings
@@ -203,7 +209,7 @@ pub fn leaks(
     let engine = delivering
         .iter()
         .filter(|(_, binding)| subscriptions.contains(binding))
-        .map(|(trigger, binding)| format!("engine trigger {trigger} still delivers {binding}"));
+        .map(|(observer, binding)| format!("engine observer {observer} still delivers {binding}"));
     let store = listed
         .iter()
         .map(|(session, binding)| format!("session {session} still lists {binding}"));
@@ -216,62 +222,37 @@ pub fn leaks(
         .collect()
 }
 
-/// `(engine trigger id, binding)` of every delivery-hop trigger. The list
-/// omits metadata, so each row's `info` names its binding.
+/// `(engine observer id, binding)` of every observer delivering to the
+/// delivery hop. The Harness gives each binding's observer the binding's id.
 async fn delivering(context: &E2eContext) -> Result<Vec<(String, String)>> {
     let listed = context
-        .trigger_value(
-            "engine::registered-triggers::list",
-            json!({ "function_id": DELIVER_FUNCTION, "include_pending": true }),
-        )
+        .trigger_value("engine::observers::list", json!({}))
         .await?;
-    let mut delivering = Vec::new();
-    for id in listed
-        .get("registered_triggers")
+    Ok(listed
+        .get("observers")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|row| row.get("id").and_then(Value::as_str))
-    {
-        let info = match context
-            .trigger_value("engine::registered-triggers::info", json!({ "id": id }))
-            .await
-        {
-            Ok(info) => info,
-            // A row unregistered between the list and its info is gone.
-            Err(error) if disappeared(&error) => continue,
-            Err(error) => return Err(error),
-        };
-        if let Some(binding) = text(&info, "/metadata/__binding") {
-            delivering.push((id.to_string(), binding.to_string()));
-        }
-    }
-    Ok(delivering)
+        .filter(|row| text(row, "/target/function_id") == Some(DELIVER_FUNCTION))
+        .filter_map(|row| text(row, "/id"))
+        .map(|id| (id.to_string(), id.to_string()))
+        .collect())
 }
 
-/// The engine answers `NOT_FOUND` for a trigger row it no longer holds; a
-/// missing function is `function_not_found`, and a transport error is neither.
-fn disappeared(error: &anyhow::Error) -> bool {
-    matches!(
-        error.downcast_ref::<iii_sdk::errors::Error>(),
-        Some(iii_sdk::errors::Error::Remote { code, .. }) if code == "NOT_FOUND"
-    )
-}
-
-/// `(session, binding)` for every binding `harness::triggers::list` returns.
+/// `(session, binding)` for every binding `harness::observers::list` returns.
 async fn listed(context: &E2eContext, sessions: &[String]) -> Result<Vec<(String, String)>> {
     let mut listed = Vec::new();
     for session in sessions {
         let response = context
-            .trigger_value("harness::triggers::list", json!({ "session_id": session }))
+            .trigger_value("harness::observers::list", json!({ "session_id": session }))
             .await?;
         listed.extend(
             response
-                .get("subscriptions")
+                .get("observers")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|row| text(row, "/subscription_id"))
+                .filter_map(|row| text(row, "/observer_id"))
                 .map(|binding| (session.clone(), binding.to_string())),
         );
     }
@@ -288,15 +269,15 @@ mod tests {
 
     fn fired(binding: &str, ordinal: u64, data: Value) -> Value {
         let mut record = json!({
-            "subscription_id": binding, "target": "harness::send", "outcome": "delivered",
+            "observer_id": binding, "target": "harness::send", "outcome": "delivered",
             "once": false, "fires": ordinal, "retired": false,
         });
         record
             .as_object_mut()
             .unwrap()
             .extend(data.as_object().unwrap().clone());
-        json!({ "entry_id": format!("e_trigfired_{binding}_{ordinal}"),
-                "custom": { "custom_type": "trigger_fired", "data": record } })
+        json!({ "entry_id": format!("e_obsfired_{binding}_{ordinal}"),
+                "custom": { "custom_type": "observer_fired", "data": record } })
     }
 
     fn wake(binding: &str, ordinal: u64) -> Value {
@@ -429,25 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_trigger_row_the_engine_reports_not_found_has_disappeared() {
-        let remote = |code: &str| {
-            anyhow::Error::new(iii_sdk::errors::Error::Remote {
-                code: code.into(),
-                message: String::new(),
-                stacktrace: None,
-            })
-            .context("invoke engine::registered-triggers::info")
-        };
-
-        assert!(disappeared(&remote("NOT_FOUND")));
-        // The info function itself missing is not a removed row.
-        assert!(!disappeared(&remote("function_not_found")));
-        assert!(!disappeared(
-            &anyhow::Error::new(iii_sdk::errors::Error::Timeout).context("invoke")
-        ));
-    }
-
-    #[test]
     fn a_run_binding_left_on_the_engine_or_in_a_session_is_a_leak() {
         let subscriptions = BTreeSet::from(["sub_a".to_string()]);
 
@@ -467,7 +429,7 @@ mod tests {
         );
         assert!(violations[0]
             .detail
-            .contains("engine trigger t1 still delivers sub_a"));
+            .contains("engine observer t1 still delivers sub_a"));
         assert!(violations[1]
             .detail
             .contains("session child still lists sub_b"));

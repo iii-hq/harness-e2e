@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use iii_sdk::protocol::{RegisterTriggerInput, TriggerRequest};
-use iii_sdk::{IIIClient, RegisterFunction};
+use iii_sdk::protocol::CallRequest;
+use iii_sdk::{IIIClient, RegisterFunction, Source};
 use serde_json::{json, Value};
 
 const CALL_TIMEOUT_MS: u64 = 15_000;
@@ -104,12 +104,16 @@ impl ControlPool {
             .description("Internal: restore the E2E pool after the database configuration changes.")
             .metadata(json!({"internal": true})),
         );
-        iii.register_trigger(RegisterTriggerInput::new(
-            "configuration",
+        iii.observe(
+            Source::function("configuration::on-updated").filters(json!({
+                "input.id": { "$eq": id },
+                "input.event_type": { "$eq": "configuration:updated" },
+            })),
             RESTORE_FUNCTION_ID,
-            json!({"configuration_id": id, "event_types": ["configuration:updated"]}),
-        ))
-        .context("subscribe to the database worker's configuration")?;
+        )
+        .ready()
+        .await
+        .context("observe the database worker's configuration")?;
         // A save between provisioning and this subscription went unobserved.
         pool.ensure(iii, &id, tokio::time::Instant::now() + WRITE_WINDOW)
             .await
@@ -287,8 +291,8 @@ async fn set_runtime(iii: &IIIClient, id: &str, value: Value) -> Result<Value> {
 }
 
 async fn call(iii: &IIIClient, function: &str, payload: Value) -> Result<Value> {
-    iii.trigger(
-        TriggerRequest {
+    iii.call(
+        CallRequest {
             function_id: function.into(),
             payload,
             action: None,

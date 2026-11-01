@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::IIIClient;
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -525,7 +525,7 @@ fn monitors() -> &'static Mutex<HashMap<String, Monitor>> {
 }
 async fn trigger(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
     client
-        .trigger(TriggerRequest {
+        .call(CallRequest {
             function_id: function_id.to_string(),
             payload,
             action: None,

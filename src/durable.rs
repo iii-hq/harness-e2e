@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::IIIClient;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -211,7 +211,7 @@ struct IiiCaller {
 impl FunctionCaller for IiiCaller {
     async fn call(&self, function_id: &str, payload: Value) -> Result<Value> {
         self.client
-            .trigger(TriggerRequest {
+            .call(CallRequest {
                 function_id: function_id.into(),
                 payload,
                 action: None,

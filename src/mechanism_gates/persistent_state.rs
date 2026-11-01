@@ -34,7 +34,7 @@ fn chokepoint_probes(run_id: &str) -> [(&'static str, Value); 4] {
         ),
         ("state::claim-namespace", json!({"namespace": absent})),
         (
-            "harness::function::trigger",
+            "harness::function::call",
             json!({"session_id": absent, "call": {"id": "c", "function_id": "state::get", "arguments": {}}}),
         ),
     ]

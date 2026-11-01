@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use futures_util::future::join_all;
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::IIIClient;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

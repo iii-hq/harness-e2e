@@ -18,6 +18,9 @@ pub const ID: &str = "timer_wake";
 const DELIVERABLE_ID: &str = "timer_result";
 
 const RESULT_KEY: &str = "result";
+/// The agent arms its deadline by observing the Harness's timer.
+const OBSERVE: &str = "harness::observe";
+const TIMER: &str = "harness::on-timer";
 const DELAY_MS: u64 = 6_000;
 const READY_AFTER_SECONDS: u64 = 4;
 const TIMER_ARMED: AssessmentSpec = AssessmentSpec::scored(
@@ -136,11 +139,11 @@ impl Scenario for TimerWake {
             prompt: format!(
                 r#"Test the parent-owned timer control plane in isolated state scope `{scope}`.
 
-Register exactly one wake-only timer for roughly six seconds from now:
+Arm exactly one wake-only timer for roughly six seconds from now with `harness::observe`:
 
-- use trigger type `timer` with `in_ms: {delay_ms}`;
+- observe `harness::on-timer` with args `{{ "in_ms": {delay_ms} }}`;
 - use the exact top-level label `{timer_label}` and mark it once;
-- omit every function target so it wakes this session;
+- omit the target so it wakes this session;
 - do not spawn a child.
 
 The gated function `{signal_function}` is already registered. Calling it before the wake is
@@ -150,7 +153,7 @@ without calling it or writing state.
 When the timer notification starts a new turn, call `{signal_function}` exactly once with `{{}}`.
 It will return a ready `SIG-...` token. Then write exactly `{{ "status": "fired" }}` to `{scope}` /
 `{result_key}` and respond briefly with both `timer fired` and the exact signal token. Leave no
-binding armed."#,
+observer armed."#,
                 scope = names.scope,
                 delay_ms = DELAY_MS,
                 timer_label = names.timer_label,
@@ -306,23 +309,23 @@ binding armed."#,
         let names = Names::new(run_id);
         let listed = context
             .trigger_value(
-                "harness::triggers::list",
+                "harness::observers::list",
                 json!({ "session_id": names.root_session }),
             )
             .await?;
-        for subscription_id in listed
-            .get("subscriptions")
+        for observer_id in listed
+            .get("observers")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+            .filter_map(|observer| observer.get("observer_id").and_then(Value::as_str))
         {
             let _: Value = context
                 .trigger(
-                    "harness::triggers::unregister",
+                    "harness::observers::dispose",
                     json!({
                         "session_id": names.root_session,
-                        "subscription_id": subscription_id,
+                        "observer_id": observer_id,
                     }),
                 )
                 .await?;
@@ -502,9 +505,11 @@ fn timer_audit(transcript: &Value, names: &Names) -> TimerAudit {
         .enumerate()
     {
         if let Some(custom) = entry.get("custom") {
-            if custom.get("custom_type").and_then(Value::as_str) == Some("trigger_fired")
-                && custom.pointer("/data/label").and_then(Value::as_str)
-                    == Some(names.timer_label.as_str())
+            if matches!(
+                custom.get("custom_type").and_then(Value::as_str),
+                Some("observer_fired" | "trigger_fired")
+            ) && custom.pointer("/data/label").and_then(Value::as_str)
+                == Some(names.timer_label.as_str())
                 && audit.fired_entry.is_none()
             {
                 audit.fired_entry = Some(entry_index);
@@ -532,7 +537,7 @@ fn timer_audit(transcript: &Value, names: &Names) -> TimerAudit {
             };
             position += 1;
             match function_id {
-                "engine::register_trigger" => {
+                OBSERVE => {
                     audit.registrations += 1;
                     if is_timer_arguments(arguments, &names.timer_label) {
                         audit.matching_timers += 1;
@@ -625,9 +630,9 @@ fn expected_result() -> Value {
 }
 
 fn is_timer_arguments(arguments: &Value, label: &str) -> bool {
-    arguments.get("trigger_type").and_then(Value::as_str) == Some("timer")
+    arguments.get("function_id").and_then(Value::as_str) == Some(TIMER)
         && arguments
-            .pointer("/config/in_ms")
+            .pointer("/args/in_ms")
             .and_then(Value::as_u64)
             .is_some_and(|in_ms| (3_000..=15_000).contains(&in_ms))
         && arguments.get("label").and_then(Value::as_str) == Some(label)
@@ -675,17 +680,17 @@ pub(crate) mod tests {
 
     fn timer_arguments(label: &str) -> Value {
         json!({
-            "trigger_type": "timer",
+            "function_id": TIMER,
             "label": label,
             "once": true,
-            "config": { "in_ms": DELAY_MS },
+            "args": { "in_ms": DELAY_MS },
         })
     }
 
     fn fired_entry(label: &str) -> Value {
         json!({
             "custom": {
-                "custom_type": "trigger_fired",
+                "custom_type": "observer_fired",
                 "data": {
                     "label": label,
                     "retired": true,
@@ -728,7 +733,7 @@ pub(crate) mod tests {
             &names.timer_label
         ));
         let mut targeted = timer_arguments(&names.timer_label);
-        targeted["function_id"] = json!("state::set");
+        targeted["target"] = json!({ "function_id": "state::set" });
         assert!(!is_timer_arguments(&targeted, &names.timer_label));
         assert!(!is_timer_arguments(
             &timer_arguments("other"),
@@ -741,7 +746,7 @@ pub(crate) mod tests {
         let names = Names::new("run");
         let transcript = json!({ "messages": [
             assistant_entry(vec![call_block(
-                "engine::register_trigger",
+                OBSERVE,
                 timer_arguments(&names.timer_label),
             )]),
             fired_entry(&names.timer_label),
@@ -759,7 +764,7 @@ pub(crate) mod tests {
         let early = json!({ "messages": [
             assistant_entry(vec![
                 call_block(&names.signal_function, json!({})),
-                call_block("engine::register_trigger", timer_arguments(&names.timer_label)),
+                call_block(OBSERVE, timer_arguments(&names.timer_label)),
             ]),
             fired_entry(&names.timer_label),
             assistant_entry(vec![state_write(&names)]),
@@ -768,7 +773,7 @@ pub(crate) mod tests {
 
         let repeated = json!({ "messages": [
             assistant_entry(vec![call_block(
-                "engine::register_trigger",
+                OBSERVE,
                 timer_arguments(&names.timer_label),
             )]),
             fired_entry(&names.timer_label),
@@ -832,7 +837,7 @@ pub(crate) mod tests {
         let names = Names::new("run");
         let reference = vec![
             assistant_entry(vec![call_block(
-                "engine::register_trigger",
+                OBSERVE,
                 timer_arguments(&names.timer_label),
             )]),
             fired_entry(&names.timer_label),
@@ -857,7 +862,7 @@ pub(crate) mod tests {
         let names = Names::new("run");
         let arm = || {
             assistant_entry(vec![call_block(
-                "engine::register_trigger",
+                OBSERVE,
                 timer_arguments(&names.timer_label),
             )])
         };
@@ -884,10 +889,7 @@ pub(crate) mod tests {
         assert_eq!(
             completion_of(vec![
                 assistant_entry(vec![
-                    call_block(
-                        "engine::register_trigger",
-                        timer_arguments(&names.timer_label)
-                    ),
+                    call_block(OBSERVE, timer_arguments(&names.timer_label)),
                     state_write(&names),
                 ]),
                 fired_entry(&names.timer_label),
@@ -900,10 +902,7 @@ pub(crate) mod tests {
         assert_eq!(
             completion_of(vec![
                 assistant_entry(vec![
-                    call_block(
-                        "engine::register_trigger",
-                        timer_arguments(&names.timer_label)
-                    ),
+                    call_block(OBSERVE, timer_arguments(&names.timer_label)),
                     call_block(&names.signal_function, json!({})),
                     state_write(&names),
                 ]),

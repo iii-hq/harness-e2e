@@ -25,9 +25,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use iii_sdk::protocol::RegisterTriggerInput;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::trigger::Trigger;
+use iii_sdk::ObserverHandle;
 use iii_sdk::{IIIClient, RegisterFunction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -171,7 +170,7 @@ struct Probe {
 
 struct Runtime {
     functions: Vec<FunctionRef>,
-    bindings: Vec<Trigger>,
+    bindings: Vec<ObserverHandle>,
     probe: Arc<Mutex<Probe>>,
 }
 
@@ -191,8 +190,8 @@ fn release_runtime(run_id: &str) {
     if let Some(runtime) = common::lock_unpoisoned(runtimes()).remove(run_id) {
         runtime
             .bindings
-            .iter()
-            .for_each(|binding| binding.unregister());
+            .into_iter()
+            .for_each(crate::observe::release);
         runtime
             .functions
             .iter()
@@ -553,20 +552,10 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
     );
 
     let bindings = vec![
+        context.client().observe("harness::on-ready", ready_id),
         context
             .client()
-            .register_trigger(RegisterTriggerInput::new(
-                "harness::ready",
-                ready_id,
-                json!({}),
-            ))?,
-        context
-            .client()
-            .register_trigger(RegisterTriggerInput::new(
-                "harness::turn-completed",
-                turns_id,
-                json!({}),
-            ))?,
+            .observe(crate::observe::TURN_COMPLETED_TRIGGER, turns_id),
     ];
     Ok(Runtime {
         functions,

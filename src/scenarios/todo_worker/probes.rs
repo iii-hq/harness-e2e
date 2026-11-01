@@ -516,7 +516,7 @@ async fn rejection_observation(
 
 async fn trigger_value(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
     client
-        .trigger(TriggerRequest {
+        .call(CallRequest {
             function_id: function_id.into(),
             payload,
             action: None,

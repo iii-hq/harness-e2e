@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use iii_sdk::errors::Error;
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::{IIIClient, RegisterFunction};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1543,7 +1543,7 @@ impl ControlPlane {
     async fn trigger(&self, function_id: &str, payload: Value) -> Result<Value> {
         self.inner
             .iii
-            .trigger(TriggerRequest {
+            .call(CallRequest {
                 function_id: function_id.into(),
                 payload,
                 action: None,

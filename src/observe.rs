@@ -13,9 +13,9 @@ use crate::wire::{
 };
 
 pub const SINK_FUNCTION_ID: &str = "e2e::on-turn-completed";
-pub const TURN_COMPLETED_TRIGGER: &str = "harness::turn-completed";
+pub const TURN_COMPLETED_TRIGGER: &str = "harness::on-turn-completed";
 pub const ENTRY_SINK_FUNCTION_ID: &str = "e2e::on-message-added";
-pub const MESSAGE_ADDED_TRIGGER: &str = "session::message-added";
+pub const MESSAGE_ADDED_TRIGGER: &str = "session::on-message-added";
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SinkAck {
@@ -135,7 +135,8 @@ impl ObserveSubscription {
     }
 }
 
-pub fn trigger_type_ids(listed: &Value) -> impl Iterator<Item = &str> {
+/// The function ids of an `engine::functions::list` answer.
+pub fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
     listed
         .as_array()
         .or_else(|| listed.as_object()?.values().find_map(Value::as_array))
@@ -143,20 +144,53 @@ pub fn trigger_type_ids(listed: &Value) -> impl Iterator<Item = &str> {
         .flatten()
         .filter_map(|item| {
             item.as_str()
+                .or_else(|| item.get("function_id").and_then(Value::as_str))
                 .or_else(|| item.get("id").and_then(Value::as_str))
-                .or_else(|| item.get("trigger_type").and_then(Value::as_str))
         })
 }
 
 pub fn turn_completed_available(listed: &Value) -> bool {
-    trigger_type_ids(listed).any(|id| id == TURN_COMPLETED_TRIGGER)
+    function_ids(listed).any(|id| id == TURN_COMPLETED_TRIGGER)
 }
 
 pub fn missing_turn_completed_trigger() -> anyhow::Error {
     anyhow!(
-        "unsupported: required trigger type {TURN_COMPLETED_TRIGGER} is not registered; \
+        "unsupported: required event {TURN_COMPLETED_TRIGGER} is not registered; \
          event-driven observation cannot proceed"
     )
+}
+
+/// How long an observer may stay `pending` once its source and target are
+/// registered.
+const OBSERVER_READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Observes `source` into `target` and waits until the engine holds the
+/// observer, as registering a trigger did: a refusal is an error.
+pub async fn active(
+    client: &iii_sdk::IIIClient,
+    source: impl Into<iii_sdk::Source>,
+    target: impl Into<iii_sdk::Target>,
+) -> Result<iii_sdk::ObserverHandle> {
+    let source = source.into();
+    let function_id = source.function_id().to_string();
+    let handle = client.observe(source, target);
+    tokio::time::timeout(OBSERVER_READY_TIMEOUT, handle.ready())
+        .await
+        .map_err(|_| {
+            anyhow!("observer of {function_id} not active after {OBSERVER_READY_TIMEOUT:?}")
+        })?
+        .map_err(|error| anyhow!("observe {function_id}: {error}"))?;
+    Ok(handle)
+}
+
+/// Disposes an observer without waiting for the engine, as unbinding a
+/// trigger did; with no runtime left there is no connection to unobserve on.
+pub fn release(handle: iii_sdk::ObserverHandle) {
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(async move {
+            let _ = handle.dispose().await;
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -635,13 +669,13 @@ mod tests {
     }
 
     #[test]
-    fn preflight_without_the_trigger_type_is_unsupported() {
-        assert!(!turn_completed_available(&json!({ "triggers": [] })));
+    fn preflight_without_the_event_function_is_unsupported() {
+        assert!(!turn_completed_available(&json!({ "functions": [] })));
         assert!(!turn_completed_available(&json!({})));
         let listed = json!({
-            "triggers": [
-                { "id": "harness::turn-started" },
-                { "id": "harness::turn-completed", "description": "done" }
+            "functions": [
+                { "function_id": "harness::on-turn-started" },
+                { "function_id": "harness::on-turn-completed", "description": "done" }
             ]
         });
         assert!(turn_completed_available(&listed));

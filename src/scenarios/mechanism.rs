@@ -11,10 +11,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::trigger::Trigger;
-use iii_sdk::IIIClient;
+use iii_sdk::{IIIClient, ObserverHandle};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -38,7 +37,7 @@ pub(super) struct Check {
 struct Run {
     checks: Vec<Check>,
     functions: Vec<FunctionRef>,
-    triggers: Vec<Trigger>,
+    triggers: Vec<ObserverHandle>,
     /// Sessions the runner made beside the subject's, deleted on cleanup.
     sessions: Vec<String>,
     /// Values a later probe reads (the id a held call started, a turn id).
@@ -81,7 +80,7 @@ pub(super) fn keep_function(run_id: &str, function: FunctionRef) {
     with_run(run_id, |run| run.functions.push(function));
 }
 
-pub(super) fn keep_trigger(run_id: &str, trigger: Trigger) {
+pub(super) fn keep_trigger(run_id: &str, trigger: ObserverHandle) {
     with_run(run_id, |run| run.triggers.push(trigger));
 }
 
@@ -144,7 +143,7 @@ pub(super) fn reset(run_id: &str) {
 
 fn release_registrations(run: Run) {
     for trigger in run.triggers {
-        trigger.unregister();
+        crate::observe::release(trigger);
     }
     for function in run.functions {
         function.unregister();
@@ -190,8 +189,8 @@ pub(super) async fn call(client: &IIIClient, function_id: &str, payload: Value) 
     let (namespace, payload) =
         crate::context::inspection_routing(function_id, client.namespace(), payload);
     client
-        .trigger(
-            TriggerRequest {
+        .call(
+            CallRequest {
                 function_id: function_id.to_string(),
                 payload,
                 action: None,

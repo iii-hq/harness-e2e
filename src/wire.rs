@@ -693,20 +693,20 @@ const TEARDOWN_RESPONSE: &[SchemaField] = &[SchemaField {
     required: true,
 }];
 
-const TRIGGERS_LIST_REQUEST: &[SchemaField] = &[SchemaField {
+const OBSERVERS_LIST_REQUEST: &[SchemaField] = &[SchemaField {
     path: "session_id",
     kind: JsonType::String,
     required: false,
 }];
 
-const TRIGGERS_LIST_RESPONSE: &[SchemaField] = &[
+const OBSERVERS_LIST_RESPONSE: &[SchemaField] = &[
     SchemaField {
-        path: "subscriptions",
+        path: "observers",
         kind: JsonType::Array,
         required: true,
     },
     SchemaField {
-        path: "subscriptions[].subscription_id",
+        path: "observers[].observer_id",
         kind: JsonType::String,
         required: true,
     },
@@ -744,9 +744,9 @@ const CONTROL_PLANE: &[FunctionRequirement] = &[
         response: TEARDOWN_RESPONSE,
     },
     FunctionRequirement {
-        function_id: "harness::triggers::list",
-        request: TRIGGERS_LIST_REQUEST,
-        response: TRIGGERS_LIST_RESPONSE,
+        function_id: "harness::observers::list",
+        request: OBSERVERS_LIST_REQUEST,
+        response: OBSERVERS_LIST_RESPONSE,
     },
 ];
 
@@ -1018,17 +1018,17 @@ mod tests {
                     "../tests/golden/schemas/harness.teardown.json"
                 )),
                 schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.triggers.list.json"
+                    "../tests/golden/schemas/harness.observers.list.json"
                 )),
             ]
         });
         validate_control_plane(&raw).unwrap();
 
-        // Every native run lists the session tree's trigger bindings.
+        // Every native run lists the session tree's observer bindings.
         let mut without_bindings = raw;
         without_bindings["functions"].as_array_mut().unwrap().pop();
         let error = validate_control_plane(&without_bindings).unwrap_err();
-        assert!(error.to_string().contains("harness::triggers::list"));
+        assert!(error.to_string().contains("harness::observers::list"));
     }
 
     #[test]
@@ -1230,7 +1230,7 @@ mod tests {
                     "../tests/golden/schemas/harness.teardown.json"
                 )),
                 schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.triggers.list.json"
+                    "../tests/golden/schemas/harness.observers.list.json"
                 )),
             ]
         });
@@ -1242,7 +1242,6 @@ mod tests {
     fn schema_fixture(source: &str) -> Value {
         let mut fixture: Value = serde_json::from_str(source).unwrap();
         fixture["worker_name"] = Value::String("harness".to_string());
-        fixture["registered_triggers"] = Value::Array(Vec::new());
         fixture
     }
 }

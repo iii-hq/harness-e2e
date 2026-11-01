@@ -18,7 +18,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use iii_sdk::protocol::RegisterTriggerInput;
 use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 
@@ -39,7 +38,7 @@ const BULK_BYTES: usize = 16_000;
 /// Past the usable window of any catalog model (DeepSeek: 1M - 384k output).
 const OVERFLOW_BYTES: usize = 4 * 1024 * 1024;
 const COMPACTION_WAIT: Duration = Duration::from_secs(150);
-const COMPACTION_EVENT: &str = "harness::compaction";
+const COMPACTION_EVENT: &str = "harness::on-compaction";
 
 const COMMAND: AssessmentSpec = AssessmentSpec::gate(
     "compact_command",
@@ -251,13 +250,13 @@ impl Scenario for ContextCompaction {
             .metadata(json!({ "internal": true })),
         );
         mechanism::keep_function(run_id, function);
-        let trigger = context
-            .client()
-            .register_trigger(RegisterTriggerInput::new(
-                COMPACTION_EVENT,
-                sink_function(run_id),
-                json!({ "session_id": mechanism::session_id(run_id) }),
-            ))?;
+        let trigger = crate::observe::active(
+            context.client(),
+            iii_sdk::Source::function(COMPACTION_EVENT)
+                .filters(json!({ "input.session_id": { "$eq": mechanism::session_id(run_id) } })),
+            sink_function(run_id),
+        )
+        .await?;
         mechanism::keep_trigger(run_id, trigger);
         Ok(())
     }

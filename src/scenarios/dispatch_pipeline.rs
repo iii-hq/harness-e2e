@@ -15,10 +15,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use iii_sdk::protocol::{RegisterTriggerInput, TriggerRequest};
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::trigger::Trigger;
 use iii_sdk::{IIIClient, RegisterFunction};
+use iii_sdk::{ObserverHandle, Source};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -35,8 +35,8 @@ use super::{
 
 pub const ID: &str = "dispatch_pipeline";
 const DELIVERABLE_ID: &str = "dispatch_pipeline_probes";
-const PRE_TRIGGER: &str = "harness::hook::pre-trigger";
-const POST_TRIGGER: &str = "harness::hook::post-trigger";
+const PRE_TRIGGER: &str = "harness::hook::on-pre-call";
+const POST_TRIGGER: &str = "harness::hook::on-post-call";
 /// The fixtures, by name; each is `e2etest::pipe_<name>_<suffix>`.
 const FIXTURES: &[&str] = &[
     "echo", "held", "big", "err", "str", "content", "empty", "denied", "gone",
@@ -116,7 +116,7 @@ impl Ledger {
 
 struct Runtime {
     functions: Vec<FunctionRef>,
-    triggers: Vec<Trigger>,
+    triggers: Vec<ObserverHandle>,
     /// `pipe_gone`, until the resolver unregisters it.
     gone: Arc<Mutex<Option<FunctionRef>>>,
     ledger: Arc<Mutex<Ledger>>,
@@ -336,11 +336,10 @@ impl Scenario for DispatchPipeline {
         ));
         functions.push(holder(client, run_id, &ledger, &gone));
 
-        let bind = |trigger_type: &str, hook: &str, config: Value| {
-            client.register_trigger(RegisterTriggerInput::new(
-                trigger_type,
+        let bind = |hook_point: &str, hook: &str, config: Value| {
+            Ok::<_, anyhow::Error>(client.observe(
+                Source::function(hook_point).args(config),
                 hook_id(run_id, hook),
-                config,
             ))
         };
         let echo = fixture_id(run_id, "echo");
@@ -585,7 +584,10 @@ impl Scenario for DispatchPipeline {
         let exposed = exposed_tools(&observation.transcript);
         probes.check(
             "discovery.agent_trigger_exposure",
-            !exposed.is_empty() && exposed.iter().all(|tool| tool == "agent_trigger"),
+            !exposed.is_empty()
+                && exposed
+                    .iter()
+                    .all(|tool| tool == "agent_call" || tool == "agent_trigger"),
             &exposed,
         );
         probes.check(
@@ -691,7 +693,7 @@ impl Scenario for DispatchPipeline {
 fn release(run_id: &str) {
     if let Some(runtime) = common::lock_unpoisoned(runtimes()).remove(run_id) {
         for trigger in runtime.triggers {
-            trigger.unregister();
+            crate::observe::release(trigger);
         }
         for function in runtime.functions {
             function.unregister();
@@ -786,7 +788,7 @@ async fn resolve_held(
     call_id: String,
 ) {
     let invoke = |function_id: &str, payload: Value| {
-        client.trigger(TriggerRequest {
+        client.call(CallRequest {
             function_id: function_id.to_string(),
             payload,
             action: None,
