@@ -160,6 +160,13 @@ pub fn missing_turn_completed_trigger() -> anyhow::Error {
     )
 }
 
+/// An event function observed for the event itself. Each event function's
+/// handler returns the event it is called with, so its output is the event;
+/// the default delivery would wrap it in the call's envelope instead.
+pub fn event(function_id: &str) -> iii_sdk::Source {
+    iii_sdk::Source::function(function_id).deliver(iii_sdk::Deliver::Output)
+}
+
 /// How long an observer may stay `pending` once its source and target are
 /// registered.
 const OBSERVER_READY_TIMEOUT: Duration = Duration::from_secs(10);

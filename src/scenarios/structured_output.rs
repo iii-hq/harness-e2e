@@ -143,7 +143,7 @@ impl Scenario for StructuredOutput {
         mechanism::keep_function(run_id, function);
         let trigger = crate::observe::active(
             context.client(),
-            iii_sdk::Source::function(crate::observe::TURN_COMPLETED_TRIGGER)
+            crate::observe::event(crate::observe::TURN_COMPLETED_TRIGGER)
                 .filters(json!({ "input.session_id": { "$eq": mechanism::session_id(run_id) } })),
             sink_function(run_id),
         )

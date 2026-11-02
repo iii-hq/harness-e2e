@@ -252,7 +252,7 @@ impl Scenario for ContextCompaction {
         mechanism::keep_function(run_id, function);
         let trigger = crate::observe::active(
             context.client(),
-            iii_sdk::Source::function(COMPACTION_EVENT)
+            crate::observe::event(COMPACTION_EVENT)
                 .filters(json!({ "input.session_id": { "$eq": mechanism::session_id(run_id) } })),
             sink_function(run_id),
         )

@@ -10,8 +10,7 @@ use iii_sdk::errors::Error as SdkError;
 use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::{IIIConnectionState, WorkerMetadata};
 use iii_sdk::{
-    register_worker, IIIClient, InitOptions, ObserverHandle, RegisterFunction, Source,
-    WorkerIdentityMode,
+    register_worker, IIIClient, InitOptions, ObserverHandle, RegisterFunction, WorkerIdentityMode,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -295,7 +294,7 @@ impl E2eContext {
         // Observation is a worker-owned observer in the stack namespace, held
         // by this connection: it goes when the runner disposes it or exits.
         for (event, function_id) in turn_bindings(&listed)? {
-            let binding = observe::active(&self.client, event, function_id).await?;
+            let binding = observe::active(&self.client, observe::event(event), function_id).await?;
             self.lock_bindings().push(binding);
         }
         Ok(())
@@ -307,7 +306,7 @@ impl E2eContext {
     pub fn count_entry_events(&self, session_id: &str) {
         self.entry_events.start();
         let binding = self.client.observe(
-            Source::function(observe::MESSAGE_ADDED_TRIGGER)
+            observe::event(observe::MESSAGE_ADDED_TRIGGER)
                 .filters(json!({ "input.session_id": { "$eq": session_id } })),
             observe::ENTRY_SINK_FUNCTION_ID,
         );

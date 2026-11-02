@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use iii_sdk::{IIIClient, RegisterFunction, Source};
+use iii_sdk::{IIIClient, RegisterFunction};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -268,7 +268,7 @@ impl Scenario for SteerAndStop {
         mechanism::keep_function(run_id, function);
         let trigger = crate::observe::active(
             context.client(),
-            Source::function(MESSAGE_QUEUED)
+            crate::observe::event(MESSAGE_QUEUED)
                 .filters(json!({ "input.session_id": { "$eq": mechanism::session_id(run_id) } })),
             sink_function(run_id),
         )

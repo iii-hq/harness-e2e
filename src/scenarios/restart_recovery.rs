@@ -552,10 +552,13 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
     );
 
     let bindings = vec![
-        context.client().observe("harness::on-ready", ready_id),
         context
             .client()
-            .observe(crate::observe::TURN_COMPLETED_TRIGGER, turns_id),
+            .observe(crate::observe::event("harness::on-ready"), ready_id),
+        context.client().observe(
+            crate::observe::event(crate::observe::TURN_COMPLETED_TRIGGER),
+            turns_id,
+        ),
     ];
     Ok(Runtime {
         functions,
