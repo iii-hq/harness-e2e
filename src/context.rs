@@ -9,7 +9,10 @@ use async_trait::async_trait;
 use iii_sdk::errors::Error as SdkError;
 use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::{IIIConnectionState, WorkerMetadata};
-use iii_sdk::{register_worker, IIIClient, InitOptions, ObserverHandle, RegisterFunction, Source};
+use iii_sdk::{
+    register_worker, IIIClient, InitOptions, ObserverHandle, RegisterFunction, Source,
+    WorkerIdentityMode,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -83,6 +86,15 @@ impl E2eContext {
                     pid: Some(std::process::id()),
                     ..WorkerMetadata::default()
                 }),
+                // An auxiliary connection, often inside the harness-e2e worker:
+                // managed identity would replace the ephemeral name with the
+                // worker's `III_WORKER_NAME`, which the engine refuses as a
+                // second live `harness-e2e`. Explicit identity ignores the
+                // environment, so the worker's namespace is passed on here.
+                namespace: std::env::var("III_NAMESPACE")
+                    .ok()
+                    .filter(|namespace| !namespace.trim().is_empty()),
+                identity: WorkerIdentityMode::Explicit,
                 ..InitOptions::default()
             },
         );
