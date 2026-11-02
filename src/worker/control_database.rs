@@ -22,6 +22,8 @@ const CALL_TIMEOUT_MS: u64 = 15_000;
 /// How long one out-of-startup write (restore, removal) may keep rebasing.
 const WRITE_WINDOW: Duration = Duration::from_secs(15);
 const RESTORE_FUNCTION_ID: &str = "e2e::control-pool-restore";
+/// The engine's configuration event, in `default`.
+const CONFIGURATION_UPDATED: &str = "configuration::on-updated";
 
 /// The built-in control pool: one SQLite connection under `data_dir`.
 pub(super) struct ControlPool {
@@ -105,10 +107,12 @@ impl ControlPool {
             .metadata(json!({"internal": true})),
         );
         iii.observe(
-            Source::function("configuration::on-updated").filters(json!({
-                "input.id": { "$eq": id },
-                "input.event_type": { "$eq": "configuration:updated" },
-            })),
+            Source::function(CONFIGURATION_UPDATED)
+                .namespace("default")
+                .filters(json!({
+                    "input.id": { "$eq": id },
+                    "input.event_type": { "$eq": "configuration:updated" },
+                })),
             RESTORE_FUNCTION_ID,
         )
         .ready()
@@ -166,7 +170,14 @@ impl ControlPool {
         )
         .await
         .context("inspect the control database worker")?;
-        subscribed_configuration(&worker, namespace)
+        let observers = call(
+            iii,
+            "engine::observers::list",
+            json!({"function_id": CONFIGURATION_UPDATED, "namespace": "default"}),
+        )
+        .await
+        .context("list the configuration observers")?;
+        subscribed_configuration(&worker, &observers, namespace)
     }
 
     fn entry(&self) -> Value {
@@ -231,19 +242,34 @@ where
     }
 }
 
-fn subscribed_configuration(worker: &Value, namespace: &str) -> Result<String> {
+/// The configuration id the database worker observes `configuration::on-updated`
+/// for, from its own observers (`engine::workers::info`) among the engine's
+/// (`engine::observers::list`), whose filters are in normal form
+/// (`{"$and": [{clause}, ...]}`).
+fn subscribed_configuration(worker: &Value, observers: &Value, namespace: &str) -> Result<String> {
     if worker["worker"]["namespace"] != namespace {
         bail!("database worker does not belong to the control namespace {namespace}");
     }
-    let ids: std::collections::BTreeSet<&str> = worker["registered_triggers"]
+    let own: std::collections::BTreeSet<&str> = worker["observers"]
         .as_array()
         .context("database worker has no configuration subscriptions")?
         .iter()
-        .filter(|row| {
-            row["trigger_type"] == "configuration"
-                && row["function_id"] == "database::on-config-change"
+        .filter_map(Value::as_str)
+        .collect();
+    let ids: std::collections::BTreeSet<&str> = observers["observers"]
+        .as_array()
+        .context("the engine did not list the configuration observers")?
+        .iter()
+        .filter(|observer| {
+            observer["id"].as_str().is_some_and(|id| own.contains(id))
+                && observer["target"]["function_id"] == "database::on-config-change"
         })
-        .filter_map(|row| row["config"]["configuration_id"].as_str())
+        .filter_map(|observer| {
+            observer["filters"]["$and"]
+                .as_array()?
+                .iter()
+                .find_map(|clause| clause["input.id"]["$eq"].as_str())
+        })
         .filter(|id| !id.trim().is_empty())
         .collect();
     match ids.len() {
@@ -373,34 +399,43 @@ mod tests {
 
     #[test]
     fn the_database_subscription_identifies_a_custom_config_and_namespace() {
-        let mut worker = json!({
+        let worker = json!({
             "worker": {"name": "sql-service", "namespace": "custom-project"},
-            "registered_triggers": [
-                {"trigger_type": "configuration", "function_id": "database::on-config-change",
-                 "config": {"configuration_id": "operator-sql-config"}},
-                {"trigger_type": "configuration", "function_id": "other::reload",
-                 "config": {"configuration_id": "unrelated"}},
-            ],
+            "observers": ["obs-db", "obs-other"],
         });
+        let observer = |id: &str, target: &str, config: &str| {
+            json!({
+                "id": id,
+                "function_id": "configuration::on-updated",
+                "namespace": "default",
+                "target": {"function_id": target, "namespace": "custom-project"},
+                "filters": {"$and": [
+                    {"input.event_type": {"$eq": "configuration:updated"}},
+                    {"input.id": {"$eq": config}},
+                ]},
+            })
+        };
+        let observers = json!({"observers": [
+            observer("obs-db", "database::on-config-change", "operator-sql-config"),
+            observer("obs-other", "other::reload", "unrelated"),
+            observer("obs-foreign", "database::on-config-change", "another-database"),
+        ]});
         assert_eq!(
-            subscribed_configuration(&worker, "custom-project").unwrap(),
+            subscribed_configuration(&worker, &observers, "custom-project").unwrap(),
             "operator-sql-config"
         );
-        assert!(subscribed_configuration(&worker, "another-project").is_err());
+        assert!(subscribed_configuration(&worker, &observers, "another-project").is_err());
         let mut unnamespaced = worker.clone();
         unnamespaced["worker"] = json!({"name": "sql-service"});
-        assert!(subscribed_configuration(&unnamespaced, "default").is_err());
-        worker["registered_triggers"]
+        assert!(subscribed_configuration(&unnamespaced, &observers, "default").is_err());
+        let mut ambiguous = worker.clone();
+        ambiguous["observers"]
             .as_array_mut()
             .unwrap()
-            .push(json!({
-                "trigger_type": "configuration", "function_id": "database::on-config-change",
-                "config": {"configuration_id": "ambiguous"},
-            }));
-        assert!(subscribed_configuration(&worker, "custom-project").is_err());
-        let registering =
-            json!({"worker": {"namespace": "project-one"}, "registered_triggers": []});
-        let error = subscribed_configuration(&registering, "project-one").unwrap_err();
+            .push(json!("obs-foreign"));
+        assert!(subscribed_configuration(&ambiguous, &observers, "custom-project").is_err());
+        let registering = json!({"worker": {"namespace": "project-one"}, "observers": []});
+        let error = subscribed_configuration(&registering, &observers, "project-one").unwrap_err();
         assert!(error.to_string().contains("not registered"), "{error}");
     }
 
