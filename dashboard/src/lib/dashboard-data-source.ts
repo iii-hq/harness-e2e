@@ -1056,13 +1056,14 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         readCache.clear()
         handler(payload)
       })
-      const offTrigger = client.registerTrigger({
-        type: runtime.functions.changed_trigger,
-        function_id: `${handlerId}::${client.browserId}`,
-        config: {},
-      })
+      // `output`: the handler takes the change the function returned. No
+      // namespace: it resolves as the dashboard's calls do.
+      const offObserver = client.observe(
+        { function_id: runtime.functions.changed_trigger, deliver: 'output' },
+        `${handlerId}::${client.browserId}`,
+      )
       return () => {
-        offTrigger()
+        offObserver()
         offHandler()
       }
     },

@@ -264,24 +264,42 @@ describe('live dashboard transport', () => {
       functions: {
         executions_list: 'executions',
         tests_list: 'tests',
-        changed_trigger: 'changed',
+        changed_trigger: 'e2e::dashboard::changed',
       },
     } as RuntimeConfig
     let handler: (value: Record<string, unknown>) => void = () => {}
     const trigger = vi.fn(async (_functionId: string) => ({}))
+    const offHandler = vi.fn()
+    const offObserver = vi.fn()
+    const on = vi.fn((_id: string, callback: typeof handler) => {
+      handler = callback
+      return offHandler
+    })
+    const observe = vi.fn(() => offObserver)
     const client = {
       browserId: 'test-browser',
       trigger,
-      on: vi.fn((_id, callback) => {
-        handler = callback
-        return () => {}
-      }),
-      registerTrigger: vi.fn(() => () => {}),
+      on,
+      observe,
     } as unknown as DashboardIiiClient
     installDashboardRuntimeConfig(runtime)
     installDashboardIiiClient(client)
     const bridge = await getDashboardDataBridge()
-    const stop = await bridge.subscribeRunChanges(() => {})
+    const seen: Record<string, unknown>[] = []
+    const stop = await bridge.subscribeRunChanges((payload) =>
+      seen.push(payload),
+    )
+    expect(on).toHaveBeenCalledWith(
+      'iii::harness-e2e-dashboard::changed',
+      expect.any(Function),
+    )
+    // The handler's full id is the target; `output` hands it the change itself.
+    expect(observe.mock.calls).toEqual([
+      [
+        { function_id: 'e2e::dashboard::changed', deliver: 'output' },
+        'iii::harness-e2e-dashboard::changed::test-browser',
+      ],
+    ])
     await bridge.listExecutions({ ids: ['execution-1'] })
     await bridge.listExecutions({ ids: ['execution-1'] })
     expect(
@@ -290,9 +308,17 @@ describe('live dashboard transport', () => {
     await bridge.listTests()
     await bridge.listTests()
     expect(trigger.mock.calls.filter(([id]) => id === 'tests')).toHaveLength(1)
-    handler({ kind: 'progress', execution_id: 'execution-1' })
+    const change = {
+      kind: 'progress',
+      execution_id: 'execution-1',
+      at: '2026-11-02T12:00:00Z',
+    }
+    handler(change)
+    expect(seen).toEqual([change])
     await bridge.listTests()
     expect(trigger.mock.calls.filter(([id]) => id === 'tests')).toHaveLength(2)
     stop()
+    expect(offObserver).toHaveBeenCalledOnce()
+    expect(offHandler).toHaveBeenCalledOnce()
   })
 })

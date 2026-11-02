@@ -12,11 +12,16 @@ declare module '@iii-dev/console-ui' {
       functionId: string,
       handler: (payload: P) => void | Promise<void>,
     ): () => void
-    registerTrigger(input: {
-      type: string
-      function_id: string
-      config: Record<string, unknown>
-    }): () => void
+    /** Observe `source` with `target`, a function registered with `on()`
+     *  by its full id; returns its disposer. */
+    observe(
+      source: {
+        function_id: string
+        namespace?: string
+        deliver?: 'envelope' | 'input' | 'output'
+      },
+      target: string,
+    ): () => void
   }
 
   export interface PageRenderProps {
