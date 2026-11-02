@@ -3,8 +3,7 @@
 repository's pipeline and say what it measured.
 
 The caller names what changed: workers at a commit (`--pins`, `--commit`),
-released versions (`--versions`), an iii release (`--iii`), or the runner at a
-commit of this repository (`--runner`). This tool builds
+released versions (`--versions`), or an iii release (`--iii`). This tool builds
 the stack from `stacks/default.yaml`, or the one `--stack` names, dispatches `exact-stack-e2e.yml` without an execution (its reports only go to
 artifacts), waits for the run and reads `execution-summary.json`:
 
@@ -15,8 +14,8 @@ artifacts), waits for the run and reads `execution-summary.json`:
     not_measured  the run produced no summary, a group is inconclusive, its
                   infrastructure was invalid or it has no completion
                   evidence, or the run never finished
-    skipped       nothing the caller changed is part of the stack: a worker it
-                  declares or one of their dependencies
+    skipped       nothing the caller changed is part of the harness graph (or
+                  of the stack `--stack` names)
 
 A green workflow proves nothing here: the campaign is advisory, so the
 verdict is read from the summary. Only `passed` and `skipped` exit 0, unless
@@ -36,11 +35,11 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from exact_stack_campaign import DEFAULT_STACK, RUNNER, load_yaml, worker_name  # noqa: E402
-from prepare_execution import PIN_KEYS, release_graph  # noqa: E402
+from exact_stack_campaign import APPLICATION, DEFAULT_STACK, load_yaml  # noqa: E402
+from prepare_execution import release_graph  # noqa: E402
 
 EXECUTOR_REPOSITORY = "iii-hq/harness-e2e"
 #: Where the workers are built from. The Registry no longer points a release at
@@ -82,29 +81,24 @@ def gh(*args: str, token: str | None = None, merged: bool = False) -> str:
     return done.stdout + done.stderr if merged else done.stdout
 
 
-def graph_workers(package: str) -> set[str]:
-    """The workers the newest release of `package` depends on, engine
-    built-ins and the package itself left out."""
-    nodes = release_graph(package).get("graph") or []
-    return {node["name"] for node in nodes if node.get("type") != "engine"} - {package}
+def graph_workers() -> set[str]:
+    """The workers the harness release is made of, engine built-ins left out."""
+    nodes = release_graph(APPLICATION).get("graph") or []
+    return {node["name"] for node in nodes if node.get("type") != "engine"}
 
 
-def build_stack(pins: list[str], commit: str, iii: str, graph: Callable[[str], set[str]] | None = None,
-                stack: str = "default", versions: dict[str, str] | None = None,
-                runner: str = "") -> dict[str, Any] | None:
-    """The `stack` of stacks/ with the pinned workers built from `commit`, the
-    runner built from `runner` (a commit of this repository) and `versions` of
-    its workers installed.
+def build_stack(pins: list[str], commit: str, iii: str, graph: set[str], stack: str = "default",
+                versions: dict[str, str] | None = None) -> dict[str, Any] | None:
+    """The `stack` of stacks/ with the pinned workers built from `commit` and
+    `versions` of its workers installed.
 
-    A pin is part of what runs when the stack declares it or one of the
-    packages it declares depends on it (`graph`); any other is dropped. The
-    runner's dependencies count only when the runner is built too: a released
-    runner brings its own. A declared package that depends on a pinned worker
-    is pinned with it, at the same commit, so the Registry does not bring a
-    second copy of a worker that is being built from source. A pinned worker
-    keeps its container's settings; one the stack does not declare joins it.
-    No pin left, and no version, iii release or runner asked for, means nothing
-    to verify (None).
+    On the default stack a pinned worker outside the harness graph is not part
+    of what runs, so it is dropped, and the harness is always pinned with the
+    rest, at the same commit, so the Registry does not bring a second copy of a
+    worker that is being built from source. On a named stack a pin is one of
+    its containers, built with that container's settings kept; the others stay
+    as the stack has them. No pin left, and no version or iii release asked
+    for, means nothing to verify (None).
     """
     named = stack != "default"
     built = load_yaml((STACKS / f"{stack}.yaml" if named else DEFAULT_STACK).read_text())
@@ -115,24 +109,14 @@ def build_stack(pins: list[str], commit: str, iii: str, graph: Callable[[str], s
         if name not in containers:
             raise VerifyError(f"the {stack} stack declares no {name} to install {version} of")
         containers[name]["version"] = version
-    packages = {name: worker_name(container["worker"]) for name, container in containers.items()
-                if str(container.get("worker", "")).startswith("package://") and (runner or name != RUNNER)}
-    graph = graph or graph_workers
-    depends = {name: graph(package) for name, package in packages.items()} if pins else {}
-    pinned = set(pins) & {*containers, *(worker for workers in depends.values() for worker in workers)}
-    pinned -= {RUNNER}
-    if pins and not pinned and not (versions or iii or runner):
+    pinned = sorted(set(pins) & (set(containers) if named else graph))
+    if pins and not pinned and not (versions or iii):
         return None
-    pinned |= {name for name, workers in depends.items() if name != RUNNER and workers & pinned}
-
-    def build(name: str, repository: str, at: str) -> None:
-        kept = {key: value for key, value in containers.get(name, {}).items() if key not in ("worker", *PIN_KEYS)}
-        containers[name] = {"worker": f"package://{name}", **kept, "repository": repository, "commit": at}
-
-    for name in sorted(pinned):
-        build(name, WORKERS_REPOSITORY, commit)
-    if runner:
-        build(RUNNER, EXECUTOR_REPOSITORY, runner)
+    for name in sorted(set(pinned) if named or not pinned else {APPLICATION, *pinned}):
+        kept = {key: value for key, value in containers.get(name, {}).items()
+                if named and key not in ("worker", "version")}
+        containers[name] = {"worker": f"package://{name}", **kept, "repository": WORKERS_REPOSITORY,
+                            "commit": commit}
     return built
 
 
@@ -226,14 +210,11 @@ def verdict(summary: dict[str, Any]) -> dict[str, Any]:
             "failed": failed, "not_measured": unmeasured}
 
 
-def label(built: list[str], commit: str, versions: dict[str, str], iii: str, suite: str,
-          runner: str = "") -> str:
-    """What the stack measured: the workers built from `commit`, the runner
-    built from `runner`, the released versions it installs (a worker built
-    from a commit runs no version) and the iii release, after the suite when
-    it is not `pr`."""
+def label(built: list[str], commit: str, versions: dict[str, str], iii: str, suite: str) -> str:
+    """What the stack measured: the workers built from `commit`, the released
+    versions it installs (a worker built from the commit runs no version) and
+    the iii release, after the suite when it is not `pr`."""
     named = " + ".join(filter(None, [f"{', '.join(built)} @ {commit[:7]}" if built else "",
-                                     f"{RUNNER} @ {runner[:7]}" if runner else "",
                                      *(f"{name} {version}" for name, version in versions.items()
                                        if name not in built),
                                      f"iii {iii}" if iii else ""]))
@@ -355,7 +336,6 @@ def main() -> int:
     parser.add_argument("--pins", default="[]", help="JSON list of the workers the change touches")
     parser.add_argument("--commit", default="", help="the commit those workers are built from")
     parser.add_argument("--iii", default="", help="an iii release version to install")
-    parser.add_argument("--runner", default="", help=f"the full commit of {EXECUTOR_REPOSITORY} the runner is built from")
     parser.add_argument("--versions", default="{}", help="JSON object of released worker versions to install")
     parser.add_argument("--suite", default="pr")
     parser.add_argument("--stack", default="default", help="the stack of stacks/ the suite runs on")
@@ -368,14 +348,13 @@ def main() -> int:
     versions = json.loads(args.versions)
     if pins and not args.commit:
         parser.error("--pins needs --commit")
-    if args.runner and not re.fullmatch(r"[0-9a-f]{40}", args.runner):
-        parser.error("--runner needs a full commit")
-    if not pins and not args.iii and not versions and not args.runner:
-        parser.error("nothing to verify: give --pins, --versions, --iii or --runner")
+    if not pins and not args.iii and not versions:
+        parser.error("nothing to verify: give --pins, --versions or --iii")
     token = os.environ.get("GH_TOKEN")
     run_url, stack = "", None
     try:
-        stack = build_stack(pins, args.commit, args.iii, stack=args.stack, versions=versions, runner=args.runner)
+        graph = graph_workers() if pins and args.stack == "default" else set()
+        stack = build_stack(pins, args.commit, args.iii, graph, args.stack, versions)
         if stack is None:
             result = {"status": "skipped", "passed": 0, "planned": 0, "failed": [], "not_measured": []}
             if args.stack != "default":
@@ -388,9 +367,9 @@ def main() -> int:
         result = {"status": "not_measured", "passed": 0, "planned": 0, "failed": [], "not_measured": [],
                   "reason": f"{type(error).__name__}: {error}"}
 
-    built = [name for name in (pinned(stack) if stack else pins) if not (args.runner and name == RUNNER)]
+    built = pinned(stack) if stack else pins
     mark = marker(args.suite)
-    body = describe(result, label(built, args.commit, versions, args.iii, args.suite, args.runner), run_url, mark)
+    body = describe(result, label(built, args.commit, versions, args.iii, args.suite), run_url, mark)
     emit(result, body, run_url)
     if args.comment_pr and result["status"] != "skipped":
         try:
