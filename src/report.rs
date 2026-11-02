@@ -1643,9 +1643,34 @@ fn observed_wake_resumes(transcript: Option<&Value>) -> Option<u64> {
 }
 
 fn observed_parallel_spawns(transcript: Option<&Value>) -> Option<u64> {
-    let transcript =
-        transcript.filter(|transcript| transcript.get("messages").is_some_and(Value::is_array))?;
-    Some(crate::scenarios::common::max_parallel_spawns(transcript) as u64)
+    let messages = transcript?.get("messages")?.as_array()?;
+    Some(
+        messages
+            .iter()
+            .filter_map(|entry| entry.get("message"))
+            .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+            .map(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("function_call")
+                            && (block.get("function_id").and_then(Value::as_str)
+                                == Some("harness::spawn")
+                                || (block.get("function_id").and_then(Value::as_str)
+                                    == Some("agent_trigger")
+                                    && block
+                                        .pointer("/arguments/function")
+                                        .and_then(Value::as_str)
+                                        == Some("harness::spawn")))
+                    })
+                    .count() as u64
+            })
+            .max()
+            .unwrap_or(0),
+    )
 }
 
 fn observed_complexity(

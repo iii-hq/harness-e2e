@@ -732,9 +732,9 @@ fn named_relations(sql: &str) -> Vec<(String, String)> {
             Some(schema) if schema.eq_ignore_ascii_case("main.") => &unquoted[5..],
             _ => unquoted.as_str(),
         };
-        // An upsert's `DO UPDATE SET` is not a relation.
+        // An upsert's `DO UPDATE SET` is not a relation; a quoted `"SET"` is.
         if name.eq_ignore_ascii_case("SELECT")
-            || (keyword == "UPDATE" && name.eq_ignore_ascii_case("SET"))
+            || (keyword == "UPDATE" && candidate.eq_ignore_ascii_case("SET"))
             || !name
                 .chars()
                 .next()
@@ -819,6 +819,8 @@ pub(crate) mod tests {
             prefix
         )
         .is_empty());
+        // A quoted relation named `SET` is still a relation.
+        assert_eq!(foreign_relations("UPDATE \"SET\" SET k=1", prefix), ["SET"]);
         assert!(foreign_relations(
             "INSERT INTO e2e_run_orders_v2 (id) SELECT id FROM e2e_run_legacy_orders WHERE id NOT IN (SELECT source_legacy_id FROM e2e_run_orders_v2)",
             prefix

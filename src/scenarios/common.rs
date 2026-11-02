@@ -475,11 +475,35 @@ pub fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
     }
     Some((function, arguments))
 }
-/// The largest fan-out: the longest run of `harness::spawn` calls with no
-/// other call, other function result or new message between them. A run may
-/// span responses, since the Harness prompt asks for one large call per
-/// response and a spawn's task is large.
+/// The most `harness::spawn` calls in one assistant response.
 pub fn max_parallel_spawns(transcript: &Value) -> usize {
+    transcript
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("message"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .map(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|block| {
+                    normalized_block_call(block)
+                        .is_some_and(|(function, _)| function == "harness::spawn")
+                })
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+/// The longest run of `harness::spawn` calls with no other call, other
+/// function result or new message between them. A run may span responses,
+/// since the Harness prompt asks for one large call per response and a
+/// spawn's task is large.
+pub fn back_to_back_spawns(transcript: &Value) -> usize {
     let (mut run, mut longest) = (0, 0);
     let messages = transcript.get("messages").and_then(Value::as_array);
     for message in messages
@@ -490,12 +514,13 @@ pub fn max_parallel_spawns(transcript: &Value) -> usize {
         match message.get("role").and_then(Value::as_str) {
             Some("assistant") => {
                 let blocks = message.get("content").and_then(Value::as_array);
-                for (function, _) in blocks
-                    .into_iter()
-                    .flatten()
-                    .filter_map(normalized_block_call)
-                {
-                    run = if function == "harness::spawn" {
+                // Any call, even one that does not normalize, ends the run.
+                for block in blocks.into_iter().flatten().filter(|block| {
+                    block.get("type").and_then(Value::as_str) == Some("function_call")
+                }) {
+                    run = if normalized_block_call(block)
+                        .is_some_and(|(function, _)| function == "harness::spawn")
+                    {
                         run + 1
                     } else {
                         0
@@ -845,6 +870,42 @@ mod tests {
     }
 
     #[test]
+    fn parallel_spawns_count_one_response_only() {
+        let spread: Vec<Value> = (0..16)
+            .flat_map(|index| {
+                let id = format!("s{index}");
+                [
+                    response(&[(&id, "harness::spawn")]),
+                    result(&id, "harness::spawn"),
+                ]
+            })
+            .collect();
+        let spread = json!({"messages": spread});
+        assert_eq!(max_parallel_spawns(&spread), 1);
+        assert_eq!(back_to_back_spawns(&spread), 16);
+
+        let ids: Vec<String> = (0..16).map(|index| format!("s{index}")).collect();
+        let calls: Vec<(&str, &str)> = ids
+            .iter()
+            .map(|id| (id.as_str(), "harness::spawn"))
+            .collect();
+        let one_response = json!({"messages": [response(&calls)]});
+        assert_eq!(max_parallel_spawns(&one_response), 16);
+    }
+
+    #[test]
+    fn a_call_that_does_not_normalize_breaks_the_run() {
+        let messages = json!({"messages": [
+            response(&[("a", "harness::spawn")]),
+            {"message": {"role": "assistant", "content": [
+                {"type": "function_call", "id": "x", "function_id": "state::get"}
+            ]}},
+            response(&[("b", "harness::spawn")]),
+        ]});
+        assert_eq!(back_to_back_spawns(&messages), 1);
+    }
+
+    #[test]
     fn back_to_back_spawn_responses_are_one_fan_out() {
         // The Harness prompt allows one large call per response, so a model
         // spawns three writers in three responses with only their results between.
@@ -859,12 +920,12 @@ mod tests {
             response(&[("c", "harness::spawn")]),
             result("c", "harness::spawn"),
         ]});
-        assert_eq!(max_parallel_spawns(&split), 3);
+        assert_eq!(back_to_back_spawns(&split), 3);
 
         let batched = json!({"messages": [
             response(&[("r", "engine::register_trigger"), ("a", "harness::spawn"), ("b", "harness::spawn")]),
         ]});
-        assert_eq!(max_parallel_spawns(&batched), 2);
+        assert_eq!(back_to_back_spawns(&batched), 2);
     }
 
     #[test]
@@ -878,7 +939,7 @@ mod tests {
             result("b", "harness::spawn"),
             response(&[("c", "harness::spawn")]),
         ]});
-        assert_eq!(max_parallel_spawns(&interrupted), 2);
+        assert_eq!(back_to_back_spawns(&interrupted), 2);
 
         let mixed = json!({"messages": [
             response(&[("a", "harness::spawn"), ("q", "state::get")]),
@@ -886,7 +947,7 @@ mod tests {
             result("q", "state::get"),
             response(&[("b", "harness::spawn")]),
         ]});
-        assert_eq!(max_parallel_spawns(&mixed), 1);
+        assert_eq!(back_to_back_spawns(&mixed), 1);
 
         let next_turn = json!({"messages": [
             response(&[("a", "harness::spawn")]),
@@ -894,6 +955,6 @@ mod tests {
             {"message": {"role": "user", "content": [{"type": "text", "text": "next"}]}},
             response(&[("b", "harness::spawn")]),
         ]});
-        assert_eq!(max_parallel_spawns(&next_turn), 1);
+        assert_eq!(back_to_back_spawns(&next_turn), 1);
     }
 }

@@ -495,7 +495,7 @@ fn evaluate_observation(
     let expected_sessions: BTreeSet<&str> =
         names.writer_sessions.iter().map(String::as_str).collect();
     let single_response_spawns =
-        common::max_parallel_spawns(&observation.transcript) == usize::from(WRITERS);
+        common::back_to_back_spawns(&observation.transcript) == usize::from(WRITERS);
 
     let records = common::trigger_fired_records(&observation.transcript);
     let completion_records: Vec<_> = records
