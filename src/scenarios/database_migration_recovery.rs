@@ -220,9 +220,13 @@ impl Scenario for DatabaseMigrationRecovery {
                  - `{legacy}`: six immutable legacy rows with columns `id`, `customer`, \
                  `total_text`, and `status`.\n\
                  - `{target}`: columns `id`, `customer`, `amount_cents`, `status`, and \
-                 `source_legacy_id`; legacy row 101 is already copied.\n\
+                 `source_legacy_id`; legacy row 101 is already copied. Every migrated row keeps \
+                 the legacy `id` as both `id` and `source_legacy_id`, and copies the legacy \
+                 `customer` and `status` unchanged.\n\
                  - `{quarantine}`: columns `legacy_id`, `customer`, `raw_total`, `status`, and \
-                 `reason`; initially empty.\n\
+                 `reason`; initially empty. The quarantine row keeps the legacy `id` as \
+                 `legacy_id` and copies the legacy `customer`, `total_text` as `raw_total`, and \
+                 `status` unchanged.\n\
                  - `{journal}`: columns `migration_id`, `status`, `applied_rows`, \
                  `quarantined_rows`, and `replay_count`; it contains an incomplete \
                  `{MIGRATION_ID}` entry.\n\
@@ -245,8 +249,8 @@ impl Scenario for DatabaseMigrationRecovery {
                  final state must contain five target rows, one quarantine row, six compatibility \
                  rows, `replay_count=2`, the unchanged six-row legacy source, and the unchanged \
                  sentinel. Use no relation outside prefix `{prefix}`.\n\n\
-                 Finish with exactly `{EXPECTED_REPORT}` only if every verification succeeds; \
-                 otherwise report `FAIL` and the discrepancy.",
+                 Reply with exactly `{EXPECTED_REPORT}` and nothing else only if every \
+                 verification succeeds; otherwise report `FAIL` and the discrepancy.",
                 legacy = relations.legacy,
                 target = relations.target,
                 quarantine = relations.quarantine,
@@ -728,7 +732,9 @@ fn named_relations(sql: &str) -> Vec<(String, String)> {
             Some(schema) if schema.eq_ignore_ascii_case("main.") => &unquoted[5..],
             _ => unquoted.as_str(),
         };
+        // An upsert's `DO UPDATE SET` is not a relation; a quoted `"SET"` is.
         if name.eq_ignore_ascii_case("SELECT")
+            || (keyword == "UPDATE" && candidate.eq_ignore_ascii_case("SET"))
             || !name
                 .chars()
                 .next()
@@ -807,6 +813,14 @@ pub(crate) mod tests {
     #[test]
     fn foreign_relations_flag_only_unprefixed_names() {
         let prefix = "e2e_run_";
+        // An upsert's `DO UPDATE SET` names no relation.
+        assert!(foreign_relations(
+            "INSERT INTO e2e_run_j (k) VALUES (1) ON CONFLICT(k) DO UPDATE SET k=1",
+            prefix
+        )
+        .is_empty());
+        // A quoted relation named `SET` is still a relation.
+        assert_eq!(foreign_relations("UPDATE \"SET\" SET k=1", prefix), ["SET"]);
         assert!(foreign_relations(
             "INSERT INTO e2e_run_orders_v2 (id) SELECT id FROM e2e_run_legacy_orders WHERE id NOT IN (SELECT source_legacy_id FROM e2e_run_orders_v2)",
             prefix

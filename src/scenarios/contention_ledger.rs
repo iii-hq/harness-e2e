@@ -68,7 +68,7 @@ const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::gate(
 const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "quorum_free_fan_in",
     10,
-    "Is one barrier-gated wake over the three done keys armed before the writers are spawned in one response, retiring on the third key after exactly three evaluations?",
+    "Is one barrier-gated wake over the three done keys armed before the writers are spawned back to back with no other call between them, retiring on the third key after exactly three evaluations?",
 )
 .labeled("One barrier wake armed before spawning writers");
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
@@ -364,7 +364,7 @@ Use this run-isolated database contract so the result can be evaluated:
 - audit: `{audit}` — columns `writer` (INTEGER, 0-2) and `seq` (INTEGER, 1-{increments});
   one row per increment
 
-Do all of the following in ONE response, in this order:
+Do all of the following in this order:
 
 1. Create both tables and insert the single accumulator row with `total = 0`.
 2. Arm exactly one one-shot wake-only state wake over the whole scope `{scope}` with
@@ -372,8 +372,9 @@ Do all of the following in ONE response, in this order:
    `{barrier_id}`, expecting exactly these keys: `done-00`, `done-01`, `done-02`, and carry
    each event's new value. The registration is wake-only: omit any function target.
    Register nothing else.
-3. Directly spawn all three writers in parallel — every spawn in this same response — as
-   sessions `{w0}` (writer 0), `{w1}` (writer 1), and `{w2}` (writer 2). Then end the turn.
+3. Directly spawn all three writers in parallel — back to back, with no other call between
+   the spawns (one spawn per response is fine) — as sessions `{w0}` (writer 0), `{w1}`
+   (writer 1), and `{w2}` (writer 2). Then end the turn.
 
 Each writer must, in its own session, perform its {increments} increments for `seq` 1
 through {increments} — each one atomic accumulator UPDATE plus one audit INSERT carrying
@@ -494,7 +495,7 @@ fn evaluate_observation(
     let expected_sessions: BTreeSet<&str> =
         names.writer_sessions.iter().map(String::as_str).collect();
     let single_response_spawns =
-        common::max_parallel_spawns(&observation.transcript) == usize::from(WRITERS);
+        common::back_to_back_spawns(&observation.transcript) == usize::from(WRITERS);
 
     let records = common::trigger_fired_records(&observation.transcript);
     let completion_records: Vec<_> = records

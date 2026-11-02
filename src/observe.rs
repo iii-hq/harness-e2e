@@ -316,6 +316,7 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
     let mut last_progress = started;
     let mut previous_metrics = None;
     let mut unobservable = None;
+    let mut expects_wake = false;
     let mut machine = ObserveMachine::new(root_session_id, expected_turn_id, expected_outcome);
     let mut cancellation = cancellation.cloned();
 
@@ -331,9 +332,15 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
                     stuck_timeout.as_secs()
                 );
             }
+            // A root parked on an armed wake that never fires reads as stuck too.
+            let parked = if expects_wake {
+                "; the root status still expects a wake"
+            } else {
+                ""
+            };
             bail!(
                 "scenario {scenario_id} made no observable progress for {}s while waiting for \
-                 the complete session tree {root_session_id}",
+                 the complete session tree {root_session_id}{parked}",
                 stuck_timeout.as_secs()
             );
         }
@@ -405,6 +412,7 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
         match observer.pull_root_status(root_session_id).await {
             Ok(Some(status)) => {
                 ensure_not_cancelled(cancellation.as_ref())?;
+                expects_wake = status.expects_wake;
                 // An older turn that completed is not the awaited turn's outcome.
                 let older_completed = status.status == TurnStatus::Completed
                     && machine
@@ -1009,6 +1017,34 @@ mod tests {
         .to_string();
         assert!(error.contains("no observable progress"), "{error}");
         assert!(observer.stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_stuck_root_that_expects_a_wake_says_so() {
+        let parked = Injected::new(metrics(false, 1, 0), status(TurnStatus::Running, true));
+        let error = wait(
+            &parked,
+            Duration::from_millis(90),
+            Duration::from_millis(20),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("no observable progress"), "{error}");
+        assert!(error.ends_with("still expects a wake"), "{error}");
+
+        let idle = Injected::new(metrics(false, 1, 0), status(TurnStatus::Running, false));
+        let error = wait(
+            &idle,
+            Duration::from_millis(90),
+            Duration::from_millis(20),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(!error.contains("wake"), "{error}");
     }
 
     #[tokio::test]
