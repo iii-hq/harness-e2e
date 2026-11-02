@@ -16,8 +16,17 @@ assert SPEC and SPEC.loader
 verify_stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verify_stack)
 
-GRAPH = {"harness", "ade", "state", "queue"}
 COMMIT = "c46ead4ffb5051ae922888139849dcdb47e07805"
+RUNNER_COMMIT = "a75a5bcf6d8d86fe7880ea33b638fbffd6ecc3a7"
+
+
+def graph(depends):
+    """A Registry whose packages depend on the workers `depends` lists."""
+    return lambda package: set(depends.get(package, ()))
+
+
+GRAPH = graph({"harness": {"ade", "state", "queue"}})
+NO_GRAPH = graph({})
 
 
 def group(scenario, outcome="passed", valid=True, state="complete", completion=1.0):
@@ -56,12 +65,12 @@ class BuildStackTests(unittest.TestCase):
 
     def test_an_iii_release_changes_only_the_cli(self):
         default = verify_stack.load_yaml(verify_stack.DEFAULT_STACK.read_text())
-        stack = verify_stack.build_stack([], "", "0.24.3-rc.1", set())
+        stack = verify_stack.build_stack([], "", "0.24.3-rc.1", NO_GRAPH)
         self.assertEqual(stack["iii"], "0.24.3-rc.1")
         self.assertEqual(stack["containers"], default["containers"])
 
     def test_a_named_stack_builds_its_own_worker_and_keeps_its_settings(self):
-        stack = verify_stack.build_stack(["memory"], COMMIT, "", set(), stack="memory")
+        stack = verify_stack.build_stack(["memory"], COMMIT, "", NO_GRAPH, stack="memory")
         self.assertEqual(stack["containers"]["memory"], {
             "worker": "package://memory",
             "config_override": {"extraction_model": "deepseek::deepseek-flash"},
@@ -72,26 +81,77 @@ class BuildStackTests(unittest.TestCase):
         self.assertEqual(stack["containers"]["harness"], {"worker": "package://harness", "version": "latest"})
 
     def test_a_named_stack_ignores_workers_it_does_not_declare(self):
-        stack = verify_stack.build_stack(["memory", "ade"], COMMIT, "", set(), stack="memory")
+        stack = verify_stack.build_stack(["memory", "ade"], COMMIT, "", NO_GRAPH, stack="memory")
         self.assertNotIn("ade", stack["containers"])
-        self.assertIsNone(verify_stack.build_stack(["ade"], COMMIT, "", set(), stack="memory"))
+        self.assertIsNone(verify_stack.build_stack(["ade"], COMMIT, "", NO_GRAPH, stack="memory"))
 
     def test_a_released_version_runs_that_version_with_the_stack_settings(self):
-        stack = verify_stack.build_stack([], "", "", set(), stack="memory", versions={"memory": "0.2.22"})
+        stack = verify_stack.build_stack([], "", "", NO_GRAPH, stack="memory", versions={"memory": "0.2.22"})
         self.assertEqual(stack["containers"]["memory"]["version"], "0.2.22")
         self.assertIn("config_override", stack["containers"]["memory"])
 
     def test_a_requested_version_is_measured_even_when_no_pin_applies(self):
-        stack = verify_stack.build_stack(["ade"], COMMIT, "", set(), stack="memory", versions={"memory": "0.2.22"})
+        stack = verify_stack.build_stack(["ade"], COMMIT, "", NO_GRAPH, stack="memory", versions={"memory": "0.2.22"})
         self.assertEqual(stack["containers"]["memory"]["version"], "0.2.22")
 
     def test_the_label_names_only_versions_the_stack_installs(self):
         label = verify_stack.label(["memory"], COMMIT, {"memory": "0.2.22", "fp": "1.0.0"}, "", "memory")
         self.assertEqual(label, "memory · memory @ c46ead4 + fp 1.0.0")
 
+    def test_a_worker_the_default_stack_declares_accepts_a_pin(self):
+        stack = verify_stack.build_stack(["fp", "provider-zai"], COMMIT, "", GRAPH)
+        pin = {"repository": "iii-hq/workers", "commit": COMMIT}
+        self.assertEqual(stack["containers"]["fp"], {"worker": "package://fp", **pin})
+        self.assertEqual(stack["containers"]["provider-zai"], {"worker": "package://provider-zai", **pin})
+        # Neither is a dependency of the harness, which stays released.
+        self.assertEqual(stack["containers"]["harness"], {"worker": "package://harness", "version": "latest"})
+
+    def test_the_runner_dependencies_take_pins_only_when_the_runner_is_built(self):
+        registry = graph({"harness": {"state"}, "harness-e2e": {"database", "state"}})
+        # A released runner brings its own database: pinning one would be a second copy.
+        self.assertIsNone(verify_stack.build_stack(["database"], COMMIT, "", registry))
+        stack = verify_stack.build_stack(["database"], COMMIT, "", registry, runner=RUNNER_COMMIT)
+        self.assertEqual(stack["containers"]["database"],
+                         {"worker": "package://database", "repository": "iii-hq/workers", "commit": COMMIT})
+        self.assertEqual(stack["containers"]["harness-e2e"],
+                         {"worker": "package://harness-e2e", "repository": "iii-hq/harness-e2e", "commit": RUNNER_COMMIT})
+        self.assertEqual(stack["containers"]["harness"], {"worker": "package://harness", "version": "latest"})
+
+    def test_the_memory_stack_builds_the_whole_candidate_graph_and_keeps_its_settings(self):
+        registry = graph({
+            "harness": {"state", "queue", "llm-router"},
+            "memory": {"state", "llm-router"},
+            "harness-e2e": {"database", "browser", "storage", "state"},
+        })
+        changed = ["harness", "memory", "state", "queue", "llm-router", "database", "browser", "storage",
+                   "fp", "provider-deepseek", "provider-zai", "billing"]
+        stack = verify_stack.build_stack(changed, COMMIT, "0.26.0-rc.2", registry, stack="memory",
+                                         runner=RUNNER_COMMIT)
+        containers = stack["containers"]
+        self.assertEqual(verify_stack.pinned(stack), sorted({*changed, "harness-e2e"} - {"billing"}))
+        self.assertEqual(containers["memory"], {
+            "worker": "package://memory",
+            "config_override": {"extraction_model": "deepseek::deepseek-flash"},
+            "repository": "iii-hq/workers",
+            "commit": COMMIT,
+        })
+        self.assertEqual(containers["harness-e2e"]["commit"], RUNNER_COMMIT)
+        self.assertTrue(all("version" not in containers[name] for name in verify_stack.pinned(stack)))
+        self.assertEqual(stack["iii"], "0.26.0-rc.2")
+
+    def test_a_declared_package_is_built_with_a_dependency_that_is(self):
+        registry = graph({"harness": {"state"}, "memory": {"state"}})
+        stack = verify_stack.build_stack(["state"], COMMIT, "", registry, stack="memory")
+        self.assertEqual(verify_stack.pinned(stack), ["harness", "memory", "state"])
+        self.assertIn("config_override", stack["containers"]["memory"])
+
+    def test_the_label_names_the_runner_commit_apart_from_the_workers_commit(self):
+        label = verify_stack.label(["database", "harness"], COMMIT, {}, "0.26.0-rc.2", "pr", RUNNER_COMMIT)
+        self.assertEqual(label, "database, harness @ c46ead4 + harness-e2e @ a75a5bc + iii 0.26.0-rc.2")
+
     def test_a_version_for_a_worker_the_stack_lacks_is_an_error(self):
         with self.assertRaises(verify_stack.VerifyError):
-            verify_stack.build_stack([], "", "", set(), stack="memory", versions={"ade": "1.0.0"})
+            verify_stack.build_stack([], "", "", NO_GRAPH, stack="memory", versions={"ade": "1.0.0"})
 
     def test_each_suite_keeps_a_comment_of_its_own(self):
         self.assertEqual(verify_stack.marker("pr"), verify_stack.MARKER)

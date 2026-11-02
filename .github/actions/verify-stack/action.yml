@@ -1,8 +1,9 @@
 name: Verify a stack with Harness E2E
 description: >-
   Runs a Harness E2E suite on a candidate stack (workers built from a commit,
-  released worker versions, or an iii release), waits for it and reports what
-  it measured. It never fails the calling job: read `status` and decide there.
+  the runner built from a commit, released worker versions, or an iii
+  release), waits for it and reports what it measured. It never fails the
+  calling job: read `status` and decide there.
 
 inputs:
   token:
@@ -14,8 +15,8 @@ inputs:
     default: ''
   pins:
     description: >-
-      JSON list of the workers the change touches; those outside the harness
-      graph (or, with `stack`, outside that stack) are ignored
+      JSON list of the workers the change touches; those the stack neither
+      declares nor depends on are ignored
     required: false
     default: '[]'
   commit:
@@ -28,6 +29,12 @@ inputs:
     default: '{}'
   iii:
     description: iii release version to install instead of the newest candidate
+    required: false
+    default: ''
+  runner:
+    description: >-
+      Full commit of iii-hq/harness-e2e the runner is built from instead of its
+      newest release; the runner's dependencies then accept pins too
     required: false
     default: ''
   suite:
@@ -73,6 +80,7 @@ runs:
         COMMIT: ${{ inputs.commit }}
         VERSIONS: ${{ inputs.versions }}
         III: ${{ inputs.iii }}
+        E2E_RUNNER: ${{ inputs.runner }}
         SUITE: ${{ inputs.suite }}
         STACK: ${{ inputs.stack }}
         MODEL: ${{ inputs.model }}
@@ -83,6 +91,6 @@ runs:
       # job sends reaches it and it cancels the run it started.
       run: |
         exec python3 "$ACTION_PATH/../../../scripts/verify_stack.py" --exit-zero \
-          --pins "$PINS" --commit "$COMMIT" --versions "$VERSIONS" --iii "$III" \
+          --pins "$PINS" --commit "$COMMIT" --versions "$VERSIONS" --iii "$III" --runner "$E2E_RUNNER" \
           --suite "$SUITE" --stack "$STACK" --model "$MODEL" \
           ${COMMENT_PR:+--comment-pr "$COMMENT_PR"}
