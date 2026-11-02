@@ -1,8 +1,10 @@
 import hashlib
 import importlib.util
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).parents[2] / "scripts" / "release_worker.py"
@@ -35,6 +37,91 @@ class ReleaseAssetsTests(unittest.TestCase):
             (root / "harness-e2e-aarch64-apple-darwin.tar.gz").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "does not match"):
                 release_worker.release_assets(root)
+
+
+TYPED = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+UNTYPED = {"$schema": "http://json-schema.org/draft-07/schema#", "title": "AnyValue"}
+
+
+def engine_0_26(details):
+    """`iii trigger` against a 0.26 engine: functions only; trigger types are gone.
+
+    `details` maps each harness-e2e function to its `engine::functions::info`
+    row, which states `args_format`, `private` and `observable` only when they
+    are not the defaults."""
+    calls = []
+
+    def answer(function_id, payload):
+        calls.append(function_id)
+        if function_id == "engine::workers::list":
+            return {"workers": [{"name": "database", "id": "w-db"}, {"name": "harness-e2e", "id": "w-e2e"}]}
+        if function_id == "engine::functions::list":
+            rows = [{"function_id": fid, "worker_name": "harness-e2e"} for fid in details]
+            return {"functions": [*rows, {"function_id": "database::query", "worker_name": "database"}]}
+        if function_id == "engine::functions::info":
+            return {"function": {"function_id": payload["function_id"], **details[payload["function_id"]]}}
+        raise subprocess.CalledProcessError(1, ["iii", "trigger", function_id],
+                                            stderr=f"Function {function_id} not found in namespace default.")
+
+    return answer, calls
+
+
+class CollectInterfaceTests(unittest.TestCase):
+    BASELINE = {"workers": [{"name": "database", "id": "w-db"}]}
+
+    def collect(self, details):
+        answer, calls = engine_0_26(details)
+        with patch.object(release_worker, "iii_trigger", answer):
+            interface = release_worker.collect_interface(
+                worker="harness-e2e", prefix="e2e::", baseline_workers=self.BASELINE, wait_seconds=5)
+        return interface, calls
+
+    def test_collects_every_function_with_how_it_is_observed_and_reads_no_trigger_types(self):
+        interface, calls = self.collect({
+            "e2e::scenarios-list": {"request_schema": TYPED, "response_schema": TYPED},
+            "e2e::dashboard::changed": {"request_schema": TYPED, "response_schema": TYPED, "private": True},
+            "e2e::sealed": {"request_schema": TYPED, "response_schema": TYPED, "observable": False,
+                            "args_format": {"type": "object", "properties": {"in_ms": {"type": "integer"}}}},
+        })
+        self.assertEqual(list(interface), ["functions"])
+        rows = {row["name"]: row for row in interface["functions"]}
+        self.assertEqual(sorted(rows), ["e2e::dashboard::changed", "e2e::scenarios-list", "e2e::sealed"])
+        observed = {name: (row["args_format"], row["private"], row["observable"]) for name, row in rows.items()}
+        self.assertEqual(observed, {
+            "e2e::scenarios-list": (None, False, True),
+            "e2e::dashboard::changed": (None, True, True),
+            "e2e::sealed": ({"type": "object", "properties": {"in_ms": {"type": "integer"}}}, False, False),
+        })
+        self.assertFalse([call for call in calls if call.startswith("engine::triggers::")])
+
+    def test_an_untyped_function_still_fails_the_collection_private_or_not(self):
+        with self.assertRaisesRegex(RuntimeError, r"e2e::dashboard::changed\.request_schema"):
+            self.collect({
+                "e2e::scenarios-list": {"request_schema": TYPED, "response_schema": TYPED},
+                "e2e::dashboard::changed": {"request_schema": UNTYPED, "response_schema": TYPED, "private": True},
+            })
+
+    def test_an_args_format_that_is_not_a_schema_fails_the_collection(self):
+        with self.assertRaisesRegex(RuntimeError, r"e2e::sealed\.args_format"):
+            self.collect({"e2e::sealed": {"request_schema": TYPED, "response_schema": TYPED, "args_format": "in_ms"}})
+
+
+class BuildPayloadTests(unittest.TestCase):
+    ROOT = Path(__file__).parents[2]
+
+    def test_a_0_26_release_publishes_functions_with_how_they_are_observed_and_no_trigger_types(self):
+        function = {"name": "e2e::dashboard::changed", "description": "", "request_schema": TYPED,
+                    "response_schema": TYPED, "args_format": None, "private": True, "observable": True,
+                    "metadata": {}}
+        payload = release_worker.build_payload(root=self.ROOT, version="0.24.0", tag="harness-e2e/v0.24.0",
+                                               repo_url="https://github.com/iii-hq/harness-e2e",
+                                               interface={"functions": [function]})
+        self.assertNotIn("triggers", payload)
+        self.assertEqual(payload["functions"], [function])
+        with self.assertRaisesRegex(ValueError, "untyped function schemas"):
+            release_worker.build_payload(root=self.ROOT, version="0.24.0", tag="harness-e2e/v0.24.0",
+                                         repo_url="https://github.com/iii-hq/harness-e2e",
+                                         interface={"functions": [{**function, "request_schema": UNTYPED}]})
 
 
 if __name__ == "__main__":
