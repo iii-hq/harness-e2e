@@ -270,8 +270,18 @@ pub(super) struct GithubStatusResponse {
     message: Option<String>,
 }
 
+/// What `e2e::dashboard::changed` carries: an execution and what happened to it.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct DashboardChange {
+    /// `started`, `progress`, `cancelling`, `finished`, `renamed` or `deleted`.
+    kind: String,
+    execution_id: String,
+    /// When it happened (RFC 3339).
+    at: String,
+}
+
 /// `e2e::dashboard::changed`: a private function whose handler returns the
-/// signal it is called with, so its observers receive every one.
+/// change it is called with, so its observers receive every one.
 pub(super) struct DashboardEvents {
     iii: IIIClient,
 }
@@ -280,7 +290,7 @@ impl DashboardEvents {
     pub(super) fn register(iii: &IIIClient) -> Arc<Self> {
         iii.register_function(
             CHANGED_TRIGGER,
-            RegisterFunction::new(|signal: Value| Ok::<Value, Error>(signal))
+            RegisterFunction::new(|change: DashboardChange| Ok::<DashboardChange, Error>(change))
                 .description(
                     "A local E2E execution started, produced progress, or reached a terminal state.",
                 )
@@ -290,10 +300,10 @@ impl DashboardEvents {
     }
 
     pub(super) async fn emit(&self, kind: &str, execution_id: &str) {
-        let payload = json!({
-            "kind": kind,
-            "execution_id": execution_id,
-            "at": chrono::Utc::now().to_rfc3339(),
+        let payload = json!(DashboardChange {
+            kind: kind.to_owned(),
+            execution_id: execution_id.to_owned(),
+            at: chrono::Utc::now().to_rfc3339(),
         });
         if let Err(error) = self
             .iii
@@ -1285,6 +1295,29 @@ fn handler_error(error: impl std::fmt::Display) -> Error {
 #[cfg(test)]
 mod response_contract_tests {
     use super::*;
+
+    /// The release refuses a function whose schemas are untyped, private ones
+    /// included; the dashboard change event is typed, and its handler takes
+    /// and returns exactly the payload the dashboard reads.
+    #[test]
+    fn the_dashboard_change_event_is_typed_and_keeps_its_payload() {
+        let schema = serde_json::to_value(schemars::schema_for!(DashboardChange)).unwrap();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(keys(&schema["properties"]), "at,execution_id,kind");
+        let mut required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect();
+        required.sort();
+        assert_eq!(required, ["at", "execution_id", "kind"]);
+        let sent =
+            json!({"kind": "finished", "execution_id": "e2e_1", "at": "2026-11-02T12:00:00+00:00"});
+        let change: DashboardChange = serde_json::from_value(sent.clone()).unwrap();
+        assert_eq!(serde_json::to_value(change).unwrap(), sent);
+        assert!(serde_json::from_value::<DashboardChange>(json!({"kind": "finished"})).is_err());
+    }
 
     /// The keys of an object, sorted and comma-joined.
     fn keys(value: &Value) -> String {
