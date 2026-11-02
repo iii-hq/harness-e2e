@@ -1,13 +1,11 @@
 use crate::context::function_ids;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use iii_sdk::errors::Error;
-use iii_sdk::protocol::{TriggerAction, TriggerRequest};
-use iii_sdk::trigger::{TriggerConfig, TriggerHandler};
-use iii_sdk::{IIIClient, RegisterFunction, RegisterTriggerType};
+use iii_sdk::protocol::{CallAction, CallRequest};
+use iii_sdk::{IIIClient, RegisterFunction};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -272,107 +270,52 @@ pub(super) struct GithubStatusResponse {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct EventBindingConfig {}
-
-#[derive(Clone, Default)]
-struct Subscribers {
-    values: Arc<Mutex<HashMap<String, TriggerConfig>>>,
+/// What `e2e::dashboard::changed` carries: an execution and what happened to it.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct DashboardChange {
+    /// `started`, `progress`, `cancelling`, `finished`, `renamed` or `deleted`.
+    kind: String,
+    execution_id: String,
+    /// When it happened (RFC 3339).
+    at: String,
 }
 
-impl Subscribers {
-    fn insert(&self, config: TriggerConfig) {
-        self.values
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .insert(config.id.clone(), config);
-    }
-
-    fn remove(&self, id: &str) {
-        self.values
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(id);
-    }
-
-    fn targets(&self) -> Vec<String> {
-        self.values
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .values()
-            .map(|config| config.function_id.clone())
-            .collect()
-    }
-}
-
-struct ChangedHandler {
-    subscribers: Subscribers,
-}
-
-#[async_trait]
-impl TriggerHandler for ChangedHandler {
-    async fn register_trigger(&self, config: TriggerConfig) -> std::result::Result<(), Error> {
-        let raw = if config.config.is_null() {
-            json!({})
-        } else {
-            config.config.clone()
-        };
-        serde_json::from_value::<EventBindingConfig>(raw)
-            .map_err(|error| Error::Handler(format!("invalid dashboard event config: {error}")))?;
-        self.subscribers.insert(config);
-        Ok(())
-    }
-
-    async fn unregister_trigger(&self, config: TriggerConfig) -> std::result::Result<(), Error> {
-        self.subscribers.remove(&config.id);
-        Ok(())
-    }
-}
-
+/// `e2e::dashboard::changed`: a private function whose handler returns the
+/// change it is called with, so its observers receive every one.
 pub(super) struct DashboardEvents {
     iii: IIIClient,
-    subscribers: Subscribers,
 }
 
 impl DashboardEvents {
     pub(super) fn register(iii: &IIIClient) -> Arc<Self> {
-        let subscribers = Subscribers::default();
-        let _ = iii.register_trigger_type(
-            RegisterTriggerType::new(
-                CHANGED_TRIGGER,
-                "A local E2E execution started, produced progress, or reached a terminal state.",
-                ChangedHandler {
-                    subscribers: subscribers.clone(),
-                },
-            )
-            .trigger_request_format::<EventBindingConfig>(),
+        iii.register_function(
+            CHANGED_TRIGGER,
+            RegisterFunction::new(|change: DashboardChange| Ok::<DashboardChange, Error>(change))
+                .description(
+                    "A local E2E execution started, produced progress, or reached a terminal state.",
+                )
+                .private(),
         );
-        Arc::new(Self {
-            iii: iii.clone(),
-            subscribers,
-        })
+        Arc::new(Self { iii: iii.clone() })
     }
 
     pub(super) async fn emit(&self, kind: &str, execution_id: &str) {
-        let payload = json!({
-            "kind": kind,
-            "execution_id": execution_id,
-            "at": chrono::Utc::now().to_rfc3339(),
+        let payload = json!(DashboardChange {
+            kind: kind.to_owned(),
+            execution_id: execution_id.to_owned(),
+            at: chrono::Utc::now().to_rfc3339(),
         });
-        for function_id in self.subscribers.targets() {
-            if let Err(error) = self
-                .iii
-                .trigger(TriggerRequest {
-                    function_id: function_id.clone(),
-                    payload: payload.clone(),
-                    action: Some(TriggerAction::Void),
-                    timeout_ms: None,
-                })
-                .await
-            {
-                tracing::debug!(%error, %function_id, "deliver dashboard change signal");
-            }
+        if let Err(error) = self
+            .iii
+            .call(CallRequest {
+                function_id: CHANGED_TRIGGER.to_string(),
+                payload,
+                action: Some(CallAction::Void),
+                timeout_ms: None,
+            })
+            .await
+        {
+            tracing::debug!(%error, "emit dashboard change signal");
         }
     }
 }
@@ -1235,7 +1178,7 @@ pub(super) async fn catalog(
     if url == controller.default_url() {
         if let Some(iii) = connected {
             let functions = iii
-                .trigger(TriggerRequest {
+                .call(CallRequest {
                     function_id: "engine::functions::list".into(),
                     payload: json!({ "include_internal": true }),
                     action: None,
@@ -1352,6 +1295,29 @@ fn handler_error(error: impl std::fmt::Display) -> Error {
 #[cfg(test)]
 mod response_contract_tests {
     use super::*;
+
+    /// The release refuses a function whose schemas are untyped, private ones
+    /// included; the dashboard change event is typed, and its handler takes
+    /// and returns exactly the payload the dashboard reads.
+    #[test]
+    fn the_dashboard_change_event_is_typed_and_keeps_its_payload() {
+        let schema = serde_json::to_value(schemars::schema_for!(DashboardChange)).unwrap();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(keys(&schema["properties"]), "at,execution_id,kind");
+        let mut required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect();
+        required.sort();
+        assert_eq!(required, ["at", "execution_id", "kind"]);
+        let sent =
+            json!({"kind": "finished", "execution_id": "e2e_1", "at": "2026-11-02T12:00:00+00:00"});
+        let change: DashboardChange = serde_json::from_value(sent.clone()).unwrap();
+        assert_eq!(serde_json::to_value(change).unwrap(), sent);
+        assert!(serde_json::from_value::<DashboardChange>(json!({"kind": "finished"})).is_err());
+    }
 
     /// The keys of an object, sorted and comma-joined.
     fn keys(value: &Value) -> String {

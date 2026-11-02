@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::WorkerMetadata;
 use iii_sdk::{register_worker, InitOptions};
 use serde::{Deserialize, Serialize};
@@ -301,8 +301,8 @@ pub fn load_config(path: &Path) -> Result<WorkerConfig> {
 /// namespace, placeholders expanded. No entry means the built-in defaults.
 async fn fetch_config(iii: &iii_sdk::IIIClient, name: &str) -> Result<WorkerConfig> {
     let response = iii
-        .trigger(
-            TriggerRequest {
+        .call(
+            CallRequest {
                 function_id: "configuration::get".into(),
                 payload: serde_json::json!({ "id": name }),
                 action: None,
@@ -444,8 +444,8 @@ async fn query_control_database(
     namespace: &str,
     database: &str,
 ) -> Result<()> {
-    iii.trigger(
-        TriggerRequest {
+    iii.call(
+        CallRequest {
             function_id: "database::query".into(),
             payload: serde_json::json!({
                 "db": database,

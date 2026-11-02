@@ -175,9 +175,11 @@ def collect_interface(
     worker: str,
     prefix: str,
     baseline_workers: dict[str, Any],
-    baseline_triggers: dict[str, Any],
     wait_seconds: int,
 ) -> dict[str, Any]:
+    """The worker's functions as iii 0.26 describes them. There are no trigger
+    types: a function says how it is observed (`args_format`, `private`,
+    `observable`), and the engine leaves out the defaults (null, false, true)."""
     baseline_names = {
         value
         for row in list_rows(baseline_workers, "workers")
@@ -235,12 +237,18 @@ def collect_interface(
             violations.append(f"{fid}.response_schema")
         metadata = detail.get("metadata") if isinstance(detail.get("metadata"), dict) else {}
         registry_name = metadata.get("registry_name") or metadata.get("name") or fid
+        args_format = detail.get("args_format")
+        if args_format is not None and not isinstance(args_format, dict):
+            raise RuntimeError(f"{fid}.args_format must be a JSON Schema or null")
         normalized_functions.append(
             {
                 "name": registry_name,
                 "description": detail.get("description") if isinstance(detail.get("description"), str) else "",
                 "request_schema": request_schema,
                 "response_schema": response_schema,
+                "args_format": args_format,
+                "private": detail.get("private") is True,
+                "observable": detail.get("observable") is not False,
                 "metadata": metadata,
             }
         )
@@ -249,33 +257,7 @@ def collect_interface(
     if violations:
         raise RuntimeError("untyped function schemas: " + ", ".join(violations))
 
-    baseline_trigger_ids = {
-        row.get("id")
-        for row in list_rows(baseline_triggers, "triggers")
-        if isinstance(row.get("id"), str)
-    }
-    trigger_rows = list_rows(
-        iii_trigger("engine::triggers::list", {"include_internal": False}), "triggers"
-    )
-    normalized_triggers: list[dict[str, Any]] = []
-    for row in trigger_rows:
-        trigger_id = row.get("id")
-        if not isinstance(trigger_id, str) or trigger_id in baseline_trigger_ids:
-            continue
-        detail = unwrap_detail(
-            iii_trigger("engine::triggers::info", {"id": trigger_id}), "trigger"
-        )
-        normalized_triggers.append(
-            {
-                "name": trigger_id,
-                "description": detail.get("description") if isinstance(detail.get("description"), str) else "",
-                "invocation_schema": schema(detail.get("configuration_schema")),
-                "return_schema": schema(detail.get("request_schema")),
-                "metadata": {},
-            }
-        )
-
-    return {"functions": normalized_functions, "triggers": normalized_triggers}
+    return {"functions": normalized_functions}
 
 
 def normalize_dependencies(raw: Any) -> list[dict[str, str]]:
@@ -323,7 +305,6 @@ def build_payload(
         "dependencies": normalize_dependencies(manifest.get("dependencies")),
         "config": config,
         "functions": functions,
-        "triggers": interface.get("triggers") or [],
         "experimental": release_is_experimental(version),
         "tags": manifest.get("tags") or [],
     }
@@ -367,7 +348,6 @@ def main() -> int:
     collect.add_argument("--worker", default=WORKER_NAME)
     collect.add_argument("--prefix", default="e2e::")
     collect.add_argument("--baseline-workers", required=True)
-    collect.add_argument("--baseline-triggers", required=True)
     collect.add_argument("--wait-seconds", type=int, default=120)
     collect.add_argument("--out", required=True)
 
@@ -390,11 +370,10 @@ def main() -> int:
                 worker=args.worker,
                 prefix=args.prefix,
                 baseline_workers=read_json(args.baseline_workers),
-                baseline_triggers=read_json(args.baseline_triggers),
                 wait_seconds=args.wait_seconds,
             )
             pathlib.Path(args.out).write_text(json.dumps(interface, indent=2) + "\n", encoding="utf-8")
-            print(json.dumps({"functions": len(interface["functions"]), "triggers": len(interface["triggers"])}, indent=2))
+            print(json.dumps({"functions": len(interface["functions"])}, indent=2))
         elif args.command == "build-payload":
             release_payload = build_payload(
                 root=pathlib.Path(args.root),

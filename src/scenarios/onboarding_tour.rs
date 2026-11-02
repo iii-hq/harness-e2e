@@ -35,10 +35,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use iii_sdk::protocol::{RegisterTriggerInput, TriggerRequest};
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::trigger::Trigger;
-use iii_sdk::{IIIClient, RegisterFunction};
+use iii_sdk::{IIIClient, ObserverHandle, RegisterFunction, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -334,7 +333,7 @@ struct Observed {
 
 struct Run {
     functions: Vec<FunctionRef>,
-    triggers: Vec<Trigger>,
+    triggers: Vec<ObserverHandle>,
     observed: Arc<Mutex<Observed>>,
     live_tour: Value,
     baseline: Value,
@@ -350,8 +349,8 @@ async fn call(client: &IIIClient, function_id: &str, payload: Value) -> Result<V
     let (namespace, payload) =
         crate::context::inspection_routing(function_id, client.namespace(), payload);
     client
-        .trigger(
-            TriggerRequest {
+        .call(
+            CallRequest {
                 function_id: function_id.to_string(),
                 payload,
                 action: None,
@@ -441,7 +440,7 @@ fn bind(
     condition: &Condition,
     next_prompt_only: Option<String>,
     observed: Arc<Mutex<Observed>>,
-) -> Result<(FunctionRef, Trigger)> {
+) -> Result<(FunctionRef, ObserverHandle)> {
     let function_id = format!("e2e::onboarding::{}::{}", &digest(run_id)[..12], step.id);
     let client = context.client().clone();
     let step_id = step.id.clone();
@@ -467,13 +466,10 @@ fn bind(
         .description("The onboarding tour card's condition for one step, played by the E2E runner.")
         .metadata(json!({"internal": true})),
     );
-    let trigger = context
-        .client()
-        .register_trigger(RegisterTriggerInput::new(
-            condition.kind.clone(),
-            function_id,
-            condition.config.clone(),
-        ))?;
+    let trigger = context.client().observe(
+        Source::function(condition.kind.clone()).args(condition.config.clone()),
+        function_id,
+    );
     Ok((function, trigger))
 }
 
@@ -1084,19 +1080,14 @@ async fn add_expenses(
         .description("Hears the expense tracker's trigger while the E2E runner adds expenses.")
         .metadata(json!({"internal": true})),
     );
-    let mut bindings = Vec::new();
-    for trigger_type in trigger_types {
-        match context.client().register_trigger(RegisterTriggerInput::new(
-            trigger_type.clone(),
-            function_id.clone(),
-            json!({}),
-        )) {
-            Ok(binding) => bindings.push(binding),
-            Err(error) => {
-                tracing::warn!(%trigger_type, %error, "could not bind the tracker's trigger")
-            }
-        }
-    }
+    let bindings = trigger_types
+        .iter()
+        .map(|event| {
+            context
+                .client()
+                .observe(event.as_str(), function_id.clone())
+        })
+        .collect::<Vec<_>>();
     let mut totals = vec![read_all(context, readers).await];
     let mut added = Vec::new();
     let mut answers = Vec::new();
@@ -1128,7 +1119,7 @@ async fn add_expenses(
         answers.push(answer.ok());
     }
     for binding in bindings {
-        binding.unregister();
+        crate::observe::release(binding);
     }
     function.unregister();
 
@@ -1688,7 +1679,7 @@ impl Scenario for OnboardingTour {
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
         if let Some(run) = lock_unpoisoned(runs()).remove(run_id) {
             for trigger in run.triggers {
-                trigger.unregister();
+                crate::observe::release(trigger);
             }
             for function in run.functions {
                 function.unregister();

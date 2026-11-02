@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use super::CriterionAward;
 use crate::context::E2eContext;
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::IIIClient;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,7 +98,7 @@ fn normalize_invocation(block: &Value) -> Option<ObservedFunctionInvocation> {
     let call_id = block.get("id").and_then(Value::as_str).map(str::to_owned);
     let function_id = block.get("function_id")?.as_str()?;
     let arguments = block.get("arguments").cloned().unwrap_or_else(|| json!({}));
-    if function_id == "agent_trigger" {
+    if function_id == "agent_call" || function_id == "agent_trigger" {
         return Some(ObservedFunctionInvocation {
             call_id,
             call: ObservedFunctionCall {
@@ -227,8 +227,14 @@ pub fn requested_once(arguments: &Value) -> bool {
             == Some(true)
 }
 
+/// A `harness::observe` with no target (or `harness::send`) wakes the
+/// session; its `function_id` is the observed source. An
+/// `engine::register_trigger` (its `trigger_type` says so, before 0.26) named
+/// its target `function_id`.
 pub fn is_wake_registration(arguments: &Value) -> bool {
-    arguments.get("function_id").is_none_or(Value::is_null)
+    let legacy_target = arguments.get("trigger_type").is_some()
+        && arguments.get("function_id").is_some_and(|id| !id.is_null());
+    !legacy_target
         && arguments.get("target").is_none_or(|target| {
             target.is_null()
                 || target.get("function_id").and_then(Value::as_str) == Some("harness::send")
@@ -279,7 +285,13 @@ pub fn trigger_fired_records(transcript: &Value) -> Vec<&Value> {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.get("custom"))
-        .filter(|custom| custom.get("custom_type").and_then(Value::as_str) == Some("trigger_fired"))
+        // `trigger_fired` is the record's name before 0.26.
+        .filter(|custom| {
+            matches!(
+                custom.get("custom_type").and_then(Value::as_str),
+                Some("observer_fired" | "trigger_fired")
+            )
+        })
         .filter_map(|custom| custom.get("data"))
         .collect()
 }
@@ -287,11 +299,11 @@ pub fn trigger_fired_records(transcript: &Value) -> Vec<&Value> {
 pub async fn active_binding_count(context: &E2eContext, session_id: &str) -> anyhow::Result<usize> {
     Ok(context
         .trigger_value(
-            "harness::triggers::list",
+            "harness::observers::list",
             json!({ "session_id": session_id }),
         )
         .await?
-        .get("subscriptions")
+        .get("observers")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(usize::MAX))
@@ -467,7 +479,8 @@ pub fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
     }
     let function = block.get("function_id")?.as_str()?;
     let arguments = block.get("arguments")?;
-    if function == "agent_trigger" {
+    // `agent_trigger` is the wrapper's name before 0.26.
+    if function == "agent_call" || function == "agent_trigger" {
         return Some((
             arguments.get("function")?.as_str()?,
             arguments.get("payload")?,
@@ -587,7 +600,7 @@ pub fn is_remote_failure(error: &anyhow::Error) -> bool {
 }
 pub async fn invoke(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
     client
-        .trigger(TriggerRequest {
+        .call(CallRequest {
             function_id: function_id.into(),
             payload,
             action: None,

@@ -21,7 +21,7 @@ const DESTRUCTIVE_FUNCTIONS: &[&str] = &[
     "harness::teardown",
     "state::delete",
     "state::clear",
-    "engine::unregister_trigger",
+    "engine::observers::dispose",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::IIIClient;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ pub(crate) async fn list_with_client(
 ) -> Result<Vec<CatalogModel>> {
     let payload = serde_json::to_value(ModelsListRequest { provider })?;
     let value = client
-        .trigger(TriggerRequest {
+        .call(CallRequest {
             function_id: "router::models::list".into(),
             payload,
             action: None,

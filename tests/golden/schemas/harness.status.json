@@ -49,7 +49,7 @@
       "ArmedWake": {
         "description": "One armed wake as `harness::status` reports it — enough for a console or a poller to say \"parked on state operation_meta/status since T, deadline T2\" instead of showing a session that just looks quietly done.",
         "properties": {
-          "config": true,
+          "args": true,
           "created_at": {
             "format": "int64",
             "type": "integer"
@@ -61,20 +61,21 @@
               "null"
             ]
           },
-          "subscription_id": {
-            "type": "string"
-          },
-          "trigger_type": {
-            "description": "The registered trigger's type/config, read from the canonicalised registration request. Absent on records that predate it.",
+          "filters": true,
+          "function_id": {
+            "description": "The observed function and the observer's args and filters. Absent on records without a source.",
             "type": [
               "string",
               "null"
             ]
+          },
+          "observer_id": {
+            "type": "string"
           }
         },
         "required": [
           "created_at",
-          "subscription_id"
+          "observer_id"
         ],
         "type": "object"
       },
@@ -201,6 +202,13 @@
           },
           {
             "properties": {
+              "attachment_id": {
+                "description": "Optional link to the stored original of this inline image (`session::put-attachment`, resolvable with `session::get-attachment`). Lets readers ask `session::messages { include_image_data: false }` and fetch the bytes lazily instead of receiving them inline. Persisted verbatim on the transcript; model-bound consumers never see it (see [`ContentBlock::strip_files`]). Omitted on the wire when absent so legacy transcripts stay byte-identical.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "data": {
                 "type": "string"
               },
@@ -217,6 +225,39 @@
             "required": [
               "data",
               "mime",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Reference to an original upload in the session-manager attachment store (resolvable with `session::get-attachment`). A REFERENCE ONLY: the bytes are never inline. Persisted verbatim on user messages and stripped from every model-bound copy (see [`ContentBlock::strip_files`]).",
+            "properties": {
+              "attachment_id": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "type": {
+                "enum": [
+                  "file"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "attachment_id",
+              "mime",
+              "name",
+              "size",
               "type"
             ],
             "type": "object"
@@ -321,6 +362,135 @@
           }
         ]
       },
+      "ContextSnapshotV1": {
+        "description": "One generation's context accounting. `free = usable - total`, floored at zero: once provider usage lands, `total` is what was billed, which can exceed the `usable` budget the window was fit into — that budget was derived before the generation from an estimate.",
+        "properties": {
+          "categories": {
+            "$ref": "#/definitions/SnapshotCategoriesV1"
+          },
+          "compacted": {
+            "description": "The context carries a conversation summary: compacted on this step, or anchored on an earlier compaction entry (a previous step, the console's `/compact`). The summary's tokens count in `system_prompt`.",
+            "type": "boolean"
+          },
+          "effective_max_output_tokens": {
+            "description": "Output allocation `usable` was derived against.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "estimator": {
+            "description": "Which estimator produced the numbers (`heuristic` until the context-manager resolves a real tokenizer). Absent when the context-manager predates the breakdown response.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "free": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prefix_divergences": {
+            "description": "Already-sent rows this session's requests rewrote, newest last (at most [`MAX_PREFIX_DIVERGENCES`]), carried from step to step.",
+            "items": {
+              "$ref": "#/definitions/PrefixDivergenceV1"
+            },
+            "type": "array"
+          },
+          "prompt_sections_fallback": {
+            "description": "Why no shared prefix went out: `disabled` (config), `no_stable_prefix` (empty identity prompt) or `prefix_rewritten` (a pre_generate hook replaced the prompt head; its prompt still wins, it just shares nothing).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_surface_digest": {
+            "description": "Identity of the shared prompt prefix this generation went out with (`sha256:` of the stable section) — present only when the request carried `system_sections`. A local identity, never a provider hit; `usage.cache_read` is the reuse signal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_cost_usd": {
+            "description": "Running cost of the whole session in USD, accumulated across every generation step. `usage.cost_usd` is one step's bill — on providers with steep cache discounts the per-step number swings two orders of magnitude, so a chip showing it alone reads as a bouncing total.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "step": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "summarized_head_tokens": {
+            "description": "Size of the history that summary replaced.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Final request estimate: categories plus post-assembly growth.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "usable": {
+            "description": "The input budget the window was fit into.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Actual provider usage for this generation, stamped after the terminal frame; absent when the provider returned none (or the generation never completed)."
+          }
+        },
+        "required": [
+          "categories",
+          "compacted",
+          "effective_max_output_tokens",
+          "free",
+          "model",
+          "session_id",
+          "step",
+          "timestamp",
+          "total",
+          "turn_id",
+          "usable"
+        ],
+        "type": "object"
+      },
       "CustomMessage": {
         "properties": {
           "content": {
@@ -414,6 +584,77 @@
         ],
         "type": "string"
       },
+      "PrefixDivergenceV1": {
+        "description": "One generation that rewrote a row an earlier request of the session had already sent: a prefix-matching provider cache (DeepSeek) stops reusing at that row.",
+        "properties": {
+          "cache_read": {
+            "description": "`usage.cache_read` of the rewriting request: what the provider still reused.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "call_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "description": "What rewrote the row, as far as the harness can tell: `prune` (context-manager pruned or reduced function results to fit the budget that step) or `system_prompt` (row 0: a compaction summary or a prompt change).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "First row (0 = system prompt, then one per message) that differs from the session's previous request. Absent when only the provider's wire mapping changed.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "prev_len": {
+            "description": "Rows the previous request carried.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_note": {
+            "description": "The provider's own wire-level finding, cause included, when it reported one (a final-message warning starting with [`PROVIDER_PREFIX_NOTE`]).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "turn_id"
+        ],
+        "type": "object"
+      },
       "QueuedMessage": {
         "description": "One message parked while a step was streaming, waiting for the loop's drain to append it to the transcript (harness.md § Concurrency & steering).",
         "properties": {
@@ -445,6 +686,84 @@
         ],
         "type": "object"
       },
+      "SnapshotCategoriesV1": {
+        "description": "Where the request's tokens sit. Categories are assembly-time estimates; `hook_guidance` is the measured growth after assembly (pre-generate hook appends and orphan-repair patches), 0 when the request left assembly unchanged.",
+        "properties": {
+          "hook_guidance": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "messages": {
+            "$ref": "#/definitions/SnapshotMessagesV1"
+          },
+          "overhead": {
+            "description": "Provider framing plus response_format / provider_options fields.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "skills": {
+            "default": 0,
+            "description": "Selected skill bodies contained in the system prompt.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "system_prompt": {
+            "description": "Final assembled system prompt excluding tokens attributed to `skills`: identity, per-step aids, and any compaction summary section.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "tools": {
+            "description": "Function schemas exposed to the model.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "messages",
+          "overhead",
+          "system_prompt",
+          "tools"
+        ],
+        "type": "object"
+      },
+      "SnapshotMessagesV1": {
+        "description": "Estimated tokens of the assembled window's messages, by role.",
+        "properties": {
+          "assistant": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "custom": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "function_result": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "user": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "assistant",
+          "custom",
+          "function_result",
+          "user"
+        ],
+        "type": "object"
+      },
       "StatusReport": {
         "properties": {
           "armed_wakes": {
@@ -463,6 +782,18 @@
             },
             "type": "array"
           },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/ContextSnapshotV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The last generate step's context accounting (budget, categories, provider-exact usage once it lands) — what a UI meter should show instead of re-estimating the transcript. Verbose only; absent before the first generate."
+          },
           "depth": {
             "format": "uint32",
             "minimum": 0.0,
@@ -473,7 +804,7 @@
           },
           "expects_wake": {
             "default": false,
-            "description": "The session owns an armed wake (a one-shot notify subscription): a completed turn here is NOT the run's outcome — a later turn in this session carries it. Mirrors the `terminal` flag on `harness::turn-completed` (`expects_wake == !terminal`). Pollers (e.g. workflow reconcile) must treat `completed && expects_wake` as still running.",
+            "description": "The session owns an armed wake (a one-shot notify subscription): a completed turn here is NOT the run's outcome — a later turn in this session carries it. Mirrors the `terminal` flag on `harness::on-turn-completed` (`expects_wake == !terminal`). Pollers (e.g. workflow reconcile) must treat `completed && expects_wake` as still running.",
             "type": "boolean"
           },
           "max_transient_resumes": {
@@ -542,6 +873,14 @@
             "format": "uint64",
             "minimum": 0.0,
             "type": "integer"
+          },
+          "stop_reason": {
+            "default": null,
+            "description": "Why a `completed` turn stopped when the model did not end it itself (`max_turns`). Present in the lean report too: a poller that reads `completed` with no error must still be able to tell an exhausted budget from a finished task.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "transient_resumes": {
             "format": "uint32",

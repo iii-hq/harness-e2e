@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use iii_sdk::errors::Error as SdkError;
-use iii_sdk::protocol::{RegisterTriggerInput, TriggerRequest};
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::{IIIConnectionState, WorkerMetadata};
-use iii_sdk::trigger::Trigger;
-use iii_sdk::{register_worker, IIIClient, InitOptions, RegisterFunction};
+use iii_sdk::{
+    register_worker, IIIClient, InitOptions, ObserverHandle, RegisterFunction, WorkerIdentityMode,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -33,9 +34,9 @@ pub struct E2eContext {
     client: IIIClient,
     hub: ObserveHub,
     turn_log: TurnLog,
-    bindings: Mutex<Vec<Trigger>>,
+    bindings: Mutex<Vec<ObserverHandle>>,
     entry_events: Arc<EntryEvents>,
-    entry_binding: Mutex<Option<Trigger>>,
+    entry_binding: Mutex<Option<ObserverHandle>>,
     execution_outputs: Mutex<HashMap<&'static str, Option<ExecutionOutput>>>,
 }
 
@@ -84,6 +85,15 @@ impl E2eContext {
                     pid: Some(std::process::id()),
                     ..WorkerMetadata::default()
                 }),
+                // An auxiliary connection, often inside the harness-e2e worker:
+                // managed identity would replace the ephemeral name with the
+                // worker's `III_WORKER_NAME`, which the engine refuses as a
+                // second live `harness-e2e`. Explicit identity ignores the
+                // environment, so the worker's namespace is passed on here.
+                namespace: std::env::var("III_NAMESPACE")
+                    .ok()
+                    .filter(|namespace| !namespace.trim().is_empty()),
+                identity: WorkerIdentityMode::Explicit,
                 ..InitOptions::default()
             },
         );
@@ -276,55 +286,54 @@ impl E2eContext {
         self.turn_log.clear();
         let listed = self
             .trigger_value(
-                "engine::triggers::list",
+                "engine::functions::list",
                 json!({ "include_internal": true }),
             )
             .await
-            .context("discover harness::turn-completed trigger type")?;
-        // Observation is a worker-owned subscription in the stack namespace.
-        // engine::register_trigger creates a durable binding in default instead.
-        for (trigger_type, function_id) in turn_bindings(&listed)? {
-            let binding = self.client.register_trigger(RegisterTriggerInput::new(
-                trigger_type,
-                function_id,
-                json!({}),
-            ))?;
+            .context("discover the harness::on-turn-completed event")?;
+        // Observation is a worker-owned observer in the stack namespace, held
+        // by this connection: it goes when the runner disposes it or exits.
+        for (event, function_id) in turn_bindings(&listed)? {
+            let binding = observe::active(&self.client, observe::event(event), function_id).await?;
             self.lock_bindings().push(binding);
         }
         Ok(())
     }
 
-    /// Counts the `session::message-added` deliveries of one root session per
-    /// entry until the next unbind. Delivery is at-least-once, so Trends
+    /// Counts the `session::on-message-added` deliveries of one root session
+    /// per entry until the next unbind. Delivery is at-least-once, so Trends
     /// charts the repeats; a binding that fails leaves the metric absent.
     pub fn count_entry_events(&self, session_id: &str) {
         self.entry_events.start();
-        match self.client.register_trigger(RegisterTriggerInput::new(
-            observe::MESSAGE_ADDED_TRIGGER,
+        let binding = self.client.observe(
+            observe::event(observe::MESSAGE_ADDED_TRIGGER)
+                .filters(json!({ "input.session_id": { "$eq": session_id } })),
             observe::ENTRY_SINK_FUNCTION_ID,
-            json!({ "session_id": session_id }),
-        )) {
-            Ok(binding) => {
-                *self
-                    .entry_binding
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(binding)
-            }
-            Err(error) => {
-                self.entry_events.stop();
-                tracing::warn!(%error, "could not count session::message-added deliveries");
-            }
-        }
+        );
+        *self
+            .entry_binding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(binding);
     }
 
-    /// Deliveries past the first of each entry since `count_entry_events`.
+    /// Deliveries past the first of each entry since `count_entry_events`;
+    /// absent when the engine refused the observer.
     pub fn duplicate_entry_events(&self) -> Option<u64> {
+        let refused = self
+            .entry_binding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|binding| binding.state() == iii_sdk::ObserverState::Error);
+        if refused {
+            return None;
+        }
         self.entry_events.duplicates()
     }
 
     pub async fn unbind_turn_completed(&self) -> Result<()> {
         for binding in self.lock_bindings().drain(..) {
-            binding.unregister();
+            observe::release(binding);
         }
         if let Some(binding) = self
             .entry_binding
@@ -332,7 +341,7 @@ impl E2eContext {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
         {
-            binding.unregister();
+            observe::release(binding);
         }
         self.entry_events.stop();
         self.hub.drain();
@@ -557,8 +566,8 @@ impl E2eContext {
         invoke_with_transport_retries(function_id, outer, || async {
             ensure_connected_before_dispatch(self.client.get_connection_state())?;
             self.client
-                .trigger(
-                    TriggerRequest {
+                .call(
+                    CallRequest {
                         function_id: function_id.to_string(),
                         payload: payload.clone(),
                         action: None,
@@ -593,7 +602,7 @@ impl E2eContext {
                         }
                         Err(error) => tracing::warn!(
                             %error,
-                            "ignored malformed harness::turn-completed payload"
+                            "ignored malformed harness::on-turn-completed payload"
                         ),
                     }
                     Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
@@ -601,7 +610,9 @@ impl E2eContext {
                     })
                 }
             })
-            .description("Internal harness::turn-completed sink for E2E session-tree observation.")
+            .description(
+                "Internal harness::on-turn-completed sink for E2E session-tree observation.",
+            )
             .metadata(json!({ "internal": true })),
         );
         let log = self.turn_log.clone();
@@ -612,14 +623,16 @@ impl E2eContext {
                 async move {
                     match TurnEvent::started(&payload) {
                         Some(event) => log.push(event),
-                        None => tracing::warn!("ignored malformed harness::turn-started payload"),
+                        None => {
+                            tracing::warn!("ignored malformed harness::on-turn-started payload")
+                        }
                     }
                     Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
                         accepted: true,
                     })
                 }
             })
-            .description("Internal harness::turn-started sink for E2E turn-lifecycle evidence.")
+            .description("Internal harness::on-turn-started sink for E2E turn-lifecycle evidence.")
             .metadata(json!({ "internal": true })),
         );
         let entry_events = self.entry_events.clone();
@@ -634,12 +647,12 @@ impl E2eContext {
                     })
                 }
             })
-            .description("Internal session::message-added sink counting repeat deliveries.")
+            .description("Internal session::on-message-added sink counting repeat deliveries.")
             .metadata(json!({ "internal": true })),
         );
     }
 
-    fn lock_bindings(&self) -> std::sync::MutexGuard<'_, Vec<Trigger>> {
+    fn lock_bindings(&self) -> std::sync::MutexGuard<'_, Vec<ObserverHandle>> {
         self.bindings
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -713,10 +726,7 @@ pub(crate) fn inspection_routing(
         ("default".into(), payload)
     } else if matches!(
         function_id,
-        "engine::health::check"
-            | "engine::workers::list"
-            | "engine::triggers::list"
-            | "engine::registered-triggers::list"
+        "engine::health::check" | "engine::workers::list" | "engine::observers::list"
     ) || function_id.starts_with("engine::traces::")
         || function_id.starts_with("stream::")
         || function_id.starts_with("configuration::")
@@ -803,15 +813,15 @@ fn is_retryable_read(function_id: &str) -> bool {
     )
 }
 
-/// The turn-event bindings a run needs, or unsupported when the stack does not
-/// list one of their trigger types.
+/// The turn-event observers a run needs, or unsupported when the stack does
+/// not register one of their event functions.
 fn turn_bindings(listed: &Value) -> Result<[(&'static str, &'static str); 2]> {
     if !observe::turn_completed_available(listed) {
         return Err(observe::missing_turn_completed_trigger());
     }
-    if !observe::trigger_type_ids(listed).any(|id| id == turn_lifecycle::TURN_STARTED_TRIGGER) {
+    if !observe::function_ids(listed).any(|id| id == turn_lifecycle::TURN_STARTED_TRIGGER) {
         bail!(
-            "unsupported: required trigger type {} is not registered",
+            "unsupported: required event {} is not registered",
             turn_lifecycle::TURN_STARTED_TRIGGER
         );
     }
@@ -1044,8 +1054,7 @@ mod tests {
         for function in [
             "engine::health::check",
             "engine::workers::list",
-            "engine::triggers::list",
-            "engine::registered-triggers::list",
+            "engine::observers::list",
             "engine::traces::list",
             "engine::traces::tree",
             "stream::list",
@@ -1203,10 +1212,10 @@ mod tests {
 
     #[test]
     fn a_run_binds_both_turn_events_and_refuses_a_stack_missing_either() {
-        let completed = json!({ "id": observe::TURN_COMPLETED_TRIGGER });
-        let started = json!({ "id": turn_lifecycle::TURN_STARTED_TRIGGER });
+        let completed = json!({ "function_id": observe::TURN_COMPLETED_TRIGGER });
+        let started = json!({ "function_id": turn_lifecycle::TURN_STARTED_TRIGGER });
         assert_eq!(
-            turn_bindings(&json!({ "triggers": [completed, started] })).unwrap(),
+            turn_bindings(&json!({ "functions": [completed, started] })).unwrap(),
             [
                 (observe::TURN_COMPLETED_TRIGGER, observe::SINK_FUNCTION_ID),
                 (
@@ -1217,11 +1226,11 @@ mod tests {
         );
         for (listed, missing) in [
             (
-                json!({ "triggers": [started] }),
+                json!({ "functions": [started] }),
                 observe::TURN_COMPLETED_TRIGGER,
             ),
             (
-                json!({ "triggers": [completed] }),
+                json!({ "functions": [completed] }),
                 turn_lifecycle::TURN_STARTED_TRIGGER,
             ),
         ] {

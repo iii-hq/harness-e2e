@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use iii_sdk::IIIClient;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -764,8 +764,8 @@ impl Persistence {
 
     async fn call(&self, function_id: &str, payload: Value) -> Result<Value> {
         self.iii
-            .trigger(
-                TriggerRequest {
+            .call(
+                CallRequest {
                     function_id: function_id.into(),
                     payload,
                     action: None,

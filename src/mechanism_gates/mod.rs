@@ -11,10 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use iii_sdk::protocol::RegisterTriggerInput;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::trigger::Trigger;
-use iii_sdk::RegisterFunction;
+use iii_sdk::{ObserverHandle, RegisterFunction, Source};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -47,8 +45,8 @@ pub fn prompt_append(scenario: &str, run_id: &str) -> Option<String> {
     (scenario == persistent_state::ID).then(|| persistent_state::marker(run_id))
 }
 
-const PRE_GENERATE: &str = "harness::hook::pre-generate";
-const PRE_TRIGGER: &str = "harness::hook::pre-trigger";
+const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
+const PRE_TRIGGER: &str = "harness::hook::on-pre-call";
 /// A probe the chokepoint must answer quickly: a wedged session lock is a
 /// broken chokepoint, not a slow one.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -133,13 +131,13 @@ pub struct Armed {
     calls: Arc<Mutex<Vec<Value>>>,
     resend: Option<Value>,
     functions: Vec<FunctionRef>,
-    triggers: Vec<Trigger>,
+    triggers: Vec<ObserverHandle>,
 }
 
 impl Drop for Armed {
     fn drop(&mut self) {
         for trigger in self.triggers.drain(..) {
-            trigger.unregister();
+            crate::observe::release(trigger);
         }
         for function in self.functions.drain(..) {
             function.unregister();
@@ -220,13 +218,13 @@ pub async fn arm(
         // the stack makes this round trip while the attempt runs; it is armed
         // only for the scenarios whose gates read prompts.
         armed.triggers.push(
-            context
-                .client()
-                .register_trigger(RegisterTriggerInput::new(
-                    PRE_GENERATE,
-                    function_id,
-                    json!({"priority": 1000, "timeout_ms": 2000, "on_error": "fail_open"}),
-                ))?,
+            crate::observe::active(
+                context.client(),
+                Source::function(PRE_GENERATE)
+                    .args(json!({"priority": 1000, "timeout_ms": 2000, "on_error": "fail_open"})),
+                function_id,
+            )
+            .await?,
         );
     }
     if scenario == shell_coder_sandbox::ID {
@@ -256,16 +254,15 @@ pub async fn arm(
             ),
         );
         armed.triggers.push(
-            context
-                .client()
-                .register_trigger(RegisterTriggerInput::new(
-                    PRE_TRIGGER,
-                    function_id,
-                    json!({
-                        "functions": shell_coder_sandbox::OBSERVED,
-                        "priority": 1000, "timeout_ms": 2000, "on_error": "fail_open",
-                    }),
-                ))?,
+            crate::observe::active(
+                context.client(),
+                Source::function(PRE_TRIGGER).args(json!({
+                    "functions": shell_coder_sandbox::OBSERVED,
+                    "priority": 1000, "timeout_ms": 2000, "on_error": "fail_open",
+                })),
+                function_id,
+            )
+            .await?,
         );
     }
     Ok(armed)
@@ -380,7 +377,7 @@ async fn ask(context: &E2eContext, function_id: &str, payload: Value) -> Value {
     answer(context.trigger_value(function_id, payload).await)
 }
 
-/// `harness::function::trigger` as `session_id`: the same pipeline a turn's
+/// `harness::function::call` as `session_id`: the same pipeline a turn's
 /// call goes through, policy and chokepoint included. A timeout or an error
 /// is kept as the probe's answer.
 async fn invoke_as(
@@ -396,7 +393,7 @@ async fn invoke_as(
     });
     match tokio::time::timeout(
         PROBE_TIMEOUT,
-        context.trigger_value("harness::function::trigger", call),
+        context.trigger_value("harness::function::call", call),
     )
     .await
     {

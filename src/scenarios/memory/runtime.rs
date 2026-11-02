@@ -11,9 +11,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use iii_sdk::protocol::RegisterTriggerInput;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::trigger::Trigger;
+use iii_sdk::ObserverHandle;
 use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 use tokio::time::sleep;
@@ -29,7 +28,7 @@ use crate::wire::{
     FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit, TurnStatus,
 };
 
-const PRE_GENERATE: &str = "harness::hook::pre-generate";
+const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
 const EMBEDDER: &str = "all-MiniLM-L6-v2";
 const POLL: Duration = Duration::from_secs(2);
 const EMBEDDER_WAIT: Duration = Duration::from_secs(300);
@@ -54,7 +53,7 @@ struct Run {
     retrieval: Option<Retrieval>,
     compaction: Option<String>,
     function: Option<FunctionRef>,
-    trigger: Option<Trigger>,
+    trigger: Option<ObserverHandle>,
     /// Each case seed's memory once saved, parallel to the case's memories.
     seeds: Vec<Option<Saved>>,
     changes: Vec<ChangeOutcome>,
@@ -356,13 +355,13 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         .expect("registered above")
         .function = Some(function);
     // Last in the chain, and open on error: it never changes or stops a turn.
-    let trigger = context
-        .client()
-        .register_trigger(RegisterTriggerInput::new(
-            PRE_GENERATE,
-            function_id,
-            json!({"priority": 1000, "timeout_ms": 2000, "on_error": "fail_open"}),
-        ))?;
+    let trigger = crate::observe::active(
+        context.client(),
+        iii_sdk::Source::function(PRE_GENERATE)
+            .args(json!({"priority": 1000, "timeout_ms": 2000, "on_error": "fail_open"})),
+        function_id,
+    )
+    .await?;
     lock_unpoisoned(runs())
         .get_mut(run_id)
         .expect("registered above")
@@ -938,7 +937,7 @@ pub async fn cleanup(context: &E2eContext, case: &Case, run_id: &str) -> Result<
     let steps = undo(run.as_ref(), run_id);
     if let Some(run) = run {
         if let Some(trigger) = run.trigger {
-            trigger.unregister();
+            crate::observe::release(trigger);
         }
         if let Some(function) = run.function {
             function.unregister();

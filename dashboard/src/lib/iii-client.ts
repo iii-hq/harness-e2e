@@ -6,11 +6,14 @@ export type DashboardIiiClient = {
     options?: { timeoutMs?: number; namespace?: string },
   ): Promise<T>
   on<T>(functionId: string, handler: (payload: T) => void): () => void
-  registerTrigger(input: {
-    type: string
-    function_id: string
-    config: Record<string, unknown>
-  }): () => void
+  observe(
+    source: {
+      function_id: string
+      namespace?: string
+      deliver?: 'envelope' | 'input' | 'output'
+    },
+    target: string,
+  ): () => void
 }
 
 let client: DashboardIiiClient | null = null

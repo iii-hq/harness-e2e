@@ -1629,12 +1629,13 @@ fn observed_wake_resumes(transcript: Option<&Value>) -> Option<u64> {
             .iter()
             .filter_map(|entry| entry.get("custom"))
             .filter(|custom| {
-                custom.get("custom_type").and_then(Value::as_str) == Some("trigger_fired")
-                    && matches!(
-                        custom.pointer("/data/target").and_then(Value::as_str),
-                        Some("harness::send" | "notify")
-                    )
-                    && custom.pointer("/data/outcome").and_then(Value::as_str) == Some("delivered")
+                matches!(
+                    custom.get("custom_type").and_then(Value::as_str),
+                    Some("observer_fired" | "trigger_fired")
+                ) && matches!(
+                    custom.pointer("/data/target").and_then(Value::as_str),
+                    Some("harness::send" | "notify")
+                ) && custom.pointer("/data/outcome").and_then(Value::as_str) == Some("delivered")
             })
             .count()
             .try_into()
@@ -1659,12 +1660,13 @@ fn observed_parallel_spawns(transcript: Option<&Value>) -> Option<u64> {
                         block.get("type").and_then(Value::as_str) == Some("function_call")
                             && (block.get("function_id").and_then(Value::as_str)
                                 == Some("harness::spawn")
-                                || (block.get("function_id").and_then(Value::as_str)
-                                    == Some("agent_trigger")
-                                    && block
-                                        .pointer("/arguments/function")
-                                        .and_then(Value::as_str)
-                                        == Some("harness::spawn")))
+                                || (matches!(
+                                    block.get("function_id").and_then(Value::as_str),
+                                    Some("agent_call" | "agent_trigger")
+                                ) && block
+                                    .pointer("/arguments/function")
+                                    .and_then(Value::as_str)
+                                    == Some("harness::spawn")))
                     })
                     .count() as u64
             })

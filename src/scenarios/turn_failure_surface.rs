@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use iii_sdk::protocol::RegisterTriggerInput;
 use iii_sdk::runtime::FunctionRef;
 use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
@@ -32,7 +31,7 @@ pub const ID: &str = "turn_failure_surface";
 const DELIVERABLE_ID: &str = "turn_failure_probes";
 const MAX_TOTAL_TOKENS: u64 = 1_000;
 const MAX_OUTPUT_TOKENS: u64 = 4_096;
-const PRE_TURN: &str = "harness::hook::pre-turn";
+const PRE_TURN: &str = "harness::hook::on-pre-turn";
 const DENY_REASON: &str = "turn_failure_surface vetoes this turn";
 
 const PREFLIGHT_REFUSED: AssessmentSpec = AssessmentSpec::gate_in(
@@ -327,13 +326,13 @@ async fn veto_probe(
     let (model, provider) = probe::subject_route(&observation.transcript)
         .ok_or_else(|| anyhow::anyhow!("the root transcript names no model"))?;
     let session_id = vetoed_session(run_id);
-    let binding = context
-        .client()
-        .register_trigger(RegisterTriggerInput::new(
-            PRE_TURN,
-            deny_hook_id(run_id),
-            json!({ "sessions": [session_id], "timeout_ms": 5000 }),
-        ))?;
+    let binding = crate::observe::active(
+        context.client(),
+        iii_sdk::Source::function(PRE_TURN)
+            .args(json!({ "sessions": [session_id], "timeout_ms": 5000 })),
+        deny_hook_id(run_id),
+    )
+    .await?;
     let seen = async {
         // The engine hands the binding to the Harness asynchronously.
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -373,7 +372,7 @@ async fn veto_probe(
         }))
     }
     .await;
-    binding.unregister();
+    crate::observe::release(binding);
     seen
 }
 

@@ -17,7 +17,7 @@ use crate::harness_invariants::{HarnessInvariant, HarnessViolation};
 use crate::report::E2eRunReport;
 use crate::suite::SubjectConfig;
 
-/// A Harness function or trigger type the stack does not serve (yet).
+/// A Harness function or event the stack does not serve (yet).
 pub const HARNESS_NOT_READY: &str = "harness_not_ready";
 /// A Harness configured or registered unlike the one the regression measures.
 pub const HARNESS_MISCONFIGURED: &str = "harness_misconfigured";
@@ -30,14 +30,16 @@ const DEFAULT_IDENTITY_PREFIX: &str = "You are an iii agent worker.";
 const LANGUAGE_MIN_WORDS: usize = 20;
 
 /// `register` in the Harness's `functions/mod.rs`: on the agent catalog.
-const PUBLIC_FUNCTIONS: [&str; 7] = [
+const PUBLIC_FUNCTIONS: [&str; 9] = [
     "harness::spawn",
     "harness::ask",
+    "harness::observe",
+    "harness::unobserve",
     "harness::status",
     "harness::session-tree",
     "harness::metrics",
-    "harness::triggers::list",
-    "harness::triggers::unregister",
+    "harness::observers::list",
+    "harness::observers::dispose",
 ];
 /// `register_internal` (and trace-hidden) there: registered, off the catalog.
 const INTERNAL_FUNCTIONS: [&str; 24] = [
@@ -46,9 +48,9 @@ const INTERNAL_FUNCTIONS: [&str; 24] = [
     "harness::delete-session-tree-run",
     "harness::send",
     "harness::compact",
-    "harness::trigger::deliver",
+    "harness::observer::deliver",
     "harness::turn",
-    "harness::function::trigger",
+    "harness::function::call",
     "harness::function::resolve",
     "harness::stop",
     "harness::system-prompt::get",
@@ -66,17 +68,18 @@ const INTERNAL_FUNCTIONS: [&str; 24] = [
     "harness::sweep-pending",
     "harness::on-session-deleted",
 ];
-const TRIGGER_TYPES: [&str; 10] = [
-    "harness::ready",
-    "harness::turn-started",
-    "harness::compaction",
-    "timer",
-    "harness::hook::pre-turn",
-    "harness::hook::pre-generate",
-    "harness::hook::post-generate",
-    "harness::hook::pre-trigger",
-    "harness::hook::post-trigger",
-    "harness::hook::post-turn",
+/// The private event functions sessions and siblings observe.
+const EVENTS: [&str; 10] = [
+    "harness::on-ready",
+    "harness::on-turn-started",
+    "harness::on-compaction",
+    "harness::on-timer",
+    "harness::hook::on-pre-turn",
+    "harness::hook::on-pre-generate",
+    "harness::hook::on-post-generate",
+    "harness::hook::on-pre-call",
+    "harness::hook::on-post-call",
+    "harness::hook::on-post-turn",
 ];
 /// Keys the Harness migrates out of its entry at boot.
 const RETIRED_KEYS: [&str; 3] = ["provider_identity_prompt", "permissions", "providers"];
@@ -134,12 +137,7 @@ pub async fn preflight(
         .await
         .context("list every registered function")
         .map_err(PreflightFailure::not_ready)?;
-    let triggers = context
-        .trigger_value("engine::triggers::list", json!({}))
-        .await
-        .context("list trigger types")
-        .map_err(PreflightFailure::not_ready)?;
-    let (missing, misconfigured) = surface_problems(&catalog, &registered, &triggers);
+    let (missing, misconfigured) = surface_problems(&catalog, &registered);
     if !missing.is_empty() {
         return Err(PreflightFailure {
             code: HARNESS_NOT_READY,
@@ -229,16 +227,11 @@ fn harness_configuration_id(listed: &Value) -> Option<&str> {
         .and_then(|entry| text(entry, "/id"))
 }
 
-/// Functions and trigger types that are missing (not ready), and internal
+/// Functions and events that are missing (not ready), and internal
 /// functions the default catalog lists (misconfigured).
-fn surface_problems(
-    catalog: &Value,
-    registered: &Value,
-    triggers: &Value,
-) -> (Vec<String>, Vec<String>) {
+fn surface_problems(catalog: &Value, registered: &Value) -> (Vec<String>, Vec<String>) {
     let catalog = function_ids(catalog).collect::<BTreeSet<_>>();
     let registered = function_ids(registered).collect::<BTreeSet<_>>();
-    let triggers = function_ids(triggers).collect::<BTreeSet<_>>();
     let missing = PUBLIC_FUNCTIONS
         .iter()
         .filter(|id| !catalog.contains(**id))
@@ -249,10 +242,10 @@ fn surface_problems(
         )
         .map(|id| format!("function {id}"))
         .chain(
-            TRIGGER_TYPES
+            EVENTS
                 .iter()
-                .filter(|id| !triggers.contains(**id))
-                .map(|id| format!("trigger type {id}")),
+                .filter(|id| !registered.contains(**id))
+                .map(|id| format!("event {id}")),
         )
         .collect();
     let leaked = INTERNAL_FUNCTIONS
@@ -691,7 +684,9 @@ fn plain_spawns(sessions: &[SessionSurface]) -> BTreeSet<String> {
             // The agent_trigger meta-function wraps the target and its payload.
             let payload = match text(call, "/function_id")? {
                 "harness::spawn" => arguments,
-                "agent_trigger" if text(arguments, "/function") == Some("harness::spawn") => {
+                "agent_call" | "agent_trigger"
+                    if text(arguments, "/function") == Some("harness::spawn") =>
+                {
                     arguments.get("payload")?
                 }
                 _ => return None,
@@ -1118,21 +1113,25 @@ mod tests {
         let all = PUBLIC_FUNCTIONS
             .iter()
             .chain(&INTERNAL_FUNCTIONS)
+            .chain(&EVENTS)
             .copied()
             .collect::<Vec<_>>();
-        let triggers = json!({ "triggers": TRIGGER_TYPES.map(|id| json!({ "id": id })) });
 
         assert_eq!(
-            surface_problems(&listed(&PUBLIC_FUNCTIONS), &listed(&all), &triggers),
+            surface_problems(&listed(&PUBLIC_FUNCTIONS), &listed(&all)),
             (vec![], vec![])
         );
+        let without_timer = all
+            .iter()
+            .copied()
+            .filter(|id| *id != "harness::on-timer")
+            .collect::<Vec<_>>();
         let (missing, leaked) = surface_problems(
             &listed(&["harness::spawn", "harness::send"]),
-            &listed(&all[1..]),
-            &json!({ "triggers": [{ "id": "harness::ready" }] }),
+            &listed(&without_timer[1..]),
         );
         assert!(missing.contains(&"function harness::ask".to_string()));
-        assert!(missing.contains(&"trigger type timer".to_string()));
+        assert!(missing.contains(&"event harness::on-timer".to_string()));
         assert!(!missing.iter().any(|id| id.contains("harness::send")));
         assert_eq!(
             leaked,

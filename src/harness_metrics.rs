@@ -55,6 +55,7 @@ const RECONCILED_P95_ALERT_MS: f64 = 2_500.0;
 /// for the breaker: the `agent_trigger` wrapper with no target, the
 /// `harness::spawn` guards, `harness::ask` and `submit_result`.
 const CONTROL_CALLS: &[&str] = &[
+    "agent_call",
     "agent_trigger",
     "harness::spawn",
     "harness::ask",
@@ -84,7 +85,7 @@ pub const JUDGE_CALL_SPAN: &str = "call judge::evaluate";
 
 /// A key is absent when its evidence is: no transcript, no traces, no
 /// reconciliation that reached the judge, no prompt parts or no count of the
-/// root session's `session::message-added` deliveries. A count over present
+/// root session's `session::on-message-added` deliveries. A count over present
 /// evidence is there even at zero, so a mean never skips a clean run.
 pub fn measure(run: &E2eRunReport) -> BTreeMap<String, f64> {
     let mut measured = BTreeMap::new();
@@ -333,7 +334,7 @@ fn planned(block: &Value) -> Option<(&str, Value)> {
     let function_id = block.get("function_id")?.as_str()?;
     let arguments = block.get("arguments").cloned().unwrap_or(Value::Null);
     let target = block.pointer("/arguments/function").and_then(Value::as_str);
-    let (Some(target), "agent_trigger") = (target, function_id) else {
+    let (Some(target), "agent_call" | "agent_trigger") = (target, function_id) else {
         return Some((function_id, arguments));
     };
     let payload = match arguments.get("payload") {

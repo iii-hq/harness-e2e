@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::CallRequest;
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -19,8 +19,8 @@ pub(super) async fn observe(client: &iii_sdk::IIIClient) -> (Vec<StackWorker>, V
     let namespace = client.namespace().unwrap_or_else(|| "default".into());
     let call = |function_id: &'static str, namespace: String| async move {
         client
-            .trigger(
-                TriggerRequest {
+            .call(
+                CallRequest {
                     function_id: function_id.into(),
                     payload: json!({}),
                     action: None,

@@ -38,8 +38,8 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
     let Some(timer) = function_outcomes(run.transcript)
         .into_iter()
         .find(|outcome| {
-            outcome.function_id == "engine::register_trigger"
-                && outcome.arguments["trigger_type"] == "timer"
+            outcome.function_id == "harness::observe"
+                && outcome.arguments["function_id"] == "harness::on-timer"
                 && outcome.is_error == Some(false)
         })
     else {
@@ -49,7 +49,7 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
     let sub = timer
         .details
         .as_ref()
-        .and_then(|details| details["subscription_id"].as_str())
+        .and_then(|details| details["observer_id"].as_str())
         .unwrap_or_default();
     let label = timer.arguments["label"].as_str().unwrap_or_default();
     if !subscription_id(sub, "sub_") {
@@ -86,9 +86,9 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
         )),
     }
 
-    let delivered: Vec<&Value> = customs(run.transcript, "trigger_fired")
+    let delivered: Vec<&Value> = customs(run.transcript, "observer_fired")
         .map(|entry| &entry["custom"]["data"])
-        .filter(|data| data["subscription_id"] == sub && data["outcome"] == "delivered")
+        .filter(|data| data["observer_id"] == sub && data["outcome"] == "delivered")
         .collect();
     match delivered.as_slice() {
         [data] => {
@@ -103,7 +103,7 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             }
             let actual = data["payload"]["actual_at"].as_i64();
             let scheduled = data["payload"]["scheduled_at"].as_i64();
-            let in_ms = timer.arguments["config"]["in_ms"].as_i64();
+            let in_ms = timer.arguments["args"]["in_ms"].as_i64();
             let armed = timer
                 .call_id
                 .as_deref()
@@ -201,20 +201,20 @@ mod tests {
                 "e_t1_0_assistant",
                 "deepseek-flash",
                 json!([{
-                    "type": "function_call", "id": "c1", "function_id": "agent_trigger",
-                    "arguments": {"function": "engine::register_trigger", "payload": {
-                        "trigger_type": "timer", "label": "timer-wake:r", "once": true,
-                        "config": {"in_ms": 6_000}}},
+                    "type": "function_call", "id": "c1", "function_id": "agent_call",
+                    "arguments": {"function": "harness::observe", "payload": {
+                        "function_id": "harness::on-timer", "label": "timer-wake:r", "once": true,
+                        "args": {"in_ms": 6_000}}},
                 }]),
             ),
             json!({"entry_id": "e_t1_c1", "message": {"role": "function_result",
-                "function_call_id": "c1", "function_id": "engine::register_trigger",
-                "is_error": false, "details": {"subscription_id": sub, "once": true}}}),
+                "function_call_id": "c1", "function_id": "harness::observe",
+                "is_error": false, "details": {"observer_id": sub, "once": true}}}),
             json!({"entry_id": format!("e_fire_{sub}_1"), "origin": {"binding": sub, "notification": true},
                 "message": {"role": "user", "content": [{"type": "text",
                     "text": "[notification] timer-wake:r: {\"trigger\":\"timer\"}"}]}}),
-            json!({"entry_id": format!("e_trigfired_{sub}_1"), "custom": {"custom_type": "trigger_fired", "data": {
-                "subscription_id": sub, "outcome": "delivered", "retired": true,
+            json!({"entry_id": format!("e_obsfired_{sub}_1"), "custom": {"custom_type": "observer_fired", "data": {
+                "observer_id": sub, "outcome": "delivered", "retired": true,
                 "retirement_reason": "once_consumed",
                 "payload": {"actual_at": actual_at, "scheduled_at": 7_000}}}}),
             assistant("e_t2_0_assistant", wake_model, json!([])),

@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::harness_invariants::{HarnessInvariant, HarnessViolation};
 use crate::report::E2eRunReport;
 
-pub const TURN_STARTED_TRIGGER: &str = "harness::turn-started";
+pub const TURN_STARTED_TRIGGER: &str = "harness::on-turn-started";
 pub const STARTED_SINK_FUNCTION_ID: &str = "e2e::on-turn-started";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -33,7 +33,7 @@ pub struct TurnEvent {
 }
 
 impl TurnEvent {
-    /// A `harness::turn-started` payload, or `None` when it names no turn.
+    /// A `harness::on-turn-started` payload, or `None` when it names no turn.
     pub fn started(payload: &Value) -> Option<Self> {
         Some(Self {
             kind: TurnEventKind::Started,
