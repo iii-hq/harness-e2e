@@ -1,6 +1,8 @@
 import hashlib
 import importlib.util
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -122,6 +124,27 @@ class BuildPayloadTests(unittest.TestCase):
             release_worker.build_payload(root=self.ROOT, version="0.24.0", tag="harness-e2e/v0.24.0",
                                          repo_url="https://github.com/iii-hq/harness-e2e",
                                          interface={"functions": [{**function, "request_schema": UNTYPED}]})
+
+
+class ReleaseWorkflowTests(unittest.TestCase):
+    ROOT = Path(__file__).parents[2]
+
+    def test_the_interface_job_installs_what_the_manifest_declares(self):
+        import yaml
+
+        workflow = yaml.safe_load((self.ROOT / ".github/workflows/release.yml").read_text())
+        steps = {step.get("name"): step["run"] for step in workflow["jobs"]["registry"]["steps"] if "run" in step}
+        project = steps["Start isolated iii engine"].split("<<'PYCONFIG'\n", 1)[1].split("\nPYCONFIG", 1)[0]
+        declared = yaml.safe_load((self.ROOT / "iii.worker.yaml").read_text())["dependencies"]
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "interface-project").mkdir()
+            shutil.copy(self.ROOT / "iii.worker.yaml", directory)
+            subprocess.run([sys.executable, "-c", project], cwd=directory, check=True)
+            compose = yaml.safe_load((Path(directory) / "interface-project/worker-compose.yaml").read_text())
+            listed = (Path(directory) / "interface-project/dependencies.txt").read_text().split()
+        self.assertEqual(compose["containers"]["database"]["version"], declared["database"])
+        self.assertEqual(listed, [f"{name}@{version}" for name, version in declared.items()])
+        self.assertNotRegex("\n".join(steps.values()), r"worker=[\w-]+@\d")
 
 
 if __name__ == "__main__":

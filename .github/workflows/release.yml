@@ -221,12 +221,14 @@ jobs:
           import yaml
 
           project = pathlib.Path('interface-project').resolve()
+          # The dependencies this release declares, at the versions it declares.
+          dependencies = yaml.safe_load(pathlib.Path('iii.worker.yaml').read_text())['dependencies']
           config = {
               'namespace': 'default',
               'containers': {
                   'database': {
                       'worker': 'package://api.workers.iii.dev/database',
-                      'version': '0.5.10',
+                      'version': dependencies['database'],
                       'config_name': 'database',
                       'config_override': {
                           'history_max_entries': 0,
@@ -242,6 +244,9 @@ jobs:
               },
           }
           (project / 'worker-compose.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
+          (project / 'dependencies.txt').write_text(
+              ''.join(f'{name}@{version}\n' for name, version in dependencies.items())
+          )
           PYCONFIG
           (
             cd interface-project
@@ -279,16 +284,16 @@ jobs:
           done
           echo "::error::iii compose did not become ready"
           exit 1
-      - name: Assemble worker dependencies and capture the workers baseline
-        # BLOCKED for a 0.26 release: state 0.22.2, database 0.5.10 and storage
-        # 0.1.13 are pre-0.26 builds (the engine drops their trigger frames).
-        # They move to the 0.26 builds, with iii.worker.yaml's ranges, once
-        # those are published.
+      - name: Assemble the declared dependencies and capture the workers baseline
+        # What iii.worker.yaml declares, as the Registry resolves it. The
+        # collection needs database to answer below: a database the engine
+        # refuses never does, and the release stops here, before publishing.
         run: |
           set -euo pipefail
+          mapfile -t dependencies < interface-project/dependencies.txt
           iii trigger compose::add --timeout-ms 600000 \
             file=interface-project/worker-compose.yaml \
-            worker=state@0.22.2 worker=database@0.5.10 worker=storage@0.1.13 > compose-add.json
+            "${dependencies[@]/#/worker=}" > compose-add.json
           python3 - <<'PYCONFIG'
           import json
           import pathlib
