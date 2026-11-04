@@ -1626,6 +1626,66 @@ pub(crate) mod tests {
         assert!(!temporary.path().join(".delegation-probe").exists());
     }
 
+    /// The probe's `go test` must not inherit the runner's `III_WORKER_NAME`.
+    /// Reruns itself as a child holding that identity, so this process's
+    /// environment is never mutated under concurrent async tests.
+    #[tokio::test]
+    async fn go_route_test_drops_the_runner_worker_identity() {
+        const CHILD: &str = "HARNESS_E2E_ROUTE_PROBE_IDENTITY_CHILD";
+        require_go_toolchain().await.unwrap();
+        if std::env::var_os(CHILD).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "scenarios::alertmanager_route_match::tests::go_route_test_drops_the_runner_worker_identity",
+                ])
+                .env("III_WORKER_NAME", "harness-e2e")
+                .env(CHILD, "1")
+                .stdin(Stdio::null())
+                .kill_on_drop(true)
+                .output()
+                .await
+                .unwrap();
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{text}");
+            // A filter that matched nothing would also exit 0.
+            assert!(text.contains("1 passed"), "{text}");
+            return;
+        }
+        assert_eq!(
+            std::env::var("III_WORKER_NAME").as_deref(),
+            Ok("harness-e2e")
+        );
+        let temporary = tempfile::tempdir().unwrap();
+        let module = temporary.path();
+        fs::create_dir_all(module.join("dispatch")).unwrap();
+        fs::write(module.join("go.mod"), "module probe\n\ngo 1.25\n").unwrap();
+        fs::write(
+            module.join("dispatch/route_test.go"),
+            r#"package dispatch
+
+import (
+	"os"
+	"testing"
+)
+
+func TestRouteMatch(t *testing.T) {
+	if name, ok := os.LookupEnv("III_WORKER_NAME"); ok {
+		t.Fatalf("inherited III_WORKER_NAME=%q", name)
+	}
+	if url, ns := os.Getenv("III_URL"), os.Getenv("III_NAMESPACE"); url != "ws://127.0.0.1:9" || ns != "alertmanager-probe" {
+		t.Fatalf("III_URL=%q III_NAMESPACE=%q", url, ns)
+	}
+}
+"#,
+        )
+        .unwrap();
+        let (passed, tail) = go_route_test(module, CLOSED_ENGINE_URL, "alertmanager-probe")
+            .await
+            .unwrap();
+        assert!(passed, "{tail}");
+    }
+
     #[tokio::test]
     #[ignore = "requires iii on PATH; CI runs this explicitly with the pinned Engine"]
     async fn delegation_probe_accepts_real_rpc_and_rejects_tcp_only_routing() {
