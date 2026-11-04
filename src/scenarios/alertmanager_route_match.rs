@@ -939,6 +939,8 @@ async fn run_delegation_probe(
 }
 
 /// `go test` for upstream `TestRouteMatch`; `Ok((passed, output tail))`.
+/// Drops `III_WORKER_NAME`: an SDK client would adopt the runner's identity,
+/// and the engine rejects it as a second live `harness-e2e`.
 async fn go_route_test(checkout: &Path, url: &str, namespace: &str) -> Result<(bool, String)> {
     let output = Command::new("go")
         .args([
@@ -953,6 +955,7 @@ async fn go_route_test(checkout: &Path, url: &str, namespace: &str) -> Result<(b
         .current_dir(checkout)
         .env("III_URL", url)
         .env("III_NAMESPACE", namespace)
+        .env_remove("III_WORKER_NAME")
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output();
