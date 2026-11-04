@@ -71,7 +71,7 @@ fn content(path: &str) -> Option<UiContentResponse> {
 /// from [`CONTENT_FUNCTION_ID`] through this observer, held by the connection.
 fn register_asset(iii: &IIIClient, kind: &str, path: &str) {
     iii.observe(
-        Source::function("console::ui::asset").args(json!({ "kind": kind, "path": path })),
+        Source::function("ade::ui::asset").args(json!({ "kind": kind, "path": path })),
         CONTENT_FUNCTION_ID,
     );
 }

@@ -2823,7 +2823,7 @@ mod tests {
         // The prompt reaches the reader as the subject receives it.
         assert!(spec.prompt.contains("worker-compose.yaml"));
         assert!(spec.prompt.contains("legal_moves"));
-        assert!(spec.prompt.contains("console:script"));
+        assert!(spec.prompt.contains("ade::ui::asset"));
         assert!(spec.prompt.contains("#/worker/"));
         assert_eq!(spec.title.as_deref(), ScenarioId::ChessEngineBuild.title());
         assert_eq!(

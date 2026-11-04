@@ -185,7 +185,7 @@ with a run-scoped iii Worker declared in `{compose}`. The Compose worker and con
 Do not declare `engine:`; the run-scoped project uses the existing iii Engine.
 Keep all chess logic and the Console page in this Worker. Chess libraries and external network
 services are forbidden.
-The Harness has already materialized `iii-sdk@0.23.1-rc.6` and its lockfile in this workspace solely
+The Harness has already materialized `iii-sdk@0.26.0-rc.5` and its lockfile in this workspace solely
 for iii integration. Do not change dependencies. Set `scripts.run` to exactly `npm start`; the
 supplied start script runs `src/index.mjs`.
 Do not launch `npm`, `node`, or the Worker directly. The Harness starts and stops it through Compose
@@ -201,8 +201,8 @@ Register these exact functions with non-empty descriptions and JSON request/resp
 Reject malformed/illegal FENs and moves and depths outside 0..4. Implement standard chess,
 including castling, en passant, four promotion pieces, pins, and check evasion.
 
-Register Message-path `console:script` and `console:style` triggers whose only config is `path`,
-both backed by `{ui_content}`. Their paths must be `{script_path}` and `{style_path}`. The first
+Observe `ade::ui::asset` with `iii.observe` once per asset, args `{{ kind: 'script' | 'style', path }}`,
+both targeting `{ui_content}`. Their paths must be `{script_path}` and `{style_path}`. The first
 must return an ESM module with `export default function setup(host)` that calls
 `host.pages.register({{ id: 'chess', ... }})`; the second must return CSS scoped under
 `[data-iii-ui="{worker}"]`. Do not use `engine::register_trigger` or `console:assets`.
@@ -776,7 +776,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     ensure_remote_or_success(&script, "fetch candidate Console script")?;
     ensure_remote_or_success(&style, "fetch candidate Console style")?;
 
-    let console_status = context.trigger_value("console::status", json!({})).await;
+    let console_status = context.trigger_value("ade::status", json!({})).await;
     ensure_remote_or_success(&console_status, "inspect iii Console status")?;
     let console_port = console_status
         .as_ref()
@@ -787,9 +787,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     let mut manifest = Value::Null;
     if ready {
         for _ in 0..40 {
-            let observed = context
-                .trigger_value("console::ui-manifest", json!({}))
-                .await;
+            let observed = context.trigger_value("ade::ui-manifest", json!({})).await;
             ensure_remote_or_success(&observed, "inspect Console UI manifest")?;
             manifest = observed.unwrap_or(Value::Null);
             if console_assets_ok(&manifest, &contract) {
@@ -1387,14 +1385,14 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
     fs::write(
         &original_readme,
         format!(
-            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker with a playable page injected into the real iii Console. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section. Harness validates, starts, and stops the Worker after completion; run local logic tests without launching it manually.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\niii.registerFunction('{}', async ({{ path }}) => assets[path], {{ description: 'Console UI assets', request_format: {{ type: 'object', required: ['path'], properties: {{ path: {{ type: 'string' }} }} }}, response_format: {{ type: 'object', required: ['content'], properties: {{ content: {{ type: 'string' }}, content_type: {{ type: 'string' }} }} }} }})\niii.registerTrigger({{ type: 'console:script', function_id: '{}', config: {{ path: '{}' }} }})\niii.registerTrigger({{ type: 'console:style', function_id: '{}', config: {{ path: '{}' }} }})\n```\n\nThe page asset is plain ESM. It may import shared `react` at runtime, must default-export `setup(host)`, and registers `host.pages.register({{ id: 'chess', title: 'Chess', render }})`. Its board invokes `{}` with `host.iii.trigger`. Scope every CSS rule under `[data-iii-ui=\"{}\"]`.\n",
+            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker with a playable page injected into the real iii Console. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section. Harness validates, starts, and stops the Worker after completion; run local logic tests without launching it manually.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\niii.registerFunction('{}', async ({{ path }}) => assets[path], {{ description: 'Console UI assets', request_format: {{ type: 'object', required: ['path'], properties: {{ path: {{ type: 'string' }} }} }}, response_format: {{ type: 'object', required: ['content'], properties: {{ content: {{ type: 'string' }}, content_type: {{ type: 'string' }} }} }} }})\niii.observe({{ function_id: 'ade::ui::asset', args: {{ kind: 'script', path: '{}' }} }}, '{}')\niii.observe({{ function_id: 'ade::ui::asset', args: {{ kind: 'style', path: '{}' }} }}, '{}')\n```\n\nThe page asset is plain ESM. It may import shared `react` at runtime, must default-export `setup(host)`, and registers `host.pages.register({{ id: 'chess', title: 'Chess', render }})`. Its board invokes `{}` with `host.iii.trigger`. Scope every CSS rule under `[data-iii-ui=\"{}\"]`.\n",
             contract.worker,
             contract.functions["legal_moves"],
-            contract.functions["ui-content"],
             contract.functions["ui-content"],
             contract.script_path(),
             contract.functions["ui-content"],
             contract.style_path(),
+            contract.functions["ui-content"],
             contract.functions["play"],
             contract.worker,
         ),
@@ -1406,7 +1404,7 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
             "private": true,
             "type": "module",
             "scripts": {"start": "node src/index.mjs"},
-            "dependencies": {"iii-sdk": "0.23.1-rc.6"}
+            "dependencies": {"iii-sdk": "0.26.0-rc.5"}
         }))?,
     )?;
     fs::copy(
@@ -1838,7 +1836,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             lock["packages"]["node_modules/iii-sdk"]["version"],
-            "0.23.1-rc.6"
+            "0.26.0-rc.5"
         );
         assert!(lock["packages"]
             .as_object()
