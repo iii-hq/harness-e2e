@@ -844,7 +844,7 @@ class CommitPinTests(unittest.TestCase):
 
         with patch.object(prepare_execution, "get_json", side_effect=get), \
                 patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
-            pins = prepare_execution.resolve_commits({"containers": containers}, "token")
+            pins = prepare_execution.resolve_commits({"containers": containers}, "token", "0.26.0-rc.5")
         self.printed = printed.getvalue()
         return pins, urls
 
@@ -858,7 +858,8 @@ class CommitPinTests(unittest.TestCase):
         self.assertEqual((pin["worker"], pin["repository"], pin["path"], pin["commit"]),
                          ("harness", "iii-hq/workers", "harness", self.FULL))
         self.assertEqual(urls[0], (prepare_execution.REGISTRY_URL + "/resolve",
-                                   {"worker": "harness", "version": "latest", "target": prepare_execution.CLI_TARGET}))
+                                   {"worker": "harness", "version": "latest", "target": prepare_execution.CLI_TARGET,
+                                    "iii_version": "0.26.0-rc.5"}))
         self.assertTrue(urls[1][0].endswith("/repos/iii-hq/workers/commits/3f2a9c1"))
         self.assertTrue(urls[3][0].endswith(f"/repos/iii-hq/workers/compare/main...{self.FULL}?per_page=1"))
         self.assertTrue(pin["on_default_branch"])

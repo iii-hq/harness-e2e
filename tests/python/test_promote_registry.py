@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,8 +13,51 @@ assert SPEC and SPEC.loader
 promote_registry = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(promote_registry)
 
+# What the installed iii answers to --version in these tests: no real engine.
+FAKE_ENGINE = "0.0.0-fake-engine.7"
+
 
 class PromoteRegistryTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        cli = Path(directory.name) / "iii"
+        cli.write_text(f'#!/bin/sh\n[ "$1" = --version ] && echo {FAKE_ENGINE}\n')
+        cli.chmod(0o755)
+        path = patch.dict(os.environ, {"PATH": f"{directory.name}{os.pathsep}{os.environ['PATH']}"})
+        path.start()
+        self.addCleanup(path.stop)
+
+    @patch.object(promote_registry, "request_json")
+    def test_resolve_names_the_installed_engine(self, request):
+        request.return_value = (200, {"root": {"version": "0.24.2"}})
+
+        self.assertEqual(promote_registry.resolve_version("https://r.example/", "harness-e2e", "next"), "0.24.2")
+
+        request.assert_called_once_with(
+            "POST",
+            "https://r.example/resolve",
+            {"worker": "harness-e2e", "version": "next", "iii_version": FAKE_ENGINE},
+        )
+
+    @patch.object(promote_registry, "request_json")
+    def test_verify_resolves_next_for_the_installed_engine(self, request):
+        pointers = (200, {"versions": [
+            {"version": "0.23.2", "tags": ["latest"]},
+            {"version": "0.24.2", "tags": ["next"]},
+        ]})
+        request.side_effect = [pointers, pointers, (200, {"root": {"version": "0.24.2"}})]
+
+        result = promote_registry.inspect_candidate("https://r.example", "harness-e2e", "0.24.2", "0.23.2")
+
+        self.assertEqual(result["resolved_next"], "0.24.2")
+        self.assertEqual(request.call_args_list[2].args[2]["iii_version"], FAKE_ENGINE)
+
+        # A candidate the Registry refuses for this engine still fails the check.
+        request.side_effect = [pointers, pointers, (409, {"error": {"code": "incompatible_engine"}})]
+        with self.assertRaises(promote_registry.RegistryError):
+            promote_registry.inspect_candidate("https://r.example", "harness-e2e", "0.24.2", "0.23.2")
+
     def test_promotion_payload_omits_missing_latest_precondition(self):
         self.assertEqual(
             promote_registry.promotion_payload("0.3.0-experimental", None),
@@ -48,6 +92,7 @@ class PromoteRegistryTests(unittest.TestCase):
             {"version": "0.3.0-experimental", "expected_tag": "next"},
         )
         self.assertEqual(put_call.kwargs["api_key"], "secret-that-is-never-printed")
+        self.assertEqual(request.call_args_list[4].args[2]["iii_version"], FAKE_ENGINE)
 
     @patch.object(promote_registry, "request_json")
     def test_idempotent_promotion_does_not_write(self, request):
@@ -68,6 +113,7 @@ class PromoteRegistryTests(unittest.TestCase):
 
         self.assertFalse(result["changed"])
         self.assertEqual([call.args[0] for call in request.call_args_list], ["GET", "GET", "POST"])
+        self.assertEqual(request.call_args_list[2].args[2]["iii_version"], FAKE_ENGINE)
 
     @patch.object(promote_registry, "request_json")
     def test_candidate_mismatch_fails_before_mutation(self, request):
@@ -129,6 +175,7 @@ class PromoteRegistryTests(unittest.TestCase):
             (200, {"root": {"version": "0.3.0"}}),
         ]
         self.assertFalse(promote_registry.publish("https://r.example", "key", payload, [], Path("."))["changed"])
+        self.assertEqual(request.call_args_list[1].args[2]["iii_version"], FAKE_ENGINE)
 
         request.side_effect = [
             (409, {"error": "exists", "code": "version_already_published"}),

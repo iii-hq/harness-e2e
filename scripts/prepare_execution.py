@@ -361,15 +361,16 @@ def resolve_fixtures(token: str | None) -> tuple[dict[str, str], dict[str, dict[
     return revisions, fallbacks
 
 
-def release_graph(reference: str) -> dict[str, Any]:
+def release_graph(reference: str, iii_version: str) -> dict[str, Any]:
     """What the Registry resolves `<reference>@latest` to, as `compose::add`
     asks it: every worker of the graph, exact, and who calls whom."""
     host, _, name = reference.rpartition("/")
     url = f"https://{host}/resolve" if host else f"{REGISTRY_URL}/resolve"
-    return get_json(url, body={"worker": name, "version": "latest", "target": CLI_TARGET})
+    return get_json(url, body={"worker": name, "version": "latest", "target": CLI_TARGET,
+                               "iii_version": iii_version})
 
 
-def resolve_commits(stack: dict[str, Any], token: str | None) -> dict[str, dict[str, Any]]:
+def resolve_commits(stack: dict[str, Any], token: str | None, iii_version: str) -> dict[str, dict[str, Any]]:
     """Every container the stack pins to a `commit:`, by container name.
 
     The repository is the one the Registry downloads the worker's newest
@@ -390,7 +391,7 @@ def resolve_commits(stack: dict[str, Any], token: str | None) -> dict[str, dict[
         if not COMMIT.fullmatch(requested):
             raise ResolutionError(f"{name}: commit {requested!r} is not a commit sha")
         worker = worker_name(source)
-        graph = release_graph(source.removeprefix("package://"))
+        graph = release_graph(source.removeprefix("package://"), iii_version)
         nodes = {node["name"]: node for node in graph.get("graph") or [] if isinstance(node, dict)}
         release = nodes.get(worker)
         if release is None:
@@ -803,7 +804,7 @@ def command_runtime(args: argparse.Namespace) -> None:
     requested = str(stack.get("iii") or "latest")
     skipped: list[dict[str, str]] = []
     cli = resolve_cli(requested, token, skipped)
-    commits = resolve_commits(stack, token)
+    commits = resolve_commits(stack, token, cli["version"])
     # What was asked, what runs, and every newer candidate passed over and why.
     # FIXTURE_TOKEN reads the private fixture; any token reads the public one.
     fixtures, fixture_fallbacks = resolve_fixtures(os.environ.get("FIXTURE_TOKEN") or token)
