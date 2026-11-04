@@ -125,6 +125,26 @@ class BuildPayloadTests(unittest.TestCase):
                                          repo_url="https://github.com/iii-hq/harness-e2e",
                                          interface={"functions": [{**function, "request_schema": UNTYPED}]})
 
+    def test_the_payload_carries_the_observe_v2_engine_floor_and_never_publishes_without_one(self):
+        function = {"name": "e2e::run", "description": "", "request_schema": TYPED, "response_schema": TYPED}
+        payload = release_worker.build_payload(root=self.ROOT, version="0.24.1", tag="harness-e2e/v0.24.1",
+                                               repo_url="https://github.com/iii-hq/harness-e2e",
+                                               interface={"functions": [function]})
+        # iii 0.25 must resolve an older runner, not this Observe v2 one.
+        self.assertEqual(payload["iii_engine_version"], ">=0.26.0")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copy(self.ROOT / "config.yaml", root)
+            shutil.copy(self.ROOT / "README.md", root)
+            manifest = (self.ROOT / "iii.worker.yaml").read_text()
+            (root / "iii.worker.yaml").write_text(
+                "\n".join(line for line in manifest.splitlines() if not line.startswith("iii_engine_version:")))
+            with self.assertRaisesRegex(ValueError, "iii_engine_version"):
+                release_worker.build_payload(root=root, version="0.24.1", tag="harness-e2e/v0.24.1",
+                                             repo_url="https://github.com/iii-hq/harness-e2e",
+                                             interface={"functions": [function]})
+
 
 class ReleaseWorkflowTests(unittest.TestCase):
     ROOT = Path(__file__).parents[2]

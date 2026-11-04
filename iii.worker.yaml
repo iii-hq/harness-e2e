@@ -7,6 +7,9 @@ license: Apache-2.0
 bin: harness-e2e
 tags: [harness, e2e, evaluation, benchmark, dashboard]
 description: Measure Harness capability, retain reproducible evidence, and expose the E2E dashboard.
+# The runner speaks Observe v2 (iii-sdk 0.26): an older engine resolves an
+# older release instead of this one.
+iii_engine_version: ">=0.26.0"
 
 dependencies:
   browser: "^0.2.15"

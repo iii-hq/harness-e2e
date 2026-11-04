@@ -112,6 +112,7 @@ def validate_release(root: pathlib.Path, tag: str, event_sha: str) -> dict[str, 
         raise ValueError("iii.worker.yaml dependencies must be a non-empty map")
     if not all(isinstance(name, str) and isinstance(constraint, str) for name, constraint in dependencies.items()):
         raise ValueError("iii.worker.yaml dependency names and constraints must be strings")
+    engine_range(manifest)
 
     config = read_yaml(root / "config.yaml")
     if not isinstance(config, dict):
@@ -260,6 +261,17 @@ def collect_interface(
     return {"functions": normalized_functions}
 
 
+def engine_range(manifest: dict[str, Any]) -> str:
+    """The engines this release runs on, forwarded as the Registry's
+    `iii_engine_version` (the Registry validates its syntax). Required: without
+    it the Registry hands the newest release to every engine, and one older
+    than the runner's SDK fails at resolve instead of getting an older release."""
+    value = manifest.get("iii_engine_version")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"iii.worker.yaml iii_engine_version must be a non-empty range, got {value!r}")
+    return value
+
+
 def normalize_dependencies(raw: Any) -> list[dict[str, str]]:
     if not isinstance(raw, dict):
         raise ValueError("dependencies must be a map")
@@ -303,6 +315,7 @@ def build_payload(
         "description": manifest.get("description", ""),
         "license": manifest.get("license", ""),
         "dependencies": normalize_dependencies(manifest.get("dependencies")),
+        "iii_engine_version": engine_range(manifest),
         "config": config,
         "functions": functions,
         "experimental": release_is_experimental(version),
