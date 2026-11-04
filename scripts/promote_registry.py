@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -84,10 +85,16 @@ def resolve_version(
     *,
     allow_missing: bool = False,
 ) -> str | None:
+    # The Registry resolves for the engine it is told about; told none, it keeps
+    # out every release that requires a newer iii than the oldest.
     status, response = request_json(
         "POST",
         f"{api_url.rstrip('/')}/resolve",
-        {"worker": worker, "version": selector},
+        {
+            "worker": worker,
+            "version": selector,
+            "iii_version": subprocess.check_output(["iii", "--version"], text=True).strip(),
+        },
     )
     if status == 200:
         return resolved_root_version(response)
