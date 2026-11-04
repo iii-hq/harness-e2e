@@ -6,13 +6,12 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::timer_wake::subscription_id;
 use super::{invoke_as, messages, text, Attempt, Broken, Run};
 use crate::context::E2eContext;
 use crate::scenarios::common::function_outcomes;
 
 pub const ID: &str = crate::scenarios::validation_self_repair::ID;
-const HOOK_TYPE: &str = "harness::hook::post-turn";
+const HOOK: &str = "harness::hook::on-post-turn";
 /// The Harness's own ceiling when the run sets none.
 const DEFAULT_MAX_RETRIES: u64 = 2;
 
@@ -20,13 +19,13 @@ fn validator(transcript: &Value) -> Option<(String, Value)> {
     function_outcomes(transcript)
         .into_iter()
         .find_map(|outcome| {
-            (outcome.function_id == "engine::register_trigger"
-                && outcome.arguments["trigger_type"] == HOOK_TYPE
+            (outcome.function_id == "harness::observe"
+                && outcome.arguments["function_id"] == HOOK
                 && outcome.is_error == Some(false))
             .then(|| {
                 let details = outcome.details.unwrap_or_default();
                 (
-                    details["subscription_id"]
+                    details["observer_id"]
                         .as_str()
                         .unwrap_or_default()
                         .to_string(),
@@ -37,11 +36,11 @@ fn validator(transcript: &Value) -> Option<(String, Value)> {
 }
 
 /// Whether the subject itself removed this validator: a failed call, or one
-/// for another subscription, leaves it for the probes.
-fn unregistered_by_subject(transcript: &Value, subscription: &str) -> bool {
+/// for another observer, leaves it for the probes.
+fn unregistered_by_subject(transcript: &Value, observer: &str) -> bool {
     function_outcomes(transcript).iter().any(|outcome| {
-        outcome.function_id == "engine::unregister_trigger"
-            && outcome.arguments["id"] == subscription
+        outcome.function_id == "harness::unobserve"
+            && outcome.arguments["id"] == observer
             && outcome.is_error == Some(false)
             && outcome
                 .details
@@ -50,7 +49,7 @@ fn unregistered_by_subject(transcript: &Value, subscription: &str) -> bool {
     })
 }
 
-/// Unregisters the validator twice, unless the subject already did.
+/// Unobserves the validator twice, unless the subject already did.
 pub(super) async fn capture(
     context: &E2eContext,
     attempt: &Attempt<'_>,
@@ -65,22 +64,22 @@ pub(super) async fn capture(
             "max_validation_retries": status["max_validation_retries"],
         }),
     );
-    let Some((subscription, _)) = validator(attempt.transcript) else {
+    let Some((observer, _)) = validator(attempt.transcript) else {
         return;
     };
-    if unregistered_by_subject(attempt.transcript, &subscription) {
+    if unregistered_by_subject(attempt.transcript, &observer) {
         return;
     }
-    // The session's own path: the console's `harness::triggers::unregister`
-    // does not reach an agent-registered validator.
+    // The session's own path: the console's `harness::observers::dispose`
+    // does not reach an agent-observed validator.
     let mut replies = Vec::new();
     for _ in 0..2 {
         replies.push(
             invoke_as(
                 context,
                 attempt.session_id,
-                "engine::unregister_trigger",
-                json!({"id": subscription}),
+                "harness::unobserve",
+                json!({"id": observer}),
             )
             .await,
         );
@@ -90,10 +89,11 @@ pub(super) async fn capture(
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
     let mut broken = Vec::new();
-    let Some((subscription, details)) = validator(run.transcript) else {
+    let Some((observer, details)) = validator(run.transcript) else {
         return broken;
     };
-    if !subscription_id(&subscription, "posthook_")
+    // The hook registry hands back the SDK observer's id, a UUID.
+    if uuid::Uuid::parse_str(&observer).is_err()
         || details["once"] != false
         || !details["note"]
             .as_str()
@@ -149,16 +149,19 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
 mod tests {
     use super::*;
 
-    fn transcript(subscription: &str, nudges: usize) -> Value {
+    /// The subject's `harness::observe` of the post-turn hook, as Harness
+    /// 1.9.1 answers it.
+    fn transcript(observer: &str, nudges: usize) -> Value {
         let mut entries = vec![
             json!({"entry_id": "e_t1_0_assistant", "message": {"role": "assistant", "content": [{
-                "type": "function_call", "id": "c1", "function_id": "agent_trigger",
-                "arguments": {"function": "engine::register_trigger", "payload": {
-                    "trigger_type": HOOK_TYPE, "function_id": "e2etest::audit_x"}}}]}}),
+                "type": "function_call", "id": "c1", "function_id": "agent_call",
+                "arguments": {"function": "harness::observe", "payload": {
+                    "function_id": "harness::hook::on-post-turn",
+                    "target": {"function_id": "e2etest::audit_x"}, "args": {"timeout_ms": 30000}}}}]}}),
             json!({"entry_id": "e_t1_c1", "message": {"role": "function_result", "function_call_id": "c1",
-                "function_id": "engine::register_trigger", "is_error": false, "details": {
-                    "subscription_id": subscription, "once": false,
-                    "note": "post-turn validator bound to THIS session only (s)."}}}),
+                "function_id": "harness::observe", "is_error": false, "details": {
+                    "observer_id": observer, "once": false,
+                    "note": "post-turn validator bound to THIS session only (s); unobserve it with this id when the goal is met."}}}),
         ];
         for index in 0..nudges {
             entries.push(json!({"entry_id": format!("e_t1_nudge_{index}"),
@@ -179,7 +182,8 @@ mod tests {
         .collect()
     }
 
-    const POSTHOOK: &str = "posthook_0be3d9294f0245ebb4e12fdb512b6059";
+    /// The SDK observer id the hook registry hands back.
+    const POSTHOOK: &str = "ea4785c0-f297-4298-a73a-0b27879ace30";
 
     #[test]
     fn a_counted_session_bound_validator_removed_once_keeps_every_gate() {
@@ -214,10 +218,10 @@ mod tests {
     fn with_unregister(mut transcript: Value, id: &str, is_error: bool, removed: bool) -> Value {
         transcript["messages"].as_array_mut().unwrap().extend([
             json!({"entry_id": "e_t1_1_assistant", "message": {"role": "assistant", "content": [{
-                "type": "function_call", "id": "c2", "function_id": "agent_trigger",
-                "arguments": {"function": "engine::unregister_trigger", "payload": {"id": id}}}]}}),
+                "type": "function_call", "id": "c2", "function_id": "agent_call",
+                "arguments": {"function": "harness::unobserve", "payload": {"id": id}}}]}}),
             json!({"entry_id": "e_t1_c2", "message": {"role": "function_result", "function_call_id": "c2",
-                "function_id": "engine::unregister_trigger", "is_error": is_error,
+                "function_id": "harness::unobserve", "is_error": is_error,
                 "details": {"removed": removed}}}),
         ]);
         transcript
