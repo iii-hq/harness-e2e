@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@iii-dev/console-ui": "0.2.0",
-    "iii-sdk": "0.23.1-rc.6",
+    "iii-sdk": "0.26.0-rc.5",
     "lucide-react": "1.16.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

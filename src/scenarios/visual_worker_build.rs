@@ -423,8 +423,8 @@ so a Worker you start for your own checks is not the one evaluated. It already i
 dependencies; do not change them.
 You may add build scripts to package.json while keeping dependency versions fixed.
 Register `{domain}`, `{canvas}`, and `{ui}` with non-empty descriptions and object JSON
-schemas. Register console:script and console:style Message-path triggers backed by `{ui}` at
-`{script}` and `{style}`. Build the ESM asset with `buildWorkerUi`; it must default-export
+schemas. Observe `ade::ui::asset` with `iii.observe` once per asset, args `{{kind: 'script' | 'style', path}}`,
+targeting `{ui}` at `{script}` and `{style}`. Build the ESM asset with `buildWorkerUi`; it must default-export
 setup(host), register page id `{page}`, and call Worker functions through host.iii.trigger. Use
 PageShell, PageHeader, PageMain, and appropriate shared controls. Scope CSS under
 `[data-iii-ui="{worker}"]`; the Console manifest must have no asset warnings.
@@ -1013,7 +1013,7 @@ async fn inspect_console(
     .await;
     ensure_remote_or_success(&script, "fetch Console script")?;
     ensure_remote_or_success(&style, "fetch Console style")?;
-    let console_status = context.trigger_value("console::status", json!({})).await;
+    let console_status = context.trigger_value("ade::status", json!({})).await;
     ensure_remote_or_success(&console_status, "inspect Console status")?;
     let port = console_status
         .as_ref()
@@ -1023,9 +1023,7 @@ async fn inspect_console(
     let mut manifest = Value::Null;
     if ready {
         for _ in 0..40 {
-            let observed = context
-                .trigger_value("console::ui-manifest", json!({}))
-                .await;
+            let observed = context.trigger_value("ade::ui-manifest", json!({})).await;
             ensure_remote_or_success(&observed, "inspect Console UI manifest")?;
             manifest = observed.unwrap_or(Value::Null);
             if console_assets_ok(&manifest, contract) {
