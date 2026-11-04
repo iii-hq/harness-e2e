@@ -184,6 +184,54 @@ def write_private(path: Path, values: dict[str, str]) -> None:
         file.write("".join(f"{name}={value}\n" for name, value in sorted(values.items())))
 
 
+def package_identity(contract: dict[str, Any]) -> Any:
+    """The package a container runs: its `package://` name, or for a
+    path:// worker the stack built from a commit, the package it was built
+    from (`runtime.commits`), whatever the container is called."""
+    runtime = contract.get("runtime") or {}
+    assembled = (runtime.get("compose") or {}).get("containers") or {}
+    built = {assembled[name]["worker"]: pin["worker"]
+             for name, pin in (runtime.get("commits") or {}).items() if name in assembled}
+
+    def package_of(container: dict[str, Any]) -> str | None:
+        source = str(container.get("worker", ""))
+        return worker_name(source) if source.startswith("package://") else built.get(source)
+
+    return package_of
+
+
+def scope_credentials(containers: dict[str, Any], env_file: str, package_of: Any) -> list[str]:
+    """Hand each container the credentials it reads and none other, by the
+    package the contract says it runs (`package_identity`): the runner every
+    one, to redact them; `provider-<id>` its own key; the router the keys of the stack's
+    providers, which it reads when a slice has none; judge-typesafe its key.
+    A consumer gets a private file of its own beside `env_file`; any other
+    container, a template's `./.env` included, gets no env_file at all.
+    Returns the containers whose env_file changed."""
+    providers, _ = credential_catalog()
+    keys = {**providers, **json.loads(CREDENTIAL_CATALOG.read_text()).get("subscriptions", {})}
+    received = read_env_file(Path(env_file))
+    workers = {name: package_of(container) or "" for name, container in containers.items()}
+    present = {worker.removeprefix("provider-") for worker in workers.values() if worker.startswith("provider-")}
+    wanted = {f"provider-{provider}": {key} for provider, key in keys.items()}
+    wanted["llm-router"] = {key for provider, key in providers.items() if provider in present}
+    wanted["judge-typesafe"] = {"TYPESAFE_API_KEY"}
+    changed = []
+    for name, container in containers.items():
+        before = container.get("env_file")
+        if workers[name] == RUNNER:
+            container["env_file"] = [env_file]
+        elif names := sorted(wanted.get(workers[name], set()) & received.keys()):
+            scoped = Path(env_file).with_name(f"{Path(env_file).stem}.{name}.env")
+            write_private(scoped, {key: received[key] for key in names})
+            container["env_file"] = [str(scoped)]
+        else:
+            container.pop("env_file", None)
+        if container.get("env_file") != before:
+            changed.append(name)
+    return changed
+
+
 def credential_forms(value: str) -> list[str]:
     """A value as written and as JSON escapes it, longest first."""
     forms = {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}
@@ -775,11 +823,7 @@ def project_scaffold(
     # still the package it was built from, known by its path.
     commits = runtime.get("commits") or {}
     assembled = (runtime.get("compose") or {}).get("containers") or {}
-    built = {assembled[name]["worker"]: pin["worker"] for name, pin in commits.items() if name in assembled}
-
-    def package_of(container: dict[str, Any]) -> str | None:
-        source = str(container.get("worker", ""))
-        return worker_name(source) if source.startswith("package://") else built.get(source)
+    package_of = package_identity(contract)
 
     def declares(package: str) -> bool:
         return any(package_of(item) == package for item in containers.values())
@@ -953,11 +997,8 @@ def project_scaffold(
         for name in package_names["iii-directory"]:
             containers[name]["config_name"] = scoped_config_name(namespace, "directory")
             containers[name].setdefault("config_override", {}).update(config)
-    # One env file, every container. A worker reads the keys it knows and
-    # ignores the rest; the template's own `./.env` reference is replaced by it.
     if env_file:
-        for container in containers.values():
-            container["env_file"] = [env_file]
+        scope_credentials(containers, env_file, package_of)
     # iii telemetry stays off in every worker, whatever the Compose daemon
     # that starts it inherited (a developer's own daemon, say).
     for container in containers.values():
@@ -1565,6 +1606,11 @@ def main() -> int:
     stack_env = commands.add_parser("credentials-env", help="the stack's .env: every credential the group received")
     stack_env.add_argument("--contract", type=Path, required=True)
     stack_env.add_argument("--output", type=Path, required=True)
+    scope = commands.add_parser("scope-credentials",
+                                help="give the containers Compose added their credentials, and no other")
+    scope.add_argument("--contract", type=Path, required=True)
+    scope.add_argument("--compose", type=Path, required=True)
+    scope.add_argument("--env-file", type=Path, required=True)
     credentials_file = commands.add_parser(
         "credentials-file", help="a private env file of the catalog's credentials this environment sets")
     credentials_file.add_argument("--output", type=Path, required=True)
@@ -1652,6 +1698,16 @@ def main() -> int:
             else:
                 configure_directory_profile_root(manifest, args.profile_root, args.namespace)
             args.compose.write_text(yaml.safe_dump(manifest, sort_keys=False))
+            return 0
+        if args.command == "scope-credentials":
+            import yaml
+
+            manifest = load_yaml(args.compose.read_text())
+            changed = scope_credentials(manifest["containers"], str(args.env_file),
+                                        package_identity(load_object(args.contract, "contract")))
+            if changed:
+                args.compose.write_text(yaml.safe_dump(manifest, sort_keys=False))
+                print("\n".join(changed))
             return 0
         if args.command == "validate-layout":
             validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root, args.compose)
