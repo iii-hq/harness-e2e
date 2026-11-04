@@ -1,8 +1,8 @@
-//! `binding_contract_probe` — trigger bindings, from registration to
-//! teardown. After the subject's first answer, the runner registers bindings
-//! for the root session the way an agent's own call would reach the Harness
-//! (`harness::function::trigger` with `engine::register_trigger`), fires them
-//! by writing the state keys they watch, and reads what each fire did:
+//! `binding_contract_probe` — observer bindings, from observing to teardown.
+//! After the subject's first answer, the runner observes state keys for the
+//! root session the way an agent's own call would reach the Harness
+//! (`harness::function::call` with `harness::observe`), fires them by writing
+//! the state keys they watch, and reads what each fire did:
 //!
 //! - registrations the Harness must refuse, each with its pinned error;
 //! - call bindings: a `max_fires` budget, a burst, an expiry, and the
@@ -37,6 +37,9 @@ use super::{
 };
 
 pub const ID: &str = "binding_contract_probe";
+const OBSERVE: &str = "harness::observe";
+const UNOBSERVE: &str = "harness::unobserve";
+const STATE_CHANGED: &str = "state::on-changed";
 const DELIVERABLE_ID: &str = "binding_contract_probes";
 const PROMPT: &str = "Reply with exactly: OK. Every later message in this conversation is a \
 notification sent by this test: answer each with exactly OK, and call no function.";
@@ -50,7 +53,7 @@ const KEYS: &[&str] = &[
 const REFUSALS: AssessmentSpec = AssessmentSpec::gate(
     "refusals",
     20,
-    "Are a string config, a harness trigger type, harness::spawn, an unpermitted or a nested-registration target, a zero max_fires, a non-positive or absolute deadline, an unknown call-metadata key, a relative event_into and a config condition all refused with their pinned errors?",
+    "Are string filters, an internal harness source, harness::spawn, an unpermitted or a nested-observe target, a zero max_fires, a non-positive or absolute deadline, an unknown target key, a relative event_into and a wrapped condition config all refused with their pinned errors?",
 )
 .labeled("Malformed and unsafe bindings refused");
 const CALL_BINDINGS: AssessmentSpec = AssessmentSpec::gate_in(
@@ -131,10 +134,7 @@ impl Scenario for BindingContractProbe {
 
     fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
         let mut allowed = self.required_functions(run_id);
-        allowed.extend([
-            "engine::register_trigger".to_string(),
-            "engine::unregister_trigger".to_string(),
-        ]);
+        allowed.extend([OBSERVE, UNOBSERVE, STATE_CHANGED].map(str::to_string));
         Some(allowed)
     }
 
@@ -155,7 +155,7 @@ impl Scenario for BindingContractProbe {
             ID,
             seed,
             json!({
-                "trigger_type": "state",
+                "source": STATE_CHANGED,
                 "keys": KEYS,
                 "binding_cap": CAP,
                 "wake_text_max": WAKE_TEXT_MAX,
@@ -333,88 +333,89 @@ fn release(run_id: &str) {
     }
 }
 
-/// Each refusal: the probe id, the registration, and the text its error
+/// Each refusal: the probe id, the observe request, and the text its error
 /// must carry.
 fn refusal_cases(run_id: &str) -> Vec<(&'static str, Value, &'static str)> {
     let sink = sink_id(run_id);
-    let watch = json!({ "scope": scope(run_id), "key": "refused" });
+    let watch = json!({
+        "input.scope": { "$eq": scope(run_id) }, "input.key": { "$eq": "refused" },
+    });
+    let state = |extra: Value| {
+        let mut request = json!({ "function_id": STATE_CHANGED, "filters": watch });
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        request
+    };
     vec![
         (
             "refuse.config_string",
-            json!({ "trigger_type": "state", "config": watch.to_string() }),
-            "`config` must be a JSON object",
+            json!({ "function_id": STATE_CHANGED, "filters": watch.to_string() }),
+            "`filters` must be a JSON object",
         ),
         (
             "refuse.harness_type",
-            json!({ "trigger_type": "harness::turn-completed", "config": {} }),
-            "cannot bind harness-internal trigger type",
+            json!({ "function_id": "harness::on-turn-completed" }),
+            "cannot observe harness function `harness::on-turn-completed`",
         ),
         (
             "refuse.spawn_target",
-            json!({ "trigger_type": "state", "config": watch, "function_id": "harness::spawn" }),
-            "is not a binding target",
+            state(json!({ "target": { "function_id": "harness::spawn" } })),
+            "`harness::spawn` is not a binding target",
         ),
         (
             "refuse.unpermitted_target",
-            json!({ "trigger_type": "state", "config": watch, "function_id": "state::set" }),
-            "is not permitted by this session's dispatch policy",
+            state(json!({ "target": { "function_id": "state::set" } })),
+            "`state::set` is not permitted by this session's dispatch policy",
         ),
         (
             "refuse.nested_registration",
-            json!({
-                "trigger_type": "state", "config": watch,
-                "function_id": "engine::register_trigger",
-            }),
-            "requires the harness's agent-call intercept",
+            state(json!({ "target": { "function_id": OBSERVE } })),
+            "`harness::observe` is not a binding target",
         ),
         (
             "refuse.zero_max_fires",
-            json!({
-                "trigger_type": "state", "config": watch, "function_id": sink,
-                "lifecycle": { "max_fires": 0 },
-            }),
+            state(json!({
+                "target": { "function_id": sink }, "lifecycle": { "max_fires": 0 },
+            })),
             "`lifecycle.max_fires` must be at least 1",
         ),
         (
             "refuse.non_positive_deadline",
-            json!({
-                "trigger_type": "state", "config": watch, "function_id": sink,
-                "lifecycle": { "expires_in_ms": -5 },
-            }),
+            state(json!({
+                "target": { "function_id": sink }, "lifecycle": { "expires_in_ms": -5 },
+            })),
             "`lifecycle.expires_in_ms` must be positive",
         ),
         (
             "refuse.absolute_deadline",
-            json!({
-                "trigger_type": "state", "config": watch, "function_id": sink,
+            state(json!({
+                "target": { "function_id": sink },
                 "lifecycle": { "expires_at": 4_102_444_800_000_i64 },
-            }),
+            })),
             "unknown field `expires_at`",
         ),
         (
             "refuse.unknown_metadata_key",
-            json!({
-                "trigger_type": "state", "config": watch, "function_id": sink,
-                "metadata": { "task": "spawn something" },
-            }),
-            "unknown key `task`",
+            state(json!({ "target": { "function_id": sink, "task": "spawn something" } })),
+            "unknown field `task`",
         ),
         (
             "refuse.relative_event_into",
-            json!({
-                "trigger_type": "state", "config": watch,
-                "target": { "function_id": sink, "event_into": "event" },
-            }),
+            state(json!({ "target": { "function_id": sink, "event_into": "event" } })),
             "`event_into` must be a JSON pointer",
         ),
         (
             "refuse.config_condition",
-            json!({
-                "trigger_type": "state",
-                "config": { "scope": scope(run_id), "key": "refused", "condition_function_id": sink },
-                "function_id": sink,
-            }),
-            "`condition_function_id` in `config` is not supported",
+            state(json!({
+                "target": { "function_id": sink },
+                "conditions": [{
+                    "function_id": sink,
+                    "config": { "condition_config": { "id": "refused", "expect": 1 } },
+                }],
+            })),
+            "pass its fields (e.g. id, expect) directly",
         ),
     ]
 }
@@ -446,7 +447,7 @@ impl Prober<'_> {
     async fn control(&self, function_id: &str, arguments: Value) -> Answer {
         probe::call(
             self.context,
-            "harness::function::trigger",
+            "harness::function::call",
             json!({
                 "session_id": self.root,
                 "call": { "id": "e2e-binding", "function_id": function_id, "arguments": arguments },
@@ -456,19 +457,30 @@ impl Prober<'_> {
     }
 
     async fn register(&self, arguments: Value) -> (Option<String>, Answer) {
-        let answer = self.control("engine::register_trigger", arguments).await;
+        let answer = self.control(OBSERVE, arguments).await;
         let id = answer
             .as_ref()
             .ok()
             .filter(|result| result.get("is_error") != Some(&json!(true)))
-            .and_then(|result| result.pointer("/details/subscription_id"))
+            .and_then(|result| result.pointer("/details/observer_id"))
             .and_then(Value::as_str)
             .map(str::to_string);
         (id, answer)
     }
 
-    fn watch(&self, key: &str) -> Value {
-        json!({ "scope": scope(self.run_id), "key": key })
+    /// Observes `key` of the run's scope, with the rest of the request.
+    fn watch(&self, key: &str, rest: Value) -> Value {
+        let mut request = json!({
+            "function_id": STATE_CHANGED,
+            "filters": {
+                "input.scope": { "$eq": scope(self.run_id) }, "input.key": { "$eq": key },
+            },
+        });
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(rest.as_object().unwrap().clone());
+        request
     }
 
     async fn fire(&self, key: &str, value: Value) {
@@ -503,12 +515,12 @@ impl Prober<'_> {
     async fn listed(&self) -> Vec<Value> {
         probe::call(
             self.context,
-            "harness::triggers::list",
+            "harness::observers::list",
             json!({ "session_id": self.root }),
         )
         .await
         .ok()
-        .and_then(|list| list.get("subscriptions").cloned())
+        .and_then(|list| list.get("observers").cloned())
         .and_then(|rows| serde_json::from_value(rows).ok())
         .unwrap_or_default()
     }
@@ -517,7 +529,7 @@ impl Prober<'_> {
         self.listed()
             .await
             .iter()
-            .any(|row| row.get("subscription_id").and_then(Value::as_str) == id.as_deref())
+            .any(|row| row.get("observer_id").and_then(Value::as_str) == id.as_deref())
     }
 
     async fn refusals(&self, probes: &mut Probes) {
@@ -534,10 +546,13 @@ impl Prober<'_> {
     async fn call_bindings(&self, probes: &mut Probes) {
         let sink = sink_id(self.run_id);
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("max"), "function_id": sink,
-                "metadata": { "payload": { "tag": "max" } }, "lifecycle": { "max_fires": 2 },
-            }))
+            .register(self.watch(
+                "max",
+                json!({
+                    "target": { "function_id": sink, "payload": { "tag": "max" } },
+                    "lifecycle": { "max_fires": 2 },
+                }),
+            ))
             .await;
         for value in 1..=3 {
             self.fire("max", json!(value)).await;
@@ -552,10 +567,10 @@ impl Prober<'_> {
         );
 
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("burst"), "function_id": sink,
-                "metadata": { "payload": { "tag": "burst" } },
-            }))
+            .register(self.watch(
+                "burst",
+                json!({ "target": { "function_id": sink, "payload": { "tag": "burst" } } }),
+            ))
             .await;
         for value in 1..=5 {
             self.fire("burst", json!(value)).await;
@@ -571,10 +586,7 @@ impl Prober<'_> {
             })
             .collect();
         let removed = match &id {
-            Some(id) => {
-                self.control("engine::unregister_trigger", json!({ "id": id }))
-                    .await
-            }
+            Some(id) => self.control(UNOBSERVE, json!({ "id": id })).await,
             None => Err("never registered".into()),
         };
         probes.check(
@@ -589,11 +601,13 @@ impl Prober<'_> {
         );
 
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("expiry"), "function_id": sink,
-                "metadata": { "payload": { "tag": "expiry" } },
-                "lifecycle": { "expires_in_ms": 1_500 },
-            }))
+            .register(self.watch(
+                "expiry",
+                json!({
+                    "target": { "function_id": sink, "payload": { "tag": "expiry" } },
+                    "lifecycle": { "expires_in_ms": 1_500 },
+                }),
+            ))
             .await;
         tokio::time::sleep(Duration::from_millis(2_500)).await;
         self.fire("expiry", json!(1)).await;
@@ -606,12 +620,16 @@ impl Prober<'_> {
         );
 
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("scoped"),
-                "function_id": scoped_sink_id(self.run_id),
-                "metadata": { "payload": { "tag": "scoped", "fs_scope": { "root": "/" } } },
-                "lifecycle": { "max_fires": 1 },
-            }))
+            .register(self.watch(
+                "scoped",
+                json!({
+                    "target": {
+                        "function_id": scoped_sink_id(self.run_id),
+                        "payload": { "tag": "scoped", "fs_scope": { "root": "/" } },
+                    },
+                    "lifecycle": { "max_fires": 1 },
+                }),
+            ))
             .await;
         self.fire("scoped", json!(1)).await;
         let scoped = self.delivered("scoped", 1).await;
@@ -629,19 +647,14 @@ impl Prober<'_> {
 
     async fn wakes(&self, probes: &mut Probes) {
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("wburst"),
-                "label": "burst", "once": false,
-            }))
+            .register(self.watch("wburst", json!({ "label": "burst", "once": false })))
             .await;
         for value in 1..=3 {
             self.fire("wburst", json!(value)).await;
         }
         let burst = self.notifications("[notification] burst:", 3).await;
         if let Some(id) = &id {
-            let _ = self
-                .control("engine::unregister_trigger", json!({ "id": id }))
-                .await;
+            let _ = self.control(UNOBSERVE, json!({ "id": id })).await;
         }
         probes.check(
             "wake.burst",
@@ -650,9 +663,7 @@ impl Prober<'_> {
         );
 
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("wbig"), "label": "big",
-            }))
+            .register(self.watch("wbig", json!({ "label": "big" })))
             .await;
         self.fire("wbig", json!("y".repeat(20_000))).await;
         let big = self.notifications("[notification] big:", 1).await;
@@ -664,10 +675,10 @@ impl Prober<'_> {
         );
 
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("never"), "label": "late",
-                "lifecycle": { "expires_in_ms": 1_500 },
-            }))
+            .register(self.watch(
+                "never",
+                json!({ "label": "late", "lifecycle": { "expires_in_ms": 1_500 } }),
+            ))
             .await;
         let expired = match &id {
             Some(id) => {
@@ -686,16 +697,14 @@ impl Prober<'_> {
         );
 
         let (id, registered) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("wgone"), "label": "gone",
-            }))
+            .register(self.watch("wgone", json!({ "label": "gone" })))
             .await;
         let removed = match &id {
             Some(id) => {
                 probe::call(
                     self.context,
-                    "harness::triggers::unregister",
-                    json!({ "session_id": self.root, "subscription_id": id }),
+                    "harness::observers::dispose",
+                    json!({ "session_id": self.root, "observer_id": id }),
                 )
                 .await
             }
@@ -703,8 +712,13 @@ impl Prober<'_> {
         };
         let told = match &id {
             Some(id) => {
-                self.notifications(&format!("(binding {id}) was unregistered"), 1)
-                    .await
+                self.notifications(
+                    &format!(
+                        "(binding {id}) was unobserved by session harness::observers::dispose"
+                    ),
+                    1,
+                )
+                .await
             }
             None => Vec::new(),
         };
@@ -727,10 +741,10 @@ impl Prober<'_> {
         let mut slot = 0;
         while active < CAP && slot < CAP * 2 {
             let (id, answer) = self
-                .register(json!({
-                    "trigger_type": "state", "config": self.watch(&format!("cap{slot}")),
-                    "function_id": sink, "metadata": { "payload": { "tag": "cap" } },
-                }))
+                .register(self.watch(
+                    &format!("cap{slot}"),
+                    json!({ "target": { "function_id": sink, "payload": { "tag": "cap" } } }),
+                ))
                 .await;
             match id {
                 Some(_) => active += 1,
@@ -739,15 +753,17 @@ impl Prober<'_> {
             slot += 1;
         }
         let (over, refused) = self
-            .register(json!({
-                "trigger_type": "state", "config": self.watch("cap-over"),
-                "function_id": sink, "metadata": { "payload": { "tag": "cap" } },
-            }))
+            .register(self.watch(
+                "cap-over",
+                json!({ "target": { "function_id": sink, "payload": { "tag": "cap" } } }),
+            ))
             .await;
         let full = self.listed().await.len();
         probes.check(
             "capacity.cap",
-            full == CAP && over.is_none() && is_refused(&refused, "binding cap reached (64 active"),
+            full == CAP
+                && over.is_none()
+                && is_refused(&refused, "observer cap reached (64 active"),
             json!({ "active": full, "refused": refused, "failed_fills": failures }),
         );
 
@@ -855,9 +871,9 @@ mod tests {
         ] });
         assert_eq!(notification_texts(&transcript, "burst:").len(), 1);
         let refused: Answer = Ok(
-            json!({ "is_error": true, "content": [{ "text": "binding cap reached (64 active for this session)" }] }),
+            json!({ "is_error": true, "content": [{ "text": "observer cap reached (64 active for this session)" }] }),
         );
-        assert!(is_refused(&refused, "binding cap reached (64 active"));
+        assert!(is_refused(&refused, "observer cap reached (64 active"));
         assert!(!is_refused(
             &Ok(json!({ "is_error": false, "content": [] })),
             "x"

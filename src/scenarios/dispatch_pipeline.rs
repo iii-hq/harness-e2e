@@ -7,7 +7,7 @@
 //! hook's own resolver unregisters `pipe_gone`, waits for the registry to
 //! notice, and releases the call with `harness::function::resolve`, so the
 //! resumed step must tell the model the registry changed. Every other probe
-//! is a direct `harness::function::trigger` on the root after its turn,
+//! is a direct `harness::function::call` on the root after its turn,
 //! which runs the same pipeline under the turn's recorded policy, plus one
 //! spawned child that may call only `pipe_echo`.
 
@@ -410,7 +410,7 @@ impl Scenario for DispatchPipeline {
         let call = |session: &str, id: &str, function_id: &str, arguments: Value| {
             probe::call(
                 context,
-                "harness::function::trigger",
+                "harness::function::call",
                 json!({
                     "session_id": session,
                     "call": { "id": id, "function_id": function_id, "arguments": arguments },
@@ -526,7 +526,11 @@ impl Scenario for DispatchPipeline {
             &rewritten,
         );
         let invalid = invalid_hook_config(context, run_id).await;
-        probes.check("hook.invalid_config_refused", invalid.is_err(), &invalid);
+        probes.check(
+            "hook.invalid_config_refused",
+            probe::refused_with(&invalid, "invalid on_error"),
+            &invalid,
+        );
 
         // Normalization.
         probes.check(
@@ -826,27 +830,22 @@ async fn resolve_held(
     }
 }
 
-/// Registers a hook whose config the Harness must refuse; scoped to a
-/// function that does not exist and removed again, should it be accepted.
+/// Observes the pre-call hook with args the Harness must refuse; scoped to a
+/// function that does not exist and disposed again, should it be accepted.
 async fn invalid_hook_config(context: &E2eContext, run_id: &str) -> Answer {
-    let answer = probe::call(
-        context,
-        "engine::register_trigger",
-        json!({
-            "trigger_type": PRE_TRIGGER,
-            "function_id": hook_id(run_id, "z"),
-            "config": { "functions": [fixture_id(run_id, "none")], "on_error": "maybe" },
-        }),
+    crate::observe::active(
+        context.client(),
+        Source::function(PRE_TRIGGER).args(json!({
+            "functions": [fixture_id(run_id, "none")], "on_error": "maybe",
+        })),
+        hook_id(run_id, "z"),
     )
-    .await;
-    if let Some(id) = answer
-        .as_ref()
-        .ok()
-        .and_then(|registered| registered.get("id"))
-    {
-        let _ = probe::call(context, "engine::unregister_trigger", json!({ "id": id })).await;
-    }
-    answer
+    .await
+    .map(|handle| {
+        crate::observe::release(handle);
+        json!({ "accepted": true })
+    })
+    .map_err(|error| format!("{error:#}"))
 }
 
 /// Spawns a child that may call only `pipe_echo` and checks, once its turn
@@ -893,7 +892,7 @@ async fn spawned_child_policy(
     let call = |id: &str, function_id: String, arguments: Value| {
         probe::call(
             context,
-            "harness::function::trigger",
+            "harness::function::call",
             json!({ "session_id": child, "call": { "id": id, "function_id": function_id, "arguments": arguments } }),
         )
     };
