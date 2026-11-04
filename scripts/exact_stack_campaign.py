@@ -799,8 +799,20 @@ def project_scaffold(
         added = []
         for name, container in assembled.items():
             package = package_of(container)
-            if (package not in roots or package == RUNNER
-                    or declares((template_packages or {}).get(package, package))):
+            if package not in roots or package == RUNNER:
+                continue
+            declared = (template_packages or {}).get(package, package)
+            if declares(declared):
+                # The template's worker runs under what the stack states for
+                # it, key by key over the template's own settings. A worker
+                # built from a commit carries its build's defaults instead,
+                # which go under the template's below.
+                if str(container.get("worker", "")).startswith("package://"):
+                    for item in containers.values():
+                        if package_of(item) == declared:
+                            for key in ("config_override", "environment"):
+                                if container.get(key):
+                                    item[key] = merged(item.get(key) or {}, container[key])
                 continue
             if name in containers:
                 raise ValueError(f"container {name} is already used by another worker")
