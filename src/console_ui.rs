@@ -2,8 +2,8 @@
 //!
 //! The frontend build emits an ESM setup module and a fully scoped stylesheet.
 //! This module exposes them through one typed internal content function and
-//! Message-path `console:script` / `console:style` triggers. The Console owns
-//! `console:assets` subscriptions and pushes these registrations to open tabs.
+//! one `ade::ui::asset` observer per asset. The ADE worker fetches each asset
+//! through its observer and pushes the served set to open tabs.
 
 use iii_sdk::{Error, IIIClient, RegisterFunction, Source};
 use schemars::JsonSchema;
@@ -67,7 +67,7 @@ fn content(path: &str) -> Option<UiContentResponse> {
     }
 }
 
-/// Ships one asset: the Console's `console::ui::asset` fetches its content
+/// Ships one asset: the ADE worker's `ade::ui::asset` fetches its content
 /// from [`CONTENT_FUNCTION_ID`] through this observer, held by the connection.
 fn register_asset(iii: &IIIClient, kind: &str, path: &str) {
     iii.observe(
