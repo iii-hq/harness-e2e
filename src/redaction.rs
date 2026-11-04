@@ -323,9 +323,16 @@ fn first_shape_finding(text: &str) -> Option<(usize, usize, &'static str)> {
     shapes
         .into_iter()
         .filter_map(|(prefix, minimum, rule)| {
-            let start = text.find(prefix)?;
-            let end = token_end(text, start);
-            (end.saturating_sub(start) >= minimum).then_some((start, end, rule))
+            // A shape is a whole token: `registry-task-…` holds `sk-` but is no
+            // key, and a prefix that is too short or mid-word must not hide a
+            // real token later in the same text.
+            text.match_indices(prefix).find_map(|(start, _)| {
+                let end = token_end(text, start);
+                let mid_token = text[..start].chars().next_back().is_some_and(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+                });
+                (!mid_token && end - start >= minimum).then_some((start, end, rule))
+            })
         })
         .chain(jwt(text).map(|(start, end)| (start, end, "jwt")))
         .min_by_key(|(start, _, _)| *start)
@@ -413,6 +420,50 @@ mod tests {
             "eyJhbGciOiJSUzI1NiJ9.notapayloadatallbutlongenough.sig",
         ] {
             assert_eq!(policy.redact_text(lookalike).0, lookalike);
+        }
+    }
+
+    #[test]
+    fn a_token_shape_counts_only_where_a_token_starts() {
+        let policy = RedactionPolicy::default();
+        let key = "sk-0123456789abcdefghij";
+        // The registry fixture names its containers `registry-task-<uuid hex>`.
+        let fixture = "registry-task-0123456789abcdef0123456789abcdef";
+        for word in [
+            fixture,
+            "registry-fixture:registry-task-0123456789abcdef0123456789abcdef",
+            "task-list-item-checkbox-expanded",
+            "flaghp_0123456789abcdefghij",
+            "ZAKIA0123456789ABCDEF",
+        ] {
+            let (text, report) = policy.redact_text(word);
+            assert_eq!(text, word);
+            assert!(!report.changed(), "{word}");
+        }
+        for (input, expected) in [
+            (format!("KEY={key}"), "KEY=[REDACTED]".to_owned()),
+            (format!("\"{key}\""), "\"[REDACTED]\"".to_owned()),
+            (
+                format!("token {key} end"),
+                "token [REDACTED] end".to_owned(),
+            ),
+            (format!("auth:{key}"), "auth:[REDACTED]".to_owned()),
+            (key.to_owned(), "[REDACTED]".to_owned()),
+            (
+                "x ghp_0123456789abcdefghij".to_owned(),
+                "x [REDACTED]".to_owned(),
+            ),
+            ("AKIA0123456789ABCDEF".to_owned(), "[REDACTED]".to_owned()),
+            // A short or mid-word prefix before the key must not hide it.
+            (
+                format!("sk-short then {key}"),
+                "sk-short then [REDACTED]".to_owned(),
+            ),
+            (format!("{fixture} {key}"), format!("{fixture} [REDACTED]")),
+        ] {
+            let (text, report) = policy.redact_text(&input);
+            assert_eq!(text, expected, "{input}");
+            assert!(report.changed(), "{input}");
         }
     }
 

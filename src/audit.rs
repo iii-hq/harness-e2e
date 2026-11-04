@@ -300,7 +300,7 @@ fn secret_exposure_flags(policy: &RedactionPolicy, transcript: &Value) -> Vec<Au
         severity: AuditSeverity::Critical,
         source: AuditFlagSource::Deterministic,
         summary: format!(
-            "live secret material from the runner environment appeared in the transcript \
+            "secret or credential-like material appeared in the transcript \
 ({} value(s), {} field(s); rules: {})",
             redaction.redacted_values,
             redaction.redacted_fields,

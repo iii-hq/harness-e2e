@@ -25,6 +25,18 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         self.assertTrue(all(count == 100 for count in result["replays"].values()))
         self.assertGreaterEqual(result["actual503Responses"], 1200)
 
+    def test_expanded_detail_reads_only_visible_row_or_controlled_values(self):
+        playwright = Path(os.environ.get("PLAYWRIGHT_MODULE_PATH", ROOT / "dashboard/node_modules/playwright/index.mjs"))
+        self.assertTrue(playwright.exists(), "Playwright is required for evaluator regression controls")
+        result = subprocess.run(
+            ["node", str(SCRIPT.with_name("disclosure-regressions.mjs"))], cwd=ROOT,
+            env={**os.environ, "PLAYWRIGHT_MODULE_PATH": playwright.as_uri()},
+            text=True, capture_output=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        accepted = {name for name, passed in json.loads(result.stdout)["disclosure"].items() if passed}
+        self.assertEqual(accepted, {"nested", "controlled_sibling"})
+
     def test_the_probe_runs_when_node_reads_it_on_stdin(self):
         # validate.py pipes the probe into `node -`, where require.main is
         # undefined: a guard on require.main === module alone ran nothing,

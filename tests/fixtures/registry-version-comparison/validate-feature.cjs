@@ -171,6 +171,49 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
   } finally { page.off('pageerror', onError); }
 }
 
+async function expandedDetail(page) {
+  const timeoutPath = page.getByText(/^\/?timeoutMs$/i).first();
+  const detailRow = timeoutPath.locator('xpath=ancestor::*[self::tr or self::li or self::details or @role="row" or .//button][1]');
+  const detail = detailRow.locator('button, summary').first();
+  let expanded = false;
+  let disclosure = {};
+  if (await timeoutPath.count() && await detail.count()) {
+    const state = () => detail.evaluate(node => node.tagName === 'SUMMARY'
+      ? node.parentElement?.open === true : node.getAttribute('aria-expanded') === 'true');
+    disclosure.before = await state();
+    await detail.click();
+    disclosure.after = await state();
+    disclosure.text = await detailRow.innerText();
+    // The values sit in the row or in the region its toggle names with
+    // aria-controls; only text a user can see counts (innerText of a hidden
+    // region would still return it).
+    const shown = await detail.evaluate((toggle, row) => {
+      const seen = node => {
+        let opacity = 1;
+        for (let element = node.parentElement; element; element = element.parentElement) {
+          const style = getComputedStyle(element), box = element.getBoundingClientRect();
+          opacity *= Number(style.opacity);
+          if (style.display === 'none' || !opacity
+            || (style.overflow !== 'visible' && (box.width <= 1 || box.height <= 1))) return false;
+        }
+        return getComputedStyle(node.parentElement).visibility === 'visible';
+      };
+      const text = root => {
+        const parts = [], walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) if (seen(node)) parts.push(node.textContent);
+        return parts.join(' ');
+      };
+      const controlled = (toggle.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean)
+        .map(id => document.getElementById(id)).filter(Boolean);
+      return [row, ...controlled].map(text).join('\n');
+    }, await detailRow.elementHandle());
+    disclosure.shown = shown.slice(0, 2000);
+    expanded = !disclosure.before && disclosure.after
+      && /3000|3,000/.test(shown) && /5000|5,000/.test(shown);
+  }
+  return { expanded, observed: { controlFound: !!(await detail.count()), ...disclosure } };
+}
+
 async function browserProbes(apiHealthy) {
   const { chromium } = require('@playwright/test');
   const ids = ['shared_url','stale_results','history','expanded_detail','keyboard_selectors','versions_regression','readme_regression','api_reference_regression'];
@@ -186,22 +229,8 @@ async function browserProbes(apiHealthy) {
     const hasChangelog = /changelog/i.test(historyText);
     observe('implementation.shared_url', hasChangelog && selected.includes('1.0.0') && selected.includes('2.0.0'), 'Selected pair restored', { url: page.url(), selected, hasChangelog });
     observe('implementation.history', hasChangelog && ['0.9.0','1.0.0','1.1.0','2.0.0'].every(v => historyText.includes(v)), 'Four seeded releases visible in Changelog', historyText.slice(0,2000));
-    const timeoutPath = page.getByText(/^\/?timeoutMs$/i).first();
-    const detailRow = timeoutPath.locator('xpath=ancestor::*[self::tr or self::li or self::details or @role="row" or .//button][1]');
-    const detail = detailRow.locator('button, summary').first();
-    let expanded = false;
-    let disclosure = {};
-    if (await timeoutPath.count() && await detail.count()) {
-      const state = () => detail.evaluate(node => node.tagName === 'SUMMARY'
-        ? node.parentElement?.open === true : node.getAttribute('aria-expanded') === 'true');
-      disclosure.before = await state();
-      await detail.click();
-      disclosure.after = await state();
-      disclosure.text = await detailRow.innerText();
-      expanded = !disclosure.before && disclosure.after
-        && /3000|3,000/.test(disclosure.text) && /5000|5,000/.test(disclosure.text);
-    }
-    observe('implementation.expanded_detail', expanded, 'Closed timeout row opens and shows 3000 and 5000', { controlFound: !!(await detail.count()), ...disclosure });
+    const detail = await expandedDetail(page);
+    observe('implementation.expanded_detail', detail.expanded, 'Closed timeout row opens and shows 3000 and 5000', detail.observed);
     const selects = page.locator('select');
     let keyboard = false;
     if (await selects.count() >= 2) {
@@ -262,7 +291,7 @@ async function main() {
   await fs.writeFile(`${output}/feature.json`, `${JSON.stringify({ api_url: api, app_url: app, observations, cases }, null, 2)}\n`);
 }
 
-module.exports = { comparisonFailure };
+module.exports = { comparisonFailure, expandedDetail };
 // Run as the probe on stdin (`node -`, which has no main module) or as a script;
 // a test that requires it for comparisonFailure, from ESM too, runs nothing.
 if (module.id === '[stdin]' || require.main === module) main().catch(async error => {
