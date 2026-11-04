@@ -121,10 +121,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/registry-smoke-bin"
           curl -fsSL --retry 3 \
-            https://github.com/iii-hq/iii/releases/download/iii/v0.26.0-rc.2/iii-x86_64-unknown-linux-gnu.tar.gz \
+            https://github.com/iii-hq/iii/releases/download/iii/v0.26.0-rc.5/iii-x86_64-unknown-linux-gnu.tar.gz \
             -o "$RUNNER_TEMP/registry-smoke-cli.tar.gz"
           printf '%s  %s\n' \
-            ef42cd139b4f9f47d1530e2156699781ea29e85653185424c0f073f2d4f248dd \
+            370db2d08f25842e28579778734e677663c6cacf3210bba0d752ee97019481d0 \
             "$RUNNER_TEMP/registry-smoke-cli.tar.gz" | sha256sum --check --status
           tar -xzf "$RUNNER_TEMP/registry-smoke-cli.tar.gz" -C "$RUNNER_TEMP/registry-smoke-bin"
           echo "$RUNNER_TEMP/registry-smoke-bin" >> "$GITHUB_PATH"

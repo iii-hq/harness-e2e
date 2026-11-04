@@ -179,11 +179,13 @@ jobs:
       - name: Install release tooling
         run: python3 -m pip install --quiet pyyaml
       # The worker speaks Observe v2, so its interface is collected on iii 0.26.
-      # This is a release candidate, the only published 0.26 so far.
-      - name: Install iii CLI (0.26.0-rc.2, release candidate)
+      # This is a release candidate, the only published 0.26 so far. rc.5 is the
+      # first whose Compose sends its iii_version to the Registry, which refuses
+      # a dependency that requires iii >=0.26.0 to an engine that does not.
+      - name: Install iii CLI (0.26.0-rc.5, release candidate)
         env:
-          VERSION: '0.26.0-rc.2'
-          CLI_SHA256: ef42cd139b4f9f47d1530e2156699781ea29e85653185424c0f073f2d4f248dd
+          VERSION: '0.26.0-rc.5'
+          CLI_SHA256: 370db2d08f25842e28579778734e677663c6cacf3210bba0d752ee97019481d0
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 \
