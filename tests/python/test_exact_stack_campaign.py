@@ -1926,36 +1926,61 @@ kits:
             self.assertEqual(MODULE.kit_agent_ids(lock, "deepwork-e2e"),
                              ["deepwork-e2e", "deepwork-lead", "deepwork-worker"])
 
-    def test_profile_preflight_checks_every_id_and_rejects_invalid_child(self):
+    def run_profile_preflight(self, root, answers):
+        """`wait_for_profiles` over three ids, each answered by `answers[id]`
+        (a JSON receipt, or None for a profile the Directory does not have)."""
         source = RUNNER_SCRIPT.read_text()
         start = source.index("wait_for_profiles() {")
         function = source[start:source.index("# `compose::add`", start)]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "stack").mkdir()
-            shell = r'''set -Eeuo pipefail
+        (root / "stack").mkdir(exist_ok=True)
+        (root / "answers.json").write_text(json.dumps(answers))
+        shell = r'''set -Eeuo pipefail
 artifact_dir=$1
 sleep() { SECONDS=$((SECONDS + 60)); }
 fail() { printf '%s\n' "$1" >&2; return 1; }
+log() { printf '%s\n' "$1" >>"$artifact_dir/log"; }
 project_trigger() {
   id=$(jq -r .id <<<"$2")
   printf '%s\n' "$id" >>"$artifact_dir/calls"
-  if [[ "$id" == deepwork-worker ]]; then
-    jq -cn --arg id "$id" '{id:$id,unknown_functions:["missing::fn"]}'
-  else
-    jq -cn --arg id "$id" '{id:$id}'
-  fi
+  jq -ce --arg id "$id" '.[$id] // empty' "$artifact_dir/answers.json"
 }
 '''
-            result = subprocess.run(
-                ["bash", "-c", shell + function +
-                 "wait_for_profiles <<'EOF'\ndeepwork-lead\ndeepwork-impl\ndeepwork-worker\nEOF\n",
-                 "runner", str(root)], capture_output=True, text=True,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("deepwork-worker has unresolved inheritance", result.stderr)
-            self.assertEqual(set((root / "calls").read_text().splitlines()),
-                             {"deepwork-lead", "deepwork-impl", "deepwork-worker"})
+        return subprocess.run(
+            ["bash", "-c", shell + function +
+             "wait_for_profiles <<'EOF'\ndeepwork-lead\ndeepwork-impl\ndeepwork-worker\nEOF\n",
+             "runner", str(root)], capture_output=True, text=True,
+        )
+
+    def test_profile_preflight_checks_every_id_and_rejects_invalid_child(self):
+        valid = {"deepwork-lead": {"id": "deepwork-lead"}, "deepwork-impl": {"id": "deepwork-impl"}}
+        for case, answer in {
+            "missing": None,
+            "wrong id": {"id": "deepwork-other"},
+            "inheritance error": {"id": "deepwork-worker", "inheritance_error": "parent deepwork-base not found"},
+            "unknown skills": {"id": "deepwork-worker", "unknown_skills": ["missing-skill"]},
+        }.items():
+            with self.subTest(case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                answers = {**valid, **({"deepwork-worker": answer} if answer else {})}
+                result = self.run_profile_preflight(root, answers)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("deepwork-worker has unresolved inheritance or skills", result.stderr)
+                self.assertEqual(set((root / "calls").read_text().splitlines()),
+                                 {"deepwork-lead", "deepwork-impl", "deepwork-worker"})
+
+    def test_profile_preflight_accepts_functions_unavailable_in_the_stack_as_a_warning(self):
+        # The Directory reports unknown_functions as a warning; the Harness
+        # renders them unavailable.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            answers = {"deepwork-lead": {"id": "deepwork-lead"}, "deepwork-impl": {"id": "deepwork-impl"},
+                       "deepwork-worker": {"id": "deepwork-worker", "unknown_functions": ["http::status"]}}
+            result = self.run_profile_preflight(root, answers)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            receipt = json.loads((root / "stack/profiles/deepwork-worker.json").read_text())
+            self.assertEqual(receipt["unknown_functions"], ["http::status"])
+            self.assertIn("deepwork-worker", (root / "log").read_text())
+            self.assertIn("http::status", (root / "log").read_text())
 
     def test_kit_cannot_change_an_existing_worker_source_or_version(self):
         with tempfile.TemporaryDirectory() as directory:

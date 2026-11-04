@@ -256,12 +256,16 @@ wait_for_profiles() {
     agent_deadline=$((SECONDS + 120))
     until project_trigger directory::agents::get "$agent_request" 30000 >"$receipt" 2>"$error_log" \
         && jq -e --arg id "$profile_id" '.id == $id and (.inheritance_error == null)
-          and ((.unknown_skills // []) | length == 0)
-          and ((.unknown_functions // []) | length == 0)' "$receipt" >/dev/null; do
+          and ((.unknown_skills // []) | length == 0)' "$receipt" >/dev/null; do
       ((SECONDS < agent_deadline)) || fail \
-        "Directory profile $profile_id has unresolved inheritance, skills or functions after 120s"
+        "Directory profile $profile_id has unresolved inheritance or skills after 120s"
       sleep 2
     done
+    # A function the stack does not run is a Directory warning: the Harness
+    # renders it unavailable, and the receipt keeps it.
+    if jq -e '(.unknown_functions // []) | length > 0' "$receipt" >/dev/null; then
+      log "Directory profile $profile_id names functions this stack does not run: $(jq -c '.unknown_functions' "$receipt")"
+    fi
   done
 }
 

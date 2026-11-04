@@ -13,12 +13,14 @@ use crate::scenarios::common::{function_outcomes, state_value};
 use crate::wire::E2E_SESSION_KIND;
 
 pub const ID: &str = crate::scenarios::contention_ledger::ID;
-/// The control plane a leaf loses (the Harness's `CONTROL_PLANE_DENY`).
-const WALLED: [&str; 4] = [
+/// The control plane a leaf loses (the Harness's `CONTROL_PLANE_DENY`;
+/// `engine::observers::*` probed through the two functions it covers).
+const WALLED: [&str; 5] = [
     "harness::spawn",
     "harness::send",
-    "engine::unregister_trigger",
-    "engine::registered-triggers::list",
+    "harness::unobserve",
+    "engine::observers::list",
+    "engine::observers::dispose",
 ];
 /// The Harness's patience for pending work, which caps a leaf's wake.
 const LEAF_WAKE_CAP_MS: i64 = 30 * 60 * 1_000;
@@ -150,33 +152,36 @@ pub(super) async fn capture(
     probes.insert("tree_complete".into(), raw_metrics["complete"].clone());
 }
 
-/// Registers, as the leaf, a mechanical binding and a long wake, reads what
+/// A long `harness::on-timer` observe as the probe asks it: a wake, or a
+/// mechanical call to `target`.
+fn probe_timer(target: Option<&str>) -> Value {
+    let mut request = json!({"function_id": "harness::on-timer", "args": {"in_ms": PROBE_WAKE_MS},
+                             "once": true, "label": "e2e-mechanism-probe"});
+    if let Some(target) = target {
+        request["target"] = json!({"function_id": target});
+    }
+    request
+}
+
+/// Observes, as the leaf, a mechanical binding and a long wake, reads what
 /// the Harness kept, and removes both, each removal tried whatever the last
 /// one answered.
 async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Value {
-    let timer = |target: Option<&str>| {
-        let mut request = json!({"trigger_type": "timer", "config": {"in_ms": PROBE_WAKE_MS},
-                                 "once": true, "label": "e2e-mechanism-probe"});
-        if let Some(target) = target {
-            request["function_id"] = json!(target);
-        }
-        request
-    };
     let mechanical = invoke_as(
         context,
         leaf,
-        "engine::register_trigger",
-        timer(Some("state::get")),
+        "harness::observe",
+        probe_timer(Some("state::get")),
     )
     .await;
-    let wake = invoke_as(context, leaf, "engine::register_trigger", timer(None)).await;
+    let wake = invoke_as(context, leaf, "harness::observe", probe_timer(None)).await;
     let listed = ask(
         context,
-        "harness::triggers::list",
+        "harness::observers::list",
         json!({"session_id": leaf}),
     )
     .await;
-    let probes: Vec<&Value> = listed["subscriptions"]
+    let probes: Vec<&Value> = listed["observers"]
         .as_array()
         .into_iter()
         .flatten()
@@ -189,8 +194,8 @@ async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Value {
     for row in &probes {
         let reply = ask(
             context,
-            "harness::triggers::unregister",
-            json!({"session_id": leaf, "subscription_id": row["subscription_id"]}),
+            "harness::observers::dispose",
+            json!({"session_id": leaf, "observer_id": row["observer_id"]}),
         )
         .await;
         unregistered &= reply.get("probe_error").is_none();
@@ -203,7 +208,7 @@ async fn leaf_bindings(context: &E2eContext, leaf: &str) -> Value {
         "wake_window_ms": window,
         "unregistered": unregistered,
         // A failed listing reads as nothing kept: the gate must not trust it.
-        "listed": listed["subscriptions"].is_array(),
+        "listed": listed["observers"].is_array(),
     })
 }
 
@@ -350,14 +355,14 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
 /// watched (it skipped a fire) and never woke once every done key was
 /// written is the Harness's.
 fn barrier(transcript: &Value, label: &str, ready: bool) -> Vec<Broken> {
-    let fires: Vec<&Value> = customs(transcript, "trigger_fired")
+    let fires: Vec<&Value> = customs(transcript, "observer_fired")
         .map(|entry| &entry["custom"]["data"])
         .filter(|data| data["label"] == label)
         .collect();
     let Some(sub) = fires
         .iter()
         .find(|data| data["outcome"] == "delivered")
-        .and_then(|data| data["subscription_id"].as_str())
+        .and_then(|data| data["observer_id"].as_str())
     else {
         // A subscription whose condition failed is the model's wrong one.
         let failed = |sub: &str| {
@@ -368,9 +373,7 @@ fn barrier(transcript: &Value, label: &str, ready: bool) -> Vec<Broken> {
         };
         let watched = fires.iter().any(|data| {
             data["outcome"] == "skipped"
-                && data["subscription_id"]
-                    .as_str()
-                    .is_some_and(|sub| !failed(sub))
+                && data["observer_id"].as_str().is_some_and(|sub| !failed(sub))
         });
         return if ready && watched {
             vec![(
@@ -386,7 +389,7 @@ fn barrier(transcript: &Value, label: &str, ready: bool) -> Vec<Broken> {
     };
     let fires: Vec<&&Value> = fires
         .iter()
-        .filter(|data| data["subscription_id"] == sub)
+        .filter(|data| data["observer_id"] == sub)
         .collect();
     let skipped: Vec<&&&Value> = fires
         .iter()
@@ -451,8 +454,8 @@ mod tests {
             "function_call_id": "c0", "function_id": "harness::spawn", "is_error": false,
             "details": {"child_session_id": "w0", "child_turn_id": "tw0", "fire_and_forget": true, "reused": false}}}));
         for (index, outcome) in ["skipped", "skipped", "delivered"].iter().enumerate() {
-            entries.push(json!({"entry_id": format!("e_trig_{index}"), "custom": {"custom_type": "trigger_fired", "data": {
-                "label": LABEL, "subscription_id": SUB, "outcome": outcome,
+            entries.push(json!({"entry_id": format!("e_trig_{index}"), "custom": {"custom_type": "observer_fired", "data": {
+                "label": LABEL, "observer_id": SUB, "outcome": outcome,
                 "note": "`state::barrier` skipped this fire", "retirement_reason": "once_consumed"}}}));
         }
         entries.push(json!({"entry_id": format!("e_fire_{SUB}_1"), "origin": {"binding": SUB, "notification": true}}));
@@ -595,8 +598,8 @@ mod tests {
         let messages = transcript["messages"].as_array_mut().unwrap();
         messages.push(json!({"entry_id": "e_condfail_sub_wrong"}));
         messages.push(
-            json!({"entry_id": "e_trig_wrong", "custom": {"custom_type": "trigger_fired",
-            "data": {"label": LABEL, "subscription_id": "sub_wrong", "outcome": "skipped",
+            json!({"entry_id": "e_trig_wrong", "custom": {"custom_type": "observer_fired",
+            "data": {"label": LABEL, "observer_id": "sub_wrong", "outcome": "skipped",
                      "note": "`state::barrier`: condition call failed"}}}),
         );
 
