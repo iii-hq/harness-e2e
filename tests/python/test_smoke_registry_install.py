@@ -3,6 +3,8 @@ import contextlib
 import http.server
 import importlib.util
 import io
+import json
+import os
 import pathlib
 import socket
 import tempfile
@@ -23,9 +25,11 @@ OUTAGE = """Error: {
 
 
 @contextlib.contextmanager
-def registry_answering(status):
+def registry_answering(status, requests=None):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
+            if requests is not None:
+                requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
             self.send_response(status)
             self.end_headers()
 
@@ -51,6 +55,13 @@ class RegistryOutageTest(unittest.TestCase):
             "#!/bin/sh\necho '{\"version\": \"0.0.0\", \"supported_targets\": [\"x\"]}'\n"
         )
         self.binary.chmod(0o755)
+        # The iii on PATH is the CLI the smoke runs Compose with.
+        iii = self.root / "iii"
+        iii.write_text("#!/bin/sh\necho 7.3.1-test.2\n")
+        iii.chmod(0o755)
+        path = patch.dict(os.environ, {"PATH": f"{self.root}{os.pathsep}{os.environ['PATH']}"})
+        path.start()
+        self.addCleanup(path.stop)
 
     def smoke(self, registry):
         output, delays = io.StringIO(), []
@@ -79,6 +90,13 @@ class RegistryOutageTest(unittest.TestCase):
         with registry_answering(400) as registry, \
                 self.assertRaises(urllib.error.HTTPError):
             self.smoke(registry)
+
+    def test_the_registry_resolves_for_the_installed_cli(self):
+        requests = []
+        with registry_answering(400, requests) as registry, \
+                self.assertRaises(urllib.error.HTTPError):
+            self.smoke(registry)
+        self.assertEqual(requests, [{"worker": "harness-e2e", "version": "latest", "iii_version": "7.3.1-test.2"}])
 
     def test_only_registry_downloads_count_as_outages(self):
         self.assertTrue(module.registry_outage(OUTAGE))

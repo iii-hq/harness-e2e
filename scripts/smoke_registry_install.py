@@ -52,10 +52,10 @@ def registry_outage(stderr):
     return "client error" not in stderr or "429" in stderr
 
 
-def resolve(registry):
+def resolve(registry, iii_version):
     request = urllib.request.Request(
         registry + "/resolve",
-        data=json.dumps({"worker": "harness-e2e", "version": "latest"}).encode(),
+        data=json.dumps({"worker": "harness-e2e", "version": "latest", "iii_version": iii_version}).encode(),
         headers={"Content-Type": "application/json"},
     )
     try:
@@ -81,7 +81,9 @@ def run(binary, directory, registry=REGISTRY):
     directory.mkdir(parents=True, exist_ok=True)
     directory = directory.resolve()
     manifest = json.loads(subprocess.check_output([str(binary), "--manifest"], text=True))
-    resolved = resolve(registry)
+    # The Registry resolves for the engine it is told about; told none, it keeps
+    # out every release that requires a newer iii than the oldest.
+    resolved = resolve(registry, subprocess.check_output(["iii", "--version"], text=True).strip())
     (directory / "registry-resolution.json").write_text(json.dumps(resolved, indent=2))
     archive = directory / "candidate.tar.gz"
     with tarfile.open(archive, "w:gz") as output:
