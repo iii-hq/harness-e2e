@@ -99,15 +99,16 @@ if ! python3 "$contract_tool" validate-layout \
 fi
 compose_state="$run_root/compose-state"
 tools_dir="$run_root/bin"
-env_file="$project_dir/.env"
+# Outside the project: the secrets worker reads <III_COMPOSE_DIR>/.env on its own.
+env_file="$run_root/credentials/all.env"
 # The worker's native execution tree is evidence, not disposable runtime state.
 # Keep it below the uploaded artifact root so a failed results-get or process
 # cleanup cannot erase already committed runs and journal events.
 e2e_data="$artifact_dir/native"
 engine_url="ws://127.0.0.1:${engine_port}"
-mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$e2e_data" \
+mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$e2e_data" "${env_file%/*}" \
   "$evaluation_dir" "$artifact_dir/logs" "$artifact_dir/stack"
-chmod 700 "$compose_state"
+chmod 700 "$compose_state" "${env_file%/*}"
 # A second attempt says so where a reader of the group looks first: the
 # attempt, and why the first one failed (its failure.json, under attempts/1).
 if ((group_attempt > 1)); then
@@ -561,12 +562,13 @@ if (( ${kits_requested:-0} > 0 )) && [[ -z "$assemble_only" ]]; then
     --source-root "$contract_asset_root" --project-root "$project_dir"
 fi
 
-# One env file for the whole project, written after any template scaffold so
-# it replaces the placeholder the template ships: every credential the group
-# received (those HARNESS_E2E_CREDENTIALS names, which run_in_image.sh sets
-# from its --env-file, and DEEPSEEK_API_KEY, ZAI_API_KEY and TYPESAFE_API_KEY
-# from the environment), nothing else of it. The model's provider without its
-# key is said out loud and the group still runs.
+# Every credential the group received (those HARNESS_E2E_CREDENTIALS names,
+# which run_in_image.sh sets from its --env-file, and DEEPSEEK_API_KEY,
+# ZAI_API_KEY and TYPESAFE_API_KEY from the environment), nothing else of it,
+# in a private file outside the project; `project` gives each worker only
+# the keys it reads. The placeholder a template ships is emptied, not filled.
+# The model's provider without its key is said out loud and the group still runs.
+[[ ! -e "$project_dir/.env" ]] || : >"$project_dir/.env"
 : >"$env_file"
 chmod 600 "$env_file"
 python3 "$contract_tool" credentials-env --contract "$contract_path" --output "$env_file"
@@ -633,14 +635,23 @@ if [[ -z "$assemble_only" ]]; then
 fi
 python3 "$contract_tool" project "${project_args[@]}"
 
+# Every worker inherits the compose daemon's environment (iii-compose
+# spawn_plan): neither it nor the engine keeps a credential. Each reaches its
+# consumers through their env files only.
+scrub=()
+for name in $credential_names ${HARNESS_E2E_CREDENTIALS:-} \
+  $(jq -r '[.providers[], .others[], .subscriptions[]][]' "$repo_root/config/provider-credentials.json"); do
+  scrub+=(-u "$name")
+done
+
 failure_phase=engine_start
-(cd "$project_dir" && exec setsid "$iii_bin" -c "$engine_config" --no-update-check) \
+(cd "$project_dir" && exec env "${scrub[@]}" setsid "$iii_bin" -c "$engine_config" --no-update-check) \
   >"$artifact_dir/logs/engine.log" 2>&1 &
 engine_pid=$!
 wait_for_engine
 
 failure_phase=compose_start
-(cd "$compose_working_dir" && exec env III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
+(cd "$compose_working_dir" && exec env "${scrub[@]}" III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
   --engine "$engine_url" --namespace "$namespace") \
   >"$artifact_dir/logs/compose.log" 2>&1 &
 compose_pid=$!
@@ -766,6 +777,17 @@ if [[ -n "$assemble_only" ]]; then
   exit 0
 fi
 
+# Preparation, not a retry: compose::add starts the workers it writes with
+# no env_file, and the daemon no longer lends them its environment. When one
+# of them reads a credential, it is scoped now and the project restarted once
+# (only a project-wide restart reloads the manifest); otherwise nothing changes.
+scoped=$(python3 "$contract_tool" scope-credentials --contract "$contract_path" \
+  --compose "$compose_file" --env-file "$env_file")
+if [[ -n "$scoped" ]]; then
+  log "Scoped credentials for the workers compose::add wrote: $(paste -sd' ' - <<<"$scoped")"
+  compose_trigger compose::restart "file=$compose_file" >"$artifact_dir/stack/credentials-restart.json"
+  jq -e '.status == "ok"' "$artifact_dir/stack/credentials-restart.json" >/dev/null
+fi
 python3 "$contract_tool" locked-workers --lock "${compose_file%.yaml}.lock" \
   >"$artifact_dir/stack/declared-workers.json"
 export_compose

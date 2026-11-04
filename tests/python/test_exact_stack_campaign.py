@@ -167,31 +167,128 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inside its project"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
 
-    def test_one_env_file_reaches_every_container_including_those_born_later(self):
+    def test_credentials_reach_only_the_workers_that_read_them(self):
+        """The shell, Harness and every other worker get no credential: only
+        the provider that reads a key, the router that falls back to it, the
+        judge that calls Typesafe, and the runner, which redacts them all.
+        A template's own `./.env` reference goes too. Values are synthetic."""
         contract = campaign_contract({
             "harness": "1.9.0", "state": "0.22.1", "llm-router": "1.4.0", "provider-deepseek": "0.1.0",
         })
-        # The template ships its own `./.env` reference; ours replaces it. It does
-        # not name iii-directory, so the agent profile has to create it.
         template = {"containers": {
-            "harness": {"worker": "package://harness"},
+            "harness": {"worker": "package://harness", "env_file": ["./.env"]},
+            "shell": {"worker": "package://shell", "env_file": ["./.env"]},
             "state": {"worker": "package://state"},
+            "fp": {"worker": "package://fp", "env_file": ["./.env"]},
+            "secrets": {"worker": "package://secrets", "env_file": ["./.env"]},
             "llm-router": {"worker": "package://llm-router", "env_file": ["./.env"]},
             "provider-deepseek": {"worker": "package://provider-deepseek"},
+            "provider-openai": {"worker": "package://provider-openai"},
+            "judge-typesafe": {"worker": "package://judge-typesafe"},
         }}
-        project = MODULE.project_scaffold(contract, "project-one", Path("/data"),
-            "/private/.env", {}, template, profile_root=Path("/isolated/project"))
-        containers = project["containers"]
-        self.assertIn("harness-e2e", containers)  # the runner is added, never assumed
-        self.assertIn("iii-directory", containers)
-        for name, container in containers.items():
-            with self.subTest(container=name):
-                self.assertEqual(container["env_file"], ["/private/.env"])
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory) / "all.env"
+            private.write_text("".join(f"{name}=synthetic-{name.lower()}-0123456789\n" for name in
+                                       ("DEEPSEEK_API_KEY", "TYPESAFE_API_KEY", "ZAI_API_KEY")))
+            project = MODULE.project_scaffold(contract, "project-one", Path("/data"),
+                str(private), {}, template, {"shell": "ide"}, profile_root=Path("/isolated/project"))
+            containers = project["containers"]
+            self.assertIn("harness-e2e", containers)  # the runner is added, never assumed
+            self.assertIn("iii-directory", containers)  # born in the scaffold
+            received = {name: sorted(MODULE.read_env_file(Path(container["env_file"][0])))
+                        for name, container in containers.items() if "env_file" in container}
+            self.assertEqual(received, {
+                "harness-e2e": ["DEEPSEEK_API_KEY", "TYPESAFE_API_KEY", "ZAI_API_KEY"],
+                "provider-deepseek": ["DEEPSEEK_API_KEY"],
+                "llm-router": ["DEEPSEEK_API_KEY"],
+                "judge-typesafe": ["TYPESAFE_API_KEY"],
+            })
+            self.assertEqual(containers["harness-e2e"]["env_file"], [str(private)])
+            for name in ("provider-deepseek", "llm-router", "judge-typesafe"):
+                scoped = Path(containers[name]["env_file"][0])
+                self.assertEqual(scoped.parent, private.parent)
+                self.assertEqual(scoped.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(MODULE.read_env_file(scoped)[received[name][0]],
+                                 MODULE.read_env_file(private)[received[name][0]])
         directory = containers["iii-directory"]["config_override"]
         self.assertFalse(directory["auto_download"])
         self.assertEqual(directory["agents_folder"], "/isolated/project/agents")
         with self.assertRaisesRegex(ValueError, "must be absolute"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), "relative/.env", {}, template)
+
+    def test_a_consumer_born_after_the_scaffold_is_scoped_before_the_runs(self):
+        """`compose::add` writes the graph's workers with no env_file and the
+        daemon no longer hands them its environment: the router or provider
+        it brings is given its own key, and only that, before the runs."""
+        compose = {"containers": {
+            "harness-e2e": {"worker": "package://harness-e2e", "env_file": ["PRIVATE"]},
+            "llm-router": {"worker": "package://api.workers.iii.dev/llm-router"},
+            "provider-deepseek": {"worker": "package://provider-deepseek"},
+            "ide": {"worker": "package://ide"},
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "credentials/all.env"
+            private.parent.mkdir()
+            private.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\nZAI_API_KEY=synthetic-zai-0123456789\n")
+            compose["containers"]["harness-e2e"]["env_file"] = [str(private)]
+            file = root / "project/worker-compose.yaml"
+            file.parent.mkdir()
+            file.write_text(yaml.safe_dump(compose, sort_keys=False))
+            contract = root / "contract.json"
+            contract.write_text(json.dumps(campaign_contract()))
+            scope = ["python3", str(SCRIPT), "scope-credentials", "--contract", str(contract),
+                     "--compose", str(file), "--env-file", str(private)]
+            first = subprocess.run(scope, capture_output=True, text=True)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(first.stdout.split(), ["llm-router", "provider-deepseek"])
+            scoped = yaml.safe_load(file.read_text())["containers"]
+            self.assertNotIn("env_file", scoped["ide"])
+            self.assertEqual(scoped["harness-e2e"]["env_file"], [str(private)])
+            for name in ("llm-router", "provider-deepseek"):
+                self.assertEqual(sorted(MODULE.read_env_file(Path(scoped[name]["env_file"][0]))), ["DEEPSEEK_API_KEY"])
+            again = subprocess.run(scope, capture_output=True, text=True)
+            self.assertEqual((again.returncode, again.stdout), (0, ""))
+
+    def test_workers_built_from_commits_keep_their_credentials_under_any_container_name(self):
+        """A runner and a provider built from commits are path:// workers under
+        names of their own: the contract, not the name, says which package
+        each is, in the scaffold and again after compose::add."""
+        contract = campaign_contract()
+        contract["runtime"]["compose"] = {"containers": {
+            "e2e": {"worker": "path:///builds/harness-e2e-0123abc", "scripts": {"run": "./run"}},
+            "model": {"worker": "path:///builds/provider-deepseek-0123abc", "scripts": {"run": "./run"}},
+            "harness": {"worker": "package://harness", "version": "1.9.0"},
+            "llm-router": {"worker": "package://llm-router", "version": "1.5.0"},
+        }}
+        contract["runtime"]["commits"] = {
+            "e2e": {"worker": "harness-e2e", "commit": "0123abc" * 5},
+            "model": {"worker": "provider-deepseek", "commit": "0123abc" * 5},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "all.env"
+            private.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\nZAI_API_KEY=synthetic-zai-0123456789\n")
+            project = MODULE.project_scaffold(contract, "project-one", Path("/data"), str(private), {})
+            containers = project["containers"]
+            self.assertNotIn("provider-deepseek", containers)  # the built one is the provider
+            self.assertEqual(containers["e2e"]["env_file"], [str(private)])
+            self.assertEqual(sorted(MODULE.read_env_file(Path(containers["model"]["env_file"][0]))), ["DEEPSEEK_API_KEY"])
+            self.assertEqual(sorted(MODULE.read_env_file(Path(containers["llm-router"]["env_file"][0]))),
+                             ["DEEPSEEK_API_KEY"])
+            self.assertNotIn("env_file", containers["harness"])
+            file = root / "worker-compose.yaml"
+            file.write_text(yaml.safe_dump(project, sort_keys=False))
+            before = file.read_text()
+            (root / "contract.json").write_text(json.dumps(contract))
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "scope-credentials", "--contract", str(root / "contract.json"),
+                 "--compose", str(file), "--env-file", str(private)], capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+            self.assertEqual(file.read_text(), before)  # nothing to change, nothing restarted
+            private.unlink()
+            with self.assertRaises(FileNotFoundError):  # the file the group wrote is required
+                MODULE.project_scaffold(contract, "project-one", Path("/data"), str(private), {})
 
     def test_a_template_pin_never_holds_the_application_back(self):
         """The execution's lock wins, everything else runs latest. The Linkly
@@ -256,13 +353,18 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 contract = campaign_contract()
                 contract["suite"]["subject"]["provider"] = provider
                 contract["runtime"]["lock"] = lock_of({f"provider-{provider}": "1.2.3"})
-                project = MODULE.project_scaffold(
-                    contract, "project-one", Path("/data"), "/private/.env", {}, template,
-                )
-                self.assertEqual(project["containers"].get(f"provider-{provider}"), {
+                with tempfile.TemporaryDirectory() as directory:
+                    private = Path(directory) / "all.env"
+                    key = MODULE.credential_catalog()[0][provider]
+                    private.write_text(f"{key}=synthetic-provider-0123456789\nOPENAI_API_KEY=synthetic-openai-0123456789\n")
+                    project = MODULE.project_scaffold(
+                        contract, "project-one", Path("/data"), str(private), {}, template,
+                    )
+                    container = project["containers"].get(f"provider-{provider}")
+                    self.assertEqual(sorted(MODULE.read_env_file(Path(container.pop("env_file")[0]))), [key])
+                self.assertEqual(container, {
                     "worker": f"package://provider-{provider}",
                     "version": "1.2.3",
-                    "env_file": ["/private/.env"],
                     "environment": {"III_TELEMETRY_ENABLED": "false"},
                 })
                 self.assertNotIn("fp", project["containers"])
@@ -277,14 +379,18 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 "config_override": {"setting": "keep"},
             },
         }}
-        project = MODULE.project_scaffold(
-            campaign_contract(), "project-one", Path("/data"), "/private/.env", {}, template,
-        )
-        providers = {name: container for name, container in project["containers"].items()
-                     if container["worker"] == "package://provider-deepseek"}
-        self.assertEqual(list(providers), ["selected-model"])
-        self.assertEqual(providers["selected-model"]["config_override"], {"setting": "keep"})
-        self.assertEqual(providers["selected-model"]["env_file"], ["/private/.env"])
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory) / "all.env"
+            private.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\n")
+            project = MODULE.project_scaffold(
+                campaign_contract(), "project-one", Path("/data"), str(private), {}, template,
+            )
+            providers = {name: container for name, container in project["containers"].items()
+                         if container["worker"] == "package://provider-deepseek"}
+            self.assertEqual(list(providers), ["selected-model"])
+            self.assertEqual(providers["selected-model"]["config_override"], {"setting": "keep"})
+            self.assertEqual(sorted(MODULE.read_env_file(Path(providers["selected-model"]["env_file"][0]))),
+                             ["DEEPSEEK_API_KEY"])
 
     def test_campaign_provider_name_cannot_replace_an_unrelated_template_container(self):
         template = {"containers": {
@@ -311,9 +417,13 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_base_projects_also_add_the_campaign_provider_when_it_is_not_declared(self):
         contract = campaign_contract()
         contract["suite"]["subject"]["provider"] = "anthropic"
-        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), "/private/.env", {})
+        with tempfile.TemporaryDirectory() as directory:
+            empty = Path(directory) / "all.env"
+            empty.write_text("")
+            project = MODULE.project_scaffold(contract, "project-one", Path("/data"), str(empty), {})
+        # No credential received, none to scope: the provider starts without one.
         self.assertEqual(project["containers"].get("provider-anthropic"), {
-            "worker": "package://provider-anthropic", "version": "latest", "env_file": ["/private/.env"],
+            "worker": "package://provider-anthropic", "version": "latest",
             "environment": {"III_TELEMETRY_ENABLED": "false"},
         })
 
@@ -386,14 +496,14 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         contract["suite"]["agent_profile"] = "ade-worker-builder"
         contract["suite"]["subject"]["provider"] = "anthropic"
         assembled = MODULE.project_scaffold(
-            contract, "e2e-prepare", Path("/data"), "/private/.env", {},
+            contract, "e2e-prepare", Path("/data"), None, {},
             profile_root=Path("/project"), assembling=True,
         )
         self.assertEqual(sorted(assembled["containers"]),
                          sorted(declared_base()["containers"]))
         # The same contract in a group, without the lock yet: both are ensured.
         group = MODULE.project_scaffold(
-            contract, "e2e-group", Path("/data"), "/private/.env", {}, profile_root=Path("/project"),
+            contract, "e2e-group", Path("/data"), None, {}, profile_root=Path("/project"),
         )
         self.assertIn("iii-directory", group["containers"])
         self.assertIn("provider-anthropic", group["containers"])
@@ -426,6 +536,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "contract.json").write_text(json.dumps(contract))
+            (root / ".env").write_text("")  # the group received no credential
             output = root / "stack/worker-compose.yaml"
             output.parent.mkdir()
             result = subprocess.run(
@@ -461,7 +572,9 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         # the runner's `primary` database is declared, not left to the worker.
         self.assertEqual(project["containers"]["db"]["config_override"],
                          {"databases": {"primary": {"url": "sqlite:./data/iii.db"}}})
-        self.assertEqual({tuple(c["env_file"]) for c in project["containers"].values()}, {(str(root / ".env"),)})
+        # No credential was received: only the runner names the private file.
+        self.assertEqual({name: c["env_file"] for name, c in project["containers"].items() if "env_file" in c},
+                         {"e2e": [str(root / ".env")]})
 
     def test_a_template_database_keeps_its_databases_and_gains_primary(self):
         template = {"containers": {
@@ -482,7 +595,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         skills of every worker the subject adds."""
         source = RUNNER_SCRIPT.read_text()
         start = source.index('if [[ -n "$project_template" ]]; then\n  failure_phase=template_scaffold')
-        block = source[start:source.index("# One env file for the whole project", start)]
+        block = source[start:source.index("# Every credential the group received", start)]
         shell = '''set -Eeuo pipefail
 repo_root=$1 run_root=$1 artifact_dir=$1 project_dir=$1/project contract_path=$1/contract.json
 project_template=linkly-agentic iii_bin=scaffold profile_assets=false
@@ -625,8 +738,14 @@ project_trigger() {
 
     def test_common_runner_keeps_the_one_env_file_private_and_out_of_the_evidence(self):
         runner = RUNNER_SCRIPT.read_text()
-        self.assertIn('env_file="$project_dir/.env"', runner)
+        # Outside the project, which the secrets worker reads a `.env` from.
+        self.assertIn('env_file="$run_root/credentials/all.env"', runner)
+        self.assertIn('chmod 700 "$compose_state" "${env_file%/*}"', runner)
         self.assertIn('chmod 600 "$env_file"', runner)
+        self.assertIn(': >"$project_dir/.env"', runner)
+        # Neither the engine nor the compose daemon keeps a credential to lend.
+        self.assertEqual(runner.count('exec env "${scrub[@]}"'), 2)
+        self.assertLess(runner.index("credential_names=$(cut"), runner.index("scrub=()"))
         # The runtime tree is checked before any credential is written into it.
         self.assertLess(runner.index("validate-layout"), runner.index(': >"$env_file"'))
         # And written after a template scaffold, so it replaces the placeholder.
@@ -1711,8 +1830,12 @@ contract_tool=$2
 log() { :; }
 await_compose_add() { :; }
 export_compose() { :; }
+env_file=$1/all.env
 python3() {
-  if [[ "$2" == locked-workers ]]; then printf '[]\n'; else command python3 "$@"; fi
+  if [[ "$2" == locked-workers ]]; then printf '[]\n'
+  # Scoping itself is proven apart; here, what the launcher does with it.
+  elif [[ "$2" == scope-credentials ]]; then [[ -z "${SCOPED:-}" ]] || printf '%s\n' "$SCOPED"
+  else command python3 "$@"; fi
 }
 compose_trigger() {
   printf '%s\\n' "$*" >>"$artifact_dir/calls"
@@ -1749,6 +1872,9 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
             # A dependency the stack pins itself (another worker starts after
             # it) is held as well, so only the roots are asked for.
             (False, "1", "", False, False, "false", ["compose::add file="], "dependencies"),
+            # A consumer compose::add wrote gets its credentials before the
+            # runs, by one project-wide restart; none, and nothing restarts.
+            (True, "", "", False, False, "true", ["compose::restart file=", "compose::up --json"], "scoped"),
         )
         for locked, assemble_only, template, profile, brought, frozen, calls, *pinned in cases:
             with self.subTest(locked=locked, assemble_only=assemble_only, template=template,
@@ -1789,7 +1915,8 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
                     ["bash", "-c", stubs + variables + decide + 'printf "%s\\n" "$frozen" >"$artifact_dir/frozen"\n' + assembly,
                      "runner", str(root), str(SCRIPT), project],
                     capture_output=True, text=True,
-                    env={**os.environ, "BRINGS": str(root / "brings.yaml") if brought else ""},
+                    env={**os.environ, "BRINGS": str(root / "brings.yaml") if brought else "",
+                         "SCOPED": "provider-deepseek" if pinned == ["scoped"] else ""},
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((root / "frozen").read_text().strip(), frozen)
@@ -1799,6 +1926,7 @@ start_compose() { compose_trigger compose::up --json "$1" >"$artifact_dir/stack/
                     self.assertTrue(call.startswith(expected), (call, expected))
                 if frozen == "true":
                     self.assertEqual(json.loads((root / "stack/add.json").read_text())["status"], "skipped")
+                    self.assertEqual(Path(root / "stack/credentials-restart.json").exists(), pinned == ["scoped"])
                     self.assertIn('"frozen":true', made[-1])
                 if assemble_only:
                     self.assertFalse(any("compose::up" in call for call in made), "preparation stops at the lock")
