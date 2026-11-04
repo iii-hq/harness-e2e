@@ -11,4 +11,4 @@ containers:
       run: cargo run --locked --bin harness-e2e
   database:
     worker: package://api.workers.iii.dev/database
-    version: "^0.5.20"
+    version: "^0.6.0"
