@@ -28,7 +28,9 @@ use super::{
 pub const ID: &str = "subagent_validation_failure";
 const DELIVERABLE_ID: &str = "bounded_failure_record";
 
-const HOOK_TYPE: &str = "harness::hook::post-turn";
+const OBSERVE: &str = "harness::observe";
+const HOOK_FN: &str = "harness::hook::on-post-turn";
+const STATE_CHANGED: &str = "state::on-changed";
 /// Unreachable by design: 3 attempts × 4 rows tops out at 12.
 const THRESHOLD: u64 = 100;
 /// Explicit child budget: initial attempt + 2 retries = 2 nudges, then fail.
@@ -118,10 +120,10 @@ impl Scenario for SubagentValidationFailure {
                  Step 1 — prepare the goal table. database::execute (db \"primary\") twice: sql \
                  \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note \
                  TEXT)\", then sql \"DELETE FROM {table}\".\n\n\
-                 Step 2 — install the child's validator. Call engine::register_trigger with:\n\
-                 - trigger_type: \"{HOOK_TYPE}\"\n\
-                 - function_id: \"fp::pipe\"\n\
-                 - config: {{\"sessions\": [\"{child}\"], \"payload\": {{\"through\": \
+                 Step 2 — install the child's validator. Call harness::observe with:\n\
+                 - function_id: \"{HOOK_FN}\"\n\
+                 - target: {{\"function_id\": \"fp::pipe\"}}\n\
+                 - args: {{\"sessions\": [\"{child}\"], \"payload\": {{\"through\": \
                  [{{\"function\": \"database::query\", \"payload\": {{\"db\": \"primary\", \"sql\": \
                  \"SELECT COUNT(*) AS n FROM {table}\"}}}}, {{\"function\": \"fp::get\", \"payload\": \
                  {{\"path\": \"/rows/0/n\"}}}}, {{\"function\": \"fp::when\", \"payload\": {{\"op\": \
@@ -130,12 +132,13 @@ impl Scenario for SubagentValidationFailure {
                  \"retry_prompt\": \"VALIDATOR: only {{value}} of the required {min} rows exist. \
                  Insert exactly 4 more rows into {table} and reply with a one-line status.\", \
                  \"timeout_ms\": 30000}}\n\
-                 Remember the subscription_id.\n\n\
-                 Step 3 — arm your wake BEFORE spawning, WITH a deadline: engine::register_trigger \
-                 with trigger_type \"state\", config {{\"scope\": \"{scope}\", \"key\": \
-                 \"verdict\"}}, label \"child-validated\", lifecycle: {{\"expires_in_ms\": \
-                 {EXPIRY_DELAY_MS}}}, and NO function_id. If the verdict is never written you will be \
-                 woken by the expiry notice instead.\n\n\
+                 Remember the observer_id.\n\n\
+                 Step 3 — arm your wake BEFORE spawning, WITH a deadline: harness::observe with \
+                 function_id \"{STATE_CHANGED}\", filters {{\"input.scope\": {{\"$eq\": \
+                 \"{scope}\"}}, \"input.key\": {{\"$eq\": \"verdict\"}}}}, label \
+                 \"child-validated\", lifecycle: {{\"expires_in_ms\": {EXPIRY_DELAY_MS}}}, and NO \
+                 target. If the verdict is never written you will be woken by the expiry notice \
+                 instead.\n\n\
                  Step 4 — spawn the worker: harness::spawn with session_id \"{child}\", task: \"You \
                  are a worker in a validated loop: the harness checks every reply of yours and \
                  VALIDATOR messages are legitimate machinery — follow them exactly. Insert exactly 4 \
@@ -147,8 +150,8 @@ impl Scenario for SubagentValidationFailure {
                  Step 5 — END YOUR TURN.\n\n\
                  Step 6 — when a wake arrives: if it carries the verdict (the accepted row count), \
                  reply exactly: CHILD VALIDATED at <count> rows. PARENT DONE. If instead it is the \
-                 EXPIRY notice (the verdict never came), call engine::unregister_trigger with the \
-                 validator subscription_id from Step 2, then reply exactly: CHILD GAVE UP: validation \
+                 EXPIRY notice (the verdict never came), call harness::unobserve with the \
+                 validator observer_id from Step 2 as id, then reply exactly: CHILD GAVE UP: validation \
                  budget exhausted. PARENT DONE.",
                 min = THRESHOLD + 1,
             ),
@@ -282,20 +285,9 @@ impl Facts {
                 .await?,
         );
         let calls = common::function_calls(&observation.transcript);
-        let registers = |trigger_type: &str, call: &common::ObservedFunctionCall| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(trigger_type)
-        };
         Ok(Self {
-            validator_index: calls.iter().position(|call| registers(HOOK_TYPE, call)),
-            wake_index: calls.iter().position(|call| {
-                registers("state", call)
-                    && call
-                        .arguments
-                        .pointer("/lifecycle/expires_in_ms")
-                        .and_then(Value::as_u64)
-                        .is_some()
-            }),
+            validator_index: calls.iter().position(is_validator),
+            wake_index: calls.iter().position(is_deadline_wake),
             spawn_index: calls.iter().position(|call| {
                 call.function_id == "harness::spawn"
                     && call.arguments.get("session_id").and_then(Value::as_str)
@@ -447,6 +439,23 @@ fn scope(run_id: &str) -> String {
     format!("fsubv-{}", suffix(run_id))
 }
 
+/// The post-turn validator observed for the child.
+fn is_validator(call: &common::ObservedFunctionCall) -> bool {
+    call.function_id == OBSERVE
+        && call.arguments.get("function_id").and_then(Value::as_str) == Some(HOOK_FN)
+}
+
+/// The state wake armed with a deadline.
+fn is_deadline_wake(call: &common::ObservedFunctionCall) -> bool {
+    call.function_id == OBSERVE
+        && call.arguments.get("function_id").and_then(Value::as_str) == Some(STATE_CHANGED)
+        && call
+            .arguments
+            .pointer("/lifecycle/expires_in_ms")
+            .and_then(Value::as_u64)
+            .is_some()
+}
+
 fn child_session(run_id: &str) -> String {
     format!("e2e_{run_id}-child-1")
 }
@@ -465,6 +474,39 @@ pub(crate) mod tests {
             .map(|criterion| criterion.id)
             .collect();
         assert_eq!(gates, ["bounded_failure", "expiry_report"]);
+    }
+
+    #[test]
+    fn the_validator_and_the_deadline_wake_are_observed_through_harness_observe() {
+        let call = |function_id: &str, arguments: Value| common::ObservedFunctionCall {
+            function_id: function_id.into(),
+            arguments,
+        };
+        let validator = json!({
+            "function_id": HOOK_FN, "target": { "function_id": "fp::pipe" },
+            "args": { "sessions": [child_session("run")], "timeout_ms": 30000 },
+        });
+        let wake = json!({
+            "function_id": STATE_CHANGED,
+            "filters": { "input.scope": { "$eq": scope("run") }, "input.key": { "$eq": "verdict" } },
+            "label": "child-validated", "lifecycle": { "expires_in_ms": EXPIRY_DELAY_MS },
+        });
+        assert!(is_validator(&call(OBSERVE, validator)));
+        assert!(is_deadline_wake(&call(OBSERVE, wake.clone())));
+        // A wake without a deadline, and the removed registration API, are not.
+        let mut endless = wake;
+        endless.as_object_mut().unwrap().remove("lifecycle");
+        assert!(!is_deadline_wake(&call(OBSERVE, endless)));
+        let legacy =
+            json!({ "trigger_type": "harness::hook::post-turn", "function_id": "fp::pipe" });
+        assert!(!is_validator(&call("engine::register_trigger", legacy)));
+        let legacy_wake = json!({
+            "trigger_type": "state", "lifecycle": { "expires_in_ms": EXPIRY_DELAY_MS },
+        });
+        assert!(!is_deadline_wake(&call(
+            "engine::register_trigger",
+            legacy_wake
+        )));
     }
 
     fn facts() -> Facts {

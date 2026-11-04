@@ -26,6 +26,8 @@ use super::{
 };
 
 pub const ID: &str = "contention_ledger";
+const OBSERVE: &str = "harness::observe";
+const STATE_CHANGED: &str = "state::on-changed";
 const DELIVERABLE_ID: &str = "ledger_totals";
 
 const DATABASE: &str = "primary";
@@ -286,23 +288,23 @@ impl Scenario for ContentionLedger {
         let names = Names::new(run_id);
         let listed = context
             .trigger_value(
-                "harness::triggers::list",
+                "harness::observers::list",
                 json!({ "session_id": names.root_session }),
             )
             .await?;
-        for subscription_id in listed
-            .get("subscriptions")
+        for observer_id in listed
+            .get("observers")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+            .filter_map(|observer| observer.get("observer_id").and_then(Value::as_str))
         {
             let _: Value = context
                 .trigger(
-                    "harness::triggers::unregister",
+                    "harness::observers::dispose",
                     json!({
                         "session_id": names.root_session,
-                        "subscription_id": subscription_id,
+                        "observer_id": observer_id,
                     }),
                 )
                 .await?;
@@ -474,7 +476,7 @@ fn evaluate_observation(
     let registrations: Vec<_> = calls
         .iter()
         .enumerate()
-        .filter(|(_, call)| call.function_id == "engine::register_trigger")
+        .filter(|(_, call)| call.function_id == OBSERVE)
         .collect();
     let barrier_watch = registrations
         .iter()
@@ -854,19 +856,14 @@ fn root_avoids_increments(calls: &[common::ObservedFunctionCall], names: &Names)
         .all(|sql| !is_increment(sql, &names.ledger) && !inserts_into(sql, &names.audit))
 }
 
+/// A wake over the whole scope: `state::on-changed` filtered on the scope,
+/// never on one key.
 fn is_completion_watch(call: &common::ObservedFunctionCall, names: &Names) -> bool {
-    call.function_id == "engine::register_trigger"
-        && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
-        && call
-            .arguments
-            .pointer("/config/scope")
-            .and_then(Value::as_str)
-            == Some(names.scope.as_str())
-        && call
-            .arguments
-            .pointer("/config/key")
-            .and_then(Value::as_str)
-            .is_none()
+    let filters = &call.arguments["filters"];
+    call.function_id == OBSERVE
+        && call.arguments.get("function_id").and_then(Value::as_str) == Some(STATE_CHANGED)
+        && filters.pointer("/input.scope/$eq").and_then(Value::as_str) == Some(names.scope.as_str())
+        && filters.get("input.key").is_none()
         && call.arguments.get("label").and_then(Value::as_str)
             == Some(names.complete_label.as_str())
         && common::requested_once(&call.arguments)
@@ -1173,9 +1170,10 @@ pub(crate) mod tests {
     /// one response.
     fn armed_root(names: &Names) -> Vec<common::ObservedFunctionCall> {
         let mut root = vec![common::ObservedFunctionCall {
-            function_id: "engine::register_trigger".to_string(),
+            function_id: OBSERVE.to_string(),
             arguments: json!({
-                "trigger_type": "state", "config": { "scope": names.scope },
+                "function_id": STATE_CHANGED,
+                "filters": { "input.scope": { "$eq": names.scope } },
                 "label": names.complete_label, "once": true,
                 "conditions": [{ "function_id": "state::barrier", "config": {
                     "id": names.barrier_id, "carry": "/new_value", "expect": done_keys(),
@@ -1423,9 +1421,9 @@ pub(crate) mod tests {
     fn the_barrier_matcher_requires_exactly_the_three_done_keys() {
         let names = Names::new("barrier-run");
         let arguments = json!({
-            "trigger_type": "state",
+            "function_id": STATE_CHANGED,
             "label": names.complete_label,
-            "config": { "scope": names.scope },
+            "filters": { "input.scope": { "$eq": names.scope } },
             "once": true,
             "conditions": [{
                 "function_id": "state::barrier",
@@ -1437,10 +1435,23 @@ pub(crate) mod tests {
             }],
         });
         let call = common::ObservedFunctionCall {
-            function_id: "engine::register_trigger".to_string(),
+            function_id: OBSERVE.to_string(),
             arguments: arguments.clone(),
         };
         assert!(is_completion_watch(&call, &names));
+        // The removed registration API, a watch on one key, and a call target
+        // are not the scope-wide wake.
+        let legacy = common::ObservedFunctionCall {
+            function_id: "engine::register_trigger".to_string(),
+            arguments: arguments.clone(),
+        };
+        assert!(!is_completion_watch(&legacy, &names));
+        let mut one_key = call.clone();
+        one_key.arguments["filters"]["input.key"] = json!({ "$eq": "done-00" });
+        assert!(!is_completion_watch(&one_key, &names));
+        let mut targeted = call.clone();
+        targeted.arguments["target"] = json!({ "function_id": "state::set" });
+        assert!(!is_completion_watch(&targeted, &names));
 
         let mut missing = arguments.clone();
         missing["conditions"][0]["config"]["expect"] = json!(["done-00", "done-01"]);

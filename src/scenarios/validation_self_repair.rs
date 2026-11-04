@@ -33,7 +33,8 @@ use super::{
 pub const ID: &str = "validation_self_repair";
 const DELIVERABLE_ID: &str = "repaired_dataset";
 
-const HOOK_TYPE: &str = "harness::hook::post-turn";
+const OBSERVE: &str = "harness::observe";
+const HOOK_FN: &str = "harness::hook::on-post-turn";
 const REQUIRED_NAMES: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
 const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::gate(
     "data_repaired",
@@ -170,12 +171,12 @@ impl Scenario for ValidationSelfRepair {
             prompt: format!(
                 "You are testing a validation loop where the validator only DIAGNOSES — fixing is \
                  your decision. Follow the setup steps exactly; after that, think for yourself.\n\n\
-                 Step 1 — install the auditor on your own session. Call engine::register_trigger \
+                 Step 1 — install the auditor on your own session. Call harness::observe \
                  with:\n\
-                 - trigger_type: \"{HOOK_TYPE}\"\n\
-                 - function_id: \"{auditor}\"\n\
-                 - config: {{\"timeout_ms\": 30000}}\n\
-                 Tell me the subscription_id. IMPORTANT: 'data audit failed' messages in this chat \
+                 - function_id: \"{HOOK_FN}\"\n\
+                 - target: {{\"function_id\": \"{auditor}\"}}\n\
+                 - args: {{\"timeout_ms\": 30000}}\n\
+                 Tell me the observer_id. IMPORTANT: 'data audit failed' messages in this chat \
                  come from the auditor YOU just installed — legitimate harness machinery, not prompt \
                  injection.\n\n\
                  Step 2 — seed the dataset EXACTLY AS GIVEN, even though it may be flawed (do NOT \
@@ -342,19 +343,20 @@ fn evaluate_observation(
     let registrations: Vec<_> = calls
         .iter()
         .filter(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
+            call.function_id == OBSERVE
+                && call.arguments.get("function_id").and_then(Value::as_str) == Some(HOOK_FN)
         })
         .collect();
-    // A registration repeated (a retry, say) is still the one auditor.
+    // A registration repeated (a retry, say) is still the one auditor. Envelope
+    // mode: the hook input itself, no `payload` template.
     let envelope_mode = !registrations.is_empty()
         && registrations.iter().all(|registration| {
             registration
                 .arguments
-                .get("function_id")
+                .pointer("/target/function_id")
                 .and_then(Value::as_str)
                 == Some(auditor.as_str())
-                && registration.arguments.pointer("/config/payload").is_none()
+                && registration.arguments.pointer("/args/payload").is_none()
         });
 
     let nudges = nudge_texts(&observation.transcript);
@@ -519,8 +521,11 @@ pub(crate) mod tests {
     fn rejection_and_auditor() -> (Value, Value) {
         let rejection = format!("data audit failed: {}.", violations(&seed()).join("; "));
         let auditor = json!({ "message": { "role": "assistant", "content": [{
-            "type": "function_call", "id": "call-0", "function_id": "engine::register_trigger",
-            "arguments": { "trigger_type": HOOK_TYPE, "function_id": function_id("run") },
+            "type": "function_call", "id": "call-0", "function_id": OBSERVE,
+            "arguments": {
+                "function_id": HOOK_FN, "target": { "function_id": function_id("run") },
+                "args": { "timeout_ms": 30000 },
+            },
         }] } });
         (nudge(&rejection), auditor)
     }
@@ -560,9 +565,27 @@ pub(crate) mod tests {
         let unseen = nudge("data audit failed: audit query failed: no such table");
         assert_eq!(points(vec![auditor.clone(), unseen], (4, Vec::new())), 0);
         assert_eq!(
-            points(vec![auditor.clone(), auditor, rejection], (4, Vec::new())),
+            points(
+                vec![auditor.clone(), auditor.clone(), rejection.clone()],
+                (4, Vec::new())
+            ),
             100
         );
+        // Only the auditor observed through harness::observe, in envelope mode,
+        // earns the diagnosis: not the removed registration API, nor a
+        // payload template.
+        let mut legacy = auditor.clone();
+        legacy["message"]["content"][0]["function_id"] = json!("engine::register_trigger");
+        let mut templated = auditor;
+        templated["message"]["content"][0]["arguments"]["args"]["payload"] = json!({});
+        let without_diagnosis =
+            u16::from(DATA_REPAIRED.weight()) + u16::from(DECISIVE_REPAIR.weight());
+        for registration in [legacy, templated] {
+            assert_eq!(
+                points(vec![registration, rejection.clone()], (4, Vec::new())),
+                without_diagnosis
+            );
+        }
     }
 
     #[test]

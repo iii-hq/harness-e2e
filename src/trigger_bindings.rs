@@ -26,9 +26,6 @@ const OUTCOMES: [&str; 6] = [
     "unregistered",
     "invalidated",
 ];
-/// The engine function every agent binding registers as; its metadata is only
-/// the `__binding` pointer.
-const DELIVER_FUNCTION: &str = "harness::observer::deliver";
 /// How long teardown's engine-side unregistrations may take to land.
 const TEARDOWN_SETTLE: Duration = Duration::from_secs(5);
 const TEARDOWN_POLL: Duration = Duration::from_millis(250);
@@ -92,6 +89,14 @@ pub fn observe(transcripts: &[Value], listed: impl IntoIterator<Item = String>) 
     let mut woken = BTreeMap::<&str, u64>::new();
     for entry in &entries {
         let entry_id = text(entry, "/entry_id").unwrap_or("an unnamed entry");
+        if text(entry, "/message/role") == Some("function_result")
+            && text(entry, "/message/function_id") == Some("harness::observe")
+            && entry.pointer("/message/is_error").and_then(Value::as_bool) == Some(false)
+        {
+            if let Some(id) = text(entry, "/message/details/observer_id") {
+                bindings.subscriptions.insert(id.to_string());
+            }
+        }
         // The `e_fire_` wake only: expiry, claim and condition notices carry
         // the same origin without a delivery.
         if text(entry, "/message/role") == Some("user") && entry_id.starts_with("e_fire_") {
@@ -209,7 +214,7 @@ pub fn leaks(
     let engine = delivering
         .iter()
         .filter(|(_, binding)| subscriptions.contains(binding))
-        .map(|(observer, binding)| format!("engine observer {observer} still delivers {binding}"));
+        .map(|(observer, binding)| format!("engine observer {observer} remains for {binding}"));
     let store = listed
         .iter()
         .map(|(session, binding)| format!("session {session} still lists {binding}"));
@@ -222,8 +227,8 @@ pub fn leaks(
         .collect()
 }
 
-/// `(engine observer id, binding)` of every observer delivering to the
-/// delivery hop. The Harness gives each binding's observer the binding's id.
+/// All registered engine observer IDs, including suspended post-turn hooks.
+/// Ordinary bindings and post-turn hooks both return their engine observer ID.
 async fn delivering(context: &E2eContext) -> Result<Vec<(String, String)>> {
     let listed = context
         .trigger_value("engine::observers::list", json!({}))
@@ -233,7 +238,6 @@ async fn delivering(context: &E2eContext) -> Result<Vec<(String, String)>> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|row| text(row, "/target/function_id") == Some(DELIVER_FUNCTION))
         .filter_map(|row| text(row, "/id"))
         .map(|id| (id.to_string(), id.to_string()))
         .collect())
@@ -292,6 +296,40 @@ mod tests {
 
     fn invariants(bindings: &TriggerBindings) -> Vec<HarnessInvariant> {
         bindings.violations.iter().map(|v| v.invariant).collect()
+    }
+
+    #[test]
+    fn a_successful_observe_result_without_delivery_records_is_checked_for_leaks() {
+        let observed = json!({ "message": {
+            "role": "function_result", "function_id": "harness::observe", "is_error": false,
+            "details": { "observer_id": "post-turn-auditor" },
+        } });
+        let mut refused = observed.clone();
+        refused["message"]["is_error"] = json!(true);
+        refused["message"]["details"]["observer_id"] = json!("refused");
+        let mut unrelated = observed.clone();
+        unrelated["message"]["function_id"] = json!("another::function");
+        unrelated["message"]["details"]["observer_id"] = json!("unrelated");
+        let bindings = observe(&[transcript(vec![observed, refused, unrelated])], []);
+
+        assert_eq!(
+            bindings.subscriptions,
+            BTreeSet::from(["post-turn-auditor".into()])
+        );
+        let violations = leaks(
+            &bindings.subscriptions,
+            &[
+                ("post-turn-auditor".into(), "post-turn-auditor".into()),
+                ("unrelated".into(), "unrelated".into()),
+            ],
+            &[],
+        );
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0].invariant,
+            HarnessInvariant::LeakedTriggerBinding
+        );
+        assert!(leaks(&bindings.subscriptions, &[], &[]).is_empty());
     }
 
     #[test]
@@ -429,7 +467,7 @@ mod tests {
         );
         assert!(violations[0]
             .detail
-            .contains("engine observer t1 still delivers sub_a"));
+            .contains("engine observer t1 remains for sub_a"));
         assert!(violations[1]
             .detail
             .contains("session child still lists sub_b"));
