@@ -565,19 +565,21 @@ container as `iii project init --learn-iii` seeds it; on another stack setup
 refuses to start. The test always runs as the template's Onboarding profile,
 `ade-worker-builder`: an execution that names no profile takes it, and one that
 names another is refused. The test plays the `learn-iii` tour's card. Setup
-closes the button steps (the sign-up box is skipped, never submitted) and binds
-each other step's condition. When a condition fires, the step is closed with
-`learn-iii::steps::complete`. After the dialogue the test adds two expenses
-through the agent's expense tracker, one still to be reimbursed and one
-already reimbursed, as the tracker's page would. It listens for the tracker's
-own trigger after each and reads its totals before, between and after.
+closes the button steps (the sign-up box is skipped, never submitted) and
+observes each other step's condition, as the card does. When the observed
+function runs, the step is closed with `learn-iii::steps::complete`. After the
+dialogue the test adds two expenses through the agent's expense tracker, one
+still to be reimbursed and one already reimbursed, as the tracker's page
+would. It observes the tracker's event functions (its private functions, as
+event sources are) after each and reads its totals before, between and after.
 The objectives, gates in bold: **every tour step closed**, **the database
 worker runs**, the Discoverability answer saying what each worker can do, **a new
-worker with at least two functions**, its Console page, an expense's four
-fields, a total still to be reimbursed that counts only the unreimbursed
-expense, the tracker's own trigger type, **that trigger firing for each added
-expense**, **a trigger the chat bound on it**, **the onboarding worker
-removed**, and the tour served matching the fixture. Between prompts the test
+worker with at least two functions**, its Console page (an observer of
+`ade::ui::asset`), an expense's four fields, a total still to be reimbursed
+that counts only the unreimbursed expense, the tracker's own event function,
+**that function called for each added expense**, **an observer the chat put
+on it** (an accepted `harness::observe`, or one still live), **the onboarding
+worker removed**, and the tour served matching the fixture. Between prompts the test
 waits, as the tour's card does, while the agent is still on a step: a turn
 running or a wake it armed, up to twenty minutes.
 [tests/fixtures/onboarding-tour/learn-iii.json](tests/fixtures/onboarding-tour/learn-iii.json)

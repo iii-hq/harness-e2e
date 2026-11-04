@@ -6,8 +6,7 @@
       "ask": "hey",
       "agent": "ade-worker-builder",
       "condition": {
-        "type": "harness::turn-completed",
-        "config": {}
+        "function_id": "harness::on-turn-completed"
       }
     },
     {
@@ -20,10 +19,14 @@
       "id": "composability",
       "ask": "Add the database worker to this project. When you are ending your turn, write step_composability_completed: true to state, scope \"learn-iii\".",
       "condition": {
-        "type": "state",
-        "config": {
-          "scope": "learn-iii",
-          "key": "step_composability_completed"
+        "function_id": "state::on-changed",
+        "filters": {
+          "input.scope": {
+            "$eq": "learn-iii"
+          },
+          "input.key": {
+            "$eq": "step_composability_completed"
+          }
         }
       }
     },
@@ -37,10 +40,14 @@
       "id": "discoverability",
       "ask": "What do the database, state, and harness workers do? When you are ending your turn, write step_discoverability_completed: true to state, scope \"learn-iii\".",
       "condition": {
-        "type": "state",
-        "config": {
-          "scope": "learn-iii",
-          "key": "step_discoverability_completed"
+        "function_id": "state::on-changed",
+        "filters": {
+          "input.scope": {
+            "$eq": "learn-iii"
+          },
+          "input.key": {
+            "$eq": "step_discoverability_completed"
+          }
         }
       }
     },
@@ -48,21 +55,29 @@
       "id": "extensibility",
       "ask": "Build an expense tracker. Each expense has a description, an amount, a category, and whether it was reimbursed. Show the total still to be reimbursed. When you are ending your turn, write step_extensibility_completed: true to state, scope \"learn-iii\".",
       "condition": {
-        "type": "state",
-        "config": {
-          "scope": "learn-iii",
-          "key": "step_extensibility_completed"
+        "function_id": "state::on-changed",
+        "filters": {
+          "input.scope": {
+            "$eq": "learn-iii"
+          },
+          "input.key": {
+            "$eq": "step_extensibility_completed"
+          }
         }
       }
     },
     {
       "id": "reactivity",
-      "ask": "Make the expense tracker reactive, have it fire triggers for new expenses being added. Then create a trigger in the chat that to run when that trigger happens. When you are ending your turn, write step_reactivity_completed: true to state, scope \"learn-iii\".",
+      "ask": "Make the expense tracker reactive: give it an event function it calls whenever a new expense is added. Then, from the chat, observe that function so a reaction runs when it happens. When you are ending your turn, write step_reactivity_completed: true to state, scope \"learn-iii\".",
       "condition": {
-        "type": "state",
-        "config": {
-          "scope": "learn-iii",
-          "key": "step_reactivity_completed"
+        "function_id": "state::on-changed",
+        "filters": {
+          "input.scope": {
+            "$eq": "learn-iii"
+          },
+          "input.key": {
+            "$eq": "step_reactivity_completed"
+          }
         }
       }
     },

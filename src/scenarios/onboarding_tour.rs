@@ -5,9 +5,9 @@
 //! tour's worker, which serves the `learn-iii` tour. The dialogue sends each
 //! step's prompt as the tour card's button does, in tour order, and this
 //! module plays the card itself: `setup` closes the button-only steps as their
-//! buttons would (`stay-in-touch` is skipped, never subscribed), binds every
-//! other step's condition the way the card binds it, and closes that step with
-//! `learn-iii::steps::complete` when its trigger fires. `capture` then checks
+//! buttons would (`stay-in-touch` is skipped, never subscribed), observes every
+//! other step's condition the way the card does, and closes that step with
+//! `learn-iii::steps::complete` when the observed function runs. `capture` then checks
 //! what each step should have left behind, and adds two expenses through the
 //! agent's tracker as the user would. The objectives, gates marked:
 //!
@@ -18,8 +18,8 @@
 //! - Extensibility: a new worker with at least two functions (gate), its
 //!   Console page, an expense's four fields, and a total still to be
 //!   reimbursed that counts the unreimbursed expense and not the other.
-//! - Reactivity: the tracker's own trigger type, that trigger firing for
-//!   each expense the runner adds (gate), and a trigger the chat bound on it
+//! - Reactivity: the tracker's own event function, that function called for
+//!   each expense the runner adds (gate), and an observer the chat put on it
 //!   (gate).
 //! - Clean up: the `onboarding` worker gone (gate).
 //!
@@ -37,7 +37,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use iii_sdk::protocol::CallRequest;
 use iii_sdk::runtime::FunctionRef;
-use iii_sdk::{IIIClient, ObserverHandle, RegisterFunction, Source};
+use iii_sdk::{IIIClient, ObserverHandle, RegisterFunction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -59,8 +59,15 @@ const RUNNER_WORKER: &str = "harness-e2e";
 const FIXTURE: &str = include_str!("../../tests/fixtures/onboarding-tour/learn-iii.json");
 /// The workers the Discoverability prompt asks about.
 const DISCOVERED: [&str; 3] = ["database", "state", "harness"];
-/// How long an added expense may take to ring the tracker's trigger.
+/// How long an added expense may take to call the tracker's event function.
 const FIRE_WAIT: Duration = Duration::from_secs(10);
+/// A worker ships each Console asset by observing the ADE's asset function
+/// with `{kind, path}`; the ADE calls it for that asset and the worker's
+/// target answers with the content.
+const CONSOLE_ASSET: &str = "ade::ui::asset";
+/// The asset kind the Console mounts as a page. A stylesheet, or a module the
+/// Console only loads when a page asks for it, is no page on its own.
+const PAGE_ASSET_KIND: &str = "script";
 /// How long the user waits on a step the agent is still working on before
 /// clicking on to the next one.
 const STEP_WAIT: Duration = Duration::from_secs(20 * 60);
@@ -81,16 +88,20 @@ struct Step {
     /// to the chat the user is in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent: Option<String>,
-    /// The trigger the step waits for; without one a button closes it.
+    /// The function the step waits on; without one a button closes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     condition: Option<Condition>,
 }
 
+/// The observe source the card binds for a step: the function, and the args
+/// and filters it observes it with. The card's label and hint are only text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Condition {
-    #[serde(rename = "type")]
-    kind: String,
-    config: Value,
+    function_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    args: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filters: Option<Value>,
 }
 
 fn tour() -> &'static Tour {
@@ -111,12 +122,15 @@ fn project(live: &Value) -> Tour {
                 id: text(&step["id"]).unwrap_or_default(),
                 ask: text(&step["ask"]["text"]),
                 agent: text(&step["ask"]["agent"]),
-                condition: step["condition"].is_object().then(|| Condition {
-                    kind: text(&step["condition"]["type"]).unwrap_or_default(),
-                    config: match &step["condition"]["config"] {
-                        Value::Null => json!({}),
-                        config => config.clone(),
-                    },
+                condition: step["condition"].is_object().then(|| {
+                    let given = |field: &str| {
+                        Some(step["condition"][field].clone()).filter(|value| !value.is_null())
+                    };
+                    Condition {
+                        function_id: text(&step["condition"]["function_id"]).unwrap_or_default(),
+                        args: given("args"),
+                        filters: given("filters"),
+                    }
                 }),
             })
             .collect(),
@@ -208,7 +222,7 @@ const METRICS: [Metric; 12] = [
         ratio: false,
         gate: None,
         label: "The tracker has a Console page",
-        question: "Does the expense tracker inject a page into the Console (a console:script trigger)?",
+        question: "Does the expense tracker inject a page into the Console (an observer of ade::ui::asset)?",
     },
     Metric {
         id: "extensibility.fields",
@@ -231,24 +245,24 @@ const METRICS: [Metric; 12] = [
         weight: 4,
         ratio: false,
         gate: None,
-        label: "The tracker registers a trigger type",
-        question: "Did the expense tracker register a trigger type of its own?",
+        label: "The tracker registers an event function",
+        question: "Did the expense tracker register an event function of its own: a private function, as event sources are?",
     },
     Metric {
         id: "reactivity.fires",
         weight: 14,
         ratio: true,
         gate: Some(14),
-        label: "Each new expense fires the tracker's trigger",
-        question: "When the runner adds each of two expenses through the tracker, as its page would, does one of the tracker's trigger types fire within ten seconds?",
+        label: "Each new expense calls the tracker's event function",
+        question: "When the runner adds each of two expenses through the tracker, as its page would, is one of the tracker's event functions called within ten seconds?",
     },
     Metric {
         id: "reactivity.chat_trigger",
         weight: 6,
         ratio: false,
         gate: Some(6),
-        label: "The chat bound a trigger on new expenses",
-        question: "Did the chat register a trigger on one of the tracker's trigger types (an accepted engine::register_trigger in the transcript), or is such a binding, by anything but the tracker, still live?",
+        label: "The chat observes new expenses",
+        question: "Did the chat observe one of the tracker's event functions (an accepted harness::observe in the transcript), or is such an observer, by anything but the tracker, still live?",
     },
     Metric {
         id: "cleanup.removed",
@@ -333,7 +347,7 @@ struct Observed {
 
 struct Run {
     functions: Vec<FunctionRef>,
-    triggers: Vec<ObserverHandle>,
+    observers: Vec<ObserverHandle>,
     observed: Arc<Mutex<Observed>>,
     live_tour: Value,
     baseline: Value,
@@ -344,7 +358,7 @@ fn runs() -> &'static Mutex<HashMap<String, Run>> {
     RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// A call from a trigger handler, routed as `E2eContext` routes it.
+/// A call from a condition's handler, routed as `E2eContext` routes it.
 async fn call(client: &IIIClient, function_id: &str, payload: Value) -> Result<Value> {
     let (namespace, payload) =
         crate::context::inspection_routing(function_id, client.namespace(), payload);
@@ -385,7 +399,7 @@ async fn close(
     observed.closed.push(json!({
         "step": step_id,
         "at_ms": now_ms(),
-        "trigger_type": fired.as_ref().map(|fired| fired["trigger_type"].clone()),
+        "function_id": fired.as_ref().map(|fired| fired["function_id"].clone()),
     }));
     match closed {
         Ok(_) => {}
@@ -444,8 +458,7 @@ fn bind(
     let function_id = format!("e2e::onboarding::{}::{}", &digest(run_id)[..12], step.id);
     let client = context.client().clone();
     let step_id = step.id.clone();
-    let trigger_type = condition.kind.clone();
-    let handler_id = function_id.clone();
+    let observed_id = condition.function_id.clone();
     let function = context.client().register_function(
         function_id.clone(),
         RegisterFunction::new_async(move |payload: Value| {
@@ -453,11 +466,8 @@ fn bind(
             let observed = observed.clone();
             let step_id = step_id.clone();
             let next = next_prompt_only.clone();
-            let fired = json!({
-                "trigger_type": trigger_type,
-                "function_id": handler_id,
-                "payload": payload,
-            });
+            // What the card reports: the observed function and its event.
+            let fired = json!({"function_id": observed_id, "payload": payload});
             async move {
                 on_condition(&client, &observed, &step_id, fired, next.as_deref()).await;
                 Ok::<Value, iii_sdk::errors::Error>(json!({"ok": true}))
@@ -466,11 +476,17 @@ fn bind(
         .description("The onboarding tour card's condition for one step, played by the E2E runner.")
         .metadata(json!({"internal": true})),
     );
-    let trigger = context.client().observe(
-        Source::function(condition.kind.clone()).args(condition.config.clone()),
-        function_id,
-    );
-    Ok((function, trigger))
+    // The card's observe: its handler gets the event the function returned,
+    // with the step's args and filters.
+    let mut source = crate::observe::event(&condition.function_id);
+    if let Some(args) = &condition.args {
+        source = source.args(args.clone());
+    }
+    if let Some(filters) = &condition.filters {
+        source = source.filters(filters.clone());
+    }
+    let observer = context.client().observe(source, function_id);
+    Ok((function, observer))
 }
 
 fn items<'a>(value: &'a Value, field: &str) -> impl Iterator<Item = &'a Value> {
@@ -550,17 +566,39 @@ fn new_workers(baseline: &Value, workers: &Value) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// The worker that created an observer of `engine::observers::list`.
+fn observing_worker(observer: &Value) -> Option<&str> {
+    observer["worker"]["worker_name"].as_str()
+}
+
+/// The workers that inject a Console page: each observes the ADE's asset
+/// function for a script.
+fn with_console_page(observers: &Value) -> HashSet<&str> {
+    items(observers, "observers")
+        .filter(|observer| {
+            observer["function_id"] == CONSOLE_ASSET && observer["args"]["kind"] == PAGE_ASSET_KIND
+        })
+        .filter_map(observing_worker)
+        .collect()
+}
+
+/// A worker's event functions, from its described functions: the private
+/// ones, as event sources are (only the worker that hosts one calls it).
+fn event_functions(described: &Value) -> Vec<String> {
+    items(described, "functions")
+        .filter(|function| function["private"] == true)
+        .filter_map(|function| function["function_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
 /// The expense tracker among the new workers, each with its described
 /// functions: the one whose functions take an expense best, then the one
 /// with a Console page, then the one with the most functions.
 fn tracker_of<'a>(
     candidates: &'a [(String, u64, Value)],
-    registered: &Value,
+    observers: &Value,
 ) -> Option<&'a (String, u64, Value)> {
-    let with_page: HashSet<&str> = items(registered, "registered_triggers")
-        .filter(|trigger| trigger["trigger_type"] == "console:script")
-        .filter_map(|trigger| trigger["worker_name"].as_str())
-        .collect();
+    let with_page = with_console_page(observers);
     candidates
         .iter()
         .max_by_key(|(name, functions, described)| {
@@ -995,42 +1033,30 @@ fn record_keys(value: &Value, description: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The triggers the chat bound on these types, from the transcript: an
-/// `engine::register_trigger` call the engine accepted. A wake armed `once`
-/// is gone once it fires, so the live bindings alone miss it.
-fn chat_bindings(transcript: &Value, types: &[String]) -> Vec<Value> {
-    let accepted: HashSet<&str> = items(transcript, "messages")
-        .map(|entry| &entry["message"])
-        .filter(|message| {
-            message["role"] == "function_result"
-                && message["function_id"] == "engine::register_trigger"
-                && message["is_error"] != true
+/// The observers the chat put on these event functions, from the transcript:
+/// a `harness::observe` call the Harness accepted, made directly or through
+/// its call wrapper. An observer armed `once` is gone once it fires, so the
+/// live observers alone miss it.
+fn chat_bindings(transcript: &Value, events: &[String]) -> Vec<Value> {
+    super::common::function_invocations(transcript)
+        .iter()
+        .filter(|invocation| invocation.call.function_id == "harness::observe")
+        .filter(|invocation| {
+            invocation.call.arguments["function_id"]
+                .as_str()
+                .is_some_and(|observed| events.iter().any(|own| own == observed))
         })
-        .filter_map(|message| message["function_call_id"].as_str())
-        .collect();
-    items(transcript, "messages")
-        .flat_map(|entry| items(&entry["message"], "content"))
-        .filter(|block| block["type"] == "function_call")
-        .filter_map(|block| {
-            let arguments = &block["arguments"];
-            // Through the Harness's `agent_trigger`, or called directly.
-            let (function, payload) = if block["function_id"] == "agent_trigger" {
-                (&arguments["function"], &arguments["payload"])
-            } else {
-                (&block["function_id"], arguments)
-            };
-            let kind = payload["trigger_type"].as_str()?;
-            (function == "engine::register_trigger"
-                && types.iter().any(|own| own == kind)
-                && block["id"].as_str().is_some_and(|id| accepted.contains(id)))
-            .then(|| {
-                json!({
-                    "call": block["id"],
-                    "trigger_type": kind,
-                    "config": payload["config"],
-                    "once": payload["once"],
-                })
-            })
+        .filter_map(|invocation| {
+            let accepted = super::common::function_result(transcript, invocation)?;
+            let arguments = &invocation.call.arguments;
+            Some(json!({
+                "call": invocation.call_id,
+                "function_id": arguments["function_id"],
+                "args": arguments["args"],
+                "filters": arguments["filters"],
+                "once": arguments["once"],
+                "observer_id": accepted["details"]["observer_id"],
+            }))
         })
         .collect()
 }
@@ -1045,7 +1071,7 @@ async fn read_all(context: &E2eContext, readers: &[String]) -> Vec<Option<Value>
 
 /// What adding the two expenses showed.
 struct Added {
-    /// How many of them the tracker's own trigger answered.
+    /// How many of them one of the tracker's event functions answered.
     fired: usize,
     /// The totals that grew by the first one's amount and held for the second.
     total: Vec<String>,
@@ -1055,15 +1081,15 @@ struct Added {
 }
 
 /// Add the two expenses through the tracker as its page would, one at a
-/// time: listen for the tracker's trigger after each, and read its totals
+/// time: observe the tracker's event functions after each, and read its totals
 /// before, between and after, so each total is read seconds from the add it
-/// answers rather than after whatever the chat's trigger set off.
+/// answers rather than after whatever the chat's observer set off.
 async fn add_expenses(
     context: &E2eContext,
     run_id: &str,
     adder: &(String, Value),
     readers: &[String],
-    trigger_types: &[String],
+    events: &[String],
 ) -> Added {
     let heard = Arc::new(Mutex::new(Vec::<u128>::new()));
     let function_id = format!("e2e::onboarding::{}::expense-added", &digest(run_id)[..12]);
@@ -1077,10 +1103,12 @@ async fn add_expenses(
                 Ok::<Value, iii_sdk::errors::Error>(json!({"ok": true}))
             }
         })
-        .description("Hears the expense tracker's trigger while the E2E runner adds expenses.")
+        .description(
+            "Hears the expense tracker's event functions while the E2E runner adds expenses.",
+        )
         .metadata(json!({"internal": true})),
     );
-    let bindings = trigger_types
+    let bindings = events
         .iter()
         .map(|event| {
             context
@@ -1186,7 +1214,7 @@ impl Scenario for OnboardingTour {
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("On the project `iii project init --learn-iii` creates, take the learn-iii tour step by step as a new user does: say hey, add the database, ask what three workers do, build an expense tracker, make it fire a trigger for each new expense with one in the chat waiting on it, then remove the tour.")
+        Some("On the project `iii project init --learn-iii` creates, take the learn-iii tour step by step as a new user does: say hey, add the database, ask what three workers do, build an expense tracker, give it an event function it calls for each new expense with an observer from the chat waiting on it, then remove the tour.")
     }
 
     fn protects(&self) -> Option<&'static str> {
@@ -1354,7 +1382,7 @@ impl Scenario for OnboardingTour {
         let baseline = json!({
             "compose": status,
             "workers": context.trigger_value("engine::workers::list", json!({})).await?,
-            "registered_triggers": context.trigger_value("engine::registered-triggers::list", json!({})).await?,
+            "observers": context.trigger_value("engine::observers::list", json!({})).await?,
         });
         let directory = root(run_id);
         std::fs::create_dir_all(&directory)?;
@@ -1369,7 +1397,7 @@ impl Scenario for OnboardingTour {
             run_id.to_string(),
             Run {
                 functions: Vec::new(),
-                triggers: Vec::new(),
+                observers: Vec::new(),
                 observed: observed.clone(),
                 live_tour: live["tour"].clone(),
                 baseline,
@@ -1383,7 +1411,7 @@ impl Scenario for OnboardingTour {
                         .get(index + 1)
                         .filter(|next| next.ask.is_some() && next.condition.is_none())
                         .map(|next| next.id.clone());
-                    let (function, trigger) = bind(
+                    let (function, observer) = bind(
                         context,
                         run_id,
                         step,
@@ -1394,7 +1422,7 @@ impl Scenario for OnboardingTour {
                     let mut runs = lock_unpoisoned(runs());
                     let run = runs.get_mut(run_id).expect("registered above");
                     run.functions.push(function);
-                    run.triggers.push(trigger);
+                    run.observers.push(observer);
                 }
                 // A button the user clicks while reading: Continue, or Skip on
                 // the sign-up box.
@@ -1431,11 +1459,8 @@ impl Scenario for OnboardingTour {
         let workers = context
             .trigger_value("engine::workers::list", json!({}))
             .await?;
-        let trigger_types = context
-            .trigger_value("engine::triggers::list", json!({}))
-            .await?;
-        let registered = context
-            .trigger_value("engine::registered-triggers::list", json!({}))
+        let observers = context
+            .trigger_value("engine::observers::list", json!({}))
             .await?;
         let (progress, closed, discoverability_functions, errors) = {
             let observed = lock_unpoisoned(&observed);
@@ -1517,11 +1542,8 @@ impl Scenario for OnboardingTour {
                 .unwrap_or_else(|error| json!({"error": format!("{error:#}")}));
             candidates.push((name, functions, described));
         }
-        let tracker = tracker_of(&candidates, &registered);
+        let tracker = tracker_of(&candidates, &observers);
         let tracker_name = tracker.map(|(name, _, _)| name.clone());
-        let by_tracker = |trigger: &&Value| {
-            tracker_name.is_some() && trigger["worker_name"].as_str() == tracker_name.as_deref()
-        };
         let function_count = tracker.map_or(0, |(_, functions, _)| *functions);
         observations.push(binary(
             "extensibility.worker",
@@ -1532,37 +1554,34 @@ impl Scenario for OnboardingTour {
                 "new_workers": candidates.iter().map(|(name, functions, _)| json!({"name": name, "functions": functions})).collect::<Vec<_>>(),
             }),
         ));
-        let page = items(&registered, "registered_triggers")
-            .filter(by_tracker)
-            .any(|trigger| trigger["trigger_type"] == "console:script");
+        let page = tracker_name
+            .as_deref()
+            .is_some_and(|name| with_console_page(&observers).contains(name));
         observations.push(binary(
             "extensibility.page",
             page,
-            json!({"worker": tracker_name}),
+            json!({"worker": tracker_name, "observes": CONSOLE_ASSET}),
         ));
 
         let described = tracker.map_or(json!({"functions": []}), |(_, _, described)| {
             described.clone()
         });
         let adds = adder(&described);
-        let own_types: Vec<String> = items(&trigger_types, "triggers")
-            .filter(by_tracker)
-            .filter_map(|trigger| trigger["id"].as_str().map(str::to_owned))
-            .collect();
-        // Bound before this check binds its own listener on the same types.
-        let waiting: Vec<Value> = items(&registered, "registered_triggers")
-            .filter(|trigger| {
-                trigger["trigger_type"]
+        let events = event_functions(&described);
+        // Listed before this check observes the same functions itself.
+        let waiting: Vec<Value> = items(&observers, "observers")
+            .filter(|observer| {
+                observer["function_id"]
                     .as_str()
-                    .is_some_and(|kind| own_types.iter().any(|own| own == kind))
-                    && trigger["worker_name"].as_str() != tracker_name.as_deref()
+                    .is_some_and(|observed| events.iter().any(|own| own == observed))
+                    && observing_worker(observer) != tracker_name.as_deref()
             })
             .cloned()
             .collect();
         let added = match &adds {
             Some(adds) => {
                 let readers = readers(&described, Some(adds.0.as_str()));
-                add_expenses(context, run_id, adds, &readers, &own_types).await
+                add_expenses(context, run_id, adds, &readers, &events).await
             }
             None => Added {
                 fired: 0,
@@ -1604,16 +1623,16 @@ impl Scenario for OnboardingTour {
         ));
         observations.push(binary(
             "reactivity.trigger_type",
-            !own_types.is_empty(),
-            json!({"trigger_types": own_types}),
+            !events.is_empty(),
+            json!({"event_functions": events}),
         ));
         observations.push(ratio(
             "reactivity.fires",
             added.fired,
             EXPENSES.len(),
-            json!({"trigger_types": own_types, "expenses": added.evidence}),
+            json!({"event_functions": events, "expenses": added.evidence}),
         ));
-        let from_chat = chat_bindings(&observation.transcript, &own_types);
+        let from_chat = chat_bindings(&observation.transcript, &events);
         observations.push(binary(
             "reactivity.chat_trigger",
             !waiting.is_empty() || !from_chat.is_empty(),
@@ -1645,7 +1664,7 @@ impl Scenario for OnboardingTour {
                 "closed": closed,
                 "errors": errors,
                 "baseline": baseline,
-                "final": {"compose": status, "workers": workers, "registered_triggers": registered},
+                "final": {"compose": status, "workers": workers, "observers": observers},
             })
             .into(),
             invariants: vec![],
@@ -1678,8 +1697,8 @@ impl Scenario for OnboardingTour {
 
     async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
         if let Some(run) = lock_unpoisoned(runs()).remove(run_id) {
-            for trigger in run.triggers {
-                crate::observe::release(trigger);
+            for observer in run.observers {
+                crate::observe::release(observer);
             }
             for function in run.functions {
                 function.unregister();
@@ -1720,7 +1739,8 @@ mod tests {
             "steps": [
                 {"id": "message", "title": "Send a message",
                  "ask": {"text": "hey", "label": "Send a message", "agent": PROFILE},
-                 "condition": {"type": "harness::turn-completed", "config": {}, "label": "Waiting"}},
+                 "condition": {"function_id": "harness::on-turn-completed",
+                               "label": "Waiting", "hint": "Say hey in the chat pane."}},
                 {"id": "tabs", "title": "Workspaces", "anchors": [".learn-iii-tabs"]},
             ],
         });
@@ -1764,8 +1784,9 @@ mod tests {
             .collect();
         assert_eq!(new, ["helper", "expenses"]);
         // The helper has more functions and a page, but takes no expense.
-        let registered = json!({"registered_triggers": [
-            {"trigger_type": "console:script", "worker_name": "helper"},
+        let observers = json!({"observers": [
+            {"function_id": CONSOLE_ASSET, "args": {"kind": "script", "path": "helper/page.js"},
+             "worker": {"worker_id": "w1", "worker_name": "helper"}},
         ]});
         let candidates = vec![
             (
@@ -1776,9 +1797,39 @@ mod tests {
             ("expenses".to_string(), 4, described()),
         ];
         assert_eq!(
-            tracker_of(&candidates, &registered).map(|c| c.0.as_str()),
+            tracker_of(&candidates, &observers).map(|c| c.0.as_str()),
             Some("expenses")
         );
+        assert!(with_console_page(&observers).contains("helper"));
+        assert!(!with_console_page(&observers).contains("expenses"));
+        // A stylesheet or a module alone is no page.
+        let assets = json!({"observers": [
+            {"function_id": CONSOLE_ASSET, "args": {"kind": "style", "path": "styled/styles.css"},
+             "worker": {"worker_name": "styled"}},
+            {"function_id": CONSOLE_ASSET, "args": {"kind": "module", "path": "lib/chart.js"},
+             "worker": {"worker_name": "lib"}},
+            {"function_id": "state::on-changed", "args": {"kind": "script"},
+             "worker": {"worker_name": "other"}},
+            {"function_id": CONSOLE_ASSET, "args": {"kind": "style", "path": "both/styles.css"},
+             "worker": {"worker_name": "both"}},
+            {"function_id": CONSOLE_ASSET, "args": {"kind": "script", "path": "both/page.js"},
+             "worker": {"worker_name": "both"}},
+        ]});
+        let pages = with_console_page(&assets);
+        assert_eq!(pages, HashSet::from(["both"]));
+    }
+
+    #[test]
+    fn the_tracker_s_event_functions_are_its_private_ones() {
+        // `engine::functions::info` flattens a function's observe options.
+        let described = json!({"functions": [
+            {"function_id": "expenses::add", "private": false, "observer_count": 0},
+            {"function_id": "expenses::list", "observer_count": 0},
+            {"function_id": "expenses::on-added", "private": true, "observer_count": 1},
+            {"function_id": "expenses::gone", "error": "not_found"},
+        ]});
+        assert_eq!(event_functions(&described), ["expenses::on-added"]);
+        assert!(event_functions(&json!({"functions": []})).is_empty());
     }
 
     #[test]
@@ -1971,28 +2022,43 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_the_chat_bound_counts_once_the_engine_accepted_it() {
-        let call = |id: &str, kind: &str| {
+    fn an_observer_the_chat_put_counts_once_the_harness_accepted_it() {
+        let wrapped = |id: &str, observed: &str| {
             json!({"message": {"role": "assistant", "content": [{
-                "type": "function_call", "id": id, "function_id": "agent_trigger",
-                "arguments": {"function": "engine::register_trigger",
-                              "payload": {"trigger_type": kind, "config": {"event": "created"}, "once": true}},
+                "type": "function_call", "id": id, "function_id": "agent_call",
+                "arguments": {"function": "harness::observe",
+                              "payload": {"function_id": observed, "once": true}},
+            }]}})
+        };
+        let direct = |id: &str, observed: &str| {
+            json!({"message": {"role": "assistant", "content": [{
+                "type": "function_call", "id": id, "function_id": "harness::observe",
+                "arguments": {"function_id": observed, "filters": {"input.amount": {"$gt": 0}}},
             }]}})
         };
         let result = |id: &str, error: bool| {
             json!({"message": {
                 "role": "function_result", "function_call_id": id,
-                "function_id": "engine::register_trigger", "is_error": error,
+                "function_id": "harness::observe", "is_error": error,
+                "details": {"observer_id": format!("sub_{id}")},
             }})
         };
+        let own = ["expenses::on-added".to_string()];
         let transcript = json!({"messages": [
-            call("a", "expense-tracker:change"), result("a", false),
-            call("b", "expense-tracker:change"), result("b", true),
-            call("c", "state"), result("c", false),
+            wrapped("a", "expenses::on-added"), result("a", false),
+            wrapped("b", "expenses::on-added"), result("b", true),
+            wrapped("c", "state::on-changed"), result("c", false),
+            direct("d", "expenses::on-added"), result("d", false),
+            // No answer yet: not accepted.
+            direct("e", "expenses::on-added"),
         ]});
-        let bound = chat_bindings(&transcript, &["expense-tracker:change".to_string()]);
-        assert_eq!(bound.len(), 1);
-        assert_eq!(bound[0]["call"], "a");
+        let bound = chat_bindings(&transcript, &own);
+        let calls: Vec<&Value> = bound.iter().map(|binding| &binding["call"]).collect();
+        assert_eq!(calls, [&json!("a"), &json!("d")]);
+        assert_eq!(bound[0]["once"], true);
+        assert_eq!(bound[1]["observer_id"], "sub_d");
+        // Nothing the tracker hosts is observed: nothing counts.
+        assert!(chat_bindings(&transcript, &[]).is_empty());
     }
 
     #[test]

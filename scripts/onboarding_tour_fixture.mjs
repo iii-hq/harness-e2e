@@ -14,6 +14,15 @@ const step = ({ id, ask, condition }) => ({
   id,
   ...(ask ? { ask: ask.text } : {}),
   ...(ask?.agent ? { agent: ask.agent } : {}),
-  ...(condition ? { condition: { type: condition.type, config: condition.config ?? {} } } : {}),
+  // The observe source the card binds: what it observes, not what it says.
+  ...(condition
+    ? {
+        condition: {
+          function_id: condition.function_id,
+          ...(condition.args ? { args: condition.args } : {}),
+          ...(condition.filters ? { filters: condition.filters } : {}),
+        },
+      }
+    : {}),
 })
 process.stdout.write(`${JSON.stringify({ id: tour.id, steps: tour.steps.map(step) }, null, 2)}\n`)
