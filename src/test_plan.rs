@@ -413,7 +413,9 @@ impl MasterPlan {
         if suite.label.trim().is_empty() {
             suite.label = suite.id.clone();
         }
-        suite.lane = format!("local-{}", suite.id);
+        // A lane is at most 32 characters; a long id keeps its last 26, the
+        // part that tells dispatched suites apart. safe_id is ASCII only.
+        suite.lane = format!("local-{}", &suite.id[suite.id.len().saturating_sub(26)..]);
         let native: BTreeSet<_> = ScenarioId::ALL.iter().map(ToString::to_string).collect();
         self.selected_scenarios(&suite, &native)?;
         self.materialize_scope(suite, None)
@@ -1684,6 +1686,29 @@ mod tests {
         assert_eq!(snapshot.profile.label, "smoke");
         assert_eq!(snapshot.profile.repetitions, 1);
         assert_eq!(snapshot.campaigns[0]["campaign_id"], "smoke-r01");
+
+        // The id of a suite stated by an ad-hoc dispatch: its whole
+        // `local-<id>` would be longer than the 32 a campaign lane may be.
+        // A lane the dispatch states is never the one used.
+        let suite: Suite = serde_json::from_value(json!({
+            "id": "adhoc-e95a4049748a38dcc369d4d07c0ef7a1", "scenarios": ["minimal_path"],
+            "repetitions": 2, "lane": "release-daily"
+        }))
+        .unwrap();
+        let snapshot = plan.materialize_suite(suite).unwrap();
+        assert_eq!(
+            snapshot.profile.id,
+            "adhoc-e95a4049748a38dcc369d4d07c0ef7a1"
+        );
+        assert_eq!(snapshot.profile.lane, "local-49748a38dcc369d4d07c0ef7a1");
+        assert_eq!(snapshot.campaigns.len(), 2);
+        for campaign in &snapshot.campaigns {
+            assert_eq!(campaign["lane"], "local-49748a38dcc369d4d07c0ef7a1");
+            assert!(campaign["campaign_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("adhoc-e95a4049748a38dcc369d4d07c0ef7a1-r0"));
+        }
 
         let reviewed = plan.materialize("pr").unwrap();
         let mut copy = reviewed.profile.clone();
