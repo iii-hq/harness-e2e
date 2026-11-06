@@ -312,7 +312,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_a_template_stack_adds_the_workers_the_template_does_not_declare(self):
         """The onboarding stack is the `harness` template plus the tour's
         worker. A stack container joins the project when the template has no
-        worker of its package, and only pins the version when it does."""
+        worker of its package; when it does, the lock pins the version."""
         contract = campaign_contract()
         contract["runtime"]["lock"] = lock_of({"onboarding": "0.3.1", "harness": "1.8.60", "judge": "0.4.0"})
         contract["runtime"]["lock"]["graphs"] = {
@@ -342,6 +342,48 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertEqual(project["containers"]["onboarding"]["start_after"], ["state"])
         self.assertNotIn("start_after", project["containers"]["harness-e2e"])
         self.assertEqual(set(template["containers"]), {"harness", "state"})
+
+    def test_a_template_worker_runs_under_the_settings_the_stack_states_for_it(self):
+        """The onboarding stack pins the IDE's scaffold templates
+        (`code.templates.ref`) on the `harness` template's own `ide`: the
+        template's settings stay, the stack's win key by key, and the lock
+        still sets the version."""
+        contract = campaign_contract()
+        contract["runtime"]["lock"] = lock_of({"ide": "0.13.0", "harness": "1.9.1", "onboarding": "0.2.0"})
+        contract["runtime"]["lock"]["graphs"] = {"ide": ["ide"], "harness": ["harness"], "onboarding": ["onboarding"]}
+        contract["runtime"]["compose"] = {"containers": {
+            "ide": {"worker": "package://ide", "version": "latest",
+                    "config_override": {"code": {"templates": {"url": "https://example.test/templates.git",
+                                                              "ref": "feat/candidate"}}},
+                    "environment": {"III_TELEMETRY_ENABLED": "false"}},
+            "harness": {"worker": "package://harness", "version": "1.9.1",
+                        "config_override": {"max_children": 3}},
+            "onboarding": {"worker": "package://onboarding", "version": "0.2.0",
+                           "config_override": {"tour": {"steps": 10}}},
+        }}
+        template = {"containers": {
+            "ide": {"worker": "package://ide", "version": "latest",
+                    "config_override": {"code": {"templates": {"url": "https://github.com/iii-hq/templates.git",
+                                                              "ref": "main", "cache": True},
+                                                 "editor": "code"}},
+                    "environment": {"IDE_LOG": "info"}},
+            "harness": {"worker": "package://harness", "version": "1.8.17",
+                        "config_override": {"max_children": 8, "max_depth": 4}},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        containers = project["containers"]
+        self.assertEqual(containers["ide"]["config_override"], {"code": {
+            "templates": {"url": "https://example.test/templates.git", "ref": "feat/candidate", "cache": True},
+            "editor": "code",
+        }})
+        self.assertEqual(containers["ide"]["environment"], {"IDE_LOG": "info", "III_TELEMETRY_ENABLED": "false"})
+        self.assertEqual(containers["harness"]["config_override"], {"max_children": 3, "max_depth": 4})
+        self.assertEqual({name: containers[name]["version"] for name in ("ide", "harness", "onboarding")},
+                         {"ide": "0.13.0", "harness": "1.9.1", "onboarding": "0.2.0"})
+        # A worker the template does not declare joins with all it states.
+        self.assertEqual(containers["onboarding"]["config_override"], {"tour": {"steps": 10}})
+        # The template the groups share is not edited.
+        self.assertEqual(template["containers"]["ide"]["config_override"]["code"]["templates"]["ref"], "main")
 
     def test_campaign_provider_is_added_to_templates_and_receives_its_pin_and_credentials(self):
         template = {"containers": {
