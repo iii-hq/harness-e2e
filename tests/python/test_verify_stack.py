@@ -147,6 +147,37 @@ class VerdictTests(unittest.TestCase):
     def test_an_empty_summary_is_not_measured(self):
         self.assertEqual(verify_stack.verdict({"campaigns": []})["status"], "not_measured")
 
+    def test_a_baseline_that_does_not_complete_is_a_pass(self):
+        result = verify_stack.verdict(summary(group("memory_value"), group("memory_value_baseline", completion=0.0)))
+        self.assertEqual((result["status"], result["passed"], result["failed"]), ("passed", 2, []))
+
+    def test_a_baseline_that_fails_its_objective_is_a_pass(self):
+        result = verify_stack.verdict(summary(group("memory_value_baseline", "failed", completion=0.0)))
+        self.assertEqual((result["status"], result["passed"], result["failed"]), ("passed", 1, []))
+
+    def test_a_baseline_that_completes_fails_the_stack(self):
+        result = verify_stack.verdict(summary(group("memory_value_baseline")))
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("proves nothing", result["failed"][0])
+
+    def test_one_baseline_run_that_completes_fails_the_stack(self):
+        result = verify_stack.verdict(summary(group("memory_value_baseline", completion=0.5)))
+        self.assertEqual((result["status"], result["passed"]), ("failed", 0))
+        self.assertIn("50% of runs completed without memory", result["failed"][0])
+
+    def test_a_baseline_that_fails_its_objective_after_completing_fails_the_stack(self):
+        result = verify_stack.verdict(summary(group("memory_value_baseline", "failed", completion=0.5)))
+        self.assertEqual((result["status"], result["passed"]), ("failed", 0))
+
+    def test_a_baseline_without_completion_evidence_is_not_measured(self):
+        for outcome in ("passed", "failed"):
+            result = verify_stack.verdict(summary(group("memory_value_baseline", outcome, completion=None)))
+            self.assertEqual((result["status"], result["not_measured"]), ("not_measured", ["memory_value_baseline"]))
+
+    def test_a_baseline_that_did_not_run_is_not_measured(self):
+        result = verify_stack.verdict(summary(group("memory_value_baseline", "inconclusive", valid=False)))
+        self.assertEqual(result["status"], "not_measured")
+
 
 class RunTests(unittest.TestCase):
     def test_the_run_id_comes_from_the_url_gh_prints(self):
