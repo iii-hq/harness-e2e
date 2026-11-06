@@ -193,15 +193,27 @@ def verdict(summary: dict[str, Any]) -> dict[str, Any]:
     def name(group: dict[str, Any]) -> str:
         return ", ".join(group.get("scenarios") or []) or str(group.get("group_id"))
 
+    def baseline(group: dict[str, Any]) -> bool:
+        scenarios = group.get("scenarios") or []
+        return bool(scenarios) and all(scenario.endswith("_baseline") for scenario in scenarios)
+
     # A passed objective whose runs did not all complete (a stall the scoring
     # does not see) is no pass: it fails, and the rate says why. Without
     # completion evidence (null) there is nothing to say either way.
-    passed = [g for g in groups if measured(g) and g["objective_outcome"] == "passed" and g.get("completion_rate") == 1.0]
-    failed = [name(g) for g in groups if measured(g) and g["objective_outcome"] == "failed"]
-    failed += [f"{name(g)} ({g['completion_rate']:.0%} of runs completed)" for g in groups
+    #
+    # A baseline is the task with nothing planted, and it is meant not to
+    # complete: a single run that does means its value case proves nothing.
+    ordinary = [g for g in groups if not baseline(g)]
+    baselines = [g for g in groups if baseline(g) and measured(g) and g.get("completion_rate") is not None]
+    passed = [g for g in ordinary if measured(g) and g["objective_outcome"] == "passed" and g.get("completion_rate") == 1.0]
+    passed += [g for g in baselines if g["completion_rate"] == 0]
+    failed = [name(g) for g in ordinary if measured(g) and g["objective_outcome"] == "failed"]
+    failed += [f"{name(g)} ({g['completion_rate']:.0%} of runs completed)" for g in ordinary
                if measured(g) and g["objective_outcome"] == "passed" and g.get("completion_rate") not in (None, 1.0)]
+    failed += [f"{name(g)} ({g['completion_rate']:.0%} of runs completed without memory, so its value case proves nothing)"
+               for g in baselines if g["completion_rate"] > 0]
     unmeasured = [name(g) for g in groups if not measured(g)
-                  or (g["objective_outcome"] == "passed" and g.get("completion_rate") is None)]
+                  or ((baseline(g) or g["objective_outcome"] == "passed") and g.get("completion_rate") is None)]
     planned = max(planned, len(groups))
     # Nothing measured is never a pass: 0 of 0 groups says nothing about the stack.
     complete = planned > 0 and not unmeasured and len(passed) == planned
