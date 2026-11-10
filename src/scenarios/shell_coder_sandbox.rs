@@ -825,21 +825,33 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
         let Some(result) = common::function_result(&observation.transcript, invocation) else {
             continue;
         };
-        if is_public_test_call(&invocation.call, root) {
-            match result_exit_code(result) {
-                Some(code) if code != 0 && red_baseline.is_none() => red_baseline = Some(index),
-                Some(0) if first_source_edit.is_some_and(|edit| index > edit) => {
-                    green_public.get_or_insert(index);
-                    if last_source_edit.is_some_and(|edit| index > edit) {
-                        final_green.get_or_insert(index);
-                    }
-                }
-                _ => {}
+        let direct = is_public_test_call(&invocation.call, root);
+        let exit_code = result_exit_code(result);
+        if direct && exit_code.is_some_and(|code| code != 0) && red_baseline.is_none() {
+            red_baseline = Some(index);
+        }
+        // The rerun and the demo are prompted as commands, not as one call each:
+        // a script that runs them counts by what the commands printed.
+        let script = shell_script(&invocation.call);
+        let green = if direct {
+            exit_code == Some(0)
+        } else {
+            script.is_some_and(|script| script_runs_python(script, root, &PUBLIC_TEST_ARGS))
+                && scripted_suite_passed(result)
+        };
+        if green && first_source_edit.is_some_and(|edit| index > edit) {
+            green_public.get_or_insert(index);
+            if last_source_edit.is_some_and(|edit| index > edit) {
+                final_green.get_or_insert(index);
             }
         }
-        if is_host_demo_call(&invocation.call, root)
-            && successful_output_result(result, HOST_DEMO_STDOUT)
-        {
+        let demo = if is_host_demo_call(&invocation.call, root) {
+            successful_output_result(result, HOST_DEMO_STDOUT)
+        } else {
+            script.is_some_and(|script| script_runs_python(script, root, &HOST_DEMO_ARGS))
+                && scripted_demo_printed(result)
+        };
+        if demo {
             host_demo.get_or_insert(index);
             if final_green.is_some() {
                 final_demo.get_or_insert(index);
@@ -854,7 +866,7 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
     let evidence_ordered = matches!(
         (red_baseline, diagnosis_create, first_source_edit, final_green, final_source_read, final_demo, diagnosis_move),
         (Some(red), Some(diagnosis), Some(edit), Some(green), Some(read), Some(demo), Some(moved))
-            if red < diagnosis && diagnosis < edit && edit < green && green < read && green < demo && read < moved && demo < moved
+            if red < diagnosis && diagnosis < edit && edit < green && green < read && green <= demo && read < moved && demo < moved
     );
     WorkflowAudit {
         coder_info,
@@ -1098,24 +1110,93 @@ fn is_coder_move(call: &common::ObservedFunctionCall, root: &Path, from: &str, t
             .is_some_and(|files| files.len() == 1)
 }
 
+const PUBLIC_TEST_ARGS: [&str; 7] = [
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_*.py",
+];
+const HOST_DEMO_ARGS: [&str; 2] = [SOURCE_PATH, "--demo"];
+
 fn is_public_test_call(call: &common::ObservedFunctionCall, root: &Path) -> bool {
-    is_shell_python_call(
-        call,
-        root,
-        &[
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            "tests",
-            "-p",
-            "test_*.py",
-        ],
-    )
+    is_shell_python_call(call, root, &PUBLIC_TEST_ARGS)
 }
 
 fn is_host_demo_call(call: &common::ObservedFunctionCall, root: &Path) -> bool {
-    is_shell_python_call(call, root, &[SOURCE_PATH, "--demo"])
+    is_shell_python_call(call, root, &HOST_DEMO_ARGS)
+}
+
+/// The script of a `sh -c` or `bash -c` call on the host.
+fn shell_script(call: &common::ObservedFunctionCall) -> Option<&str> {
+    if call.function_id != "shell::exec" || !host_target(&call.arguments) {
+        return None;
+    }
+    let shell = call
+        .arguments
+        .get("command")
+        .and_then(Value::as_str)
+        .and_then(|value| Path::new(value).file_name().and_then(OsStr::to_str))
+        .is_some_and(|value| matches!(value, "sh" | "bash"));
+    match call.arguments.get("args")?.as_array()?.as_slice() {
+        [flag, script] if shell && flag.as_str() == Some("-c") => script.as_str(),
+        _ => None,
+    }
+}
+
+/// Whether one command of a shell script is `python3` with exactly these
+/// arguments, quotes aside.
+fn script_runs_python(script: &str, root: &Path, expected_args: &[&str]) -> bool {
+    let script = script.replace(['\'', '"'], "");
+    script.split([';', '&', '|', '\n']).any(|command| {
+        let mut words = command.split_whitespace();
+        let python = words
+            .next()
+            .and_then(|word| Path::new(word).file_name().and_then(OsStr::to_str))
+            .is_some_and(|word| matches!(word, "python" | "python3"));
+        // A redirection such as `2>&1` was cut off at its `&`: `2>` is no argument.
+        let args: Vec<&str> = words.filter(|word| !word.contains(['<', '>'])).collect();
+        python
+            && args.len() == expected_args.len()
+            && args.iter().zip(expected_args).all(|(observed, expected)| {
+                if *expected == SOURCE_PATH {
+                    workspace_path_matches(Some(observed), root, SOURCE_PATH)
+                } else {
+                    observed == expected
+                }
+            })
+    })
+}
+
+/// What a script printed, unless it timed out. Its exit code says nothing
+/// about one of its commands: it is the last command's.
+fn scripted_output(result: &Value) -> Option<(&str, &str)> {
+    let text = |field: &str| result.pointer(field).and_then(Value::as_str);
+    (result
+        .pointer("/details/timed_out")
+        .and_then(Value::as_bool)
+        != Some(true))
+    .then(|| text("/details/stdout").zip(text("/details/stderr")))
+    .flatten()
+}
+
+/// unittest's own verdict in what a script printed: the script's exit code is
+/// that of its last command, not of the suite.
+fn scripted_suite_passed(result: &Value) -> bool {
+    scripted_output(result).is_some_and(|(stdout, stderr)| {
+        let mut lines = stdout.lines().chain(stderr.lines()).map(str::trim);
+        let ran = lines.clone().any(|line| line.starts_with("Ran "));
+        let failed = lines.clone().any(|line| line.starts_with("FAILED"));
+        ran && !failed && lines.any(|line| line == "OK")
+    })
+}
+
+/// The demo's contract line among what a script printed.
+fn scripted_demo_printed(result: &Value) -> bool {
+    scripted_output(result)
+        .is_some_and(|(stdout, _)| stdout.lines().any(|line| line.trim() == HOST_DEMO_STDOUT))
 }
 
 fn is_shell_python_call(
@@ -1691,6 +1772,137 @@ pub(crate) mod tests {
             ],
         );
         assert!(ordered(refused));
+    }
+
+    #[test]
+    fn a_suite_and_a_demo_run_through_a_shell_are_the_green_run_and_the_demo() {
+        let root = PathBuf::from("/tmp/scenario-workspaces/shell-coder-test");
+        let audit = |messages: Vec<Value>| {
+            let observation = ScenarioObservation::for_test(
+                crate::scenarios::ScenarioId::ShellCoderSandbox,
+                "test",
+                json!({ "messages": messages }),
+                "",
+                Vec::new(),
+            );
+            workflow_audit(&observation, &root)
+        };
+        let shell = |id: &str, command: &str, script: &str, stdout: &str, stderr: &str| {
+            [
+                json!({ "message": { "role": "assistant", "content": [{
+                    "type": "function_call", "id": id, "function_id": "shell::exec",
+                    "arguments": { "command": command, "args": ["-c", script] },
+                }] } }),
+                json!({ "message": {
+                    "role": "function_result", "function_call_id": id,
+                    "function_id": "shell::exec", "is_error": false,
+                    "details": { "exit_code": 0, "stdout": stdout, "stderr": stderr },
+                } }),
+            ]
+        };
+        const SUITE: &str = ".....\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n";
+        // info, read (2), red (2), create, edit, green (2), read (2), demo (2), move.
+        let reference = reference_transcript()["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+
+        // Execution of 0.24.8, round 11: one bash call after the edit, then the read.
+        let mut both = reference.clone();
+        both.splice(11..13, []);
+        both.splice(
+            7..9,
+            shell(
+                "both",
+                "bash",
+                "python3 -m unittest discover -s tests -p 'test_*.py' 2>&1; echo \"SUITE_EXIT=$?\"; echo '--- demo ---'; python3 src/reconcile.py --demo; echo \"DEMO_EXIT=$?\"",
+                &format!("{SUITE}SUITE_EXIT=0\n--- demo ---\n{HOST_DEMO_STDOUT}\nDEMO_EXIT=0\n"),
+                "",
+            ),
+        );
+        let audited = audit(both);
+        assert!(audited.green_public.is_some() && audited.host_demo.is_some());
+        assert!(audited.evidence_ordered);
+
+        // Round 10: the read came before that one call, so the order does not hold.
+        let mut read_first = reference.clone();
+        read_first.splice(11..13, []);
+        read_first.splice(7..9, []);
+        read_first.splice(
+            9..9,
+            shell(
+                "both",
+                "sh",
+                "python3 -m unittest discover -s tests -p 'test_*.py'; echo '--- demo ---'; python3 src/reconcile.py --demo",
+                &format!("--- demo ---\n{HOST_DEMO_STDOUT}\n"),
+                SUITE,
+            ),
+        );
+        let audited = audit(read_first);
+        assert!(audited.green_public.is_some() && audited.host_demo.is_some());
+        assert!(!audited.evidence_ordered);
+
+        // The script's exit code is its last command's: a `git status` outside a
+        // repository after a green suite and the demo takes neither away.
+        let mut trailing = reference.clone();
+        trailing.splice(11..13, []);
+        trailing.splice(
+            7..9,
+            shell(
+                "trailing",
+                "sh",
+                "python3 -m unittest discover -s tests -p 'test_*.py'; python3 src/reconcile.py --demo; git status --short",
+                &format!("{HOST_DEMO_STDOUT}\n"),
+                SUITE,
+            ),
+        );
+        trailing[8]["message"]["details"]["exit_code"] = json!(128);
+        let audited = audit(trailing);
+        assert!(audited.green_public.is_some() && audited.host_demo.is_some());
+
+        // A suite that failed inside the script is no green run, whatever the script exits with.
+        let mut failed = reference.clone();
+        failed.splice(
+            7..9,
+            shell(
+                "failed",
+                "sh",
+                "python3 -m unittest discover -s tests -p 'test_*.py'; true",
+                "",
+                "F....\nRan 5 tests in 0.000s\n\nFAILED (failures=1)\n",
+            ),
+        );
+        assert!(audit(failed).green_public.is_none());
+
+        // A script that never runs the suite or the demo is neither, whatever it prints.
+        let mut echoed = reference.clone();
+        echoed.splice(11..13, []);
+        echoed.splice(
+            7..9,
+            shell(
+                "echoed",
+                "sh",
+                &format!("echo 'Ran 5 tests'; echo OK; echo '{HOST_DEMO_STDOUT}'"),
+                &format!("Ran 5 tests\nOK\n{HOST_DEMO_STDOUT}\n"),
+                "",
+            ),
+        );
+        let audited = audit(echoed);
+        assert!(audited.green_public.is_none() && audited.host_demo.is_none());
+
+        // The baseline is prompted as an exact command: a script is not it.
+        let mut baseline = reference;
+        baseline.splice(
+            3..5,
+            shell(
+                "red",
+                "sh",
+                "python3 -m unittest discover -s tests -p 'test_*.py'",
+                "",
+                "F....\nRan 5 tests in 0.000s\n\nFAILED (failures=4)\n",
+            ),
+        );
+        assert!(audit(baseline).red_baseline.is_none());
     }
 
     #[test]
