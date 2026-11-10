@@ -1614,6 +1614,22 @@ fn scenario_contract_sha256(scenario: &E2eScenarioReport) -> Result<String> {
     }))
 }
 
+/// A run's total, input and output tokens: the final attempt's wire totals,
+/// and where the Harness reported none, what the run's efficiency states (a
+/// complete run that ran no turn used zero).
+fn usage_tokens(run: &E2eRunReport) -> [Option<f64>; 3] {
+    let totals = run.metrics.as_ref().map(|metrics| &metrics.totals);
+    let efficiency = run.efficiency.as_ref();
+    let input = totals
+        .and_then(|totals| totals.input_tokens)
+        .or_else(|| efficiency?.input_tokens);
+    let output = totals
+        .and_then(|totals| totals.output_tokens)
+        .or_else(|| efficiency?.output_tokens);
+    let total = input.zip(output).map(|(input, output)| input + output);
+    [total, input, output].map(|tokens| tokens.map(|tokens| tokens as f64))
+}
+
 fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMetrics {
     let totals = |field: fn(&SessionUsageTotals) -> Option<u64>| {
         run.metrics
@@ -1621,13 +1637,7 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
             .and_then(|metrics| field(&metrics.totals))
             .map(|tokens| tokens as f64)
     };
-    let tokens = run.metrics.as_ref().and_then(|metrics| {
-        metrics
-            .totals
-            .input_tokens
-            .zip(metrics.totals.output_tokens)
-            .map(|(input, output)| (input + output) as f64)
-    });
+    let [tokens, input_tokens, output_tokens] = usage_tokens(run);
     RunMetrics {
         // Only a technically valid run's score counts toward a mean.
         score: (run.technical == crate::report::TechnicalState::Valid)
@@ -1677,8 +1687,8 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         assessment: assessment.clone(),
         technical: Some(run.technical),
         cause: run.cause,
-        input_tokens: totals(|totals| totals.input_tokens),
-        output_tokens: totals(|totals| totals.output_tokens),
+        input_tokens,
+        output_tokens,
         cache_read_tokens: totals(|totals| totals.cache_read_tokens),
         cache_write_tokens: totals(|totals| totals.cache_write_tokens),
         reasoning_tokens: totals(|totals| totals.reasoning_tokens),
@@ -2393,6 +2403,26 @@ mod tests {
             (older.output_tokens, older.cost_usd, older.technical_retries),
             (None, Some(0.1), None)
         );
+    }
+
+    #[test]
+    fn a_complete_run_without_a_turn_trends_at_zero_tokens() {
+        let mut report = super::super::tests::report();
+        let run = &mut report.scenarios[0].runs[0];
+        run.metrics = Some(crate::wire::Observed::from_normalized(
+            crate::wire::SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: SessionUsageTotals {
+                    sessions: 1,
+                    ..SessionUsageTotals::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            },
+        ));
+        run.update_efficiency();
+        assert_eq!(usage_tokens(run), [Some(0.0); 3]);
     }
 
     #[test]
