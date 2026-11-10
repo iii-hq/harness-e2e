@@ -297,6 +297,10 @@ impl ScenarioId {
                     (&[], A::CoreLoop, &[])
                 }
                 Self::BindingContractProbe => (&[W::State], A::Scheduling, &[]),
+                Self::StructuredOutput => (&[], A::CoreLoop, &[]),
+                Self::ContextCompaction => (&[], A::LongContext, &[]),
+                // The subject reads the fixture file through the coder worker.
+                Self::SessionContinuity => (&[W::Ide], A::CoreLoop, &[]),
                 _ => return ScenarioTags::default(),
             };
         ScenarioTags {
@@ -342,6 +346,7 @@ mod tests {
         assert_eq!(
             harness_only,
             BTreeSet::from([
+                "context_compaction",
                 "context_pressure",
                 "dispatch_pipeline",
                 "harness_contract_probe",
@@ -349,6 +354,7 @@ mod tests {
                 "registry_implementation",
                 "registry_verification",
                 "repeated_failure_breaker",
+                "structured_output",
                 "trending_topics_build",
                 "truncated_call_guard",
                 "turn_failure_surface",
