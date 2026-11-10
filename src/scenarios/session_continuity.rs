@@ -38,7 +38,7 @@ const ROUTE: AssessmentSpec = AssessmentSpec::gate(
     25,
     "Did the keyed send that named only the session, and the bare follow-up, run on the model and provider of the first exchange?",
 )
-.labeled("A send naming only the session keeps its model");
+.labeled("A session-only send keeps its model");
 const POLICY: AssessmentSpec = AssessmentSpec::gate(
     "policy_kept",
     25,

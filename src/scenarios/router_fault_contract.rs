@@ -65,7 +65,7 @@ const PAIRING: AssessmentSpec = AssessmentSpec::gate(
     15,
     "After a step with a call to a missing function, did the next request carry a result for every call?",
 )
-.labeled("Every call has a result in the next request");
+.labeled("Every call is answered in the next request");
 const PRESTREAM: AssessmentSpec = AssessmentSpec::gate(
     "prestream_retry",
     20,
@@ -77,7 +77,7 @@ const RESUME: AssessmentSpec = AssessmentSpec::gate(
     25,
     "Did a stream cut mid-answer resume with recovering and recovered rows, keep the partial and run the earlier call once, and did a stream cut every time fail after three resumes?",
 )
-.labeled("A cut stream resumes once, gives up after three");
+.labeled("A cut stream resumes, gives up after three");
 const STOP: AssessmentSpec = AssessmentSpec::gate(
     "stop_mid_stream",
     15,
@@ -634,6 +634,13 @@ async fn stop_case(context: &E2eContext, run_id: &str, session_id: &str) -> Opti
         (status["status"] == "cancelled").then_some(status)
     })
     .await;
+    // The provider's side shares the stop's 5 s; `judge` reads what it left.
+    if let Some(turn) = status
+        .as_ref()
+        .and_then(|status| status["turn_id"].as_str())
+    {
+        provider_saw_stop(run_id, turn, STOP_WITHIN.saturating_sub(clock.elapsed())).await;
+    }
     mechanism::note(
         run_id,
         "stop",
@@ -643,6 +650,29 @@ async fn stop_case(context: &E2eContext, run_id: &str, session_id: &str) -> Opti
         }),
     );
     status.or_else(|| Some(json!({ "status": "not cancelled within 5 s" })))
+}
+
+/// Whether the provider was told to abort `turn`'s request and its stream ended.
+fn stop_reached_provider(ledger: &Ledger, turn: &str) -> bool {
+    !turn.is_empty()
+        && ledger
+            .aborts
+            .iter()
+            .any(|request| request.starts_with(&format!("{turn}:")))
+        && ledger.stop_ended.is_some()
+}
+
+/// Waits for the provider's side of a stop. The router calls the provider's
+/// abort detached and the fake finds its channel closed only on its next
+/// ping, so both can land after the turn already reads `cancelled`.
+async fn provider_saw_stop(run_id: &str, turn: &str, within: Duration) -> bool {
+    let ledger = ledger(run_id);
+    mechanism::poll(within, || {
+        let ledger = Arc::clone(&ledger);
+        async move { stop_reached_provider(&lock_unpoisoned(&ledger), turn).then_some(()) }
+    })
+    .await
+    .is_some()
 }
 
 fn rows<'a>(transcript: &'a Value, custom_type: &str) -> Vec<&'a Value> {
@@ -719,13 +749,7 @@ fn judge(run_id: &str, case: &str, status: Option<&Value>, transcript: &Value) -
             let turn = status
                 .and_then(|status| status["turn_id"].as_str())
                 .unwrap_or_default();
-            state == "cancelled"
-                && !turn.is_empty()
-                && ledger
-                    .aborts
-                    .iter()
-                    .any(|request| request.starts_with(&format!("{turn}:")))
-                && ledger.stop_ended.is_some()
+            state == "cancelled" && stop_reached_provider(&ledger, turn)
         }
         "overflow" => {
             state == "failed" && errors.len() == 1 && errors[0]["class"] == "llm.context_overflow"
@@ -982,6 +1006,8 @@ mod tests {
         assert!(judged("stop", 1, "cancelled", vec![], aborted("t_1:0")));
         assert!(!judged("stop", 1, "cancelled", vec![], aborted("t_0:0")));
         assert!(!judged("stop", 1, "completed", vec![], aborted("t_1:0")));
+        let still_streaming = |ledger: &mut Ledger| ledger.aborts.push("t_1:0".into());
+        assert!(!judged("stop", 1, "cancelled", vec![], still_streaming));
 
         let overflow = |class: &str| vec![row("error", json!({ "class": class }))];
         assert!(judged(
@@ -998,6 +1024,25 @@ mod tests {
             overflow("llm.provider_error"),
             |_| {}
         ));
+    }
+
+    /// The pilot's lost round: the turn read `cancelled` before the fake's
+    /// next ping found its channel closed.
+    #[tokio::test]
+    async fn the_stop_case_waits_for_the_provider_to_see_the_stop() {
+        let run = "stop-settles";
+        let shared = ledger(run);
+        let late = Arc::clone(&shared);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let mut late = lock_unpoisoned(&late);
+            late.aborts.push("t_1:0".into());
+            late.stop_ended = Some(Instant::now());
+        });
+        assert!(provider_saw_stop(run, "t_1", Duration::from_secs(5)).await);
+        lock_unpoisoned(&shared).stop_ended = None;
+        assert!(!provider_saw_stop(run, "t_1", Duration::ZERO).await);
+        lock_unpoisoned(ledgers()).remove(run);
     }
 
     #[test]

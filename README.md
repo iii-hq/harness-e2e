@@ -416,7 +416,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | ID | Purpose |
 | --- | --- | --- |
-| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, plus four probes of the Harness's own contract, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
+| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, plus four probes of the Harness's own contract and five short checks of its mechanisms, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
 | Null agent canary | `null-canary` | The regression's agent tasks run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
@@ -467,7 +467,7 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 198 jobs, nine at a time.
+`regression` runs eleven (`-r01` to `-r11`): 253 jobs, nine at a time.
 
 Four of the regression's tests check a Harness mechanism the model has to set
 in motion. `spawn_depth_cap` reads the Harness's `max_depth` from its
@@ -488,7 +488,7 @@ shared stack. It reads the session's status before the runner's
 `harness::status`, which would repair a lost projection, and counts that read
 only when the runner's wait ended on the turn's terminal event.
 
-Four more of the regression's eighteen tests probe the Harness's own
+Four more of the regression's twenty-three tests probe the Harness's own
 contract rather than an agent's work: `harness_contract_probe` (the sends
 `harness::send` must refuse, and the two output caps it must accept),
 `dispatch_pipeline` (policy, hook chain, result normalization, hook holds and
@@ -501,6 +501,18 @@ run's own fixtures and sessions. `turn_failure_surface` declares
 `expected_root_outcome = Failed`, and `harness_contract_probe` and
 `binding_contract_probe` end with a bare follow-up, so the turns a probe
 started are counted in the run's usage.
+
+Five more check Harness mechanisms through short turns:
+`structured_output` (a turn asked for JSON returns the validated object as its
+result), `context_compaction` (`/compact` and `harness::compact` beside a live
+turn, and a prompt too large for the window) and `session_continuity` (a send
+that names only the session keeps its model, policy and filesystem root),
+`steer_and_stop` (queued steers reach a running turn in order, and a stop
+cancels a parent and its child) and `router_fault_contract` (a scripted
+provider fails before, during and after a stream, and the turn resumes, fails
+or stops as the contract says). Like
+the probes, they have no null-agent control and stay out of `null-canary` and
+`regression-x11`.
 
 The `null-canary` suite runs the regression's fourteen agent tasks and `minimal_path`
 (the one test `pr` and `after-release` add to the regression) once, with no

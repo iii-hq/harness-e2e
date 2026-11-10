@@ -45,7 +45,7 @@ const COMMAND: AssessmentSpec = AssessmentSpec::gate(
     25,
     "Did `/compact` sent during a held call start a `cmp_*` compaction on the live turn, with no user entry and no extra turn, and did a resend with the same key come back deduplicated?",
 )
-.labeled("/compact mid-turn compacts without a turn or a user entry");
+.labeled("/compact mid-turn adds no turn or user entry");
 const RECORD: AssessmentSpec = AssessmentSpec::gate(
     "compaction_record",
     15,
@@ -57,7 +57,7 @@ const EMPTY_AND_BUSY: AssessmentSpec = AssessmentSpec::gate(
     15,
     "Did an early `harness::compact` return `empty`, a missing session get refused as not existing, and one of two concurrent compactions return `busy`?",
 )
-.labeled("Early compact is empty, a concurrent one is busy");
+.labeled("Early compact is empty, a concurrent one busy");
 const LIVE_TURN: AssessmentSpec = AssessmentSpec::gate(
     "live_turn_safety",
     15,

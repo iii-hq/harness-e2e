@@ -749,7 +749,7 @@ mod tests {
         let plan = embedded().unwrap();
         assert_eq!(plan.suites.len(), 18);
         for (id, cases, runs) in [
-            ("regression", 18, 198),
+            ("regression", 23, 253),
             ("null-canary", 15, 15),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
@@ -967,7 +967,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:d86b101ccf262d3b79f850ee6f6bc4428c9d71666896f6624ea4df795552fd99"
+            "sha256:bb8bf84d0f4e4c1c751fcf8540c3fff05e9e2c88ca88056b6ec1c0c3df5bc954"
         );
     }
 
@@ -1410,6 +1410,11 @@ mod tests {
         (ScenarioId::DispatchPipeline, HARNESS_LIVE, &[]),
         (ScenarioId::BindingContractProbe, HARNESS_LIVE, &[]),
         (ScenarioId::TurnFailureSurface, HARNESS_LIVE, &[]),
+        (ScenarioId::StructuredOutput, HARNESS_LIVE, &[]),
+        (ScenarioId::ContextCompaction, HARNESS_LIVE, &[]),
+        (ScenarioId::SessionContinuity, HARNESS_LIVE, &[]),
+        (ScenarioId::SteerAndStop, HARNESS_LIVE, &[]),
+        (ScenarioId::RouterFaultContract, HARNESS_LIVE, &[]),
     ];
     const HARNESS_LIVE: &str =
         "capture probes the Harness's own contract on a live stack and evaluate scores that \
