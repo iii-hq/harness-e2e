@@ -11,7 +11,23 @@
 //! completion, and `session::get` reads `done` before the runner calls
 //! `harness::status`, which would repair the status itself: the read runs in
 //! `after_dialogue`, and counts only when the runner's wait ended on the
-//! turn's terminal event rather than on a status sample.
+//! turn's terminal event rather than on a status sample. The hold fixture
+//! counts its invocations, and they must equal the hold calls in the
+//! transcript: a restart that ran the held call again adds an invocation
+//! without a call.
+//!
+//! Inside that restart step, right before it restarts the Harness, the runner
+//! plays one scripted turn on a side session of its own and arms two one-shot
+//! bindings there, each calling a run-scoped sink: `state::on-changed` on a
+//! key nobody wrote, and `harness::on-timer` due 20 s later. Their observers
+//! die with the Harness's connection. The boot replay (`bindings/gc.rs`)
+//! observes every surviving record again, a timer at its same instant, and
+//! reads the key of a one-shot state binding that never fired, to deliver a
+//! value written while nobody observed it. The runner writes the key when it
+//! hears the restarted Harness's `harness::ready`, and the sink must count one
+//! delivery of each binding. A run that never calls the hold arms nothing,
+//! waits for nothing and leaves the check unevaluated; the subject's session
+//! owns none of this.
 //!
 //! The ready, turn-completed and hold registrations are made before either
 //! restart, so the run first checks that they survive one: a binding the
@@ -25,6 +41,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
+use iii_sdk::channel::{ChannelWriter, StreamChannelRef};
 use iii_sdk::runtime::FunctionRef;
 use iii_sdk::ObserverHandle;
 use iii_sdk::{IIIClient, RegisterFunction};
@@ -36,6 +53,7 @@ use crate::context::E2eContext;
 use crate::wire::{TurnCompletedPayload, TurnStatus};
 
 use super::assessment::{self, AssessmentSpec};
+use super::mechanism;
 use super::{
     async_trait, common, Capability, CapturedDeliverable, ExecutionPolicy, ObjectiveEvaluation,
     ProvenanceEvidence, Scenario, ScenarioCase, ScenarioExecutionKind, ScenarioObservation,
@@ -51,16 +69,34 @@ const RECOVERY_LIMIT: Duration = Duration::from_secs(240);
 const SESSION_MANAGER_RETURN: Duration = Duration::from_secs(120);
 /// How long the projected status may take to land after the turn completes.
 const STATUS_PROJECTION: Duration = Duration::from_secs(10);
+const OBSERVE: &str = "harness::observe";
+const STATE_CHANGED: &str = "state::on-changed";
+const TIMER: &str = "harness::on-timer";
+/// The key the state binding watches; the runner writes it after the restart.
+const BINDING_KEY: &str = "binding";
+/// Armed right before the restart and due after it: the recorded restarts
+/// took about 3 s. One that outlasts the timer leaves the check unevaluated.
+const TIMER_MS: u64 = 20_000;
+/// How long arming may hold the restart back.
+const ARM_LIMIT: Duration = Duration::from_secs(20);
+/// How long after `harness::ready` and the timer's instant a delivery may
+/// take. The boot replay starts at that ready, and a healthy one takes
+/// milliseconds. Its waits are a store call (`session_timeout_ms`, 10 s by
+/// default), 5 s to take over a held observer id (`REPLAY_READY_WAIT`,
+/// `bindings/gc.rs`) and 5 s for a late timer's observer to become active
+/// (`ACTIVE_WAIT`, `timer.rs`): one of each, and 10 s to spare.
+const DELIVERY_LIMIT: Duration = Duration::from_secs(30);
+const SIDE_MODEL: &str = "e2e-restart-model";
 
 const STORE_SURVIVES: AssessmentSpec = AssessmentSpec::gate(
     "store_survives_restart",
-    20,
+    15,
     "After the first exchange wrote its row, did a session-manager restart leave the session's meta and entries byte-identical?",
 )
 .labeled("Session store unchanged by a session-manager restart");
 const SESSION_CONTINUES: AssessmentSpec = AssessmentSpec::gate(
     "session_continues",
-    15,
+    10,
     "Did the exchanges before and after the session-manager restart both store their exact rows?",
 )
 .labeled("The session continues after the restart");
@@ -72,8 +108,8 @@ const READY_ONCE: AssessmentSpec = AssessmentSpec::gate(
 .labeled("harness::ready once after the restart");
 const HELD_TURN_RECOVERS: AssessmentSpec = AssessmentSpec::gate(
     "held_turn_recovers",
-    35,
-    "Did the turn held across the Harness restart complete within 240 s of it, with one turn completion, one result per hold call, and the hold's token stored?",
+    30,
+    "Did the turn held across the Harness restart complete within 240 s of it, with one turn completion, one result per hold call, no hold call run twice, and the hold's token stored?",
 )
 .labeled("Held turn completes once after the restart");
 const STATUS_DONE: AssessmentSpec = AssessmentSpec::gate(
@@ -82,12 +118,19 @@ const STATUS_DONE: AssessmentSpec = AssessmentSpec::gate(
     "Did session::get read the session as done after the recovered turn, before harness::status could repair it?",
 )
 .labeled("Session status done without a repair");
+const BINDINGS_REARMED: AssessmentSpec = AssessmentSpec::gate(
+    "bindings_rearmed",
+    15,
+    "Did a one-shot state binding and a timer binding, armed on a runner-owned session right before the Harness restart, each call their target exactly once after the Harness was ready again?",
+)
+.labeled("Armed bindings deliver once after restart");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     STORE_SURVIVES,
     SESSION_CONTINUES,
     READY_ONCE,
     HELD_TURN_RECOVERS,
     STATUS_DONE,
+    BINDINGS_REARMED,
 ];
 
 fn suffix(run_id: &str) -> String {
@@ -128,6 +171,21 @@ fn turn_sink(run_id: &str) -> String {
     format!("e2e::restart-turns::{}", suffix(run_id))
 }
 
+/// What the two bindings call. Not `e2e::`: the side session's policy must
+/// be able to name it.
+fn binding_sink(run_id: &str) -> String {
+    format!("e2etest::restart_bind_{}", suffix(run_id))
+}
+
+/// The runner's own session, owner of the two bindings.
+fn side_session(run_id: &str) -> String {
+    format!("{}_bindings", mechanism::session_id(run_id))
+}
+
+fn side_provider(run_id: &str) -> String {
+    format!("e2e-restart-{}", suffix(run_id))
+}
+
 /// Phase 1 as the runner saw it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct StoreCheck {
@@ -159,6 +217,18 @@ struct ProbeRecord {
     hold_listed_after_restart: Option<bool>,
     completions_after_restart: Vec<Completion>,
     status_after_restart: Option<String>,
+    /// Both bindings were armed on the side session before the restart.
+    bindings_armed: bool,
+    /// The runner could not arm the bindings or write their key.
+    bindings_error: Option<String>,
+    state_deliveries: usize,
+    /// The state delivery was the boot replay's own read of the key
+    /// (`replayed`), not the observer's event. Either one counts.
+    state_caught_up: bool,
+    timer_deliveries: usize,
+    /// The timer was delivered before the restarted Harness was ready: the
+    /// process that armed it was still alive, so the restart tested nothing.
+    timer_before_ready: bool,
 }
 
 #[derive(Default)]
@@ -166,6 +236,8 @@ struct Probe {
     record: ProbeRecord,
     root_session_id: Option<String>,
     restarted_at: Option<Instant>,
+    /// When the runner heard the restarted Harness's first `harness::ready`.
+    ready_at: Option<Instant>,
 }
 
 struct Runtime {
@@ -335,6 +407,216 @@ fn hold_results(transcript: &Value, hold: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The two `harness::observe` requests: one-shot call bindings on the sink.
+fn binding_requests(run_id: &str) -> [Value; 2] {
+    let target =
+        |tag: &str| json!({ "function_id": binding_sink(run_id), "payload": { "tag": tag } });
+    [
+        json!({
+            "function_id": STATE_CHANGED,
+            "filters": {
+                "input.scope": { "$eq": scope(run_id) }, "input.key": { "$eq": BINDING_KEY },
+            },
+            "target": target("state"),
+            "once": true,
+        }),
+        json!({
+            "function_id": TIMER,
+            "args": { "in_ms": TIMER_MS },
+            "target": target("timer"),
+            "once": true,
+        }),
+    ]
+}
+
+/// What the side session's provider streams for any request: `DONE`.
+fn done_frames(provider: &str, model: &Value) -> Vec<Value> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    let message = |content: Value| {
+        json!({
+            "role": "assistant",
+            "content": content,
+            "stop_reason": "end",
+            "model": model,
+            "provider": provider,
+            "timestamp": timestamp,
+        })
+    };
+    let done = message(json!([{ "type": "text", "text": "DONE" }]));
+    vec![
+        json!({ "type": "start", "partial": message(json!([])) }),
+        json!({ "type": "text_start", "partial": message(json!([])) }),
+        json!({ "type": "text_delta", "delta": "DONE" }),
+        json!({ "type": "text_end", "partial": done }),
+        json!({ "type": "done", "message": done }),
+    ]
+}
+
+/// The side session's provider, played by the runner so no model stands
+/// between the restart and the bindings.
+/// shortcut: a third copy of `steer_and_stop`'s scripted stream, and the
+/// router keeps `e2e-restart-<run>` after the run; share one in `mechanism`
+/// when the three scenarios can change together.
+fn register_side_stream(client: &IIIClient, run_id: &str) -> FunctionRef {
+    let address = client.address().to_string();
+    let provider = side_provider(run_id);
+    client.register_function(
+        format!("provider::{provider}::stream"),
+        RegisterFunction::new_async(move |input: Value| {
+            let (address, provider) = (address.clone(), provider.clone());
+            async move {
+                let writer_ref: StreamChannelRef =
+                    serde_json::from_value(input["writer_ref"].clone())
+                        .map_err(|error| iii_sdk::errors::Error::Serde(error.to_string()))?;
+                let writer = ChannelWriter::new(&address, &writer_ref);
+                for frame in done_frames(&provider, &input["model"]) {
+                    writer
+                        .send_message(&frame.to_string())
+                        .await
+                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))?;
+                }
+                let _ = writer.close().await;
+                Ok::<Value, iii_sdk::errors::Error>(json!({ "ok": true }))
+            }
+        })
+        .description("E2E scripted side-session provider stream."),
+    )
+}
+
+/// One scripted turn on the side session, for the turn record whose policy
+/// `harness::function::call` reads, then the two bindings armed as it.
+async fn arm_bindings(client: &IIIClient, run_id: &str) -> anyhow::Result<()> {
+    let (session_id, provider) = (side_session(run_id), side_provider(run_id));
+    mechanism::call(
+        client,
+        "router::provider::register",
+        json!({
+            "id": provider,
+            "display_name": "E2E restart_recovery side session",
+            "models": [{
+                "id": SIDE_MODEL,
+                "provider": provider,
+                "context_window": 100_000,
+                "max_output_tokens": 4_096,
+                "supports_tools": true,
+            }],
+        }),
+    )
+    .await?;
+    // Enrolled before it exists, so cleanup deletes it whatever fails after.
+    mechanism::keep_session(run_id, &session_id);
+    mechanism::call(
+        client,
+        "harness::send",
+        json!({
+            "session_id": session_id,
+            "message": "Reply with exactly `DONE`.",
+            "model": SIDE_MODEL,
+            "provider": provider,
+            "session": {
+                "kind": crate::wire::E2E_SESSION_KIND,
+                "title": "Harness E2E: restart_recovery bindings",
+            },
+            "options": {
+                "max_turns": 1,
+                "functions": {
+                    "allow": [OBSERVE, STATE_CHANGED, TIMER, binding_sink(run_id)],
+                    "deny": [],
+                },
+            },
+        }),
+    )
+    .await?;
+    let completed = mechanism::poll(ARM_LIMIT, || async {
+        let status = mechanism::call(
+            client,
+            "harness::status",
+            json!({ "session_id": session_id }),
+        )
+        .await
+        .ok()?;
+        (status["status"] == "completed").then_some(())
+    })
+    .await;
+    anyhow::ensure!(
+        completed.is_some(),
+        "the side session's scripted turn did not complete"
+    );
+    for request in binding_requests(run_id) {
+        let answer = mechanism::call(
+            client,
+            "harness::function::call",
+            json!({
+                "session_id": session_id,
+                "call": { "id": "e2e-restart-binding", "function_id": OBSERVE, "arguments": request },
+            }),
+        )
+        .await?;
+        anyhow::ensure!(
+            answer.get("is_error") != Some(&json!(true))
+                && answer
+                    .pointer("/details/observer_id")
+                    .is_some_and(Value::is_string),
+            "{OBSERVE} did not arm a binding: {answer}"
+        );
+    }
+    Ok(())
+}
+
+/// Waits for the two deliveries of a run that armed the bindings and heard
+/// the restarted Harness, then a second more for a repeat. Any other run
+/// returns at once.
+async fn await_bindings(probe: &Mutex<Probe>) {
+    let deadline = {
+        let probe = common::lock_unpoisoned(probe);
+        match probe.ready_at {
+            Some(ready) if probe.record.bindings_armed => {
+                ready + Duration::from_millis(TIMER_MS) + DELIVERY_LIMIT
+            }
+            _ => return,
+        }
+    };
+    let delivered = || {
+        let probe = common::lock_unpoisoned(probe);
+        probe.record.state_deliveries >= 1 && probe.record.timer_deliveries >= 1
+    };
+    while !delivered() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+}
+
+/// Whether each binding armed before the Harness restart delivered once
+/// after it; `Err` says why this run could not tell.
+fn bindings_survive(probe: &ProbeRecord) -> Result<bool, String> {
+    if !probe.harness_restarted {
+        return Err("the run never reached the Harness restart".into());
+    }
+    if !probe.bindings_armed || probe.bindings_error.is_some() {
+        return Err(format!(
+            "the runner could not arm or fire the bindings: {:?}",
+            probe.bindings_error
+        ));
+    }
+    if probe.ready_after_restart == 0 {
+        return Err(
+            "the restarted Harness never announced ready, so the key was never written".into(),
+        );
+    }
+    if probe.state_deliveries != 1 || probe.timer_deliveries > 1 {
+        return Ok(false);
+    }
+    if probe.timer_before_ready {
+        return Err(
+            "the timer fired before the restarted Harness was ready: the restart outlasted it"
+                .into(),
+        );
+    }
+    Ok(probe.timer_deliveries == 1)
+}
+
 fn evaluation(record: &Value, run_id: &str) -> anyhow::Result<ObjectiveEvaluation> {
     let probe: ProbeRecord = serde_json::from_value(record["probe"].clone())?;
     if let Some(error) = probe.store_error.as_ref().or(probe.restart_error.as_ref()) {
@@ -364,7 +646,10 @@ fn evaluation(record: &Value, run_id: &str) -> anyhow::Result<ObjectiveEvaluatio
             && completion.after_restart_ms <= RECOVERY_LIMIT.as_millis() as u64);
     let one_result_each =
         !hold_results.is_empty() && hold_results.iter().all(|results| *results == 1);
-    let recovered = probe.harness_restarted && completed_in_time && one_result_each && row(3);
+    // One invocation per call in the transcript: the restart re-ran none.
+    let no_call_rerun = probe.hold_invocations == hold_results.len();
+    let recovered =
+        probe.harness_restarted && completed_in_time && one_result_each && no_call_rerun && row(3);
 
     // Only a wait that ended on the terminal event reached `after_dialogue`
     // without a `harness::status` sample of the finished turn, which would
@@ -372,6 +657,21 @@ fn evaluation(record: &Value, run_id: &str) -> anyhow::Result<ObjectiveEvaluatio
     let status_done = probe.harness_restarted
         && !terminal.is_empty()
         && probe.status_after_restart.as_deref() == Some("done");
+
+    let delivered = format!(
+        "bindings_armed={}, error={:?}, state_deliveries={}, state_caught_up={}, \
+         timer_deliveries={}, timer_before_ready={}",
+        probe.bindings_armed,
+        probe.bindings_error,
+        probe.state_deliveries,
+        probe.state_caught_up,
+        probe.timer_deliveries,
+        probe.timer_before_ready
+    );
+    let bindings = match bindings_survive(&probe) {
+        Ok(once_each) => BINDINGS_REARMED.full_or_zero(once_each, delivered),
+        Err(why) => BINDINGS_REARMED.unverified(format!("not evaluated: {why}; {delivered}")),
+    };
 
     Ok(assessment::build_evaluation([
         STORE_SURVIVES.full_or_zero(
@@ -413,6 +713,7 @@ fn evaluation(record: &Value, run_id: &str) -> anyhow::Result<ObjectiveEvaluatio
                 !terminal.is_empty()
             ),
         ),
+        bindings,
     ]))
 }
 
@@ -426,21 +727,23 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
     // The hold answers its first call only once the restarted Harness is
     // ready (or the recovery limit passed); a redriven or repeated call
     // answers at once.
-    let (held, released, restarter, answer) = (
+    let (held, released, restarter, answer, run) = (
         Arc::clone(&probe),
         Arc::clone(&release),
         client.clone(),
         token(run_id, 3),
+        run_id.to_string(),
     );
     functions.push(
         context.client().register_function(
             hold.clone(),
             RegisterFunction::new_async(move |_arguments: Value| {
-                let (held, released, restarter, answer) = (
+                let (held, released, restarter, answer, run) = (
                     Arc::clone(&held),
                     Arc::clone(&released),
                     restarter.clone(),
                     answer.clone(),
+                    run.clone(),
                 );
                 async move {
                     let first = {
@@ -454,6 +757,21 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
                         first
                     };
                     if first {
+                        // Armed here and nowhere earlier: a run that never
+                        // calls the hold arms nothing.
+                        let armed = tokio::time::timeout(ARM_LIMIT, arm_bindings(&restarter, &run))
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(anyhow::anyhow!("arming took over {ARM_LIMIT:?}"))
+                            });
+                        {
+                            let mut probe = common::lock_unpoisoned(&held);
+                            probe.record.bindings_armed = armed.is_ok();
+                            probe.record.bindings_error =
+                                armed.err().map(|error| format!("{error:#}"));
+                            // The recovery limit runs from the restart itself.
+                            probe.restarted_at = Some(Instant::now());
+                        }
                         let (failed, unblocked) = (Arc::clone(&held), Arc::clone(&released));
                         tokio::spawn(async move {
                             if let Err(error) = restart(&restarter, HARNESS).await {
@@ -473,31 +791,55 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
         ),
     );
 
-    let (heard, released, lister, hold_id) = (
+    let (heard, released, lister, hold_id, watched) = (
         Arc::clone(&probe),
         Arc::clone(&release),
         client.clone(),
         hold.clone(),
+        scope(run_id),
     );
     let ready_id = ready_sink(run_id);
     functions.push(
         context.client().register_function(
             ready_id.clone(),
             RegisterFunction::new_async(move |_payload: Value| {
-                let (heard, released, lister, hold_id) = (
+                let (heard, released, lister, hold_id, watched) = (
                     Arc::clone(&heard),
                     Arc::clone(&released),
                     lister.clone(),
                     hold_id.clone(),
+                    watched.clone(),
                 );
                 async move {
-                    let first_after_restart = {
+                    let (first_after_restart, armed) = {
                         let mut probe = common::lock_unpoisoned(&heard);
                         if probe.restarted_at.is_some() {
                             probe.record.ready_after_restart += 1;
                         }
-                        probe.record.ready_after_restart == 1 && probe.restarted_at.is_some()
+                        let first =
+                            probe.record.ready_after_restart == 1 && probe.restarted_at.is_some();
+                        if first {
+                            probe.ready_at = Some(Instant::now());
+                        }
+                        (first, probe.record.bindings_armed)
                     };
+                    if first_after_restart && armed {
+                        // The state binding's event, written only now: whatever
+                        // delivers it is the restarted Harness.
+                        let (writer, failed) = (lister.clone(), Arc::clone(&heard));
+                        tokio::spawn(async move {
+                            let written = common::invoke(
+                                &writer,
+                                "state::set",
+                                json!({ "scope": watched, "key": BINDING_KEY, "value": true }),
+                            )
+                            .await;
+                            if let Err(error) = written {
+                                common::lock_unpoisoned(&failed).record.bindings_error =
+                                    Some(format!("{error:#}"));
+                            }
+                        });
+                    }
                     if first_after_restart {
                         tokio::spawn(async move {
                             let listed = common::invoke(
@@ -551,6 +893,36 @@ fn register_probes(context: &E2eContext, run_id: &str) -> anyhow::Result<Runtime
         ),
     );
 
+    let delivered = Arc::clone(&probe);
+    functions.push(
+        context.client().register_function(
+            binding_sink(run_id),
+            RegisterFunction::new_async(move |delivery: Value| {
+                let delivered = Arc::clone(&delivered);
+                async move {
+                    let mut probe = common::lock_unpoisoned(&delivered);
+                    let before_ready = probe.record.ready_after_restart == 0;
+                    match delivery["tag"].as_str() {
+                        Some("state") => {
+                            probe.record.state_deliveries += 1;
+                            probe.record.state_caught_up |=
+                                delivery.pointer("/event/replayed") == Some(&json!(true));
+                        }
+                        Some("timer") => {
+                            probe.record.timer_deliveries += 1;
+                            probe.record.timer_before_ready |= before_ready;
+                        }
+                        _ => {}
+                    }
+                    Ok::<Value, iii_sdk::errors::Error>(json!({ "received": true }))
+                }
+            })
+            .description("Counts the binding deliveries of the E2E restart test.")
+            .metadata(json!({ "internal": true })),
+        ),
+    );
+    functions.push(register_side_stream(context.client(), run_id));
+
     let bindings = vec![
         context
             .client()
@@ -584,7 +956,7 @@ impl Scenario for RestartRecovery {
     }
 
     fn protects(&self) -> Option<&'static str> {
-        Some("Sessions and in-flight turns survive restarts of session-manager and the Harness: the transcript is kept as it was, the Harness comes back ready once, and a turn held across the restart finishes once with its session marked done. If it fails, a deploy or a crash loses conversations, leaves turns hanging, or leaves sessions stuck as working.")
+        Some("Sessions and in-flight turns survive restarts of session-manager and the Harness: the transcript is kept as it was, the Harness comes back ready once, a turn held across the restart finishes once without running its call again, its session is marked done, and bindings armed before the restart still deliver once. If it fails, a deploy or a crash loses conversations, repeats a call's side effects, leaves turns hanging or sessions stuck as working, or drops the triggers and timers a session was waiting on.")
     }
 
     fn execution_kind(&self) -> ScenarioExecutionKind {
@@ -743,9 +1115,9 @@ impl Scenario for RestartRecovery {
         observation: &ScenarioObservation,
         run_id: &str,
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
-        let probe = probe(run_id)
-            .map(|probe| common::lock_unpoisoned(&probe).record.clone())
-            .context("restart_recovery has no probes for this run")?;
+        let probe = probe(run_id).context("restart_recovery has no probes for this run")?;
+        await_bindings(&probe).await;
+        let probe = common::lock_unpoisoned(&probe).record.clone();
         let scope = scope(run_id);
         let mut rows = serde_json::Map::new();
         for phase in 1..=3 {
@@ -803,16 +1175,15 @@ impl Scenario for RestartRecovery {
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         release_runtime(run_id);
+        // The side session, when the run reached the restart and made one.
+        let side = mechanism::release(context, run_id).await;
         let scope = scope(run_id);
-        for phase in 1..=3 {
+        for key in (1..=3).map(row_key).chain([BINDING_KEY.to_string()]) {
             let _: Value = context
-                .trigger_value(
-                    "state::delete",
-                    json!({ "scope": scope, "key": row_key(phase) }),
-                )
+                .trigger_value("state::delete", json!({ "scope": scope, "key": key }))
                 .await?;
         }
-        Ok(())
+        side
     }
 }
 
@@ -896,6 +1267,12 @@ pub(crate) mod tests {
             hold_listed_after_restart: Some(true),
             completions_after_restart: vec![completion(TurnStatus::Completed, 95_000)],
             status_after_restart: Some("done".into()),
+            bindings_armed: true,
+            bindings_error: None,
+            state_deliveries: 1,
+            state_caught_up: true,
+            timer_deliveries: 1,
+            timer_before_ready: false,
         };
         json!({
             "probe": probe,
@@ -904,7 +1281,8 @@ pub(crate) mod tests {
                 "phase-2": expected_row(RUN, 2),
                 "phase-3": expected_row(RUN, 3),
             },
-            "hold_results": [1],
+            // The held call closes as interrupted and the subject calls again.
+            "hold_results": [1, 1],
         })
     }
 
@@ -921,15 +1299,97 @@ pub(crate) mod tests {
     fn a_sound_stack_earns_every_point() {
         assert_eq!(
             awarded(&reference()),
-            [Some(20), Some(15), Some(15), Some(35), Some(15)]
+            [Some(15), Some(10), Some(15), Some(30), Some(15), Some(15)]
         );
     }
 
     /// The runner restarts session-manager whatever the subject does, so the
-    /// store gate also needs the subject's first write.
+    /// store gate also needs the subject's first write. It never reaches the
+    /// Harness restart, so nothing was armed and the bindings are not judged.
     #[test]
     fn a_null_agent_earns_nothing() {
-        assert_eq!(awarded(&null()), [Some(0); 5]);
+        let mut expected = vec![Some(0); 5];
+        expected.push(None);
+        assert_eq!(awarded(&null()), expected);
+    }
+
+    #[test]
+    fn a_lost_or_a_doubled_delivery_fails_the_bindings_gate() {
+        for binding in ["state_deliveries", "timer_deliveries"] {
+            for deliveries in [0, 2] {
+                let mut record = reference();
+                record["probe"][binding] = json!(deliveries);
+                assert_eq!(awarded(&record)[5], Some(0), "{binding}={deliveries}");
+            }
+        }
+        // Whichever of the replay's read and the observer delivered it.
+        let mut by_observer = reference();
+        by_observer["probe"]["state_caught_up"] = json!(false);
+        assert_eq!(awarded(&by_observer)[5], Some(15));
+    }
+
+    /// A run that never put the bindings through a restart says nothing
+    /// about them: no points, and no failure either.
+    #[test]
+    fn a_run_that_could_not_test_the_bindings_leaves_them_unevaluated() {
+        let unevaluated = |change: fn(&mut Value)| {
+            let mut record = reference();
+            change(&mut record["probe"]);
+            awarded(&record)[5]
+        };
+        assert_eq!(
+            unevaluated(|probe| probe["harness_restarted"] = json!(false)),
+            None
+        );
+        assert_eq!(
+            unevaluated(|probe| probe["bindings_armed"] = json!(false)),
+            None
+        );
+        assert_eq!(
+            unevaluated(|probe| probe["bindings_error"] = json!("state::set timed out")),
+            None
+        );
+        assert_eq!(
+            unevaluated(|probe| probe["ready_after_restart"] = json!(0)),
+            None
+        );
+        // The old process outlived the timer and fired it itself.
+        assert_eq!(
+            unevaluated(|probe| probe["timer_before_ready"] = json!(true)),
+            None
+        );
+        // Still a failure: the state binding had its restart and lost it,
+        // and a timer delivered twice is twice whoever fired first.
+        assert_eq!(
+            unevaluated(|probe| {
+                probe["timer_before_ready"] = json!(true);
+                probe["state_deliveries"] = json!(0);
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            unevaluated(|probe| {
+                probe["timer_before_ready"] = json!(true);
+                probe["timer_deliveries"] = json!(2);
+            }),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn the_bindings_are_one_shot_calls_of_the_sink() {
+        let [state, timer] = binding_requests(RUN);
+        for (request, tag) in [(&state, "state"), (&timer, "timer")] {
+            assert_eq!(request["once"], json!(true));
+            assert_eq!(request["target"]["function_id"], json!(binding_sink(RUN)));
+            assert_eq!(request["target"]["payload"]["tag"], json!(tag));
+        }
+        // The `$eq` pair the boot replay reads the watched key from.
+        assert_eq!(state["filters"]["input.scope"]["$eq"], json!(scope(RUN)));
+        assert_eq!(state["filters"]["input.key"]["$eq"], json!(BINDING_KEY));
+        assert_eq!(timer["args"], json!({ "in_ms": TIMER_MS }));
+        assert!(!binding_sink(RUN).starts_with("harness::"));
+        assert_ne!(side_session(RUN), mechanism::session_id(RUN));
     }
 
     #[test]
@@ -962,8 +1422,17 @@ pub(crate) mod tests {
             assert_eq!(awarded(&record)[3], Some(0), "{completions:?}");
         }
         let mut two_results = reference();
-        two_results["hold_results"] = json!([2]);
+        two_results["hold_results"] = json!([2, 1]);
         assert_eq!(awarded(&two_results)[3], Some(0));
+    }
+
+    /// A Harness that ran the held call again instead of closing it: one call
+    /// in the transcript, two invocations at the fixture.
+    #[test]
+    fn a_hold_call_run_twice_fails_the_recovery_gate() {
+        let mut record = reference();
+        record["hold_results"] = json!([1]);
+        assert_eq!(awarded(&record)[3], Some(0));
     }
 
     #[test]

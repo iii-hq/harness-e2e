@@ -128,6 +128,7 @@ pub struct Armed {
     scenario: String,
     agent: Option<String>,
     prompts: Arc<Mutex<Vec<Prompt>>>,
+    replay: Arc<Mutex<persistent_state::Replay>>,
     calls: Arc<Mutex<Vec<Value>>>,
     resend: Option<Value>,
     functions: Vec<FunctionRef>,
@@ -180,6 +181,7 @@ pub async fn arm(
         scenario: scenario.into(),
         agent: agent.map(str::to_string),
         prompts: Arc::default(),
+        replay: Arc::default(),
         calls: Arc::default(),
         resend: None,
         functions: Vec::new(),
@@ -191,6 +193,7 @@ pub async fn arm(
         || [context_pressure::ID, onboarding::ID].contains(&scenario)
     {
         let prompts = armed.prompts.clone();
+        let replay = armed.replay.clone();
         let session = session_id.to_string();
         let function_id = format!("e2e::mechanism::pre-generate::{run_id}");
         armed.functions.push(
@@ -200,7 +203,14 @@ pub async fn arm(
                     let prompts = prompts.clone();
                     let session = session.clone();
                     let append = append.clone();
+                    let replay = replay.clone();
                     async move {
+                        if let Some(marker) = append
+                            .as_deref()
+                            .filter(|_| input["session_id"] == session.as_str())
+                        {
+                            lock_unpoisoned(&replay).observe(&input, marker);
+                        }
                         Ok::<Value, iii_sdk::errors::Error>(observe_prompt(
                             &prompts,
                             &session,
@@ -328,6 +338,7 @@ pub async fn capture(
     attempt: &Attempt<'_>,
 ) -> Option<MechanismEvidence> {
     let prompts = std::mem::take(&mut *lock_unpoisoned(&armed.prompts));
+    let replay = std::mem::take(&mut *lock_unpoisoned(&armed.replay));
     let mut probes = BTreeMap::new();
     match armed.scenario.as_str() {
         context_pressure::ID => context_pressure::capture(attempt, &prompts, &mut probes),
@@ -344,6 +355,7 @@ pub async fn capture(
                 attempt,
                 armed.resend.clone(),
                 &prompts,
+                &replay,
                 &mut probes,
             )
             .await

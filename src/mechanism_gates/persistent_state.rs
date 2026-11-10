@@ -1,7 +1,8 @@
 //! E6: an allow-`*` session's edges. A resent message is the same turn, the
 //! invocation chokepoint denies the Harness's private functions whatever the
-//! policy, the default working directory is stated, and a `pre_generate`
-//! append is persisted once however often it is replayed.
+//! policy, the default working directory is stated, a `pre_generate` append
+//! is persisted once however often it is replayed, and every step's messages
+//! start with exactly the ones the step before was handed.
 
 use std::collections::BTreeMap;
 
@@ -18,6 +19,62 @@ pub const ANNOTATION: &str = "e2e_mechanism_probe";
 /// scenario's definition carries it, since every later prompt replays it.
 pub fn marker(run_id: &str) -> String {
     format!("[e2e mechanism probe {run_id}] This line needs no action or reply.")
+}
+
+/// What the append-only check keeps between the root's steps.
+#[derive(Debug, Default)]
+pub(super) struct Replay {
+    steps: usize,
+    /// The messages `pre_generate` handed the last step.
+    last: Vec<Value>,
+    /// The first step that did not start with what the step before sent.
+    broken: Option<String>,
+}
+
+impl Replay {
+    /// Compares one root `pre_generate` input with the step before it. The
+    /// first step's append goes out after the hooks ran, so only the second
+    /// step shows where the Harness replays `marker`.
+    pub(super) fn observe(&mut self, input: &Value, marker: &str) {
+        let messages = input["generate"]["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let kept = self
+            .last
+            .iter()
+            .zip(&messages)
+            .take_while(|(sent, now)| sent == now)
+            .count();
+        let sent = self.last.len();
+        let problem = if kept < sent {
+            let fate = if kept < messages.len() {
+                "changed"
+            } else {
+                "is gone"
+            };
+            Some(format!(
+                "message {kept} of the {sent} the step before sent {fate}"
+            ))
+        } else if self.steps == 1
+            && !messages[kept..]
+                .iter()
+                .take_while(|message| message["role"] == "user")
+                .any(|message| message.to_string().contains(marker))
+        {
+            Some("the first step's append is not replayed before its reply".into())
+        } else {
+            None
+        };
+        if let (None, Some(problem)) = (&self.broken, problem) {
+            self.broken = Some(format!(
+                "turn {} step {}: {problem}",
+                input["turn_id"], input["step"]
+            ));
+        }
+        self.steps += 1;
+        self.last = messages;
+    }
 }
 
 /// Private Harness functions an agent must never reach, even under `*`.
@@ -45,6 +102,7 @@ pub(super) async fn capture(
     attempt: &Attempt<'_>,
     resend: Option<Value>,
     prompts: &[Prompt],
+    replay: &Replay,
     probes: &mut BTreeMap<String, Value>,
 ) {
     let mut chokepoint = Vec::new();
@@ -81,6 +139,7 @@ pub(super) async fn capture(
             .filter(|prompt| prompt.replays_append)
             .count()),
     );
+    probes.insert("replay_break".into(), json!(replay.broken));
 }
 
 pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
@@ -181,6 +240,14 @@ pub(super) fn gates(run: &Run<'_>) -> Vec<Broken> {
             ));
         }
     }
+    // A compaction rewrites the window on purpose.
+    // shortcut: a prune that needed no compaction rewrites it too and leaves no
+    // record; read the snapshot's prefix cause if this scenario fills its window.
+    if let Some(detail) = run.probe("replay_break").and_then(Value::as_str) {
+        if customs(run.transcript, "compaction").next().is_none() {
+            broken.push(("append_only_replay", detail.to_string()));
+        }
+    }
     broken
 }
 
@@ -251,6 +318,107 @@ mod tests {
 
         assert_eq!(
             gates_of(&transcript(1, true), &probes),
+            Vec::<String>::new()
+        );
+    }
+
+    fn message(role: &str, text: &str) -> Value {
+        json!({"role": role, "content": [{"type": "text", "text": text}]})
+    }
+
+    /// The break a root session's steps leave, each given as its messages.
+    fn replay_of(steps: &[Vec<Value>]) -> Option<String> {
+        let mut replay = Replay::default();
+        for (step, messages) in steps.iter().enumerate() {
+            replay.observe(
+                &json!({"turn_id": "t1", "step": step, "generate": {"messages": messages}}),
+                &marker("r"),
+            );
+        }
+        replay.broken
+    }
+
+    /// Three healthy steps: the append and each reply land after what was sent.
+    fn healthy_steps() -> Vec<Vec<Value>> {
+        let first = vec![message("user", "migrate")];
+        let mut second = first.clone();
+        second.extend([
+            message("user", "<mention_providers>"),
+            message("user", &marker("r")),
+            message("assistant", "reading"),
+            message("function_result", "{}"),
+        ]);
+        let mut third = second.clone();
+        third.extend([
+            message("user", "skills changed"),
+            message("assistant", "done"),
+        ]);
+        vec![first, second, third]
+    }
+
+    #[test]
+    fn steps_that_only_append_and_a_retried_step_keep_the_replay() {
+        let mut steps = healthy_steps();
+        assert_eq!(replay_of(&steps), None);
+
+        steps.insert(2, steps[1].clone());
+        assert_eq!(replay_of(&steps), None);
+    }
+
+    #[test]
+    fn a_rewritten_reordered_or_dropped_message_breaks_the_replay() {
+        let mut rewritten = healthy_steps();
+        rewritten[2][3] = message("assistant", "reading the record");
+        assert_eq!(
+            replay_of(&rewritten).as_deref(),
+            Some("turn \"t1\" step 2: message 3 of the 5 the step before sent changed")
+        );
+
+        let mut reordered = healthy_steps();
+        reordered[2].swap(1, 2);
+        assert_eq!(
+            replay_of(&reordered).as_deref(),
+            Some("turn \"t1\" step 2: message 1 of the 5 the step before sent changed")
+        );
+
+        let mut dropped = healthy_steps();
+        dropped[2].truncate(4);
+        assert_eq!(
+            replay_of(&dropped).as_deref(),
+            Some("turn \"t1\" step 2: message 4 of the 5 the step before sent is gone")
+        );
+    }
+
+    #[test]
+    fn an_append_replayed_after_the_reply_it_preceded_breaks_the_replay() {
+        let mut moved = healthy_steps();
+        moved[1].swap(2, 4);
+        moved.truncate(2);
+
+        assert_eq!(
+            replay_of(&moved).as_deref(),
+            Some("turn \"t1\" step 1: the first step's append is not replayed before its reply")
+        );
+    }
+
+    #[test]
+    fn a_broken_replay_is_flagged_unless_a_compaction_rewrote_the_window() {
+        let mut probes = probes(true);
+        probes.insert("replay_break".into(), json!("turn \"t1\" step 2: changed"));
+        let mut transcript = transcript(1, true);
+
+        assert_eq!(
+            gates_of(&transcript, &probes),
+            ["append_only_replay: turn \"t1\" step 2: changed"]
+        );
+
+        transcript["messages"].as_array_mut().unwrap().push(json!({
+            "entry_id": "e_t1_2_compaction", "custom": {"custom_type": "compaction", "data": {}}}));
+        assert_eq!(gates_of(&transcript, &probes), Vec::<String>::new());
+
+        probes.insert("replay_break".into(), Value::Null);
+        assert_eq!(
+            gates_of(&self::transcript(1, true), &probes),
             Vec::<String>::new()
         );
     }

@@ -470,11 +470,12 @@ Schedule exactly one event for profile key `{PROFILE_KEY}`:
 - local start: `{STARTS_AT_LOCAL}`
 - duration: {DURATION_MINUTES} minutes
 
-Resolve the exact legacy id first. Inspect and follow the live schemas of the current functions,
-using values returned by the resolver and profile lookup verbatim. Do not guess opaque ids,
-revisions, timezone, tokens, or receipts. Call only function discovery and the three safe
-run-scoped operations needed to resolve, read the profile, and schedule. Finish with a concise
-report containing the scheduling receipt exactly as returned."#,
+Inspect the live schema of every function before you first call it, the migration directory included,
+and follow it. Resolve the exact legacy id before the other two operations, using values returned
+by the resolver and profile lookup verbatim. Do not guess opaque ids, revisions, timezone, tokens,
+or receipts. Call only function discovery and the three safe run-scoped operations needed to
+resolve, read the profile, and schedule, each exactly once and with no failed call. Finish with a
+concise report containing the scheduling receipt exactly as returned."#,
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
@@ -840,10 +841,19 @@ fn recovery_audit(run_id: &str, transcript: &Value) -> RecoveryAudit {
             .filter(|position| calls[*position].arguments == expected)
             .collect()
     };
-    let resolver_exact_positions = exact_positions(
-        &resolver_positions,
-        serde_json::to_value(expected_resolve_request(run_id)).unwrap_or(Value::Null),
-    );
+    // The Harness may rename the resolver's one parameter before dispatch; the handler audit holds what ran.
+    let resolver_exact_positions: Vec<usize> = resolver_positions
+        .iter()
+        .copied()
+        .filter(|position| {
+            calls[*position]
+                .arguments
+                .as_object()
+                .is_some_and(|fields| {
+                    fields.len() == 1 && fields.values().all(|value| value == legacy.as_str())
+                })
+        })
+        .collect();
     let profile_exact_positions = exact_positions(
         &profile_positions,
         serde_json::to_value(expected_profile_request()).unwrap_or(Value::Null),
@@ -1352,6 +1362,96 @@ pub(crate) mod tests {
             &audit,
             handler_audit_matches(run_id, &snapshot)
         ));
+    }
+
+    /// The losing shape of six scored rounds: the resolver is called with the
+    /// exact stale id under a guessed parameter name, which the Harness
+    /// renames before dispatch, so its handler receives the exact request.
+    fn repaired_resolver_calls(run_id: &str) -> Vec<(String, Value)> {
+        let mut calls = canonical_calls(run_id);
+        calls[0].1 = json!({ "legacy_id": legacy_function_id(run_id) });
+        calls.insert(
+            1,
+            (
+                "engine::functions::info".to_string(),
+                json!({ "function_ids": [profile_function_id(run_id), schedule_function_id(run_id)] }),
+            ),
+        );
+        calls
+    }
+
+    #[test]
+    fn resolver_name_the_harness_repaired_still_recovers_the_contract() {
+        let run_id = "repaired-run";
+        let calls = repaired_resolver_calls(run_id);
+        let snapshot = canonical_snapshot(run_id);
+        let reply = format!("Booked. Receipt: {}", receipt(run_id));
+        let evaluation = evaluation_of(run_id, &calls, &snapshot, &reply);
+        let points = evaluation.awards.iter().filter_map(|award| award.awarded);
+        assert_eq!(points.map(u32::from).sum::<u32>(), 100);
+
+        let recovered = |calls: &[(String, Value)], snapshot: &FixtureSnapshot| {
+            contract_recovered(
+                &recovery_audit(run_id, &transcript_of(calls)),
+                handler_audit_matches(run_id, snapshot),
+            )
+        };
+        // Not repaired: the resolver's handler never received the request.
+        let mut unresolved = snapshot.clone();
+        unresolved.audit.remove(0);
+        unresolved.audit[0].ordinal = 1;
+        unresolved.audit[1].ordinal = 2;
+        assert!(!recovered(&calls, &unresolved));
+        // A different stale id is not the one the runbook names.
+        let mut wrong_id = calls.clone();
+        wrong_id[0].1 = json!({ "legacy_id": "e2etest::calendar_schedule_v1_guess" });
+        assert!(!recovered(&wrong_id, &snapshot));
+        // The current scheduler's contract is the model's to follow: a
+        // repaired guess there does not count.
+        let mut guessed_schedule = calls.clone();
+        let schedule = guessed_schedule.last_mut().unwrap();
+        let token = schedule
+            .1
+            .as_object_mut()
+            .unwrap()
+            .remove("idempotency_key");
+        schedule.1["migration_token"] = token.unwrap();
+        assert!(!recovered(&guessed_schedule, &snapshot));
+    }
+
+    /// The losing shape of four scored rounds: an empty resolver call the
+    /// function rejects before its handler runs, then the canonical recovery.
+    #[test]
+    fn empty_resolver_probe_costs_bounded_recovery_only() {
+        let run_id = "probe-run";
+        let mut calls = canonical_calls(run_id);
+        calls.insert(0, (resolver_function_id(run_id), json!({})));
+        let audit = recovery_audit(run_id, &transcript_of(&calls));
+        let snapshot = canonical_snapshot(run_id);
+        assert!(contract_recovered(
+            &audit,
+            handler_audit_matches(run_id, &snapshot)
+        ));
+        assert!(!bounded_recovery(&audit, &snapshot, 1));
+    }
+
+    #[test]
+    fn prompt_states_what_bounded_recovery_scores_without_naming_fields() {
+        let prompt = ToolContractRecovery.spec("prompt-run").prompt;
+        for stated in [
+            "before you first call it, the migration directory included",
+            "each exactly once and with no failed call",
+        ] {
+            assert!(prompt.contains(stated), "{stated}");
+        }
+        for field in [
+            "legacy_function",
+            "profile_key",
+            "idempotency_key",
+            "starts_at_local",
+        ] {
+            assert!(!prompt.contains(field), "{field}");
+        }
     }
 
     #[test]

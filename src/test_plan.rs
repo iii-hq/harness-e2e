@@ -747,14 +747,15 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 18);
+        assert_eq!(plan.suites.len(), 19);
         for (id, cases, runs) in [
-            ("regression", 23, 253),
+            ("regression", 21, 231),
             ("null-canary", 15, 15),
             ("software-engineering", 14, 14),
             ("software-engineering-x3", 14, 42),
             ("software-engineering-x9", 14, 126),
-            ("regression-x11", 14, 154),
+            ("regression-x11", 12, 132),
+            ("model-and-workers", 2, 6),
             ("context-capacity", 4, 4),
             ("deepwork", 3, 3),
             ("linkly", 1, 1),
@@ -772,6 +773,8 @@ mod tests {
             assert_eq!(snapshot.scenario_ids.len(), cases);
             assert_eq!(snapshot.budget["planned_runs"], runs);
             assert_eq!(snapshot.campaigns.len() * cases, runs);
+            // GitHub refuses a matrix of more than 256 jobs, and a slot is at most one.
+            assert!(runs <= 256, "{id}: {runs} jobs do not fit one matrix");
             let mut rounds = BTreeSet::new();
             for campaign in snapshot.campaigns {
                 assert!(rounds.insert(campaign["campaign_id"].as_str().unwrap().to_string()));
@@ -967,7 +970,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:bb8bf84d0f4e4c1c751fcf8540c3fff05e9e2c88ca88056b6ec1c0c3df5bc954"
+            "sha256:8b6a71f3c1fc53152010b859be2311d0ec09c2429e699cb27fbc115a00fea94a"
         );
     }
 
@@ -1288,18 +1291,40 @@ mod tests {
         }
     }
 
+    /// Neither scores the Harness (one the database worker and the model's
+    /// SQL, the other the model's obedience), so a fall in them must not read
+    /// as a Harness regression nor weigh on a comparison of two Harnesses.
+    #[test]
+    fn the_tests_that_do_not_score_the_harness_run_outside_the_regression() {
+        let plan = embedded().unwrap();
+        let moved = ["database_migration_recovery", "prompt_injection_resilience"];
+        assert_eq!(
+            plan.materialize("model-and-workers").unwrap().scenario_ids,
+            moved
+        );
+        for suite in ["regression", "regression-x11"] {
+            let ids = plan.materialize(suite).unwrap().scenario_ids;
+            assert!(
+                !ids.iter().any(|id| moved.contains(&id.as_str())),
+                "{suite}"
+            );
+        }
+    }
+
     const NULL_AGENT: &str = include_str!("../config/agents/null-agent.md");
 
     /// The canary is the regression plus the minimal path (the one test the
-    /// `pr` and `after-release` suites add), run by an agent that does nothing;
-    /// a test whose control needs a live stack (the Harness contract probes,
-    /// which score the Harness and not the agent) stays out.
+    /// `pr` and `after-release` suites add) and the model and worker tasks, run
+    /// by an agent that does nothing; a test whose control needs a live stack
+    /// (the Harness contract probes, which score the Harness and not the
+    /// agent) stays out.
     #[test]
     fn the_null_canary_runs_the_regression_as_an_agent_that_does_nothing() {
         let plan = embedded().unwrap();
         let mut expected = plan.materialize("regression").unwrap().scenario_ids;
         expected.retain(|id| !LIVE_CONTROLS.iter().any(|(live, _, _)| live.as_str() == id));
         expected.insert(0, ScenarioId::MinimalPath.to_string());
+        expected.extend(plan.materialize("model-and-workers").unwrap().scenario_ids);
         assert_eq!(
             plan.materialize("null-canary").unwrap().scenario_ids,
             expected

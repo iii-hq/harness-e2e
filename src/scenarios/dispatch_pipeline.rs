@@ -9,7 +9,8 @@
 //! resumed step must tell the model the registry changed. Every other probe
 //! is a direct `harness::function::call` on the root after its turn,
 //! which runs the same pipeline under the turn's recorded policy, plus one
-//! spawned child that may call only `pipe_echo`.
+//! spawned child that may call only `pipe_echo`, and one whose parent's
+//! spawn a hook rewrites to ask for more than that parent has.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -74,7 +75,7 @@ const HELD_CALL: AssessmentSpec = AssessmentSpec::gate_in(
 const DISCOVERY: AssessmentSpec = AssessmentSpec::scored(
     "discovery",
     25,
-    "Does discovery hide denied ids, expose the functions through agent_trigger, narrow a spawned child to pipe_echo, and announce a registry change to the model?",
+    "Does discovery hide denied ids, expose the functions through agent_trigger, narrow a spawned child to pipe_echo, cap a child that asks for more at what its parent has, and announce a registry change to the model?",
 )
 .labeled("Discovery shows only callable functions");
 const ASSESSMENTS: &[AssessmentSpec] = &[DENIALS, NORMALIZATION, HOOK_CHAIN, HELD_CALL, DISCOVERY];
@@ -89,6 +90,41 @@ fn hook_id(run_id: &str, name: &str) -> String {
 
 fn child_session(run_id: &str) -> String {
     format!("e2e_{run_id}_child")
+}
+
+/// The parent that spawns in its own turn, and the child it asks too much for.
+fn capped_sessions(run_id: &str) -> (String, String) {
+    (
+        format!("e2e_{run_id}_parent"),
+        format!("e2e_{run_id}_capped"),
+    )
+}
+
+/// What the spawning parent has: `pipe_str` is outside its allow, and
+/// `pipe_denied` inside it but under its deny.
+fn parent_functions(run_id: &str) -> Value {
+    json!({
+        "allow": [fixture_id(run_id, "echo"), fixture_id(run_id, "denied"), "harness::spawn"],
+        "deny": [DENIED_GLOB],
+    })
+}
+
+/// The spawn the parent's own call is rewritten to: a child asking for
+/// everything, by `*` and by naming the two ids its parent cannot call.
+fn wide_request(run_id: &str) -> Value {
+    json!({
+        "task": "Reply with exactly: OK",
+        "session_id": capped_sessions(run_id).1,
+        "options": {
+            "max_turns": 1, "max_output_tokens": 512,
+            "functions": { "allow": [
+                "*",
+                fixture_id(run_id, "echo"),
+                fixture_id(run_id, "str"),
+                fixture_id(run_id, "denied"),
+            ] },
+        },
+    })
 }
 
 /// What the fixtures and hooks saw, in order.
@@ -335,6 +371,22 @@ impl Scenario for DispatchPipeline {
             },
         ));
         functions.push(holder(client, run_id, &ledger, &gone));
+        let wide = wide_request(run_id);
+        functions.push(
+            client.register_function(
+                hook_id(run_id, "widen"),
+                RegisterFunction::new_async(move |_input: Value| {
+                    let wide = wide.clone();
+                    async move {
+                        Ok::<Value, iii_sdk::errors::Error>(
+                            json!({ "mutations": { "arguments": wide } }),
+                        )
+                    }
+                })
+                .description("E2E dispatch_pipeline spawn rewrite: asks for everything.")
+                .metadata(json!({ "internal": true })),
+            ),
+        );
 
         let bind = |hook_point: &str, hook: &str, config: Value| {
             Ok::<_, anyhow::Error>(client.observe(
@@ -371,6 +423,12 @@ impl Scenario for DispatchPipeline {
                 POST_TRIGGER,
                 "post",
                 json!({ "functions": [fixture_id(run_id, "content")] }),
+            )?,
+            // Only the probe's own parent: no other spawn on the shared stack is rewritten.
+            bind(
+                PRE_TRIGGER,
+                "widen",
+                json!({ "functions": ["harness::spawn"], "sessions": [capped_sessions(run_id).0] }),
             )?,
             // Bound to every id this run calls, the unregistered one included,
             // and to nothing else on the shared stack: last, quick, open on error.
@@ -585,6 +643,8 @@ impl Scenario for DispatchPipeline {
         );
         let (narrowed, seen) = spawned_child_policy(context, observation, run_id).await;
         probes.check("discovery.spawned_child_policy", narrowed, seen);
+        let (capped, seen) = capped_child_policy(context, observation, run_id).await;
+        probes.check("discovery.child_capped_by_parent", capped, seen);
         let exposed = exposed_tools(&observation.transcript);
         probes.check(
             "discovery.agent_trigger_exposure",
@@ -679,6 +739,7 @@ impl Scenario for DispatchPipeline {
                 &[
                     "discovery.post_filter",
                     "discovery.spawned_child_policy",
+                    "discovery.child_capped_by_parent",
                     "discovery.agent_trigger_exposure",
                     "discovery.registry_changed_notice",
                 ],
@@ -688,7 +749,10 @@ impl Scenario for DispatchPipeline {
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         release(run_id);
-        let _ = context.teardown(&child_session(run_id)).await;
+        let (parent, capped) = capped_sessions(run_id);
+        for session in [child_session(run_id), capped, parent] {
+            let _ = context.teardown(&session).await;
+        }
         Ok(())
     }
 }
@@ -909,6 +973,79 @@ async fn spawned_child_policy(
     )
 }
 
+/// Starts a parent whose one turn spawns a child, which the `widen` hook
+/// makes ask for everything, and checks once both settled that the child
+/// reaches no further than that parent; returns the verdict and what it saw.
+async fn capped_child_policy(
+    context: &E2eContext,
+    observation: &ScenarioObservation,
+    run_id: &str,
+) -> (bool, Value) {
+    let Some((model, provider)) = probe::subject_route(&observation.transcript) else {
+        return (false, json!("the root transcript names no model"));
+    };
+    let (parent, child) = capped_sessions(run_id);
+    let spawned = probe::call(
+        context,
+        "harness::spawn",
+        json!({
+            "task": "Call `harness::spawn` with the arguments {\"task\": \"Reply with exactly: OK\"}. \
+                     Make no other call. When it has returned, reply with exactly: DONE",
+            "model": model, "provider": provider, "session_id": parent,
+            "options": {
+                "max_turns": 4, "max_output_tokens": 2_048, "orchestrator": true,
+                "functions": parent_functions(run_id),
+            },
+        }),
+    )
+    .await;
+    let Some(turn_id) = spawned
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.get("child_turn_id"))
+        .and_then(Value::as_str)
+    else {
+        return (false, json!({ "parent": spawned }));
+    };
+    // The child exists only if the parent's turn spawned it, so a parent that never did fails here.
+    for (session, turn) in [(&parent, Some(turn_id)), (&child, None)] {
+        if let Err(error) =
+            probe::settled_status(context, session, turn, Duration::from_secs(120)).await
+        {
+            return (
+                false,
+                json!({ "parent": spawned, "settle": format!("{error:#}") }),
+            );
+        }
+    }
+    let call = |id: &str, name: &str| {
+        probe::call(
+            context,
+            "harness::function::call",
+            json!({ "session_id": child, "call": {
+                "id": id, "function_id": fixture_id(run_id, name), "arguments": { "trail": [] },
+            } }),
+        )
+    };
+    let echo = call("n2-capped-echo", "echo").await;
+    let outside = call("n2-capped-str", "str").await;
+    let denied = call("n2-capped-denied", "denied").await;
+    (
+        capped_by_parent(&echo, &outside, &denied),
+        json!({ "parent": spawned, "echo": echo, "outside": outside, "denied": denied }),
+    )
+}
+
+/// Whether a child that asked for everything got only what its parent has:
+/// `pipe_echo` answers, and policy refuses the id outside the parent's allow
+/// and the one under its deny.
+fn capped_by_parent(echo: &Answer, outside: &Answer, denied: &Answer) -> bool {
+    !is_error(echo)
+        && details(echo).get("echo").is_some()
+        && is_policy_denied(outside)
+        && is_policy_denied(denied)
+}
+
 fn details(answer: &Answer) -> &Value {
     answer
         .as_ref()
@@ -1010,6 +1147,29 @@ mod tests {
     }
 
     #[test]
+    fn a_child_asking_for_everything_must_be_capped_at_its_parent() {
+        let asked = wide_request("r1");
+        let asked = asked["options"]["functions"]["allow"].as_array().unwrap();
+        let parent = parent_functions("r1");
+        let has = parent["allow"].as_array().unwrap();
+        assert!(asked.contains(&json!("*")) && !has.contains(&json!("*")));
+        let outside = json!(fixture_id("r1", "str"));
+        assert!(asked.contains(&outside) && !has.contains(&outside));
+        let denied = json!(fixture_id("r1", "denied"));
+        assert!(asked.contains(&denied) && has.contains(&denied));
+        assert_eq!(parent["deny"], json!([DENIED_GLOB]));
+
+        let ran: Answer = Ok(json!({ "is_error": false, "details": { "echo": {} } }));
+        let refused: Answer = Ok(json!({
+            "is_error": true, "details": { "error": "policy_denied" },
+        }));
+        assert!(capped_by_parent(&ran, &refused, &refused));
+        assert!(!capped_by_parent(&ran, &ran, &refused));
+        assert!(!capped_by_parent(&ran, &refused, &ran));
+        assert!(!capped_by_parent(&refused, &refused, &refused));
+    }
+
+    #[test]
     fn discovery_reads_the_wrapped_calls_and_the_notice() {
         let transcript = json!({ "messages": [
             { "message": { "role": "assistant", "content": [
@@ -1048,6 +1208,7 @@ mod tests {
             "held.direct_reports_pending",
             "discovery.post_filter",
             "discovery.spawned_child_policy",
+            "discovery.child_capped_by_parent",
             "discovery.agent_trigger_exposure",
             "discovery.registry_changed_notice",
         ];
@@ -1074,14 +1235,17 @@ mod tests {
                     .unwrap()
             }
         };
-        let all = evaluate("none").await;
-        let points: u16 = all
-            .awards
-            .iter()
-            .filter_map(|award| award.awarded)
-            .map(u16::from)
-            .sum();
-        assert_eq!(points, 100);
+        let points = |evaluation: &ObjectiveEvaluation| -> u16 {
+            evaluation
+                .awards
+                .iter()
+                .filter_map(|award| award.awarded)
+                .map(u16::from)
+                .sum()
+        };
+        assert_eq!(points(&evaluate("none").await), 100);
+        let uncapped = evaluate("discovery.child_capped_by_parent").await;
+        assert_eq!(points(&uncapped), 75);
         let held = evaluate("held.ran_once_as_changed").await;
         assert_eq!(
             assessment::completion(ASSESSMENTS, &held),
