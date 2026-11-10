@@ -906,6 +906,12 @@ pub struct E2eRunReport {
     pub asset_redaction: crate::redaction::RedactionReport,
 }
 
+/// A complete session tree that ran no turn called no provider: it used
+/// zero tokens and cost nothing, which is not the same as usage nobody reported.
+fn no_turn_ran(metrics: &crate::wire::SessionMetricsPayload) -> bool {
+    metrics.complete && metrics.totals.turns == 0
+}
+
 impl E2eRunReport {
     pub fn new(
         run_id: String,
@@ -1174,10 +1180,12 @@ impl E2eRunReport {
     }
 
     pub fn update_cost(&mut self) {
-        let subject_usd = self
-            .metrics
-            .as_ref()
-            .and_then(|metrics| metrics.totals.cost_usd);
+        let subject_usd = self.metrics.as_ref().and_then(|metrics| {
+            metrics
+                .totals
+                .cost_usd
+                .or(no_turn_ran(metrics).then_some(0.0))
+        });
         self.cost = CostReport {
             subject_usd,
             total_usd: subject_usd,
@@ -1326,10 +1334,11 @@ impl E2eRunReport {
                 "trace aggregation unavailable for this stack".into(),
             );
         }
-        let total_tokens = metrics
-            .totals
-            .input_tokens
-            .zip(metrics.totals.output_tokens)
+        let unused = no_turn_ran(metrics);
+        let input_tokens = metrics.totals.input_tokens.or(unused.then_some(0));
+        let output_tokens = metrics.totals.output_tokens.or(unused.then_some(0));
+        let total_tokens = input_tokens
+            .zip(output_tokens)
             .and_then(|(input, output)| input.checked_add(output));
         if total_tokens.is_none() {
             unavailable.insert(
@@ -1337,19 +1346,19 @@ impl E2eRunReport {
                 "provider did not report complete input and output token usage".into(),
             );
         }
-        if metrics.totals.input_tokens.is_none() {
+        if input_tokens.is_none() {
             unavailable.insert(
                 "input_tokens".into(),
                 "provider did not report input token usage".into(),
             );
         }
-        if metrics.totals.output_tokens.is_none() {
+        if output_tokens.is_none() {
             unavailable.insert(
                 "output_tokens".into(),
                 "provider did not report output token usage".into(),
             );
         }
-        if metrics.totals.cost_usd.is_none() {
+        if metrics.totals.cost_usd.is_none() && !unused {
             unavailable.insert(
                 "cost_usd".into(),
                 "provider did not report monetary cost".into(),
@@ -1397,8 +1406,8 @@ impl E2eRunReport {
             wake_resumes,
             effective_fan_out: Some(effective_fan_out),
             critical_path_ms,
-            input_tokens: metrics.totals.input_tokens,
-            output_tokens: metrics.totals.output_tokens,
+            input_tokens,
+            output_tokens,
             total_tokens,
             cache_read_tokens: metrics.totals.cache_read_tokens,
             processed_prompt_tokens: context.processed_prompt_tokens,
@@ -5081,6 +5090,39 @@ mod tests {
             .unavailable
             .contains_key("processed_prompt_tokens"));
         assert!(efficiency.unavailable.contains_key("peak_context_tokens"));
+    }
+
+    #[test]
+    fn a_complete_run_without_a_turn_used_zero_tokens_and_cost() {
+        let no_turn = |complete: bool| -> SessionMetricsResponse {
+            serde_json::from_value(serde_json::json!({
+                "root_session_id": "root",
+                "complete": complete,
+                "totals": {"sessions": 1, "turns": 0, "function_calls": 0, "function_call_errors": 0},
+                "by_session": [{"session_id": "root", "depth": 0, "turns": 0, "function_calls": 0, "function_call_errors": 0}]
+            }))
+            .unwrap()
+        };
+        let mut attempt = run(100, true);
+        attempt.metrics = Some(no_turn(true));
+        attempt.terminal_status = Some(status(0, 0));
+        attempt.update_cost();
+        attempt.update_efficiency();
+        assert_eq!(attempt.cost.subject_usd, Some(0.0));
+        let efficiency = attempt.efficiency.clone().unwrap();
+        assert_eq!(efficiency.input_tokens, Some(0));
+        assert_eq!(efficiency.output_tokens, Some(0));
+        assert_eq!(efficiency.total_tokens, Some(0));
+        assert_eq!(efficiency.cost_usd, Some(0.0));
+        assert!(!efficiency.unavailable.contains_key("total_tokens"));
+        assert!(!efficiency.unavailable.contains_key("cost_usd"));
+
+        // An incomplete tree may hide a turn: its usage stays unknown.
+        attempt.metrics = Some(no_turn(false));
+        attempt.update_cost();
+        attempt.update_efficiency();
+        assert_eq!(attempt.cost.subject_usd, None);
+        assert_eq!(attempt.efficiency.unwrap().total_tokens, None);
     }
 
     #[test]
