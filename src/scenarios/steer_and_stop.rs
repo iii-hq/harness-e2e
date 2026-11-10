@@ -9,20 +9,29 @@
 //!
 //! - two concurrent sends with identical options land on one turn, one
 //!   seeding it and the other merged or queued into it;
+//! - a session, its first turn done, is sent a second one that is held in
+//!   the fixture; a stop naming the first turn answers `stopping: false` and
+//!   the held turn keeps running;
 //! - three times: a parent and its directly spawned child both held in the
 //!   fixture, `harness::stop` on the parent, the holds released 50 ms later;
 //!   both turns must end `cancelled` within 10 s, each held call closed with
-//!   one `cancelled` result, and no new turn may start for 15 s;
-//! - the merge session, its first turn done, is sent a second one that is
-//!   held in the fixture; a stop naming the first turn answers
-//!   `stopping: false` and the held turn keeps running.
+//!   one `cancelled` result, and no new turn may start for 15 s.
 //!
-//! A side model that never calls the fixture leaves the run undetermined.
+//! The sessions that must park in the fixture run on `e2e-steer-<run>`, a
+//! provider the runner registers with the router and plays itself: a live
+//! side model sometimes answered without calling the fixture, which left the
+//! run undetermined. A hold that is still not reached fails its check.
+//! shortcut: the router has no way to forget a provider, so every run leaves
+//! `e2e-steer-<run>` behind (unavailable once the runner disconnects), and
+//! the stream below repeats `router_fault_contract`'s; share one in
+//! `mechanism` when a third scenario plays a provider.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use iii_sdk::channel::{ChannelWriter, StreamChannelRef};
+use iii_sdk::runtime::FunctionRef;
 use iii_sdk::{IIIClient, RegisterFunction};
 use serde_json::{json, Value};
 
@@ -41,8 +50,9 @@ const DELIVERABLE_ID: &str = "steer_and_stop_checks";
 const MESSAGE_QUEUED: &str = "harness::on-message-queued";
 const STEER_LABEL: &str = "steer";
 const STALE_LABEL: &str = "stale";
-/// Recorded when a side session's model never called the hold fixture.
-const SIDE_HOLD_SKIPPED: &str = "side_hold_skipped";
+const SIDE_MODEL: &str = "e2e-steer-model";
+/// How long a scripted side session has to park in the fixture.
+const HELD_WITHIN: Duration = Duration::from_secs(30);
 const STOP_ROUNDS: usize = 3;
 const RELEASE_AFTER_STOP: Duration = Duration::from_millis(50);
 const CANCEL_WITHIN: Duration = Duration::from_secs(10);
@@ -109,6 +119,101 @@ fn merge_message(label: &str) -> String {
 
 fn side(run_id: &str, name: &str) -> String {
     format!("{}_{name}", mechanism::session_id(run_id))
+}
+
+fn side_provider(run_id: &str) -> String {
+    format!("e2e-steer-{}", mechanism::short(run_id))
+}
+
+/// The label a `side_task` in `text` asks `hold` to be called with.
+fn asked_label<'a>(text: &'a str, hold: &str) -> Option<&'a str> {
+    let after_hold = text.split_once(hold)?.1;
+    let label = after_hold.split_once("{\"label\": \"")?.1;
+    Some(label.split_once('"')?.0)
+}
+
+/// The label of the hold the latest `side_task` in `messages` names, until a
+/// call follows it.
+fn pending_hold(messages: &Value, hold: &str) -> Option<String> {
+    let mut pending = None;
+    for message in messages.as_array().into_iter().flatten() {
+        for block in message["content"].as_array().into_iter().flatten() {
+            if block["type"] == "function_call" {
+                pending = None;
+            } else if message["role"] == "user" {
+                let asked = block["text"]
+                    .as_str()
+                    .and_then(|text| asked_label(text, hold));
+                pending = asked.map(str::to_string).or(pending);
+            }
+        }
+    }
+    pending
+}
+
+/// What the scripted side provider streams for a request: the hold call its
+/// latest task names, or `DONE` when none is pending.
+fn side_frames(provider: &str, model: &Value, messages: &Value, hold: &str) -> Vec<Value> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    let message = |content: Value, stop_reason: &str| {
+        json!({
+            "role": "assistant",
+            "content": content,
+            "stop_reason": stop_reason,
+            "model": model,
+            "provider": provider,
+            "timestamp": timestamp,
+        })
+    };
+    let Some(label) = pending_hold(messages, hold) else {
+        let done = message(json!([{ "type": "text", "text": "DONE" }]), "end");
+        return vec![
+            json!({ "type": "start", "partial": message(json!([]), "end") }),
+            json!({ "type": "text_start", "partial": message(json!([]), "end") }),
+            json!({ "type": "text_delta", "delta": "DONE" }),
+            json!({ "type": "text_end", "partial": done }),
+            json!({ "type": "done", "message": done }),
+        ];
+    };
+    let call = json!([{
+        "type": "function_call",
+        "id": "fc_hold",
+        "function_id": "agent_call",
+        "arguments": { "function": hold, "description": "E2E hold", "payload": { "label": label } },
+    }]);
+    vec![
+        json!({ "type": "start", "partial": message(json!([]), "function_call") }),
+        json!({ "type": "done", "message": message(call, "function_call") }),
+    ]
+}
+
+fn register_side_stream(client: &IIIClient, run_id: &str) -> FunctionRef {
+    let address = client.address().to_string();
+    let provider = side_provider(run_id);
+    let hold = hold_function(run_id);
+    client.register_function(
+        format!("provider::{provider}::stream"),
+        RegisterFunction::new_async(move |input: Value| {
+            let (address, provider, hold) = (address.clone(), provider.clone(), hold.clone());
+            async move {
+                let writer_ref: StreamChannelRef =
+                    serde_json::from_value(input["writer_ref"].clone())
+                        .map_err(|error| iii_sdk::errors::Error::Serde(error.to_string()))?;
+                let writer = ChannelWriter::new(&address, &writer_ref);
+                for frame in side_frames(&provider, &input["model"], &input["messages"], &hold) {
+                    writer
+                        .send_message(&frame.to_string())
+                        .await
+                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))?;
+                }
+                let _ = writer.close().await;
+                Ok::<Value, iii_sdk::errors::Error>(json!({ "ok": true }))
+            }
+        })
+        .description("E2E scripted side-session provider stream."),
+    )
 }
 
 /// Which held calls are parked and which the runner released, per attempt.
@@ -219,6 +324,7 @@ impl Scenario for SteerAndStop {
             "steers": steers,
             "merge": merge,
             "stop_tasks": stop_tasks,
+            "stale_first": merge_message(STALE_LABEL),
             "stale_task": side_task(run_id, STALE_LABEL),
         } }))
     }
@@ -227,6 +333,7 @@ impl Scenario for SteerAndStop {
         mechanism::reset(run_id);
         lock_unpoisoned(boards()).remove(run_id);
         mechanism::keep_session(run_id, &side(run_id, "merge"));
+        mechanism::keep_session(run_id, &side(run_id, STALE_LABEL));
         for round in 1..=STOP_ROUNDS {
             mechanism::keep_session(run_id, &side(run_id, &format!("stop{round}_child")));
             mechanism::keep_session(run_id, &side(run_id, &format!("stop{round}")));
@@ -274,6 +381,25 @@ impl Scenario for SteerAndStop {
         )
         .await?;
         mechanism::keep_trigger(run_id, trigger);
+
+        let provider = side_provider(run_id);
+        mechanism::keep_function(run_id, register_side_stream(context.client(), run_id));
+        context
+            .trigger_value(
+                "router::provider::register",
+                json!({
+                    "id": provider,
+                    "display_name": "E2E scripted side sessions",
+                    "models": [{
+                        "id": SIDE_MODEL,
+                        "provider": provider,
+                        "context_window": 100_000,
+                        "max_output_tokens": 4_096,
+                        "supports_tools": true,
+                    }],
+                }),
+            )
+            .await?;
         Ok(())
     }
 
@@ -284,19 +410,20 @@ impl Scenario for SteerAndStop {
         run_id: &str,
     ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         steering_outcome(observation, run_id);
-        if let Some(route) = mechanism::subject_route(&observation.transcript) {
-            let earlier = seed_or_merge(context, run_id, &route).await;
-            stale_stop(context, run_id, &route, earlier).await;
-            for round in 1..=STOP_ROUNDS {
-                stop_round(context, run_id, &route, round).await;
-            }
-        } else {
-            record(
+        // Only the concurrent sends need a live model: their turn has to
+        // outlast the second send, and what it answers is not read.
+        match mechanism::subject_route(&observation.transcript) {
+            Some(route) => seed_or_merge(context, run_id, &route).await,
+            None => record(
                 run_id,
                 "side_route",
                 false,
                 "no assistant reply to take the route from",
-            );
+            ),
+        }
+        stale_stop(context, run_id).await;
+        for round in 1..=STOP_ROUNDS {
+            stop_round(context, run_id, round).await;
         }
         Ok(vec![mechanism::deliverable(DELIVERABLE_ID, run_id)])
     }
@@ -325,16 +452,6 @@ impl Scenario for SteerAndStop {
             ));
         }
         let checks = mechanism::observed_checks(observation, run_id);
-        if let Some(skipped) = checks.iter().find(|check| check.id == SIDE_HOLD_SKIPPED) {
-            return Ok(assessment::prerequisite_failure(
-                ASSESSMENTS,
-                SIDE_HOLD_SKIPPED,
-                format!(
-                    "a side session's model never called the hold fixture: {}",
-                    skipped.detail
-                ),
-            ));
-        }
         let stop_ids: Vec<String> = (1..=STOP_ROUNDS)
             .map(|round| format!("stop_round_{round}"))
             .collect();
@@ -534,13 +651,8 @@ fn steering_outcome(observation: &ScenarioObservation, run_id: &str) {
     );
 }
 
-/// Two concurrent sends with identical options to a new side session; the
-/// turn they landed on.
-async fn seed_or_merge(
-    context: &E2eContext,
-    run_id: &str,
-    route: &(String, String),
-) -> Option<String> {
+/// Two concurrent sends with identical options to a new side session.
+async fn seed_or_merge(context: &E2eContext, run_id: &str, route: &(String, String)) {
     let session_id = side(run_id, "merge");
     let send = |label: &str| {
         json!({
@@ -566,53 +678,50 @@ async fn seed_or_merge(
         }
         _ => false,
     };
+    // The folded turn must also end: a merge that leaves it stuck is no merge.
+    let ended = terminal(context, &session_id, Duration::from_secs(120))
+        .await
+        .is_some_and(|status| status["turn_id"].is_string());
     record(
         run_id,
         "one_turn_for_concurrent_sends",
-        passed,
-        format!("first={first:?} second={second:?}"),
+        passed && ended,
+        format!("first={first:?} second={second:?} ended={ended}"),
     );
-    let ended = terminal(context, &session_id, Duration::from_secs(120)).await?;
-    ended["turn_id"].as_str().map(str::to_string)
 }
 
-/// Holds a second turn on the merge session and stops it by the first
-/// turn's id: the stop must be refused and the held turn keep running.
-async fn stale_stop(
-    context: &E2eContext,
-    run_id: &str,
-    route: &(String, String),
-    earlier: Option<String>,
-) {
+/// Holds a scripted session's second turn and stops it by the first turn's
+/// id: the stop must be refused and the held turn keep running.
+async fn stale_stop(context: &E2eContext, run_id: &str) {
     let id = "stale_stop_refused";
-    let Some(earlier) = earlier else {
-        record(
-            run_id,
-            id,
-            false,
-            "the merge session's first turn never ended",
-        );
-        return;
-    };
-    let session_id = side(run_id, "merge");
-    let hold = hold_function(run_id);
-    let sent = context
-        .trigger_value(
+    let session_id = side(run_id, STALE_LABEL);
+    let send = |message: String| {
+        context.trigger_value(
             "harness::send",
             json!({
                 "session_id": session_id,
-                "message": side_task(run_id, STALE_LABEL),
-                "model": route.0,
-                "provider": route.1,
-                "options": { "max_turns": 3, "functions": { "allow": [hold], "deny": [] } },
+                "message": message,
+                "model": SIDE_MODEL,
+                "provider": side_provider(run_id),
+                "session": { "kind": crate::wire::E2E_SESSION_KIND, "title": "Harness E2E: steer_and_stop stale" },
+                "options": { "max_turns": 3, "functions": { "allow": [hold_function(run_id)], "deny": [] } },
             }),
         )
-        .await;
-    if let Err(error) = sent {
+    };
+    if let Err(error) = send(merge_message(STALE_LABEL)).await {
         record(run_id, id, false, format!("harness::send: {error:#}"));
         return;
     }
-    if !held_or_skipped(context, run_id, id, &[(&session_id, STALE_LABEL)]).await {
+    let first = terminal(context, &session_id, Duration::from_secs(120)).await;
+    let Some(earlier) = first.as_ref().and_then(|status| status["turn_id"].as_str()) else {
+        record(run_id, id, false, "the session's first turn never ended");
+        return;
+    };
+    if let Err(error) = send(side_task(run_id, STALE_LABEL)).await {
+        record(run_id, id, false, format!("harness::send: {error:#}"));
+        return;
+    }
+    if !all_held(context, run_id, id, &[(&session_id, STALE_LABEL)]).await {
         return;
     }
     let live = context
@@ -660,18 +769,12 @@ fn stale_stop_held(stopped: &anyhow::Result<Value>, after: &Value, live_turn: &s
         )
 }
 
-/// Waits until every `(session, label)` is parked in the hold fixture. When
-/// one is not, records `SIDE_HOLD_SKIPPED` if its model never called the
-/// fixture, else fails check `id`.
-async fn held_or_skipped(
-    context: &E2eContext,
-    run_id: &str,
-    id: &str,
-    holds: &[(&str, &str)],
-) -> bool {
+/// Waits until every `(session, label)` is parked in the hold fixture; fails
+/// check `id` when one is not, saying how far each session got.
+async fn all_held(context: &E2eContext, run_id: &str, id: &str, holds: &[(&str, &str)]) -> bool {
     let board = board(run_id);
     let labels: Vec<String> = holds.iter().map(|(_, label)| label.to_string()).collect();
-    let all_held = mechanism::poll(Duration::from_secs(90), || {
+    let all_held = mechanism::poll(HELD_WITHIN, || {
         let board = Arc::clone(&board);
         let labels = labels.clone();
         async move {
@@ -687,26 +790,30 @@ async fn held_or_skipped(
         return true;
     }
     let hold = hold_function(run_id);
-    let mut skipped = Vec::new();
+    let mut detail = Vec::new();
     for (session, label) in holds {
+        let status = context
+            .trigger_value("harness::status", json!({ "session_id": session }))
+            .await
+            .map_or(Value::Null, |status| status["status"].clone());
         let transcript = context.transcript(session).await.unwrap_or(Value::Null);
-        if !common::function_calls(&transcript)
+        let called = common::function_calls(&transcript)
             .iter()
-            .any(|call| call.function_id == hold && call.arguments["label"] == *label)
-        {
-            skipped.push(format!("{session} ({label})"));
-        }
+            .any(|call| call.function_id == hold && call.arguments["label"] == *label);
+        let parked = lock_unpoisoned(&board).held.contains(*label);
+        detail.push(format!(
+            "{session} ({label}): status={status} called={called} parked={parked}"
+        ));
     }
-    if skipped.is_empty() {
-        record(
-            run_id,
-            id,
-            false,
-            "the hold was called but never reached the fixture",
-        );
-    } else {
-        record(run_id, SIDE_HOLD_SKIPPED, false, skipped.join(", "));
-    }
+    record(
+        run_id,
+        id,
+        false,
+        format!(
+            "a scripted hold was not reached in {HELD_WITHIN:?}: {}",
+            detail.join("; ")
+        ),
+    );
     false
 }
 
@@ -726,8 +833,9 @@ async fn terminal(context: &E2eContext, session_id: &str, timeout: Duration) -> 
     .await
 }
 
-/// One stop of a held parent and its held child.
-async fn stop_round(context: &E2eContext, run_id: &str, route: &(String, String), round: usize) {
+/// One stop of a held parent and its held child, both scripted.
+async fn stop_round(context: &E2eContext, run_id: &str, round: usize) {
+    let route = (SIDE_MODEL, side_provider(run_id));
     let id = format!("stop_round_{round}");
     let (parent, child) = (
         side(run_id, &format!("stop{round}")),
@@ -775,7 +883,7 @@ async fn stop_round(context: &E2eContext, run_id: &str, route: &(String, String)
         (parent.as_str(), parent_label.as_str()),
         (child.as_str(), child_label.as_str()),
     ];
-    if !held_or_skipped(context, run_id, &id, &both).await {
+    if !all_held(context, run_id, &id, &both).await {
         return;
     }
     let board = board(run_id);
@@ -952,31 +1060,50 @@ mod tests {
         assert!(!stale_stop_held(&refused, &running, ""));
     }
 
-    #[tokio::test]
-    async fn a_side_model_that_skipped_its_hold_leaves_the_run_undetermined() {
-        let run = "side-skipped";
-        let hold = hold_function(run);
-        let transcript = json!({ "messages": [{ "message": { "role": "assistant", "content": [
-            { "type": "function_call", "id": "c1", "function_id": hold, "arguments": { "label": STEER_LABEL } },
-        ] } }] });
-        let observation = ScenarioObservation::for_test(
-            crate::scenarios::ScenarioId::SteerAndStop,
-            "control",
-            transcript,
-            "ACK",
-            Vec::new(),
-        );
-        record(run, SIDE_HOLD_SKIPPED, false, "stop1_child never called");
-        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
-        let evaluation = SteerAndStop
-            .evaluate(&context, &observation, run)
-            .await
-            .unwrap();
-        mechanism::reset(run);
+    fn user(text: &str) -> Value {
+        json!({ "role": "user", "content": [{ "type": "text", "text": text }] })
+    }
+
+    /// The pilot's lost rounds: a live side model sometimes answered without
+    /// calling the fixture. The scripted one calls the hold its latest task
+    /// names, once.
+    #[test]
+    fn the_scripted_side_model_calls_the_hold_its_latest_task_names_once() {
+        let hold = hold_function("run");
+        let mut messages = vec![user(&merge_message(STALE_LABEL))];
+        assert_eq!(pending_hold(&json!(messages), &hold), None);
+        messages
+            .push(json!({ "role": "assistant", "content": [{ "type": "text", "text": "DONE" }] }));
+        messages.push(user(&format!(
+            "<task>{}</task>",
+            side_task("run", STALE_LABEL)
+        )));
         assert_eq!(
-            evaluation.completion,
-            Some(crate::report::CompletionState::Undetermined)
+            pending_hold(&json!(messages), &hold),
+            Some(STALE_LABEL.to_string())
         );
+        let frames = side_frames("p", &json!("m"), &json!(messages), &hold);
+        let call = &frames.last().unwrap()["message"];
+        assert_eq!(call["stop_reason"], "function_call");
+        assert_eq!(
+            common::function_calls(&json!({ "messages": [{ "message": call }] }))
+                .iter()
+                .map(|call| (call.function_id.as_str(), call.arguments["label"].clone()))
+                .collect::<Vec<_>>(),
+            [(hold.as_str(), json!(STALE_LABEL))]
+        );
+
+        messages.push(call.clone());
+        messages.push(
+            json!({ "role": "function_result", "function_call_id": "fc_hold", "function_id": hold,
+            "content": [{ "type": "text", "text": "{\"label\":\"stale\",\"released\":true}" }] }),
+        );
+        assert_eq!(pending_hold(&json!(messages), &hold), None);
+        let frames = side_frames("p", &json!("m"), &json!(messages), &hold);
+        let reply = &frames.last().unwrap()["message"];
+        assert_eq!(reply["stop_reason"], "end");
+        assert_eq!(reply["content"][0]["text"], "DONE");
+        assert_eq!(pending_hold(&json!(null), &hold), None);
     }
 
     fn steered(run: &str, reply: &str, steers: &[&str]) -> Vec<(String, bool)> {
@@ -1044,6 +1171,7 @@ mod tests {
             messages["stop_tasks"].as_array().unwrap().len(),
             2 * STOP_ROUNDS
         );
+        assert_eq!(messages["stale_first"], merge_message(STALE_LABEL));
         assert_eq!(messages["stale_task"], side_task("run", STALE_LABEL));
     }
 
