@@ -297,7 +297,9 @@ impl ScenarioId {
                     (&[], A::CoreLoop, &[])
                 }
                 Self::BindingContractProbe => (&[W::State], A::Scheduling, &[]),
-                Self::StructuredOutput => (&[], A::CoreLoop, &[]),
+                Self::StructuredOutput | Self::SteerAndStop | Self::RouterFaultContract => {
+                    (&[], A::CoreLoop, &[])
+                }
                 Self::ContextCompaction => (&[], A::LongContext, &[]),
                 // The subject reads the fixture file through the coder worker.
                 Self::SessionContinuity => (&[W::Ide], A::CoreLoop, &[]),
@@ -354,6 +356,8 @@ mod tests {
                 "registry_implementation",
                 "registry_verification",
                 "repeated_failure_breaker",
+                "router_fault_contract",
+                "steer_and_stop",
                 "structured_output",
                 "trending_topics_build",
                 "truncated_call_guard",

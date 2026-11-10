@@ -277,7 +277,7 @@
     {
       "id": "regression",
       "label": "Core runtime regression",
-      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Fourteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness, and a sub-agent whose validator rejects it until its retries run out. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Four more probe the Harness's own contract for under a cent each: the sends harness::send must refuse, every stage of a function call, trigger bindings from registration to teardown, and how a refused turn fails. Three short turns check a result held to an output schema, compaction beside a live turn, and a send that names only the session keeping its model, policy and root. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
+      "purpose": "Did a change to the iii Engine, its workers or the Harness break a core capability agents rely on every day? Fourteen short tasks each exercise one capability: updating saved state, switching to a replaced function, waking on a timer, editing and testing code with the shell and coder workers, database migrations in transactions, parallel agents writing to one table, validators that reject a turn, long sessions that read more than the agent can keep verbatim, instructions hidden in tool output, delegation that stops at the sub-agent depth cap, the Harness refusing to re-run a call that keeps failing or to run one cut short by the output limit, and a session and a held turn surviving restarts of session-manager and the Harness, and a sub-agent whose validator rejects it until its retries run out. The two call guards depend on the model provoking them; a run where it did not is undetermined, not scored. Four more probe the Harness's own contract for under a cent each: the sends harness::send must refuse, every stage of a function call, trigger bindings from registration to teardown, and how a refused turn fails. Five more check Harness mechanisms in short turns: a result held to an output schema, compaction beside a live turn, a send that names only the session keeping its model, policy and root, steering and stopping a running turn, and how a turn survives a provider that fails. Not covered: whole applications, Console pages, browsers, Workers started by Compose and multi-hour work (see Application builds and changes, and Linkly).",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -305,7 +305,9 @@
         "turn_failure_surface",
         "structured_output",
         "context_compaction",
-        "session_continuity"
+        "session_continuity",
+        "steer_and_stop",
+        "router_fault_contract"
       ],
       "repetitions": 11,
       "technical_retries": 1,

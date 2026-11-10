@@ -76,7 +76,7 @@ const STOP: AssessmentSpec = AssessmentSpec::gate(
     40,
     "In each of three rounds, did stopping a parent whose child was also held cancel both within 10 s, close each held call with one cancelled result, and start no new turn for 15 s?",
 )
-.labeled("Stop cancels a held parent and child, three times");
+.labeled("Stop cancels held parent and child, three times");
 const STALE_STOP: AssessmentSpec = AssessmentSpec::gate(
     "stale_stop",
     10,

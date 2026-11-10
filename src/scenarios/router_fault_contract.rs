@@ -65,7 +65,7 @@ const PAIRING: AssessmentSpec = AssessmentSpec::gate(
     15,
     "After a step with a call to a missing function, did the next request carry a result for every call?",
 )
-.labeled("Every call has a result in the next request");
+.labeled("Every call is answered in the next request");
 const PRESTREAM: AssessmentSpec = AssessmentSpec::gate(
     "prestream_retry",
     20,
@@ -77,7 +77,7 @@ const RESUME: AssessmentSpec = AssessmentSpec::gate(
     25,
     "Did a stream cut mid-answer resume with recovering and recovered rows, keep the partial and run the earlier call once, and did a stream cut every time fail after three resumes?",
 )
-.labeled("A cut stream resumes once, gives up after three");
+.labeled("A cut stream resumes, gives up after three");
 const STOP: AssessmentSpec = AssessmentSpec::gate(
     "stop_mid_stream",
     15,
