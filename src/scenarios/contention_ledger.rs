@@ -519,14 +519,14 @@ fn evaluate_observation(
     let parent_woken = audit.children_in_tree == usize::from(WRITERS)
         && retired == 1
         && pending >= usize::from(WRITERS) - 1;
-    let barrier_woke = completion_records.len() == usize::from(WRITERS)
+    let three_evaluations = completion_records.len() == usize::from(WRITERS)
         && retired == 1
         && pending == usize::from(WRITERS) - 1;
     let fan_in = armed_before_spawns
         && spawns.len() == usize::from(WRITERS)
         && spawn_sessions == expected_sessions
         && single_response_spawns
-        && barrier_woke;
+        && three_evaluations;
 
     let report_verified = report_is_verified(&observation.response);
     let root_check_failed = common::function_outcomes(&observation.transcript)
@@ -580,8 +580,8 @@ fn evaluate_observation(
             fan_in,
             format!(
                 "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
-             single_response_spawns={single_response_spawns}, completion_records={}, \
-             barrier_woke={barrier_woke}",
+             single_response_spawns={single_response_spawns}, completion_records={}/{WRITERS}, \
+             skipped_while_waiting={pending}, fired={retired}",
                 registrations.len(),
                 spawns.len(),
                 completion_records.len(),
@@ -1308,6 +1308,56 @@ pub(crate) mod tests {
         assert_eq!(
             completion_of(transcript(&[], &barrier), WRITERS, clumsy),
             CompletionState::Completed
+        );
+    }
+
+    /// A root that writes its own key into the watched scope makes the
+    /// barrier evaluate a fourth time (execution 0248: r01 set
+    /// `coordinator-armed` after the spawns). The discipline points go, and
+    /// the reason shows the wake still fired.
+    #[test]
+    fn a_stray_scope_write_costs_the_fan_in_and_reports_the_wake_fired() {
+        let names = Names::new("run");
+        let mut root = armed_root(&names);
+        root.push(common::ObservedFunctionCall {
+            function_id: "state::set".to_string(),
+            arguments: json!({
+                "scope": names.scope, "key": "coordinator-armed", "value": "waiting",
+            }),
+        });
+        let barrier = [
+            ("skipped", false),
+            ("skipped", false),
+            ("skipped", false),
+            ("delivered", true),
+        ];
+        let writers = (0..WRITERS)
+            .map(|writer| (writer, contended_writer_calls(&names, writer)))
+            .collect();
+        let evaluation = evaluation_of(
+            transcript(&root, &barrier),
+            WRITERS,
+            writers,
+            &balanced(),
+            REPORT_MARKER,
+        );
+        let award = |spec: &AssessmentSpec| {
+            evaluation
+                .awards
+                .iter()
+                .find(|award| award.id == spec.id())
+                .unwrap()
+        };
+
+        assert_eq!(award(&PARENT_WOKEN).awarded, Some(PARENT_WOKEN.weight()));
+        let fan_in = award(&QUORUM_FREE_FAN_IN);
+        assert_eq!(fan_in.awarded, Some(0));
+        assert!(
+            fan_in
+                .reason
+                .ends_with("completion_records=4/3, skipped_while_waiting=3, fired=1"),
+            "{}",
+            fan_in.reason
         );
     }
 

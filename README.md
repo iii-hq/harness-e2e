@@ -281,7 +281,9 @@ with an error is judged like any other answer. A broken gate is a
 The `pre_generate` observer is a global hook (the Harness has no session filter
 for it), so while one of these attempts runs, every step on the stack makes one
 extra round trip to the runner. `persistent_state`'s observer also appends one
-line to the prompt, which its behavior digest covers.
+line to the prompt, which its behavior digest covers, and its gate requires
+each step's messages to begin with the messages of the step before: the
+Harness never rewrites what it already sent.
 
 Each criterion has a `description`, the question the subject is scored on, and
 a `label`, a 3–8 word statement the test card shows ("Stored record matches
@@ -416,12 +418,13 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | ID | Purpose |
 | --- | --- | --- |
-| Core runtime regression | `regression` | Core runtime, recovery, context and safety checks, plus four probes of the Harness's own contract and five short checks of its mechanisms, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
-| Null agent canary | `null-canary` | The regression's agent tasks run as the `null-agent` profile: every test must score 0 and stay incomplete. |
+| Core runtime regression | `regression` | Core runtime, recovery, context and call-guard checks, plus four probes of the Harness's own contract and five short checks of its mechanisms, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
+| Null agent canary | `null-canary` | The regression's agent tasks, `minimal_path` and the two `model-and-workers` tasks run as the `null-agent` profile: every test must score 0 and stay incomplete. |
+| Model and worker behavior | `model-and-workers` | `database_migration_recovery` and `prompt_injection_resilience`, three independent times each: they score the database worker and the model, not the Harness, so they stay out of the regression and of Harness comparisons. |
 | Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
 | Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | All 14 cases nine independent times, on demand when a Harness release is judged, to compare two Harness versions. |
-| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression's fourteen agent tasks eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
+| Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression's twelve agent tasks eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Context capacity (compaction) | `context-capacity` | Kanban chapters 1, 4 and 7 and context pressure, on the `context-capacity` stack. |
 | Human approval of agent calls | `approvals` | One approved and one denied call through the approval gate, on the `approvals` stack. |
 | Application builds with Deepwork | `deepwork` | The existing chess, form-flow and state-machine builds, on the `deepwork` stack with the `deepwork-e2e` profile. |
@@ -467,7 +470,8 @@ turn or token ceiling.
 A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
-`regression` runs eleven (`-r01` to `-r11`): 253 jobs, nine at a time.
+`regression` runs eleven (`-r01` to `-r11`): 231 jobs, nine at a time, under
+the 256 jobs GitHub allows one matrix.
 
 Four of the regression's tests check a Harness mechanism the model has to set
 in motion. `spawn_depth_cap` reads the Harness's `max_depth` from its
@@ -486,13 +490,18 @@ waits on a held call. Every regression test runs in a stack group, and so a
 job, of its own, so the restarts reach no other test; it must never run on a
 shared stack. It reads the session's status before the runner's
 `harness::status`, which would repair a lost projection, and counts that read
-only when the runner's wait ended on the turn's terminal event.
+only when the runner's wait ended on the turn's terminal event. The held call
+must have run once for each call in the transcript, and two one-shot bindings
+the runner arms on a side session of its own right before the Harness restart
+(a state change and a timer, both calling a fixture) must each deliver once
+after it.
 
-Four more of the regression's twenty-three tests probe the Harness's own
+Four more of the regression's twenty-one tests probe the Harness's own
 contract rather than an agent's work: `harness_contract_probe` (the sends
 `harness::send` must refuse, and the two output caps it must accept),
 `dispatch_pipeline` (policy, hook chain, result normalization, hook holds and
-discovery of a function call), `binding_contract_probe` (trigger bindings:
+discovery of a function call, and a child that asks for more than its parent
+has), `binding_contract_probe` (trigger bindings:
 refusals, call bindings, wakes, the cap of 64 and teardown) and
 `turn_failure_surface` (a turn refused by its budget preflight or a `pre_turn`
 hook fails at zero tokens). The runner drives them directly, so each costs
@@ -510,16 +519,18 @@ that names only the session keeps its model, policy and filesystem root),
 `steer_and_stop` (queued steers reach a running turn in order, and a stop
 cancels a parent and its child) and `router_fault_contract` (a scripted
 provider fails before, during and after a stream, and the turn resumes, fails
-or stops as the contract says). Like
+or stops as the contract says; the same provider scripts a turn into its step
+cap, a call whose arguments need repair, and one spawn past the fan-out cap). Like
 the probes, they have no null-agent control and stay out of `null-canary` and
 `regression-x11`.
 
-The `null-canary` suite runs the regression's fourteen agent tasks and `minimal_path`
-(the one test `pr` and `after-release` add to the regression) once, with no
-technical retries, and is meant to run as the `null-agent` Directory profile
+The `null-canary` suite runs the regression's twelve agent tasks, `minimal_path`
+(the one test `pr` and `after-release` add to the regression) and the two
+`model-and-workers` tasks once, with no technical retries, and is meant to run as the `null-agent` Directory profile
 ([config/agents/null-agent.md](config/agents/null-agent.md)): it answers
-`done` and calls no function. The four Harness contract probes stay out:
-they score the Harness, which an agent that does nothing cannot fail. The
+`done` and calls no function. The four Harness contract probes and the five
+mechanism checks stay out: they score the Harness, which an agent that does
+nothing cannot fail. The
 executor copies `config/agents/` into the
 project's agents folder whenever an execution names a profile. Every run must
 score 0 and stay `task_incomplete`; a point or a completion is a hole in that
@@ -864,12 +875,30 @@ default effort. Scores compare only with other runs of this suite.
 gh workflow run exact-stack-e2e.yml -f suite=context-thinking -f stack=context-thinking -f model=anthropic/claude-haiku-5-5
 ```
 
+### Model and worker behavior
+
+The `model-and-workers` suite runs two tasks the regression ran until
+2026-11-10, three independent times each, on the default stack. Neither has a
+Harness mechanism gate: `database_migration_recovery` scores the `database`
+worker and the SQL the model writes, and `prompt_injection_resilience` the
+model's obedience to its user (the Harness has no defense of its own against
+injection; the task only shows that it hands a function's result over whole).
+A fall here points at the model or the database worker. It is six jobs and
+about US$0.04 an execution on `deepseek-flash`; three runs tell a task that
+fails every time from one that failed once, not a fall of a few points.
+
+```bash
+gh workflow run exact-stack-e2e.yml -f suite=model-and-workers -f model=deepseek/deepseek-flash
+```
+
 ### Schedules
 
 Release Control holds the schedules; a suite here is only what to run. Beyond
 the daily `regression`, these run on their own: `memory-smoke` daily and for
 every Harness release on the `memory` stack, `harness-weekly` weekly on
-`default`, and `context-thinking` weekly as above.
+`default`, and `context-thinking` weekly as above. `model-and-workers` has no
+schedule until Release Control gets a plan for it (weekly on `default` is
+enough); until then it runs only when dispatched.
 
 ### Approvals
 
@@ -892,8 +921,8 @@ gh workflow run exact-stack-e2e.yml -f suite=approvals -f stack=approvals -f mod
 
 Decided on 2026-10-24 (KAN-516): a Harness release is judged on demand, when
 it is to be judged, with `software-engineering-x9` (all 14 software-engineering
-cases, nine repetitions) and `regression-x11` (the regression, eleven
-repetitions), each run once per arm on a pair of stacks of
+cases, nine repetitions) and `regression-x11` (the regression's twelve agent
+tasks, eleven repetitions), each run once per arm on a pair of stacks of
 [`stacks/harness-ab/`](stacks/harness-ab/), remote runs on `deepseek-flash`
 (local tests may use Codex). The ceiling is about US$50 per comparison.
 Changing the repetitions is changing `repetitions` in
@@ -901,9 +930,10 @@ Changing the repetitions is changing `repetitions` in
 
 Cost per comparison, both arms, subject cost only (the judge and technical
 retries add some): the mean of each test in local `deepseek-flash` runs, summed
-over the suite, times repetitions, times two. The regression is US$0.15 a pass
-(`subagent_validation_failure`, added after that measurement, costs about
-US$0.009), so about US$3.3; the 14 cases of `software-engineering` are US$2.51 a pass, so
+over the suite, times repetitions, times two. The regression was US$0.15 a pass;
+`subagent_validation_failure`, added after that measurement, costs about
+US$0.009, and the two tasks moved to `model-and-workers` cost about US$0.013
+together (the 1.8.44 and 1.8.50 arms), so about US$3.2; the 14 cases of `software-engineering` are US$2.51 a pass, so
 about US$45.
 
 A/A, to check the calibration: dispatch the same stack of

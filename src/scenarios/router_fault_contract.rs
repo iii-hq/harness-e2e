@@ -18,6 +18,21 @@
 //! - `heal`: a second provider whose stream function goes away fails a turn
 //!   and is marked unavailable, then serves again once it re-registers.
 //!
+//! The same scripted provider drives three Harness limits no model would hit
+//! on cue:
+//!
+//! - `loop`: every step answers with a fixture call under `max_turns` 3; the
+//!   turn gets three streams, a `max_turns` notice, and ends `completed`
+//!   with stop reason `max_turns`;
+//! - `typed`: a typed fixture is called with a boolean and an array written
+//!   as strings (repaired before dispatch, the result marked
+//!   `origin.reconciled`), with valid arguments (left unmarked), and with a
+//!   value no parse fixes (dispatched as written, refused by the fixture, and
+//!   answered with the schema violation named by argument);
+//! - `fanout`: `max_children` + 1 `harness::spawn` calls in one step; only
+//!   the last is refused, as `harness/spawn_fanout_exceeded`, and exactly
+//!   `max_children` child sessions exist.
+//!
 //! The root's one exchange is a plain reply on the subject's model.
 //! shortcut: the router has no way to forget a provider, so every run leaves
 //! its two `e2e-*-<run>` registrations behind (unavailable once the runner
@@ -50,7 +65,12 @@ const TURN_WAIT: Duration = Duration::from_secs(120);
 /// What every fault side session is sent; the fake provider plays the rest.
 const CASE_MESSAGE: &str = "Run the scripted exchange.";
 const STOP_WITHIN: Duration = Duration::from_secs(5);
-const CASES: [&str; 7] = [
+/// The `max_turns` the loop case is sent with.
+const LOOP_TURNS: usize = 3;
+const FANOUT_CODE: &str = "harness/spawn_fanout_exceeded";
+/// `harness/src/config.rs` `default_max_children`, for an entry that leaves it out.
+const DEFAULT_MAX_CHILDREN: usize = 8;
+const CASES: [&str; 10] = [
     "orphan",
     "prestream",
     "permanent",
@@ -58,45 +78,68 @@ const CASES: [&str; 7] = [
     "exhausted",
     "stop",
     "overflow",
+    "loop",
+    "typed",
+    "fanout",
 ];
 
 const PAIRING: AssessmentSpec = AssessmentSpec::gate(
     "call_pairing",
-    15,
+    10,
     "After a step with a call to a missing function, did the next request carry a result for every call?",
 )
 .labeled("Every call is answered in the next request");
 const PRESTREAM: AssessmentSpec = AssessmentSpec::gate(
     "prestream_retry",
-    20,
+    15,
     "Were two pre-stream rate limits retried invisibly (three stream calls, one reply, no error or recovery row), and did a permanent error fail after one call as not retryable?",
 )
 .labeled("Pre-stream errors retry invisibly, permanent ones fail once");
 const RESUME: AssessmentSpec = AssessmentSpec::gate(
     "midstream_resume",
-    25,
+    15,
     "Did a stream cut mid-answer resume with recovering and recovered rows, keep the partial and run the earlier call once, and did a stream cut every time fail after three resumes?",
 )
 .labeled("A cut stream resumes, gives up after three");
 const STOP: AssessmentSpec = AssessmentSpec::gate(
     "stop_mid_stream",
-    15,
+    10,
     "Did `harness::stop` cancel a turn whose stream only pinged in under 5 s, with the router aborting the provider's `<turn>:<step>` request?",
 )
 .labeled("Stop aborts a live stream within 5 s");
 const OVERFLOW: AssessmentSpec = AssessmentSpec::gate(
     "provider_overflow",
-    10,
+    5,
     "Did a provider `context_overflow` error fail the turn as `llm.context_overflow`?",
 )
 .labeled("A provider overflow is classified as such");
 const HEAL: AssessmentSpec = AssessmentSpec::gate(
     "provider_heals",
-    15,
+    10,
     "Did a provider whose stream function went away fail a turn and read unavailable, then serve again after re-registering?",
 )
 .labeled("A provider that comes back is used again");
-const ASSESSMENTS: &[AssessmentSpec] = &[PAIRING, PRESTREAM, RESUME, STOP, OVERFLOW, HEAL];
+const TURN_CAP: AssessmentSpec = AssessmentSpec::gate(
+    "turn_cap",
+    10,
+    "Did a provider that answers every step with a call get exactly three streams under `max_turns` 3, with a `max_turns` notice and a turn that ended `completed` with stop reason `max_turns`?",
+)
+.labeled("The step cap ends a looping turn");
+const RECONCILE: AssessmentSpec = AssessmentSpec::gate(
+    "argument_reconciliation",
+    15,
+    "Did a boolean and an array sent as strings reach a typed fixture as a boolean and an array, with the result marked `origin.reconciled`, a valid call left unmarked, and a value no parse can fix refused with the schema violation named by argument?",
+)
+.labeled("Stringified call arguments are repaired before dispatch");
+const FANOUT: AssessmentSpec = AssessmentSpec::gate(
+    "spawn_fanout_cap",
+    10,
+    "With `max_children` + 1 spawns in one step, was only the last refused as `harness/spawn_fanout_exceeded`, leaving exactly `max_children` child sessions?",
+)
+.labeled("One step spawns at most max_children sessions");
+const ASSESSMENTS: &[AssessmentSpec] = &[
+    PAIRING, PRESTREAM, RESUME, STOP, OVERFLOW, HEAL, TURN_CAP, RECONCILE, FANOUT,
+];
 
 fn fault_provider(run_id: &str) -> String {
     format!("e2e-fault-{}", mechanism::short(run_id))
@@ -114,8 +157,55 @@ fn missing_function(run_id: &str) -> String {
     format!("e2etest::fault_missing_{}", mechanism::short(run_id))
 }
 
+fn typed_function(run_id: &str) -> String {
+    format!("e2etest::fault_typed_{}", mechanism::short(run_id))
+}
+
 fn case_session(run_id: &str, case: &str) -> String {
     format!("{}_fault_{case}", mechanism::session_id(run_id))
+}
+
+/// The session the fan-out case's `n`-th spawn names, counting from 1.
+fn fanout_child(run_id: &str, n: usize) -> String {
+    format!("{}_c{n}", case_session(run_id, "fanout"))
+}
+
+/// What the typed fixture records for a call it accepted; also a valid payload.
+fn typed_received(tag: &str, flag: bool, items: &[&str]) -> Value {
+    json!({ "tag": tag, "flag": flag, "items": items })
+}
+
+/// The typed fixture's request: the SDK publishes its schema and refuses
+/// any other shape, so a call it records arrived with these types.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct TypedArgs {
+    tag: String,
+    flag: bool,
+    items: Vec<String>,
+}
+
+/// The stack's `max_children`, from the entry the Harness registered for itself.
+async fn max_children(context: &E2eContext) -> anyhow::Result<usize> {
+    let listed = context
+        .trigger_value("configuration::list", json!({}))
+        .await?;
+    let id = listed["configurations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["metadata"]["ui_form"] == "harness")
+        .and_then(|entry| entry["id"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("no Harness configuration entry is registered"))?;
+    let entry = context
+        .trigger_value("configuration::get", json!({ "id": id }))
+        .await?;
+    Ok(max_children_of(&entry["value"]))
+}
+
+fn max_children_of(configuration: &Value) -> usize {
+    configuration["max_children"]
+        .as_u64()
+        .map_or(DEFAULT_MAX_CHILDREN, |cap| cap as usize)
 }
 
 /// Stream calls and side effects the fake provider saw, per attempt.
@@ -126,6 +216,12 @@ struct Ledger {
     requests: HashMap<String, Vec<Value>>,
     /// Side-effect fixture runs, by the case that asked for them.
     effects: HashMap<String, usize>,
+    /// What the typed fixture was handed, per call it accepted.
+    typed: Vec<Value>,
+    /// The stack's `max_children`, read before the fan-out case.
+    max_children: usize,
+    /// The fan-out case's named child sessions that exist.
+    children: Vec<String>,
     aborts: Vec<String>,
     stop_started: bool,
     stop_ended: Option<Instant>,
@@ -213,6 +309,49 @@ fn script(run_id: &str, case: &str, attempt: usize, messages: &Value) -> Vec<Fra
         ("midstream", _) => vec![Frame::Text(vec!["RESUMED".into()])],
         ("stop", _) => vec![Frame::PingUntilClosed],
         ("overflow", _) => vec![Frame::Error(Value::Array(Vec::new()), "context_overflow")],
+        ("loop", _) => vec![Frame::Done(
+            json!([agent_call(
+                &format!("fc_loop_{attempt}"),
+                &effect,
+                json!({ "case": "loop", "step": attempt })
+            )]),
+            "function_call",
+        )],
+        ("typed", 1) => {
+            let typed = typed_function(run_id);
+            let stringified = json!({ "tag": "repaired", "flag": "true", "items": r#"["a","b"]"# });
+            let unparseable = json!({ "tag": "refused", "flag": "maybe", "items": ["d"] });
+            vec![Frame::Done(
+                json!([
+                    agent_call("fc_typed_repaired", &typed, stringified),
+                    agent_call(
+                        "fc_typed_control",
+                        &typed,
+                        typed_received("control", false, &["c"])
+                    ),
+                    agent_call("fc_typed_refused", &typed, unparseable),
+                ]),
+                "function_call",
+            )]
+        }
+        ("typed", _) => vec![Frame::Text(vec!["TYPED-DONE".into()])],
+        ("fanout", 1) => {
+            let cap = lock_unpoisoned(&ledger(run_id)).max_children;
+            let spawns = (1..=cap + 1)
+                .map(|n| {
+                    // Named, and on the fake provider: a child costs no token.
+                    let request = json!({
+                        "task": "Reply with one word.",
+                        "session_id": fanout_child(run_id, n),
+                        "model": FAULT_MODEL,
+                        "provider": fault_provider(run_id),
+                    });
+                    agent_call(&format!("fc_fan_{n}"), "harness::spawn", request)
+                })
+                .collect();
+            vec![Frame::Done(Value::Array(spawns), "function_call")]
+        }
+        ("fanout", _) => vec![Frame::Text(vec!["FANOUT-DONE".into()])],
         _ => vec![Frame::Text(vec!["UNSCRIPTED".into()])],
     }
 }
@@ -399,11 +538,11 @@ impl Scenario for RouterFaultContract {
     }
 
     fn summary(&self) -> Option<&'static str> {
-        Some("One plain reply; beside it the runner plays a model provider that rate-limits, cuts streams, overflows, hangs and disappears, and checks how each turn ends.")
+        Some("One plain reply; beside it the runner plays a model provider that rate-limits, cuts streams, overflows, hangs and disappears, then one that loops, sends stringified arguments and over-spawns, and checks how each turn ends.")
     }
 
     fn protects(&self) -> Option<&'static str> {
-        Some("When the model provider rate-limits, drops a stream, overflows, hangs or goes away, agent turns retry, resume, stop or fail cleanly, and come back when the provider does. If it fails, provider hiccups lose work, repeat tool side effects, hang turns, or leave a recovered provider unused.")
+        Some("When the model provider rate-limits, drops a stream, overflows, hangs or goes away, agent turns retry, resume, stop or fail cleanly, and come back when the provider does. A model that loops is stopped at the step cap, call arguments written as strings are repaired before the call runs, and one step cannot start more sub-agents than configured. If it fails, provider hiccups lose work, repeat tool side effects, hang turns, or leave a recovered provider unused; a runaway turn burns budget without limit, or a mistyped argument runs as something the model did not ask for.")
     }
 
     /// One retained cohort: the probes do not vary with a seed.
@@ -475,6 +614,22 @@ impl Scenario for RouterFaultContract {
             .description("E2E run-scoped side effect: counts its invocations."),
         );
         mechanism::keep_function(run_id, effect);
+        let owner = run_id.to_string();
+        let typed = client.register_function(
+            typed_function(run_id),
+            RegisterFunction::new_async(move |input: TypedArgs| {
+                let owner = owner.clone();
+                async move {
+                    let items: Vec<&str> = input.items.iter().map(String::as_str).collect();
+                    lock_unpoisoned(&ledger(&owner))
+                        .typed
+                        .push(typed_received(&input.tag, input.flag, &items));
+                    Ok::<Value, iii_sdk::errors::Error>(json!({ "applied": true }))
+                }
+            })
+            .description("E2E run-scoped typed fixture: records the arguments it was handed."),
+        );
+        mechanism::keep_function(run_id, typed);
         let fault = fault_provider(run_id);
         mechanism::keep_function(run_id, register_stream(client, run_id, &fault, false));
         let owner = run_id.to_string();
@@ -522,7 +677,17 @@ impl Scenario for RouterFaultContract {
         let fault = fault_provider(run_id);
         for case in CASES {
             let session = case_session(run_id, case);
-            let sent = send(context, &session, &fault, FAULT_MODEL, run_id).await;
+            if case == "fanout" {
+                match max_children(context).await {
+                    Ok(cap) => lock_unpoisoned(&ledger(run_id)).max_children = cap,
+                    Err(error) => {
+                        record(run_id, case, false, format!("max_children: {error:#}"));
+                        continue;
+                    }
+                }
+            }
+            let max_turns = if case == "loop" { LOOP_TURNS } else { 10 };
+            let sent = send(context, &session, &fault, FAULT_MODEL, run_id, max_turns).await;
             let status = match sent {
                 Ok(_) if case == "stop" => stop_case(context, run_id, &session).await,
                 Ok(_) => terminal(context, &session, TURN_WAIT).await,
@@ -532,6 +697,10 @@ impl Scenario for RouterFaultContract {
                 }
             };
             let transcript = context.transcript(&session).await.unwrap_or(Value::Null);
+            if case == "fanout" {
+                let children = fanout_children(context, run_id).await;
+                lock_unpoisoned(&ledger(run_id)).children = children;
+            }
             let (passed, detail) = judge(run_id, case, status.as_ref(), &transcript);
             record(run_id, case, passed, detail);
         }
@@ -560,6 +729,9 @@ impl Scenario for RouterFaultContract {
             mechanism::grade(STOP, &checks, &["stop"]),
             mechanism::grade(OVERFLOW, &checks, &["overflow"]),
             mechanism::grade(HEAL, &checks, &["heal"]),
+            mechanism::grade(TURN_CAP, &checks, &["loop"]),
+            mechanism::grade(RECONCILE, &checks, &["typed"]),
+            mechanism::grade(FANOUT, &checks, &["fanout"]),
         ]))
     }
 
@@ -579,6 +751,7 @@ async fn send(
     provider: &str,
     model: &str,
     run_id: &str,
+    max_turns: usize,
 ) -> anyhow::Result<Value> {
     context
         .trigger_value(
@@ -590,8 +763,11 @@ async fn send(
                 "provider": provider,
                 "session": { "kind": crate::wire::E2E_SESSION_KIND, "title": "Harness E2E: router fault" },
                 "options": {
-                    "max_turns": 10,
-                    "functions": { "allow": [effect_function(run_id)], "deny": [] },
+                    "max_turns": max_turns,
+                    "functions": {
+                        "allow": [effect_function(run_id), typed_function(run_id), "harness::spawn"],
+                        "deny": [],
+                    },
                 },
             }),
         )
@@ -691,6 +867,32 @@ fn assistant_texts(transcript: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The `function_result` entry answering `call_id`.
+fn result_of<'a>(transcript: &'a Value, call_id: &str) -> Option<&'a Value> {
+    mechanism::entries(transcript).find(|entry| {
+        entry["message"]["role"] == "function_result"
+            && entry["message"]["function_call_id"] == call_id
+    })
+}
+
+/// The fan-out case's named sessions that exist, kept for cleanup.
+async fn fanout_children(context: &E2eContext, run_id: &str) -> Vec<String> {
+    let cap = lock_unpoisoned(&ledger(run_id)).max_children;
+    let mut existing = Vec::new();
+    for n in 1..=cap + 1 {
+        let child = fanout_child(run_id, n);
+        // `session::get` answers `null` for an unknown session.
+        let found = context
+            .trigger_value("session::get", json!({ "session_id": child }))
+            .await;
+        if found.is_ok_and(|session| !session.is_null()) {
+            mechanism::keep_session(run_id, &child);
+            existing.push(child);
+        }
+    }
+    existing
+}
+
 /// Whether `case` ended as its script says, and why.
 fn judge(run_id: &str, case: &str, status: Option<&Value>, transcript: &Value) -> (bool, String) {
     let ledger = ledger(run_id);
@@ -754,16 +956,101 @@ fn judge(run_id: &str, case: &str, status: Option<&Value>, transcript: &Value) -
         "overflow" => {
             state == "failed" && errors.len() == 1 && errors[0]["class"] == "llm.context_overflow"
         }
+        "loop" => {
+            let notices = rows(transcript, "notice");
+            state == "completed"
+                && status.is_some_and(|status| status["stop_reason"] == "max_turns")
+                && calls == LOOP_TURNS
+                && ledger.effects.get("loop") == Some(&LOOP_TURNS)
+                && notices
+                    .iter()
+                    .filter(|notice| notice["reason"] == "max_turns")
+                    .count()
+                    == 1
+                && errors.is_empty()
+        }
+        "typed" => {
+            let unmarked = |entry: &Value| entry["origin"].get("reconciled").is_none();
+            let mut parsed: Vec<&str> = result_of(transcript, "fc_typed_repaired")
+                .and_then(|entry| entry["origin"]["reconciled"].as_array())
+                .into_iter()
+                .flatten()
+                .filter(|change| change["kind"] == "parsed")
+                .filter_map(|change| change["path"].as_str())
+                .collect();
+            parsed.sort_unstable();
+            state == "completed"
+                && calls == 2
+                && ledger.typed
+                    == [
+                        typed_received("repaired", true, &["a", "b"]),
+                        typed_received("control", false, &["c"]),
+                    ]
+                && parsed == ["/flag", "/items"]
+                && result_of(transcript, "fc_typed_control").is_some_and(unmarked)
+                && result_of(transcript, "fc_typed_refused").is_some_and(|entry| {
+                    let diagnosis = mechanism::text_of(&entry["message"]);
+                    unmarked(entry)
+                        && entry["message"]["is_error"] == true
+                        && diagnosis.contains("[harness] These arguments do not match")
+                        && diagnosis.contains("`flag`")
+                })
+        }
+        "fanout" => {
+            let cap = ledger.max_children;
+            let spawn = |n: usize| {
+                result_of(transcript, &format!("fc_fan_{n}")).map(|entry| &entry["message"])
+            };
+            let children: Vec<String> = (1..=cap).map(|n| fanout_child(run_id, n)).collect();
+            state == "completed"
+                && children.iter().zip(1..).all(|(child, n)| {
+                    spawn(n).is_some_and(|result| {
+                        result["is_error"] != true
+                            && result["details"]["child_session_id"] == child.as_str()
+                    })
+                })
+                && spawn(cap + 1).is_some_and(|result| {
+                    result["is_error"] == true && result["details"]["error"] == FANOUT_CODE
+                })
+                && ledger.children == children
+        }
         _ => false,
     };
-    let detail = if case == "stop" {
-        format!(
+    let outcome = |call_id: &str| {
+        result_of(transcript, call_id).map(|entry| {
+            json!({
+                "is_error": entry["message"]["is_error"],
+                "error": entry["message"]["details"]["error"],
+                "reconciled": entry["origin"]["reconciled"],
+                "text": mechanism::text_of(&entry["message"]),
+            })
+        })
+    };
+    let detail = match case {
+        "stop" => format!(
             "{detail} aborts={:?} stream_ended={}",
             ledger.aborts,
             ledger.stop_ended.is_some()
-        )
-    } else {
-        detail
+        ),
+        "loop" => format!(
+            "{detail} stop_reason={} notices={:?}",
+            status.map_or(&Value::Null, |status| &status["stop_reason"]),
+            rows(transcript, "notice"),
+        ),
+        "typed" => format!(
+            "{detail} received={:?} results={:?}",
+            ledger.typed,
+            ["fc_typed_repaired", "fc_typed_control", "fc_typed_refused"].map(outcome),
+        ),
+        "fanout" => format!(
+            "{detail} max_children={} children={:?} spawns={:?}",
+            ledger.max_children,
+            ledger.children,
+            (1..=ledger.max_children + 1)
+                .map(|n| outcome(&format!("fc_fan_{n}")))
+                .collect::<Vec<_>>(),
+        ),
+        _ => detail,
     };
     (passed, detail)
 }
@@ -784,7 +1071,7 @@ async fn heal_case(context: &E2eContext, run_id: &str) {
     stream.unregister();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let down_session = case_session(run_id, "heal1");
-    let down_sent = send(context, &down_session, &heal, HEAL_MODEL, run_id).await;
+    let down_sent = send(context, &down_session, &heal, HEAL_MODEL, run_id, 10).await;
     let down = match &down_sent {
         Ok(_) => terminal(context, &down_session, TURN_WAIT).await,
         Err(_) => None,
@@ -801,7 +1088,7 @@ async fn heal_case(context: &E2eContext, run_id: &str) {
         .await;
     let listed_up = available(context, &heal).await;
     let up_session = case_session(run_id, "heal2");
-    let up = match send(context, &up_session, &heal, HEAL_MODEL, run_id).await {
+    let up = match send(context, &up_session, &heal, HEAL_MODEL, run_id, 10).await {
         Ok(_) => terminal(context, &up_session, TURN_WAIT).await,
         Err(_) => None,
     };
@@ -1024,6 +1311,209 @@ mod tests {
             overflow("llm.provider_error"),
             |_| {}
         ));
+    }
+
+    fn calls_of(frames: &[Frame]) -> Vec<Value> {
+        match frames {
+            [Frame::Done(content, "function_call")] => content.as_array().cloned().unwrap(),
+            other => panic!("not one step of calls: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_cap_cases_script_their_calls() {
+        let run = "cap-scripts";
+        let empty = json!([]);
+        for attempt in [1, 2, 7] {
+            let calls = calls_of(&script(run, "loop", attempt, &empty));
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0]["arguments"]["function"], effect_function(run));
+        }
+
+        let typed = calls_of(&script(run, "typed", 1, &empty));
+        let payloads: Vec<&Value> = typed
+            .iter()
+            .map(|call| &call["arguments"]["payload"])
+            .collect();
+        assert_eq!(payloads[0]["flag"], "true");
+        assert_eq!(payloads[0]["items"], r#"["a","b"]"#);
+        assert_eq!(payloads[1], &typed_received("control", false, &["c"]));
+        assert_eq!(payloads[2]["flag"], "maybe");
+        assert_eq!(
+            script(run, "typed", 2, &empty),
+            [Frame::Text(vec!["TYPED-DONE".into()])]
+        );
+
+        lock_unpoisoned(&ledger(run)).max_children = 2;
+        let spawns = calls_of(&script(run, "fanout", 1, &empty));
+        assert_eq!(spawns.len(), 3);
+        for (index, spawn) in spawns.iter().enumerate() {
+            assert_eq!(spawn["arguments"]["function"], "harness::spawn");
+            let payload = &spawn["arguments"]["payload"];
+            assert_eq!(payload["session_id"], fanout_child(run, index + 1));
+            assert_eq!(payload["provider"], fault_provider(run));
+            assert_eq!(payload["model"], FAULT_MODEL);
+        }
+        lock_unpoisoned(ledgers()).remove(run);
+    }
+
+    fn result(call_id: &str, origin: Value, message: Value) -> Value {
+        let mut message = message;
+        message["role"] = json!("function_result");
+        message["function_call_id"] = json!(call_id);
+        json!({ "origin": origin, "message": message })
+    }
+
+    /// `judge` on a case whose status carries more than a state.
+    fn judged_status(
+        run: &str,
+        case: &str,
+        calls: usize,
+        status: Value,
+        messages: Vec<Value>,
+        ledger_with: impl FnOnce(&mut Ledger),
+    ) -> bool {
+        {
+            let shared = ledger(run);
+            let mut shared = lock_unpoisoned(&shared);
+            shared.calls.insert(case.to_string(), calls);
+            ledger_with(&mut shared);
+        }
+        let (passed, _) = judge(run, case, Some(&status), &json!({ "messages": messages }));
+        lock_unpoisoned(ledgers()).remove(run);
+        passed
+    }
+
+    #[test]
+    fn the_step_cap_case_wants_three_streams_a_notice_and_the_stop_reason() {
+        let capped = || json!({ "status": "completed", "stop_reason": "max_turns" });
+        let notice = || {
+            vec![
+                row("notice", json!({ "reason": "registry_changed" })),
+                row("notice", json!({ "reason": "max_turns" })),
+            ]
+        };
+        let ran = |times: usize| {
+            move |ledger: &mut Ledger| {
+                ledger.effects.insert("loop".into(), times);
+            }
+        };
+        let judged = |calls, status, messages, effects| {
+            judged_status("judge-loop", "loop", calls, status, messages, ran(effects))
+        };
+        assert!(judged(3, capped(), notice(), 3));
+        assert!(!judged(4, capped(), notice(), 4));
+        assert!(!judged(3, capped(), notice(), 2));
+        assert!(!judged(3, capped(), vec![], 3));
+        assert!(!judged(3, json!({ "status": "completed" }), notice(), 3));
+        let failed = json!({ "status": "failed", "stop_reason": "max_turns" });
+        assert!(!judged(3, failed, notice(), 3));
+    }
+
+    #[test]
+    fn the_reconciliation_case_wants_the_repair_the_mark_and_the_diagnosis() {
+        let parsed = |path: &str| json!({ "path": path, "kind": "parsed" });
+        let marked =
+            || json!({ "turn_id": "t_1", "reconciled": [parsed("/flag"), parsed("/items")] });
+        let diagnosis = "[harness] These arguments do not match e2etest::x's request schema: `flag`: \"maybe\" is not of type \"boolean\".";
+        let refusal = |text_value: &str| json!({ "is_error": true, "content": text(text_value) });
+        let transcript = |mark: Value, control_origin: Value, refused: Value| {
+            vec![
+                result("fc_typed_repaired", mark, json!({ "is_error": false })),
+                result(
+                    "fc_typed_control",
+                    control_origin,
+                    json!({ "is_error": false }),
+                ),
+                result("fc_typed_refused", json!({ "turn_id": "t_1" }), refused),
+            ]
+        };
+        let received = |flag: Value| {
+            move |ledger: &mut Ledger| {
+                let mut repaired = typed_received("repaired", true, &["a", "b"]);
+                repaired["flag"] = flag;
+                ledger.typed = vec![repaired, typed_received("control", false, &["c"])];
+            }
+        };
+        let judged = |messages, flag: Value| {
+            let status = json!({ "status": "completed" });
+            judged_status("judge-typed", "typed", 2, status, messages, received(flag))
+        };
+        let plain = || json!({ "turn_id": "t_1" });
+        assert!(judged(
+            transcript(marked(), plain(), refusal(diagnosis)),
+            json!(true)
+        ));
+        assert!(!judged(
+            transcript(marked(), plain(), refusal(diagnosis)),
+            json!("true")
+        ));
+        assert!(!judged(
+            transcript(plain(), plain(), refusal(diagnosis)),
+            json!(true)
+        ));
+        assert!(!judged(
+            transcript(marked(), marked(), refusal(diagnosis)),
+            json!(true)
+        ));
+        let bare = refusal("serialization error: invalid type");
+        assert!(!judged(transcript(marked(), plain(), bare), json!(true)));
+        let accepted = json!({ "is_error": false, "content": text(diagnosis) });
+        assert!(!judged(
+            transcript(marked(), plain(), accepted),
+            json!(true)
+        ));
+    }
+
+    #[test]
+    fn the_fan_out_case_wants_the_cap_refused_once_and_the_cap_in_children() {
+        let run = "judge-fanout";
+        let spawned = |n: usize| {
+            let details = json!({ "child_session_id": fanout_child(run, n) });
+            result(
+                &format!("fc_fan_{n}"),
+                json!({}),
+                json!({ "is_error": false, "details": details }),
+            )
+        };
+        let refused = |n: usize, code: &str| {
+            let details = json!({ "error": code });
+            result(
+                &format!("fc_fan_{n}"),
+                json!({}),
+                json!({ "is_error": true, "details": details }),
+            )
+        };
+        let children = |count: usize| {
+            move |ledger: &mut Ledger| {
+                ledger.max_children = 2;
+                ledger.children = (1..=count).map(|n| fanout_child(run, n)).collect();
+            }
+        };
+        let judged = |messages, existing| {
+            let status = json!({ "status": "completed" });
+            judged_status(run, "fanout", 2, status, messages, children(existing))
+        };
+        let capped = || vec![spawned(1), spawned(2), refused(3, FANOUT_CODE)];
+        assert!(judged(capped(), 2));
+        assert!(!judged(capped(), 3));
+        assert!(!judged(capped(), 1));
+        assert!(!judged(vec![spawned(1), spawned(2), spawned(3)], 2));
+        let early = vec![spawned(1), refused(2, FANOUT_CODE), refused(3, FANOUT_CODE)];
+        assert!(!judged(early, 2));
+        let depth = vec![
+            spawned(1),
+            spawned(2),
+            refused(3, "harness/spawn_depth_exceeded"),
+        ];
+        assert!(!judged(depth, 2));
+    }
+
+    #[test]
+    fn max_children_falls_back_to_the_harness_default() {
+        assert_eq!(max_children_of(&json!({ "max_children": 3 })), 3);
+        assert_eq!(max_children_of(&json!({})), DEFAULT_MAX_CHILDREN);
+        assert_eq!(max_children_of(&Value::Null), DEFAULT_MAX_CHILDREN);
     }
 
     /// The pilot's lost round: the turn read `cancelled` before the fake's
