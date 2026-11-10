@@ -296,10 +296,9 @@ impl Scenario for PersistentState {
             !writes.is_empty() && state.get("revision") == Some(&json!(2)) && items.len() == 3;
         let concise = confirmed
             && !reply.is_empty()
-            && reply.lines().count() <= 3
             && reply.chars().count() <= 400
-            && mentions_number(reply, 2)
-            && mentions_number(reply, 3);
+            && states(reply, "revision", 2)
+            && states(reply, "item", 3);
 
         Ok(assessment::build_evaluation(
             [
@@ -325,8 +324,8 @@ impl Scenario for PersistentState {
                         items.len(),
                         reply.lines().count(),
                         reply.chars().count(),
-                        mentions_number(reply, 2),
-                        mentions_number(reply, 3)
+                        states(reply, "revision", 2),
+                        states(reply, "item", 3)
                     ),
                 ),
             ],
@@ -356,10 +355,30 @@ fn deliverable_contract() -> DeliverableContract {
     )
 }
 
-fn mentions_number(text: &str, expected: u64) -> bool {
-    text.split(|character: char| !character.is_ascii_digit())
-        .filter(|token| !token.is_empty())
-        .any(|token| token.parse::<u64>().ok() == Some(expected))
+/// Whether the text states `expected` beside `label`: the number counts only
+/// as a whole token on the label's line and within a few words of it, so list
+/// markers, step numbers and the digits of an id state nothing.
+fn states(text: &str, label: &str, expected: u64) -> bool {
+    const REACH: usize = 30;
+    text.lines().any(|line| {
+        let line = line.to_ascii_lowercase();
+        let mut numbers = Vec::new();
+        let mut start = None;
+        for (at, character) in line.char_indices().chain([(line.len(), ' ')]) {
+            match (character.is_alphanumeric(), start) {
+                (true, None) => start = Some(at),
+                (false, Some(from)) => {
+                    if line[from..at].parse::<u64>().ok() == Some(expected) {
+                        numbers.push(from);
+                    }
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        line.match_indices(label)
+            .any(|(at, _)| numbers.iter().any(|number| number.abs_diff(at) <= REACH))
+    })
 }
 
 fn targets_owned(arguments: &Value, scope: &str) -> bool {
@@ -467,6 +486,43 @@ pub(crate) mod tests {
         assert_eq!(confirmation(unwritten), Some(0));
     }
 
+    /// The prompt asks for a concise confirmation, not a line count: a short
+    /// sentence followed by bullets confirms as well as one line does.
+    #[tokio::test]
+    async fn a_short_bulleted_confirmation_is_concise() {
+        let confirmation = |evaluation: ObjectiveEvaluation| {
+            evaluation
+                .awards
+                .into_iter()
+                .find(|award| award.id == CONCISE_MIGRATION_CONFIRMATION.id())
+                .and_then(|award| award.awarded)
+        };
+        // Execution 7695075e, round 9: five lines, 308 characters.
+        let bulleted = "Migration done in a single `state::set` on scope `e2e-persistent-8948faff04894c52ba518a5a0bd045f8`, key `migration_record`.\n\n- **Revision:** 2\n- **Total items:** 3 — `alpha` (completed), `beta` (now completed), `gamma` (appended, completed)\n- **Status:** migrated; `owner` and `metadata` preserved unchanged.";
+        let short = evaluation_of(read_then_write(expected()), expected(), bulleted).await;
+        assert_eq!(
+            confirmation(short),
+            Some(CONCISE_MIGRATION_CONFIRMATION.weight())
+        );
+        // The reply of round 3 of the same execution: 653 characters.
+        let long = "The record is migrated in scope `e2e-persistent-a4dd69dd90014394953a473534389b0e`, key `migration_record`:\n\n- `owner`: `\"quality-suite\"` (unchanged), `metadata` unchanged\n- `revision`: **2**, `status`: `\"migrated\"`\n- `items`: `alpha` (preserved as-is), `beta` (now completed), `gamma` (appended, completed) — **3 items total**\n\nOne caveat on the instruction \"exactly one successful `state::set`\": my first write accidentally added an extra `committed` field to the `alpha` item, so I made a second `state::set` to restore `alpha` exactly. The final stored value is correct, but two writes occurred rather than one, and no other scope or key was written.";
+        let rambling = evaluation_of(read_then_write(expected()), expected(), long).await;
+        assert_eq!(confirmation(rambling), Some(0));
+        // Short, but it never states the revision or the item count.
+        let vague = evaluation_of(read_then_write(expected()), expected(), "Migration done.").await;
+        assert_eq!(confirmation(vague), Some(0));
+        // List markers and the digits inside the scope name state nothing.
+        for unstated in [
+            "Migration complete:\n\n1. Read `migration_record`\n2. Marked `beta` completed and appended `gamma`\n3. Set `status` to `migrated`\n4. Wrote the record back once",
+            "Done on scope `e2e-persistent-8948faf3b04894c52ba518a5a0bd045f`:\n\n- `beta` completed\n- `gamma` appended",
+            "Migration complete:\n\nStep 1: Read `migration_record`\nStep 2: Marked `beta` completed and appended `gamma`\nStep 3: Set `status` to `migrated`\nStep 4: Wrote the record back once",
+            "Migration done.\n\n- **Revision:** 3\n- **Total items:** 2",
+        ] {
+            let evaluation = evaluation_of(read_then_write(expected()), expected(), unstated).await;
+            assert_eq!(confirmation(evaluation), Some(0), "{unstated}");
+        }
+    }
+
     /// Listing the scope first reads it: the read-then-write discipline holds.
     #[tokio::test]
     async fn listing_the_scope_is_a_read_not_a_foreign_write() {
@@ -509,9 +565,12 @@ pub(crate) mod tests {
 
     #[test]
     fn number_mentions_match_whole_numbers_only() {
-        assert!(mentions_number("Revision 2 now holds 3 items.", 2));
-        assert!(mentions_number("Revision 2 now holds 3 items.", 3));
-        assert!(!mentions_number("Revision 12 now holds 30 items.", 2));
-        assert!(!mentions_number("Revision 12 now holds 30 items.", 3));
+        assert!(states("Revision 2 now holds 3 items.", "revision", 2));
+        assert!(states("Revision 2 now holds 3 items.", "item", 3));
+        assert!(!states("Revision 12 now holds 30 items.", "revision", 2));
+        assert!(!states("Revision 12 now holds 30 items.", "item", 3));
+        // Execution 7695075e, rounds 8 and 11: the count on either side of its label.
+        assert!(states("the item list has 3 entries", "item", 3));
+        assert!(states("- **3** total items: `alpha`", "item", 3));
     }
 }

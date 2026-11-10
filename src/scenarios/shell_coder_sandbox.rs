@@ -807,15 +807,20 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
     let diagnosis_create = invocation_index(&invocations, |call| {
         is_coder_create(call, root, DIAGNOSIS_DRAFT_PATH)
     });
-    let final_source_read = reads(SOURCE_PATH)
-        .into_iter()
-        .find(|index| first_source_edit.is_some_and(|edit| *index > edit));
     let diagnosis_move = invocation_index(&invocations, |call| {
         is_coder_move(call, root, DIAGNOSIS_DRAFT_PATH, DIAGNOSIS_PATH)
+    });
+    // The order check starts at the last edit the worker did not refuse: evidence before it is stale.
+    let outcomes = common::function_outcomes(&observation.transcript);
+    let last_source_edit = (0..invocations.len()).rfind(|&index| {
+        is_coder_update(&invocations[index].call, root, SOURCE_PATH)
+            && outcomes[index].is_error != Some(true)
     });
     let mut red_baseline = None;
     let mut green_public = None;
     let mut host_demo = None;
+    let mut final_green = None;
+    let mut final_demo = None;
     for (index, invocation) in invocations.iter().enumerate() {
         let Some(result) = common::function_result(&observation.transcript, invocation) else {
             continue;
@@ -825,6 +830,9 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
                 Some(code) if code != 0 && red_baseline.is_none() => red_baseline = Some(index),
                 Some(0) if first_source_edit.is_some_and(|edit| index > edit) => {
                     green_public.get_or_insert(index);
+                    if last_source_edit.is_some_and(|edit| index > edit) {
+                        final_green.get_or_insert(index);
+                    }
                 }
                 _ => {}
             }
@@ -833,14 +841,20 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
             && successful_output_result(result, HOST_DEMO_STDOUT)
         {
             host_demo.get_or_insert(index);
+            if final_green.is_some() {
+                final_demo.get_or_insert(index);
+            }
         }
     }
+    let final_source_read = reads(SOURCE_PATH)
+        .into_iter()
+        .find(|index| final_green.is_some_and(|green| *index > green));
     let red_before_edit =
         matches!((red_baseline, first_source_edit), (Some(red), Some(edit)) if red < edit);
     let evidence_ordered = matches!(
-        (red_baseline, diagnosis_create, first_source_edit, green_public, final_source_read, host_demo, diagnosis_move),
+        (red_baseline, diagnosis_create, first_source_edit, final_green, final_source_read, final_demo, diagnosis_move),
         (Some(red), Some(diagnosis), Some(edit), Some(green), Some(read), Some(demo), Some(moved))
-            if red < diagnosis && diagnosis < edit && edit < green && green < read && read < demo && demo < moved
+            if red < diagnosis && diagnosis < edit && edit < green && green < read && green < demo && read < moved && demo < moved
     );
     WorkflowAudit {
         coder_info,
@@ -1046,24 +1060,19 @@ fn is_coder_update(call: &common::ObservedFunctionCall, root: &Path, relative: &
 }
 
 fn is_coder_create(call: &common::ObservedFunctionCall, root: &Path, relative: &str) -> bool {
+    // The ide worker takes a flat `{path, content}` as a one-entry batch.
+    let files = call.arguments.get("files").and_then(Value::as_array);
+    let entry = match files.map(Vec::as_slice) {
+        Some([only]) => only,
+        Some(_) => return false,
+        None => &call.arguments,
+    };
     call.function_id == "coder::create-file"
-        && workspace_path_matches(
-            call.arguments
-                .pointer("/files/0/path")
-                .and_then(Value::as_str),
-            root,
-            relative,
-        )
-        && call
-            .arguments
-            .pointer("/files/0/content")
+        && workspace_path_matches(entry.get("path").and_then(Value::as_str), root, relative)
+        && entry
+            .get("content")
             .and_then(Value::as_str)
             .is_some_and(|content| !content.trim().is_empty())
-        && call
-            .arguments
-            .get("files")
-            .and_then(Value::as_array)
-            .is_some_and(|files| files.len() == 1)
 }
 
 fn is_coder_move(call: &common::ObservedFunctionCall, root: &Path, from: &str, to: &str) -> bool {
@@ -1594,6 +1603,124 @@ pub(crate) mod tests {
             arguments: json!({ "path": PUBLIC_TEST_PATH, "stat": true }),
         };
         assert!(!is_coder_read(&stat, &answered, &root, PUBLIC_TEST_PATH));
+    }
+
+    /// The final read and the demo both follow the green run and precede
+    /// the move; the prompt gives the two no order of their own.
+    #[test]
+    fn the_final_read_and_the_demo_follow_green_in_either_order() {
+        let root = PathBuf::from("/tmp/scenario-workspaces/shell-coder-test");
+        let ordered = |messages: Vec<Value>| {
+            let observation = ScenarioObservation::for_test(
+                crate::scenarios::ScenarioId::ShellCoderSandbox,
+                "test",
+                json!({ "messages": messages }),
+                "",
+                Vec::new(),
+            );
+            workflow_audit(&observation, &root).evidence_ordered
+        };
+        // info, read (2), red (2), create, edit, green (2), read (2), demo (2), move.
+        let reference = reference_transcript()["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(ordered(reference.clone()));
+
+        // The demo, then the read.
+        let mut demo_first = reference.clone();
+        demo_first[9..13].rotate_left(2);
+        assert!(ordered(demo_first));
+
+        // A read between two edits, then the prompted read after green.
+        let mut reread = reference.clone();
+        reread.splice(
+            7..7,
+            [
+                json!({ "message": { "role": "assistant", "content": [{
+                    "type": "function_call", "id": "call-mid", "function_id": "coder::read-file",
+                    "arguments": { "path": SOURCE_PATH, "numbered": true },
+                }] } }),
+                json!({ "message": {
+                    "role": "function_result", "function_call_id": "call-mid",
+                    "function_id": "coder::read-file", "is_error": false,
+                    "details": { "content": "" },
+                } }),
+                reference[6].clone(),
+            ],
+        );
+        assert!(ordered(reread));
+
+        // No read after green, or the demo after the move, is out of order.
+        let mut unread = reference.clone();
+        unread.drain(9..11);
+        assert!(!ordered(unread));
+        let mut demo_last = reference.clone();
+        demo_last[11..14].rotate_left(2);
+        assert!(!ordered(demo_last));
+        // So is the demo before green, or the read after the move.
+        let mut demo_early = reference.clone();
+        demo_early[7..13].rotate_right(2);
+        assert!(!ordered(demo_early));
+        let mut read_last = reference.clone();
+        read_last[9..14].rotate_left(2);
+        assert!(!ordered(read_last));
+
+        // An edit after the green run leaves green, read and demo stale, in either order.
+        let mut stale = reference.clone();
+        stale.insert(13, reference[6].clone());
+        assert!(!ordered(stale.clone()));
+        stale[9..13].rotate_left(2);
+        assert!(!ordered(stale.clone()));
+        // Verifying again after that edit restores the order.
+        stale.splice(14..14, reference[7..13].iter().cloned());
+        assert!(ordered(stale));
+        // An edit the worker refused changed nothing.
+        let mut refused = reference.clone();
+        refused.splice(
+            13..13,
+            [
+                json!({ "message": { "role": "assistant", "content": [{
+                    "type": "function_call", "id": "call-refused", "function_id": "coder::update-file",
+                    "arguments": reference[6]["message"]["content"][0]["arguments"],
+                }] } }),
+                json!({ "message": {
+                    "role": "function_result", "function_call_id": "call-refused",
+                    "function_id": "coder::update-file", "is_error": true,
+                } }),
+            ],
+        );
+        assert!(ordered(refused));
+    }
+
+    #[test]
+    fn a_flat_single_file_create_is_the_diagnosis_draft() {
+        let root = PathBuf::from("/tmp/scenario-workspaces/shell-coder-test");
+        let creates = |arguments: Value| {
+            let call = common::ObservedFunctionCall {
+                function_id: "coder::create-file".to_string(),
+                arguments,
+            };
+            is_coder_create(&call, &root, DIAGNOSIS_DRAFT_PATH)
+        };
+        let draft = root.join(DIAGNOSIS_DRAFT_PATH);
+        assert!(creates(
+            json!({ "path": draft, "content": "# Diagnosis\n" })
+        ));
+        assert!(creates(
+            json!({ "files": [{ "path": draft, "content": "# Diagnosis\n" }] })
+        ));
+        for wrong in [
+            json!({ "path": draft, "content": " \n" }),
+            json!({ "path": root.join(DIAGNOSIS_PATH), "content": "# Diagnosis\n" }),
+            json!({ "files": [], "path": draft, "content": "# Diagnosis\n" }),
+            json!({ "files": [
+                { "path": draft, "content": "# Diagnosis\n" },
+                { "path": "notes.md", "content": "more\n" },
+            ] }),
+        ] {
+            assert!(!creates(wrong));
+        }
     }
 
     #[test]

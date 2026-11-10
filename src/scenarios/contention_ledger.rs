@@ -76,7 +76,7 @@ const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
 const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
-    "Once a writer has run under the root and the ledger balances, is the final answer one short LEDGER-BALANCED 15/15 line backed by an error-free run?",
+    "Once a writer has run under the root and the ledger balances, is the final answer one short LEDGER-BALANCED 15/15 line, with neither a writer's database write nor the root's last database query having failed?",
 )
 .labeled("Final answer is the short balanced line");
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -529,6 +529,10 @@ fn evaluate_observation(
         && barrier_woke;
 
     let report_verified = report_is_verified(&observation.response);
+    let root_check_failed = common::function_outcomes(&observation.transcript)
+        .iter()
+        .rfind(|outcome| outcome.function_id == "database::query")
+        .is_some_and(|outcome| outcome.is_error == Some(true));
     let discovery_errors =
         common::identified_discovery_errors(&observation.transcript) + audit.discovery_errors;
     let operational_errors = common::operational_function_errors(
@@ -584,13 +588,19 @@ fn evaluate_observation(
             ),
         ),
         // The marker is in the prompt: only a run whose writers ran and left
-        // the ledger it names backs it.
+        // the ledger it names backs it. Of the failed calls, only a writer's
+        // database write and the root's last `database::query` void the report.
         VERIFIED_REPORT.full_or_zero(
-            audit.children_in_tree > 0 && balanced && report_verified && operational_errors == 0,
+            audit.children_in_tree > 0
+                && balanced
+                && report_verified
+                && audit.failed_writes == 0
+                && !root_check_failed,
             format!(
-                "writers_in_tree={}, balanced={balanced}, report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
+                "writers_in_tree={}, balanced={balanced}, report_verified={report_verified}, response_chars={}, writer_failed_writes={}, root_check_failed={root_check_failed}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
                 audit.children_in_tree,
                 observation.response.chars().count(),
+                audit.failed_writes,
                 observation.metrics.totals.function_call_errors,
             ),
         ),
@@ -700,6 +710,7 @@ struct ContentionAudit {
     all_children_incremented: bool,
     no_extra_sessions: bool,
     discovery_errors: u64,
+    failed_writes: usize,
 }
 
 /// Audit each prescribed writer child through its own transcript: the child
@@ -738,8 +749,16 @@ fn writer_audit(
     let mut contended_children = 0usize;
     let mut incrementing_children = 0usize;
     let mut discovery_errors = 0;
+    let mut failed_writes = 0usize;
     for (writer, transcript) in writers {
         discovery_errors += common::identified_discovery_errors(transcript);
+        failed_writes += common::function_outcomes(transcript)
+            .iter()
+            .filter(|outcome| {
+                DATABASE_WRITES.contains(&outcome.function_id.as_str())
+                    && outcome.is_error == Some(true)
+            })
+            .count();
         let calls = common::function_calls(transcript);
         if increments(&calls, names) >= usize::from(INCREMENTS_PER_WRITER) {
             incrementing_children += 1;
@@ -754,6 +773,7 @@ fn writer_audit(
         all_children_incremented: all(incrementing_children),
         no_extra_sessions: observation.metrics.by_session.len() == usize::from(WRITERS) + 1,
         discovery_errors,
+        failed_writes,
         children_in_tree: writers.len(),
         contended_children,
         incrementing_children,
@@ -1106,6 +1126,23 @@ pub(crate) mod tests {
         snapshot: &LedgerSnapshot,
         response: &str,
     ) -> ObjectiveEvaluation {
+        let writers = writers
+            .into_iter()
+            .map(|(writer, calls)| (writer, transcript(&calls, &[])))
+            .collect();
+        evaluation_with(root, 0, children, writers, snapshot, response)
+    }
+
+    /// `evaluation_of` over raw writer transcripts, in a tree whose metrics
+    /// count `errors` failed calls.
+    fn evaluation_with(
+        root: Value,
+        errors: u64,
+        children: u8,
+        writers: Vec<(u8, Value)>,
+        snapshot: &LedgerSnapshot,
+        response: &str,
+    ) -> ObjectiveEvaluation {
         let names = Names::new("run");
         let mut observation = ScenarioObservation::for_test(
             crate::scenarios::ScenarioId::ContentionLedger,
@@ -1132,15 +1169,11 @@ pub(crate) mod tests {
             serde_json::from_value(json!({
                 "root_session_id": names.root_session, "complete": true,
                 "totals": { "sessions": sessions.len(), "turns": 1, "function_calls": 0,
-                            "function_call_errors": 0 },
+                            "function_call_errors": errors },
                 "by_session": sessions,
             }))
             .unwrap(),
         );
-        let writers = writers
-            .into_iter()
-            .map(|(writer, calls)| (writer, transcript(&calls, &[])))
-            .collect::<Vec<_>>();
         evaluate_observation(&observation, &names, snapshot, &writers)
     }
 
@@ -1299,6 +1332,77 @@ pub(crate) mod tests {
         assert_eq!(verified(1, &LedgerSnapshot::empty()), Some(0));
         assert_eq!(verified(1, &balanced()), Some(VERIFIED_REPORT.weight()));
         assert_eq!(verified(0, &balanced()), Some(0));
+    }
+
+    /// A root call that failed and was recovered leaves the report standing
+    /// (execution 7695075e: r01 and r06 a `harness::status` without
+    /// `session_id`, r09 a multi-statement `database::execute`); a writer's
+    /// failed database write does not, nor does a root whose last
+    /// `database::query` failed.
+    #[test]
+    fn a_failed_writer_write_or_last_root_query_voids_the_report() {
+        let names = Names::new("run");
+        let failed = |function: &str, payload: Value, code: &str| {
+            json!({ "messages": [
+                { "message": { "role": "assistant", "content": [{
+                    "type": "function_call", "id": "call_1", "function_id": "agent_call",
+                    "arguments": { "function": function, "payload": payload },
+                }] } },
+                { "message": {
+                    "role": "function_result", "function_call_id": "call_1",
+                    "function_id": function, "is_error": true,
+                    "details": { "error": { "code": code } },
+                } },
+            ] })
+        };
+        let verified = |root: Value, writer: Value| {
+            evaluation_with(root, 1, 1, vec![(0, writer)], &balanced(), REPORT_MARKER)
+                .awards
+                .into_iter()
+                .find(|award| award.id == VERIFIED_REPORT.id())
+                .and_then(|award| award.awarded)
+        };
+        let clean = || transcript(&[], &[]);
+        let tables = json!({
+            "db": DATABASE,
+            "sql": format!("CREATE TABLE {} (total INTEGER); CREATE TABLE {} (writer INTEGER, seq INTEGER);", names.ledger, names.audit),
+        });
+        assert_eq!(
+            verified(
+                failed("harness::status", json!({}), "invocation_failed"),
+                clean()
+            ),
+            Some(VERIFIED_REPORT.weight())
+        );
+        assert_eq!(
+            verified(failed("database::execute", tables, "DRIVER_ERROR"), clean()),
+            Some(VERIFIED_REPORT.weight())
+        );
+        let increment = update_call(&names).arguments;
+        assert_eq!(
+            verified(
+                clean(),
+                failed("database::execute", increment, "DRIVER_ERROR")
+            ),
+            Some(0)
+        );
+        // The root's own check: a query that failed and was not repeated
+        // leaves the marker unbacked; one repeated with success backs it.
+        let check = json!({ "db": DATABASE, "sql": format!("SELECT total FROM {}", names.ledger) });
+        let failed_check = failed("database::query", check.clone(), "DRIVER_ERROR");
+        assert_eq!(verified(failed_check.clone(), clean()), Some(0));
+        let mut repeated = failed_check;
+        repeated["messages"].as_array_mut().unwrap().extend([
+            json!({ "message": { "role": "assistant", "content": [{
+                "type": "function_call", "id": "call_2", "function_id": "agent_call",
+                "arguments": { "function": "database::query", "payload": check },
+            }] } }),
+            json!({ "message": {
+                "role": "function_result", "function_call_id": "call_2",
+                "function_id": "database::query", "is_error": false,
+            } }),
+        ]);
+        assert_eq!(verified(repeated, clean()), Some(VERIFIED_REPORT.weight()));
     }
 
     /// Writers that wrote another database left the ledger alone, and a root

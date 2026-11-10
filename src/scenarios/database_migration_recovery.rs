@@ -683,26 +683,150 @@ fn write_statements(arguments: &Value) -> Vec<String> {
 }
 
 /// Relation names a statement mutates or reads that do not carry the run
-/// prefix.
+/// prefix. A bare name that a CTE of the statement's own leading `WITH` clause
+/// defines is no relation where it is read after that CTE; as a write target,
+/// with a schema, or inside that CTE's own body it names the real table.
 fn foreign_relations(sql: &str, prefix: &str) -> Vec<String> {
-    named_relations(sql)
-        .into_iter()
-        .map(|(_, name)| name)
-        .filter(|name| !name.starts_with(prefix) && !name.eq_ignore_ascii_case("sqlite_master"))
-        .collect()
+    let structure = blanked(sql, true);
+    let sql = blanked(sql, false);
+    let mut names = Vec::new();
+    let mut start = 0;
+    for end in structure
+        .match_indices(';')
+        .map(|(at, _)| at)
+        .chain([sql.len()])
+    {
+        let ctes = with_clause(&structure[start..end]).unwrap_or_default();
+        // A CTE's body sees the CTEs before it, the rest of the statement sees all.
+        let stops: Vec<usize> = ctes.iter().map(|(_, body_end)| start + body_end).collect();
+        for (visible, stop) in stops.into_iter().chain([end]).enumerate() {
+            let relations = named_relations(&sql[start..stop]);
+            names.extend(
+                relations
+                    .into_iter()
+                    .filter(|(keyword, name, qualified)| {
+                        *qualified
+                            || !matches!(keyword.as_str(), "FROM" | "JOIN")
+                            || !ctes[..visible]
+                                .iter()
+                                .any(|(cte, _)| cte.eq_ignore_ascii_case(name))
+                    })
+                    .map(|(_, name, _)| name),
+            );
+            start = stop;
+        }
+        start = end + 1;
+    }
+    names.retain(|name| !name.starts_with(prefix) && !name.eq_ignore_ascii_case("sqlite_master"));
+    names
+}
+
+/// `sql` at the same byte offsets with its comments turned into spaces and,
+/// for `quoted`, everything in quotes turned into `'`.
+fn blanked(sql: &str, quoted: bool) -> String {
+    let mut blanked = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(first) = rest.chars().next() {
+        let (length, fill) = if rest.starts_with("--") {
+            (rest.find('\n').unwrap_or(rest.len()), Some(' '))
+        } else if let Some(comment) = rest.strip_prefix("/*") {
+            let length = comment.find("*/").map_or(rest.len(), |at| at + 4);
+            (length, Some(' '))
+        } else if matches!(first, '\'' | '"' | '`' | '[') {
+            let closer = if first == '[' { ']' } else { first };
+            let length = rest[1..].find(closer).map_or(rest.len(), |at| at + 2);
+            (length, quoted.then_some('\''))
+        } else {
+            (first.len_utf8(), None)
+        };
+        match fill {
+            Some(fill) => blanked.extend(std::iter::repeat_n(fill, length)),
+            None => blanked.push_str(&rest[..length]),
+        }
+        rest = &rest[length..];
+    }
+    blanked
+}
+
+/// The CTEs of the `WITH` clause a statement opens with: each name and the
+/// byte offset its body ends at. `structure` is the statement out of
+/// `blanked(_, true)`.
+// shortcut: a quoted CTE name, a recursive CTE's read of itself and a `WITH` that does not open the statement stay flagged, parse them if a run loses on one.
+fn with_clause(structure: &str) -> Option<Vec<(&str, usize)>> {
+    let mut tokens = Vec::new();
+    let mut word = None;
+    for (at, character) in structure.char_indices().chain([(structure.len(), ' ')]) {
+        let punctuation = matches!(character, '(' | ')' | ',');
+        // ASCII only: SQLite reads any other space as part of the name.
+        if punctuation || character.is_ascii_whitespace() {
+            if let Some(start) = word.take() {
+                tokens.push((start, &structure[start..at]));
+            }
+            if punctuation {
+                tokens.push((at, &structure[at..=at]));
+            }
+        } else if word.is_none() {
+            word = Some(at);
+        }
+    }
+    let is = |index: usize, expected: &str| {
+        tokens
+            .get(index)
+            .is_some_and(|(_, token)| token.eq_ignore_ascii_case(expected))
+    };
+    let closing = |open: usize| {
+        let mut depth = 0;
+        tokens[open..]
+            .iter()
+            .position(|(_, token)| {
+                depth += i32::from(*token == "(") - i32::from(*token == ")");
+                depth == 0
+            })
+            .map(|offset| open + offset)
+    };
+    if !is(0, "WITH") {
+        return None;
+    }
+    let mut index = 1 + usize::from(is(1, "RECURSIVE"));
+    let mut ctes = Vec::new();
+    loop {
+        let name = tokens.get(index)?.1;
+        index += 1;
+        if is(index, "(") {
+            index = closing(index)? + 1;
+        }
+        if !is(index, "AS") {
+            return None;
+        }
+        index += 1;
+        index += usize::from(is(index, "NOT"));
+        index += usize::from(is(index, "MATERIALIZED"));
+        if !is(index, "(") {
+            return None;
+        }
+        index = closing(index)?;
+        ctes.push((name, tokens[index].0));
+        index += 1;
+        if !is(index, ",") {
+            return Some(ctes);
+        }
+        index += 1;
+    }
 }
 
 /// Whether a statement inserts into or updates `relation`.
 fn writes_relation(sql: &str, relation: &str) -> bool {
     named_relations(sql)
         .iter()
-        .any(|(keyword, name)| matches!(keyword.as_str(), "INTO" | "UPDATE") && name == relation)
+        .any(|(keyword, name, _)| matches!(keyword.as_str(), "INTO" | "UPDATE") && name == relation)
 }
 
 /// Each relation a statement names, with the SQL keyword that introduces it
-/// (`FROM`, `INTO`, `UPDATE`, `TABLE`, `VIEW`, `JOIN`), unquoted and without
-/// the `main.` schema, skipping the existence modifiers and subqueries.
-fn named_relations(sql: &str) -> Vec<(String, String)> {
+/// (`FROM`, `INTO`, `UPDATE`, `TABLE`, `VIEW`, `JOIN`, or `DELETE` for a
+/// `DELETE FROM`), unquoted and without the `main.` schema, and whether it
+/// carried a schema or is otherwise not a plain word, skipping the existence
+/// modifiers and subqueries.
+fn named_relations(sql: &str) -> Vec<(String, String, bool)> {
     const INTRODUCERS: [&str; 6] = ["FROM", "INTO", "UPDATE", "TABLE", "VIEW", "JOIN"];
     const MODIFIERS: [&str; 7] = ["IF", "NOT", "EXISTS", "OR", "REPLACE", "TEMP", "TEMPORARY"];
     let tokens: Vec<&str> = sql
@@ -714,10 +838,13 @@ fn named_relations(sql: &str) -> Vec<(String, String)> {
     let mut relations = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
-        let keyword = tokens[index].to_ascii_uppercase();
+        let mut keyword = tokens[index].to_ascii_uppercase();
         index += 1;
         if !INTRODUCERS.contains(&keyword.as_str()) {
             continue;
+        }
+        if keyword == "FROM" && index >= 2 && tokens[index - 2].eq_ignore_ascii_case("DELETE") {
+            keyword = "DELETE".to_string();
         }
         while index < tokens.len()
             && MODIFIERS.contains(&tokens[index].to_ascii_uppercase().as_str())
@@ -728,10 +855,19 @@ fn named_relations(sql: &str) -> Vec<(String, String)> {
             break;
         };
         let unquoted = candidate.replace(['`', '"', '\''], "");
-        let name = match unquoted.get(..5) {
-            Some(schema) if schema.eq_ignore_ascii_case("main.") => &unquoted[5..],
-            _ => unquoted.as_str(),
-        };
+        let qualified = unquoted
+            .get(..5)
+            .is_some_and(|schema| schema.eq_ignore_ascii_case("main."));
+        let name = &unquoted[if qualified { 5 } else { 0 }..];
+        // Only a plain word with no `.` after it can be a CTE name: anything
+        // else (quotes, a schema set apart by spaces) names a real relation.
+        let plain = candidate
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            && !tokens
+                .get(index + 1)
+                .is_some_and(|next| next.starts_with('.'));
+        let qualified = qualified || !plain;
         // An upsert's `DO UPDATE SET` is not a relation; a quoted `"SET"` is.
         if name.eq_ignore_ascii_case("SELECT")
             || (keyword == "UPDATE" && candidate.eq_ignore_ascii_case("SET"))
@@ -742,7 +878,7 @@ fn named_relations(sql: &str) -> Vec<(String, String)> {
         {
             continue;
         }
-        relations.push((keyword, name.to_string()));
+        relations.push((keyword, name.to_string(), qualified));
     }
     relations
 }
@@ -847,6 +983,87 @@ pub(crate) mod tests {
             foreign_relations("DELETE FROM MAIN.audit", prefix),
             vec!["audit".to_string()]
         );
+    }
+
+    #[test]
+    fn foreign_relations_exempt_a_statement_own_cte_only_when_read() {
+        // Execution 7695075e, round 2: the second statement of each transaction.
+        let prefix = "e2e_c2f3ea2ceb754d26812331a0bf3fcbfd_";
+        let losing = "WITH src AS (SELECT id, customer, status, total_text, ((total_text IS NOT NULL AND total_text GLOB '[0-9]*' AND NOT total_text GLOB '*[^0-9.]*' AND (length(total_text) - length(replace(total_text,'.',''))) <= 1 AND NOT total_text GLOB '*.') AND (instr(total_text,'.') = 0 OR (length(total_text) - instr(total_text,'.')) BETWEEN 1 AND 2)) AS ok FROM e2e_c2f3ea2ceb754d26812331a0bf3fcbfd_legacy_orders) INSERT INTO e2e_c2f3ea2ceb754d26812331a0bf3fcbfd_orders_quarantine (legacy_id, customer, raw_total, status, reason) SELECT id, customer, total_text, status, 'invalid_total' FROM src WHERE ok = 0 AND NOT EXISTS (SELECT 1 FROM e2e_c2f3ea2ceb754d26812331a0bf3fcbfd_orders_quarantine q WHERE q.legacy_id = src.id)";
+        assert!(foreign_relations(losing, prefix).is_empty());
+        let prefix = "e2e_run_";
+        assert!(foreign_relations(
+            "WITH RECURSIVE a AS (SELECT 1), b AS MATERIALIZED (SELECT 2) SELECT * FROM a JOIN b",
+            prefix
+        )
+        .is_empty());
+        // A CTE never stands in for the real table as a write target.
+        let missed: Vec<&str> = [
+            "WITH audit AS (SELECT 1) DELETE FROM audit",
+            "WITH audit AS (SELECT 1) INSERT INTO audit SELECT 1",
+            "WITH audit AS (SELECT 1) UPDATE audit SET k=1",
+            "WITH src AS (SELECT * FROM audit) SELECT * FROM src",
+            "WITH audit AS (SELECT 1) SELECT * FROM audit; SELECT * FROM audit",
+            // A schema-qualified name and a CTE's own body read the real table.
+            "WITH audit AS (SELECT * FROM main.audit) INSERT INTO e2e_run_orders_v2 (id, note) SELECT id, note FROM audit",
+            "WITH audit AS (SELECT 1 AS id, 'x' AS note) INSERT INTO e2e_run_orders_v2 SELECT id, note FROM main.audit",
+            "WITH audit AS (SELECT * FROM audit) SELECT * FROM audit",
+            "WITH a AS (SELECT 1), audit AS (SELECT * FROM audit) SELECT * FROM a",
+            "WITH audit AS (SELECT 1) DELETE /* x */ FROM audit",
+            "WITH audit AS (SELECT 1) DELETE -- x\n FROM audit",
+            "WITH a AS (SELECT 1) INSERT INTO e2e_run_orders_v2 SELECT materialized.id, materialized.note FROM audit AS materialized",
+            // Neither a quoted `;` nor a quoted `)` ends anything.
+            "INSERT INTO e2e_run_orders_v2 (id, note) SELECT id, '; WITH audit AS (SELECT 1) ' || note FROM audit",
+            "SELECT 1 AS \"; WITH audit AS (SELECT 1) SELECT \" FROM audit",
+            "SELECT 1 AS [; WITH audit AS (SELECT 1) SELECT ] FROM audit",
+            "WITH a AS (SELECT ') , audit AS (SELECT 1') SELECT * FROM audit",
+            "WITH audit AS (SELECT 1) SELECT * FROM audit -- don't\n; SELECT * FROM audit",
+        ]
+        .into_iter()
+        .filter(|wrong| foreign_relations(wrong, prefix) != ["audit"])
+        .collect();
+        assert!(missed.is_empty(), "{missed:#?}");
+        // A CTE defined inside a subquery is out of scope outside it.
+        assert_eq!(
+            foreign_relations(
+                "WITH a AS (SELECT 1 WHERE EXISTS (WITH audit AS (SELECT 1) SELECT * FROM audit)) SELECT * FROM a JOIN audit",
+                prefix
+            ),
+            ["audit", "audit"]
+        );
+        assert!(foreign_relations(
+            "WITH a AS (SELECT 1), b(x) AS NOT MATERIALIZED (SELECT * FROM a) SELECT * FROM a JOIN b -- from audit",
+            prefix
+        )
+        .is_empty());
+        assert_eq!(
+            foreign_relations("CREATE VIEW audit AS SELECT * FROM audit", prefix),
+            ["audit", "audit"]
+        );
+        // Only the bare CTE name itself is exempt: a schema set apart from the
+        // name, a quoted alias glued to it and a non-ASCII space in the CTE name
+        // all read the real table in SQLite.
+        for (sql, flagged) in [
+            (
+                "WITH main AS (SELECT 1) SELECT id FROM main . audit",
+                "main",
+            ),
+            ("WITH main AS (SELECT 1) SELECT id FROM main .audit", "main"),
+            (
+                "WITH main AS (SELECT 1) SELECT id FROM main/**/.audit",
+                "main",
+            ),
+            (
+                "WITH auditx AS (SELECT 1) SELECT id FROM audit\"x\"",
+                "auditx",
+            ),
+            (
+                "WITH \u{a0}audit AS (SELECT 1) SELECT id FROM audit",
+                "audit",
+            ),
+        ] {
+            assert_eq!(foreign_relations(sql, prefix), [flagged], "{sql}");
+        }
     }
 
     #[test]
