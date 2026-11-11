@@ -421,7 +421,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Core runtime regression | `regression` | Core runtime, recovery, context and call-guard checks, plus four probes of the Harness's own contract and five short checks of its mechanisms, eleven independent rounds (enough for the calibrated verdict to see a fall of 8 points); one technical retry where safe. Release Control runs it daily. |
 | Null agent canary | `null-canary` | The regression's agent tasks, `minimal_path` and the two `model-and-workers` tasks run as the `null-agent` profile: every test must score 0 and stay incomplete. |
 | Model and worker behavior | `model-and-workers` | `database_migration_recovery` and `prompt_injection_resilience`, three independent times each: they score the database worker and the model, not the Harness, so they stay out of the regression and of Harness comparisons. |
-| Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers. |
+| Application builds and changes | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Alertmanager route migration and the chess, form-flow and state-machine Workers, three independent times each. |
 | Application builds and changes ×3 (weekly) | `software-engineering-x3` | The same tests three independent times, to measure the suite's run-to-run spread. |
 | Application builds and changes ×9 (harness comparison) | `software-engineering-x9` | All 14 cases nine independent times, on demand when a Harness release is judged, to compare two Harness versions. |
 | Core runtime regression ×11 (harness comparison) | `regression-x11` | The regression's twelve agent tasks eleven independent times, on demand when a Harness release is judged, to compare two Harness versions. |
@@ -456,18 +456,23 @@ groups executions by `profile_sha256`, so the first release with the new plan
 starts a new cohort for every suite. Compare across that release test by test,
 by `behavior_sha256`, not suite by suite.
 
-The `software-engineering` suite runs each selected case once, with no
-technical retries: the seven Kanban cases, Registry implementation and verification,
+The `software-engineering` suite runs each selected case three independent
+times (`-r01` to `-r03`), with no technical retries: the seven Kanban cases, Registry implementation and verification,
 the trending-topics build, Alertmanager route migration, and the chess,
-form-flow and state-machine Workers in the Console. That is 14 cases and 14
-planned runs, in 13 execution groups. Registry
+form-flow and state-machine Workers in the Console. That is 14 cases and 42
+planned runs, in 13 execution groups a round (39 jobs). One attempt run alone
+moved the suite by up to 7 points: on 2026-11-11 a chess Worker that never
+registered and a Kanban board whose cards did not render took it from 92.7 to
+78.5, and the same stack scored 94.9 when dispatched again. Three rounds cut
+what one failed attempt moves to about a third, at about US$5.5 an execution
+on `deepseek-flash`. Registry
 implementation and verification share a group, in that order, so verification
 receives the implementation delivery. Trending topics runs in
 `case-trending-topics-build`. Baseline worker versions come from the resolved
 stack contract. Alertmanager runs in its own group, needs Go 1.25+, and has no
 turn or token ceiling.
 
-A suite with `repetitions: 3` (`software-engineering-x3`) materializes three
+A suite with `repetitions: 3` (`software-engineering`, `software-engineering-x3`) materializes three
 campaigns, `<suite>-r01` to `-r03`, with the same groups and seeds; every group
 of every round is its own job, so a round adds jobs, not time to a job.
 `regression` runs eleven (`-r01` to `-r11`): 231 jobs, nine at a time, under
