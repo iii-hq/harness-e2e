@@ -298,16 +298,7 @@ struct WorkerContract {
 
 impl WorkerContract {
     fn new(kind: Kind, run_id: &str) -> Self {
-        let suffix: String = run_id
-            .chars()
-            .filter(|character| character.is_ascii_alphanumeric())
-            .take(14)
-            .collect();
-        let worker = format!(
-            "{}_{}",
-            kind.prefix(),
-            if suffix.is_empty() { "run" } else { &suffix }
-        );
+        let worker = format!("{}_{}", kind.prefix(), run_token(run_id));
         let functions = [kind.domain_operation(), "canvas", "ui-content"]
             .into_iter()
             .map(|name| (name, format!("{worker}::{name}")))
@@ -1738,6 +1729,21 @@ async fn cleanup_workspace(context: &E2eContext, kind: Kind, run_id: &str) -> Re
     remove_workspace(kind, &root)
 }
 
+/// The run's short id, shared by the Worker name and the workspace path so the
+/// prompt never shows two near-identical ids the agent could swap.
+fn run_token(run_id: &str) -> String {
+    let token: String = run_id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .take(14)
+        .collect();
+    if token.is_empty() {
+        "run".to_owned()
+    } else {
+        token
+    }
+}
+
 fn workspace_root(kind: Kind, run_id: &str) -> PathBuf {
     let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
         .map(PathBuf::from)
@@ -1745,7 +1751,7 @@ fn workspace_root(kind: Kind, run_id: &str) -> PathBuf {
     fs::canonicalize(&base)
         .unwrap_or(base)
         .join("scenario-workspaces")
-        .join(format!("{}-{run_id}", kind.id()))
+        .join(format!("{}-{}", kind.id(), run_token(run_id)))
 }
 
 fn remove_workspace(kind: Kind, root: &Path) -> Result<()> {
@@ -1890,6 +1896,20 @@ mod tests {
             "npm start"
         );
         assert!(yaml.get("engine").is_none());
+    }
+
+    #[test]
+    fn workspace_path_shows_the_worker_token_not_the_full_run_id() {
+        let run_id = "e07fc075f06c4e0ba72daf06bcea24ec";
+        for kind in [Kind::Form, Kind::Machine] {
+            let worker = WorkerContract::new(kind, run_id).worker;
+            let token = worker.rsplit('_').next().unwrap();
+            let root = workspace_root(kind, run_id);
+            let name = root.file_name().unwrap().to_str().unwrap();
+            assert_eq!(name, format!("{}-{token}", kind.id()));
+            // The prompt shows this path; a longer id there is copied into the Worker name.
+            assert!(!name.contains(run_id));
+        }
     }
 
     #[test]
