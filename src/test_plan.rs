@@ -751,7 +751,7 @@ mod tests {
         for (id, cases, runs) in [
             ("regression", 21, 231),
             ("null-canary", 15, 15),
-            ("software-engineering", 14, 14),
+            ("software-engineering", 14, 42),
             ("software-engineering-x3", 14, 42),
             ("software-engineering-x9", 14, 126),
             ("regression-x11", 12, 132),
@@ -866,7 +866,7 @@ mod tests {
             delivery["scenarios"],
             json!(["registry_implementation", "registry_verification"])
         );
-        assert_eq!(snapshot.profile.repetitions, 1);
+        assert_eq!(snapshot.profile.repetitions, 3);
         assert_eq!(snapshot.profile.technical_retries, 0);
     }
 
@@ -970,7 +970,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:8b6a71f3c1fc53152010b859be2311d0ec09c2429e699cb27fbc115a00fea94a"
+            "sha256:ca9ceb3c500d154316cd5a9a5c8b68da2c332d1cbd2acbc084ce816171015592"
         );
     }
 
@@ -1223,7 +1223,7 @@ mod tests {
         let plan = embedded().unwrap();
         let daily = plan.materialize("software-engineering").unwrap();
         let weekly = plan.materialize("software-engineering-x3").unwrap();
-        assert_eq!(daily.profile.repetitions, 1);
+        assert_eq!(daily.profile.repetitions, 3);
         assert_eq!(weekly.scenario_ids, daily.scenario_ids);
         let rounds: Vec<_> = weekly
             .campaigns
@@ -1613,7 +1613,7 @@ mod tests {
             json!(["registry_implementation", "registry_verification"])
         );
         assert_eq!(snapshot.cases.len(), 14);
-        assert_eq!(snapshot.budget["planned_runs"], 14);
+        assert_eq!(snapshot.budget["planned_runs"], 42);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());

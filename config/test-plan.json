@@ -314,7 +314,7 @@
     {
       "id": "software-engineering",
       "label": "Application builds and changes",
-      "purpose": "Can an agent running on iii build and change real software end to end, and does it still work when an independent checker runs it? The suite has a seven-chapter Kanban app (iii functions, Compose, browser); a feature in iii's own Registry, then an independent check of that delivery by a second agent; a website built from a written spec; Alertmanager's Go routing moved into an iii function; and three Workers with their own Console pages (chess, issue form, CI simulator). Not covered: isolated runtime primitives (Core runtime regression) and Registry planning or environment setup, which run only as diagnostics.",
+      "purpose": "Can an agent running on iii build and change real software end to end, and does it still work when an independent checker runs it? Each case runs three independent times, so one failed attempt moves the suite by about a third of what it would alone. The suite has a seven-chapter Kanban app (iii functions, Compose, browser); a feature in iii's own Registry, then an independent check of that delivery by a second agent; a website built from a written spec; Alertmanager's Go routing moved into an iii function; and three Workers with their own Console pages (chess, issue form, CI simulator). Not covered: isolated runtime primitives (Core runtime regression) and Registry planning or environment setup, which run only as diagnostics.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -332,7 +332,7 @@
         "form_flow_build",
         "state_machine_canvas_build"
       ],
-      "repetitions": 1,
+      "repetitions": 3,
       "technical_retries": 0,
       "lane": "local-software-engineering",
       "scenario_groups": [

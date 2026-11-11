@@ -4618,7 +4618,7 @@ esac"#,
     async fn native_coordination_covers_every_suite_of_the_master_plan() {
         for (suite, expected_slots, expected_submissions) in [
             ("regression", 231, 231),
-            ("software-engineering", 14, 13),
+            ("software-engineering", 42, 39),
             ("linkly", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
@@ -4772,7 +4772,7 @@ esac"#,
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id, &[]).await.unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 14);
+            assert_eq!(reports.len(), 42);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);

@@ -956,6 +956,36 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_case_run_several_times_scores_the_mean_of_its_rounds() {
+        let mut execution = listed(
+            "plan-a",
+            "2026-09-24T10:00:00Z",
+            Some("default"),
+            &["harness"],
+        );
+        execution["parameters"]["scenarios"] = json!(["t01"]);
+        execution["parameters"]["runs"] = json!(3);
+        let runs = [0.0, 100.0, 100.0]
+            .map(|score| run("t01", true, true, Some(score)))
+            .to_vec();
+        let response = trends(
+            &TrendsRequest::default(),
+            &[execution, native("n1", "plan-a")],
+            &BTreeMap::from([("n1".to_owned(), runs)]),
+        );
+        let point = response.points.into_iter().next().unwrap();
+        let mean = 200.0 / 3.0;
+        assert_eq!(point.tests[0].score, Some(mean));
+        let measures = point.measures.unwrap();
+        // The failed round weighs a third, not the whole case.
+        assert_eq!(
+            (measures.score_mean, measures.samples["score_mean"]),
+            (Some(mean), 3)
+        );
+        assert_eq!((measures.completed, measures.planned), (3, 3));
+    }
+
+    #[test]
     fn an_invalid_run_is_left_out_of_every_measure() {
         let point = sep_24(1);
         assert_eq!((point.runs, point.counted, point.reason), (13, 12, None));
