@@ -28,6 +28,34 @@ CASE_IDS = [
 
 
 class KanbanProbeContractTest(unittest.TestCase):
+    def test_c7_store_switch_delivers_the_reload_iii_026_no_longer_triggers(self):
+        # iii 0.26 removed the `configuration` trigger the C7 base snapshot
+        # reloads from; without this call criterion_store failed every round.
+        script = f"""
+import {{ setKanbanConfiguration }} from {json.dumps(PROBE.as_uri())}
+const calls = []
+await setKanbanConfiguration(async (id, payload) => {{ calls.push([id, payload ?? null]) }}, {{ data_dir: '/data/b' }})
+let dropped = 'resolved'
+await setKanbanConfiguration(async (id, payload) => {{
+  calls.push([id, payload ?? null])
+  if (id === 'kanban::config::reload') throw new Error('function not found')
+}}, {{ data_dir: '/data/a' }}).catch(() => {{ dropped = 'rejected' }})
+console.log(JSON.stringify({{ calls, dropped }}))
+"""
+        completed = subprocess.run(["node", "--input-type=module", "--eval", script],
+                                   cwd=ROOT, text=True, capture_output=True, timeout=20)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {
+            "calls": [
+                ["configuration::set", {"id": "kanban", "value": {"data_dir": "/data/b"}}],
+                ["kanban::config::reload", None],
+                ["configuration::set", {"id": "kanban", "value": {"data_dir": "/data/a"}}],
+                ["kanban::config::reload", None],
+            ],
+            # An app that drops the reload function may watch configuration itself.
+            "dropped": "resolved",
+        })
+
     def test_run_35012256843_totals_and_failure_feedback_accept_equivalent_markup(self):
         if not PLAYWRIGHT.exists():
             self.skipTest("dashboard Playwright is not installed")

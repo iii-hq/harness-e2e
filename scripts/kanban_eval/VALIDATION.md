@@ -1,5 +1,23 @@
 # Kanban validation — 2026-09-20
 
+## C7 store switch on iii 0.26 — 2026-11-11
+
+The C1–C7 snapshots reload their store from a `configuration` trigger
+(`iii.registerTrigger({ type: 'configuration', … })` in `kanban/src/index.ts`).
+iii 0.26 removed triggers, so a direct `configuration::set` no longer reaches the
+app. From engine 0.26.0-rc.5 on, `kanban_c7_live` lost `criterion_store` in 6 of
+6 rounds, against 0 of 48 before. The failed check left the alternate store
+configured, so `criterion_shutdown` then failed with `TICKET_NOT_FOUND` and
+`criterion_deletion` stayed unverified.
+
+The historical commits are not rewritten. The C7 probe now delivers the reload
+the trigger used to: after each `configuration::set` it calls
+`kanban::config::reload`, best effort. C1 is unaffected, because its subject
+writes its own reload and is scored on that.
+
+Local reference control on iii 0.26.0 (`run.py --case kanban_c7_live --revision
+reference`): 14 of 17 criteria passed before the change and 17 of 17 after.
+
 ## C3/C4 semantic validation and independent evidence
 
 The revision-2 rubric has 76 weighted criteria across the seven scenarios, with
