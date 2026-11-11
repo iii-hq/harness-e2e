@@ -435,6 +435,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Harness mechanisms (weekly) | `harness-weekly` | `mechanical_reaction`: a state call binding mirrors its event without a model turn and wakes only its session. |
 | Context pressure with signed thinking (weekly) | `context-thinking` | `context_pressure` on a Claude 5.5 model, on the `context-thinking` stack: compaction with thinking that the API rejects when its prefix changed. |
 | Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
+| Memory strict delivery | `memory-strict` | Opt-in, in no schedule: whether memory delivers exactly the facts each question needs, as the final model request recorded them, seven cases three times each, on the `memory` stack. Needs unreleased Harness, memory and context-manager builds; advisory for one cycle. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -720,7 +721,11 @@ included. The measured session then runs as in `memory`:
 - `memory_automation_not_learned`: a non-user session asking memory to
   remember a release command leaves the bank as setup planted it, once
   extraction has read the session. It runs as the runner's own `e2e` kind,
-  which memory treats like `automation` and every other non-user kind.
+  which memory treats like `automation` and every other non-user kind. When
+  memory emits its private `memory::on-extraction-decision` event, setup also
+  says the prompt in an `e2e` teacher session and records memory's skip
+  decision: a bank change across that skip fails the gate. Without the event
+  the case scores on the bank after the session alone.
 - `memory_learn_from_long_message`: one user message of about 4,400
   characters states a release command near its start and a staging database
   host in its middle, and both must be learned. A memory that cuts a
@@ -757,6 +762,42 @@ turn ends, so it is usually 0, and a nonzero value is extraction still running
 after the runner saw the turn finish. Cleanup deletes the teacher session before it trashes the bank, and when
 memory read another bank on a teacher turn, it retires there what the
 teacher's extraction wrote.
+
+The `memory-strict` suite holds seven delivery cases, three rounds and one
+technical retry each (21 runs), on the `memory` stack. It is opt-in: no
+schedule, workflow or default group runs it. Each case reads what the final
+model request held, not only what the pre-generate hook returned:
+
+- `memory_kafka_attribute`, `memory_trip_attribute`, `memory_team_attribute`
+  and `memory_workshop_attribute`: a stored fact on the same topic does not
+  answer an unknown partition count, hotel, team size or room. The first
+  question asks for the exact reply `I don't know` when the answer is unknown;
+  the follow-up needs the stored fact.
+- `memory_user_other_person`: the user's booking and another person's on the
+  same topic, each delivered only to the question about its owner.
+- `memory_current_and_history`: two planted records label themselves as the
+  original and the current plan; the first question gets only the current
+  one, the follow-up both. It tests selection by label, not how memory learns
+  a correction.
+- `memory_incremental_long_recall`: two teacher turns, a long note with a host
+  in its middle and then a named port; memory must hold each fact once after
+  each turn, and the later session needs the host and the port.
+
+The cases read the generation capture: a Harness started with
+`III_HARNESS_SYNTHETIC_GENERATION_CAPTURE=1` (set on the `memory` stack's
+harness) registers `harness::on-generation-request`,
+`harness::on-generation-response` and `harness::on-synthetic-memory-receipt`,
+and stamps `origin.generation_id` on the assistant `session::update-message`.
+The runner also observes `session::on-message-added`,
+`memory::hook::pre-generate` and `session::append`. That needs Harness, memory
+and context-manager builds that are not released yet (release order:
+context-manager, then Harness, then memory). On the released `latest` workers
+the capture events do not exist, so every run reports `strict capture
+unavailable` with the error that stopped the capture from binding, as an
+infrastructure error. The cases are advisory for one cycle, like every memory
+case; after one live pass against released workers they move into `memory`
+and `memory-learning`. The registry holds 36 memory cases: the 29 above and
+these seven.
 
 Run it on the `memory` stack, the default stack plus the `memory` worker.
 Memory ranks recalls with the local MiniLM embedder where iii-directory has

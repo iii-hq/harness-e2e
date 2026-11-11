@@ -697,6 +697,13 @@ scenarios! {
     MemoryLearnFromLongMessage = "memory_learn_from_long_message" => memory::Memory(26),
     MemoryHonorsDoNotKeep = "memory_honors_do_not_keep" => memory::Memory(27),
     MemoryKeepsWithoutARule = "memory_keeps_without_a_rule" => memory::Memory(28),
+    MemoryKafkaAttribute = "memory_kafka_attribute" => memory::Memory(29),
+    MemoryTripAttribute = "memory_trip_attribute" => memory::Memory(30),
+    MemoryTeamAttribute = "memory_team_attribute" => memory::Memory(31),
+    MemoryWorkshopAttribute = "memory_workshop_attribute" => memory::Memory(32),
+    MemoryUserOtherPerson = "memory_user_other_person" => memory::Memory(33),
+    MemoryCurrentAndHistory = "memory_current_and_history" => memory::Memory(34),
+    MemoryIncrementalLongRecall = "memory_incremental_long_recall" => memory::Memory(35),
     SpawnDepthCap = "spawn_depth_cap" => spawn_depth_cap::SpawnDepthCap,
     RepeatedFailureBreaker = "repeated_failure_breaker" => call_guards::RepeatedFailureBreaker,
     TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
@@ -1085,7 +1092,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 108);
+        assert_eq!(ids.len(), 115);
     }
 
     #[test]
@@ -1491,6 +1498,65 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
                 assert_eq!(rules.len(), case.rules.len(), "{id}");
             }
         }
+    }
+
+    /// The strict delivery cases follow the 29 original ones in the registry,
+    /// read a generation capture, call nothing, and are advisory like them.
+    #[test]
+    fn appended_memory_cases_are_selectable_strict_and_toolless() {
+        use crate::assessment::{AssessmentKind, AssessmentPolicy};
+        use memory::cases::CASES;
+        let additions = [
+            ScenarioId::MemoryKafkaAttribute,
+            ScenarioId::MemoryTripAttribute,
+            ScenarioId::MemoryTeamAttribute,
+            ScenarioId::MemoryWorkshopAttribute,
+            ScenarioId::MemoryUserOtherPerson,
+            ScenarioId::MemoryCurrentAndHistory,
+            ScenarioId::MemoryIncrementalLongRecall,
+        ];
+        assert_eq!(memory::IDS.len(), 36);
+        assert_eq!(memory::IDS[22], "memory_learn_then_recall");
+        assert_eq!(memory::IDS[28], "memory_keeps_without_a_rule");
+        for case in &CASES {
+            assert!(memory::score::criteria(case).iter().all(|criterion| {
+                criterion.kind == AssessmentKind::Signal
+                    && criterion.policy == AssessmentPolicy::Advisory
+            }));
+        }
+        for (offset, id) in additions.into_iter().enumerate() {
+            let case = &CASES[29 + offset];
+            assert_eq!(id.as_str(), case.id);
+            assert!(memory::strict::enabled(case), "{id}");
+            assert_eq!(id.as_str().parse::<ScenarioId>().unwrap(), id);
+            assert_eq!(selected(&[id]), vec![id]);
+            assert_eq!(id.module().allowed_functions("registration"), Some(vec![]));
+            assert_ne!(
+                id.module().send_metadata("first"),
+                id.module().send_metadata("second")
+            );
+            let materialized = id.materialize("registration", id.canonical_seed()).unwrap();
+            assert_eq!(materialized.case.scenario_id, id.as_str());
+            id.spec("registration")
+                .validate_expecting(id.module().expected_root_outcome())
+                .unwrap();
+            assert!(case.preview_first.is_empty());
+            if offset < 6 {
+                assert!(case.teacher.is_empty());
+            } else {
+                assert!(case.memories.is_empty() && case.rules.is_empty());
+                assert_eq!(case.teacher.len(), 2);
+                assert_eq!(case.teacher_reply, Some("noted"));
+                let checkpoints = memory::learning_checkpoints::config(case).unwrap();
+                assert_eq!(checkpoints.len(), 2);
+                assert!(checkpoints
+                    .iter()
+                    .all(|checkpoint| checkpoint.holders_per_canary == 1));
+            }
+        }
+        assert!(CASES[..29]
+            .iter()
+            .all(|case| !memory::strict::enabled(case)));
     }
 
     #[test]

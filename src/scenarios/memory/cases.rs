@@ -64,6 +64,13 @@ pub struct RuleSeed {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Check {
+    /// Opt-in mechanical delivery contract read from the generation capture.
+    /// See `strict`.
+    StrictDelivery,
+    /// What memory holds after each teacher turn, in order.
+    LearningCheckpoints {
+        expected: &'static [super::learning_checkpoints::ExpectedCheckpoint],
+    },
     /// Every `(exchange, group)` a seed needs is injected there or still
     /// visible; `None` = every exchange.
     NeededInjected { exchange: Option<usize> },
@@ -79,6 +86,12 @@ pub enum Check {
     /// The answer holds the canary for the label `canary`; `None` = every exchange.
     AnswerContains {
         exchange: Option<usize>,
+        canary: &'static str,
+    },
+    /// The answer is exactly the abstention the prompt asks for
+    /// (`score::ABSTENTION`) and omits the canary for the label `canary`.
+    AnswerAbstains {
+        exchange: usize,
         canary: &'static str,
     },
     /// No answer holds the canary for the label `canary`; `None` = every exchange.
@@ -144,6 +157,7 @@ impl Check {
         let (first, rest): (_, &[&str]) = match self {
             Check::AnswerContains { canary, .. }
             | Check::AnswerOmits { canary, .. }
+            | Check::AnswerAbstains { canary, .. }
             | Check::Learned { canary }
             | Check::Reached { canary, .. }
             | Check::Stored { canary, .. }
@@ -153,7 +167,15 @@ impl Check {
             }
             _ => (None, &[]),
         };
-        first.into_iter().chain(rest.iter().copied())
+        let checkpoints = match self {
+            Check::LearningCheckpoints { expected } => expected,
+            _ => &[],
+        };
+        first.into_iter().chain(rest.iter().copied()).chain(
+            checkpoints
+                .iter()
+                .flat_map(|checkpoint| checkpoint.canaries.iter().copied()),
+        )
     }
 }
 
@@ -401,7 +423,7 @@ const DO_NOT_KEEP_TEACHER: &[&str] = &[
 const DO_NOT_KEEP_PROMPT: &str =
     "Suggest one dinner for me tonight that suits my diagnosed condition. Reply with the dish only.";
 
-pub const CASES: [Case; 29] = [
+pub const CASES: [Case; 36] = [
     Case {
         id: "memory_relevant_recall",
         title: "Memory recalls what the task needs",
@@ -1931,6 +1953,13 @@ pub const CASES: [Case; 29] = [
             ),
         ],
     },
+    super::attribute_cases::KAFKA_ATTRIBUTE,
+    super::attribute_cases::TRIP_ATTRIBUTE,
+    super::attribute_cases::TEAM_ATTRIBUTE,
+    super::attribute_cases::WORKSHOP_ATTRIBUTE,
+    super::ownership_cases::USER_OTHER_PERSON,
+    super::history_cases::CURRENT_AND_HISTORY,
+    super::incremental_cases::INCREMENTAL_LONG_RECALL,
 ];
 
 pub fn bank(run_id: &str) -> String {
@@ -2283,13 +2312,18 @@ mod tests {
             match criterion.check {
                 // Nothing needed there: the check would pass by construction.
                 Check::NeededInjected { exchange: Some(k) }
-                    if !case.memories.iter().any(|seed| seed.needed_on.contains(&k)) =>
+                    if !case.memories.iter().any(|seed| seed.needed_on.contains(&k))
+                        && !case.criteria.iter().any(|criterion| {
+                            matches!(criterion.check,
+                            Check::Reached { exchange, .. } if exchange == k)
+                        }) =>
                 {
                     problems.push(format!("{}: nothing is needed on {k}", criterion.id));
                 }
                 Check::NeededInjected { exchange: None }
                     if !case.baseline
-                        && case.memories.iter().all(|seed| seed.needed_on.is_empty()) =>
+                        && case.memories.iter().all(|seed| seed.needed_on.is_empty())
+                        && learned_labels(case).next().is_none() =>
                 {
                     problems.push(format!("{}: nothing is needed anywhere", criterion.id));
                 }
@@ -2508,7 +2542,7 @@ mod tests {
                 taught += 1;
             }
         }
-        assert_eq!(taught, 12);
+        assert_eq!(taught, 14);
     }
 
     /// Each case past the per-turn cap needs more lines on its one turn than
@@ -2609,7 +2643,7 @@ mod tests {
             .iter()
             .filter(|case| case.teacher_reply.is_some())
             .collect();
-        assert_eq!(fixed.len(), 3);
+        assert_eq!(fixed.len(), 4);
         for case in fixed {
             let ask = format!(
                 "Reply to this message with exactly one word: {}",

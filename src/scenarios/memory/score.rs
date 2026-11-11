@@ -137,6 +137,15 @@ impl Extraction {
 /// What `capture` reads of an attempt.
 #[derive(Debug, Default)]
 pub struct Snapshot {
+    pub extraction_decision: Option<super::extraction_decision::Evidence>,
+    /// Internal capture limitation, not a field supplied by any worker API.
+    /// Runtime requires authenticated final-SDK pairs and current updates. Pure raw
+    /// transcript fixtures leave this false to test mechanical contracts only;
+    /// they are not witnesses of delivery to a real generation.
+    pub generation_messages_unavailable: bool,
+    pub generations: Option<super::runtime::generation_capture::Captured>,
+    /// Why the generation capture could not bind, when it could not.
+    pub generation_error: Option<String>,
     pub prompts: Vec<PromptRecord>,
     /// Each exchange's prompt prefix digest, in order, or why the status
     /// could not be read.
@@ -165,6 +174,13 @@ pub enum Retrieval {
 /// The captured deliverable of a memory case.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Evidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_decision: Option<super::extraction_decision::Evidence>,
+    /// Raw capture diagnostics for opt-in delivery checks only; absent on legacy cases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<super::strict::EvidenceSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoints: Option<Vec<super::learning_checkpoints::EvidenceCheckpoint>>,
     pub schema: String,
     pub bank: String,
     /// `None` when setup never asked the doctor.
@@ -219,7 +235,14 @@ pub fn memory_section(prompt: &str) -> Option<&str> {
 }
 
 pub fn evidence(case: &Case, run_id: &str, transcript: &Value, snapshot: Snapshot) -> Evidence {
-    assemble(case, run_id, observe(transcript), snapshot)
+    let strict =
+        super::strict::enabled(case).then(|| super::strict::capture(case, transcript, &snapshot));
+    let mut evidence = assemble(case, run_id, observe(transcript), snapshot);
+    evidence.strict = strict;
+    if super::learning_checkpoints::config(case).is_some() {
+        evidence.checkpoints = super::runtime::checkpoints(run_id);
+    }
+    evidence
 }
 
 /// The bank a memory section or rules update names, if it names one.
@@ -229,7 +252,16 @@ fn named_bank(text: &str) -> Option<&str> {
 }
 
 fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapshot) -> Evidence {
-    let own = bank(run_id);
+    let own = snapshot
+        .generations
+        .as_ref()
+        .and_then(super::runtime::generation_capture::Captured::authenticated_bank)
+        .unwrap_or_default();
+    let own = if own.is_empty() {
+        bank(run_id)
+    } else {
+        own.to_owned()
+    };
     let foreign = |text: &str| named_bank(text).is_some_and(|named| named != own);
     let case_canaries: BTreeMap<String, String> = labels(case)
         .into_iter()
@@ -287,9 +319,13 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
     let canaries: Vec<(&str, String)> = learned_labels(case)
         .map(|label| (label, canary(run_id, label)))
         .collect();
-    let learned: Vec<SeedEvidence> = snapshot
+    let mut learned: Vec<SeedEvidence> = snapshot
         .teacher
         .iter()
+        .filter(|teacher| {
+            super::learning_checkpoints::config(case).is_none()
+                || teacher.session_id == super::runtime::teacher(run_id)
+        })
         .flat_map(Extraction::learned)
         .map(|memory| SeedEvidence {
             // As memory renders it in a block: whitespace collapsed.
@@ -304,6 +340,42 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
             planted: true,
         })
         .collect();
+    if super::learning_checkpoints::config(case).is_some() {
+        // Requirements come from the case's measured Reached contract, not
+        // from whatever the subject happened to receive. Alias text comes
+        // only from live teacher-source memories, including merged holders.
+        for criterion in case.criteria {
+            if let Check::Reached {
+                exchange,
+                canary,
+                section_only: false,
+            } = criterion.check
+            {
+                let value = &case_canaries[canary];
+                let mut aliases: Vec<_> = learned
+                    .iter()
+                    .filter(|s| s.text.contains(value))
+                    .cloned()
+                    .map(|mut s| {
+                        s.group = canary.into();
+                        s.needed_on = vec![exchange];
+                        s
+                    })
+                    .collect();
+                // A failed extraction must not make delivery vacuously pass.
+                if aliases.is_empty() {
+                    aliases.push(SeedEvidence {
+                        text: String::new(),
+                        group: canary.into(),
+                        needed_on: vec![exchange],
+                        related_on: Vec::new(),
+                        planted: false,
+                    });
+                }
+                learned.extend(aliases);
+            }
+        }
+    }
     let prompts = observed
         .exchanges
         .iter()
@@ -334,6 +406,9 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
         })
         .collect();
     let mut evidence = Evidence {
+        extraction_decision: snapshot.extraction_decision,
+        strict: None,
+        checkpoints: None,
         schema: SCHEMA.to_string(),
         bank: own.clone(),
         retrieval: snapshot.retrieval,
@@ -374,8 +449,22 @@ pub fn audit(evidence: &Evidence) -> Audit {
         ..evidence.observed.clone()
     };
     let observed = &own;
-    let seed_of = |line: &str| evidence.seeds.iter().find(|seed| seed.text == line);
+    let seed_of = |line: &str| {
+        evidence.seeds.iter().find(|seed| {
+            if evidence.strict.is_some() {
+                super::strict::normalize(&seed.text) == super::strict::normalize(line)
+            } else {
+                seed.text == line
+            }
+        })
+    };
     let holds = |block: &MemoryBlock, group: &str| {
+        if evidence.strict.is_some() {
+            return block
+                .lines
+                .iter()
+                .any(|line| super::strict::groups(evidence, line).contains(group));
+        }
         block
             .lines
             .iter()
@@ -559,7 +648,36 @@ pub fn evaluate(case: &Case, evidence: &Evidence) -> ObjectiveEvaluation {
 
 fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool, String) {
     match check {
+        Check::StrictDelivery => super::strict::judge(case, evidence),
+        Check::LearningCheckpoints { .. } => super::learning_checkpoints::judge(case, evidence),
         Check::NeededInjected { exchange } => {
+            if evidence.strict.as_ref().is_some_and(|raw| {
+                raw.generation_delivery == Some(false)
+                    || raw
+                        .issues
+                        .contains(&super::strict::FailureKind::CaptureUnavailable)
+            }) {
+                return (
+                    false,
+                    "final-SDK delivery proof missing or contradicted".into(),
+                );
+            }
+            if evidence
+                .strict
+                .as_ref()
+                .is_some_and(|raw| raw.generation_delivery == Some(true))
+            {
+                let missing = super::strict::failures(case, evidence)
+                    .into_iter()
+                    .any(|failure| {
+                        failure.kind == super::strict::FailureKind::MissingGroup
+                            && exchange.is_none_or(|wanted| failure.exchange == Some(wanted))
+                    });
+                return (
+                    !missing,
+                    "needed groups checked against authenticated final-SDK witnesses".into(),
+                );
+            }
             let missing: Vec<(usize, String)> = audit
                 .missing
                 .iter()
@@ -620,6 +738,17 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                 ),
             };
             (satisfied, details)
+        }
+        Check::AnswerAbstains { exchange, canary } => {
+            let text = answer(evidence, exchange);
+            let omitted = evidence
+                .canaries
+                .get(canary)
+                .is_some_and(|v| !text.contains(v));
+            (
+                omitted && abstains(text),
+                format!("the answer must be exactly {ABSTENTION:?}, the reply the prompt asks for"),
+            )
         }
         Check::AnswerContains { exchange, canary } => {
             let Some(value) = evidence.canaries.get(canary) else {
@@ -1092,16 +1221,26 @@ fn bank_unchanged(evidence: &Evidence) -> (bool, String) {
         })
         .map(|(name, _)| format!("rule {name}"));
     let changed: Vec<String> = memories.chain(rules).collect();
-    if changed.is_empty() {
-        (
-            true,
-            "the bank holds what setup planted, and nothing else".to_string(),
-        )
-    } else {
-        (
+    if !changed.is_empty() {
+        return (
             false,
             format!("memory changed the bank: {}", changed.join("; ")),
-        )
+        );
+    }
+    // Memory's skip decision, when it sent one, is extra evidence only.
+    match &evidence.extraction_decision {
+        Some(skip) if !skip.before_teacher.unchanged(&skip.after_skip) => (
+            false,
+            "memory changed the bank across its skip of the non-user turn".to_string(),
+        ),
+        Some(_) => (
+            true,
+            "the bank holds what setup planted, and nothing else; memory reported skipping the non-user turn".to_string(),
+        ),
+        None => (
+            true,
+            "the bank holds what setup planted, and nothing else".to_string(),
+        ),
     }
 }
 
@@ -1116,6 +1255,17 @@ fn verdict(found: &[(usize, String)], clean: &str, problem: &str) -> (bool, Stri
     (false, format!("{problem}: {}", listed.join("; ")))
 }
 
+/// The reply the attribute prompts ask for when the answer is not known.
+pub const ABSTENTION: &str = "I don't know";
+
+/// The answer is the fixed abstention, give or take case and a final period.
+fn abstains(text: &str) -> bool {
+    text.trim()
+        .trim_end_matches('.')
+        .replace('\u{2019}', "'")
+        .eq_ignore_ascii_case(ABSTENTION)
+}
+
 /// "" when the exchange is missing.
 fn answer(evidence: &Evidence, index: usize) -> &str {
     evidence
@@ -1127,18 +1277,41 @@ fn answer(evidence: &Evidence, index: usize) -> &str {
 
 /// A run that cannot show memory ran is an infrastructure failure, not a score.
 fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
+    // Opt-in only: a known delivery defect must reach the runner as objective
+    // FAIL even when prompt/observer or other setup records are also missing.
+    // Missing records alone remain infrastructure; legacy precedence is intact.
+    if super::strict::enabled(case) && super::strict::has_delivery_failure(case, evidence) {
+        return None;
+    }
+    if super::learning_checkpoints::config(case).is_some() {
+        // An unavailable or timed-out capture stays infrastructure, even if
+        // stopping early also left later checkpoints absent.
+        if let Some(error) = super::learning_checkpoints::infrastructure_error(case, evidence) {
+            return Some(error);
+        }
+        if super::learning_checkpoints::has_objective_failure(case, evidence) {
+            return None;
+        }
+    }
     let mut problems = Vec::new();
     // A missing exchange must never read as "nothing injected": every check
     // below walks the exchanges that exist, so a short observation would pass.
+    let strict = super::strict::enabled(case);
     let expected = 1 + case.followups.len();
     let seen = evidence.observed.exchanges.len();
-    if seen != expected {
+    if !strict && seen != expected {
         problems.push(format!(
             "observed {seen} exchanges, the case sends {expected}"
         ));
     }
     let trashed = trashed_after(case);
-    for (index, exchange) in evidence.observed.exchanges.iter().enumerate() {
+    for (index, exchange) in evidence
+        .observed
+        .exchanges
+        .iter()
+        .enumerate()
+        .filter(|_| !strict)
+    {
         // A bank other than the attempt's means the turn-metadata pin never
         // reached memory: it read `main` or a directory bank instead. Once the
         // case trashed its bank, no bank or another one is what its gate
@@ -1187,6 +1360,11 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
             _ => problems.push(format!("exchange {index}: the observer recorded no prompt")),
         }
     }
+    if strict {
+        if let Some(error) = super::strict::infrastructure_error(case, evidence) {
+            problems.push(error);
+        }
+    }
     // Only the frozen-section gate reads the digests: elsewhere a failed
     // status read costs nothing.
     if case
@@ -1210,7 +1388,10 @@ fn infrastructure_error(case: &Case, evidence: &Evidence) -> Option<String> {
     }
     // Setup and capture fail when they cannot read the bank, so a missing
     // read is a defect, never a score.
-    if !case.teacher.is_empty() && evidence.teacher.is_none() {
+    if !case.teacher.is_empty()
+        && evidence.teacher.is_none()
+        && super::learning_checkpoints::config(case).is_none()
+    {
         problems.push("the bank was never read after the teacher".to_string());
     }
     if audits_bank_after(case) && evidence.bank_after.is_none() {
@@ -1394,6 +1575,30 @@ mod tests {
             .map(|rule| format!("\n## {}\n{}\n", rule.name, render(rule.content, RUN)))
             .collect();
         format!("{PROMPT}{HEADER}\nThe rules below are the user's standing instructions.\n{rules}")
+    }
+
+    /// The suites memory runs on every change never read a generation
+    /// capture: without one, none of their cases can report it missing.
+    #[test]
+    fn scheduled_memory_suites_never_need_a_generation_capture() {
+        let plan = crate::test_plan::embedded().unwrap();
+        let mut checked = 0;
+        for suite in ["memory", "memory-learning"] {
+            for id in plan.materialize(suite).unwrap().scenario_ids {
+                let case = case_named(&id);
+                assert!(!super::super::strict::enabled(case), "{id}");
+                let answers = vec![""; 1 + case.followups.len()];
+                let evidence = evidence_of(case, observed(&answers, Vec::new()));
+                assert!(evidence.strict.is_none(), "{id}");
+                let error = evaluate(case, &evidence).infrastructure_error;
+                assert!(
+                    !error.is_some_and(|error| error.contains("strict capture unavailable")),
+                    "{id}"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 29);
     }
 
     #[test]
@@ -2744,6 +2949,69 @@ mod tests {
         let moved = run(&change, false, vec![change.clone()]);
         assert_eq!(award(&moved, "stale_fact_left_out"), Some(30));
         assert_eq!(award(&moved, "stale_fact_retired"), Some(15));
+    }
+
+    /// Memory's skip decision is extra evidence for the bank-after gate: a
+    /// write it witnesses fails the gate, its absence changes nothing.
+    #[tokio::test]
+    async fn sdk_skip_decision_is_extra_evidence_for_the_bank_after_gate() {
+        use super::super::extraction_decision::{
+            read_bank,
+            tests::{raw, Mock},
+            Capture,
+        };
+        use std::sync::atomic::Ordering;
+        let case = case_named("memory_automation_not_learned");
+        for mutation in [0, 6, 7, 19] {
+            let mock = Mock::start().await;
+            let before = read_bank(&mock.context, "bank").await.unwrap();
+            let capture = Capture::bind(&mock.context, "teacher", "e2e")
+                .await
+                .unwrap();
+            capture.arm();
+            capture.turn("own-turn").unwrap();
+            assert_eq!(
+                mock.send(raw(), Some("memory-owner"), true).await["accepted"],
+                true
+            );
+            mock.mode.store(mutation, Ordering::SeqCst);
+            let skip = capture
+                .wait_then_read(&mock.context, "bank", before)
+                .await
+                .unwrap();
+            let mut evidence = evidence_of(case, observed(&["Noted."], vec![]));
+            evidence.bank_after = Some(read("teacher", &[], &[]));
+            evidence.extraction_decision = Some(skip);
+            let evaluation = evaluate(case, &evidence);
+            assert_eq!(
+                award(&evaluation, "nothing_learned_from_automation"),
+                Some(if mutation == 0 { 100 } else { 0 })
+            );
+            assert_eq!(evaluation.infrastructure_error, None);
+            assert_eq!(evaluation.completion, None);
+            assert_eq!(mock.reads.load(Ordering::SeqCst), 4);
+        }
+        // Without the decision, the bank after the session decides alone.
+        let mut evidence = evidence_of(case, observed(&["Noted."], vec![]));
+        evidence.bank_after = Some(read("teacher", &[], &[]));
+        let evaluation = evaluate(case, &evidence);
+        assert_eq!(
+            award(&evaluation, "nothing_learned_from_automation"),
+            Some(100)
+        );
+        assert_eq!(evaluation.infrastructure_error, None);
+        // A forged SDK delivery is not memory's decision.
+        let mock = Mock::start().await;
+        let capture = Capture::bind(&mock.context, "teacher", "e2e")
+            .await
+            .unwrap();
+        capture.arm();
+        capture.turn("own-turn").unwrap();
+        assert_eq!(
+            mock.send(raw(), Some("attacker"), true).await["accepted"],
+            false
+        );
+        assert_eq!(mock.reads.load(Ordering::SeqCst), 0);
     }
 
     #[test]

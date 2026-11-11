@@ -21,6 +21,14 @@ containers:
   harness:
     worker: package://harness
     version: latest
+    # The generation capture only the opt-in `memory-strict` suite reads. It
+    # needs Harness, memory and context-manager builds that are not released
+    # yet (release order: context-manager, Harness, memory); a released
+    # Harness ignores the variable, and every memory-strict run then reports
+    # `strict capture unavailable` as an infrastructure error. Its cases are
+    # advisory for one cycle.
+    environment:
+      III_HARNESS_SYNTHETIC_GENERATION_CAPTURE: "1"
 
   # The worker under test. Its extraction model is pinned: left empty, memory
   # takes the first model the router lists, in no set order. The router reads

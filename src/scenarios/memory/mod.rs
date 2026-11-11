@@ -17,10 +17,17 @@ use super::{
 };
 use crate::context::E2eContext;
 
+pub mod attribute_cases;
 pub mod cases;
+pub mod extraction_decision;
+pub mod history_cases;
+pub mod incremental_cases;
+pub mod learning_checkpoints;
 pub mod observe;
+pub mod ownership_cases;
 pub mod runtime;
 pub mod score;
+pub mod strict;
 
 const DELIVERABLE_ID: &str = "memory_evaluation";
 const DELIVERABLE_KIND: &str = "memory_injection_audit";
@@ -90,6 +97,9 @@ fn planted_state(case: &Case, run_id: &str) -> Value {
     // every definition.
     if !case.teacher.is_empty() {
         state["teacher"] = json!(case.teacher);
+    }
+    if let Some(expected) = learning_checkpoints::config(case) {
+        state["learning_checkpoints"] = json!(expected);
     }
     if let Some(reply) = case.teacher_reply {
         state["teacher_reply"] = reply.into();
