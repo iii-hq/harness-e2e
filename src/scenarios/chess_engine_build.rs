@@ -336,13 +336,23 @@ struct WorkerContract {
     functions: BTreeMap<&'static str, String>,
 }
 
-fn worker_contract(run_id: &str) -> WorkerContract {
-    let suffix: String = run_id
+/// The run's short id, shared by the Worker name and the workspace path so the
+/// prompt never shows two near-identical ids the agent could swap.
+fn run_token(run_id: &str) -> String {
+    let token: String = run_id
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
         .take(16)
         .collect();
-    let worker = format!("chess_{}", if suffix.is_empty() { "run" } else { &suffix });
+    if token.is_empty() {
+        "run".to_owned()
+    } else {
+        token
+    }
+}
+
+fn worker_contract(run_id: &str) -> WorkerContract {
+    let worker = format!("chess_{}", run_token(run_id));
     let functions = ["legal_moves", "perft", "play", "ui-content"]
         .into_iter()
         .map(|name| (name, format!("{worker}::{name}")))
@@ -1551,7 +1561,7 @@ fn workspace_root(run_id: &str) -> PathBuf {
     fs::canonicalize(&base)
         .unwrap_or(base)
         .join("scenario-workspaces")
-        .join(format!("{ID}-{run_id}"))
+        .join(format!("{ID}-{}", run_token(run_id)))
 }
 
 fn remove_workspace(root: &Path) -> Result<()> {
@@ -1575,6 +1585,18 @@ fn remove_workspace(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_path_shows_the_worker_token_not_the_full_run_id() {
+        let run_id = "033fcdd5b42241b985b356d416fb6901";
+        let worker = worker_contract(run_id).worker;
+        let token = worker.strip_prefix("chess_").unwrap();
+        let root = workspace_root(run_id);
+        let name = root.file_name().unwrap().to_str().unwrap();
+        assert_eq!(name, format!("{ID}-{token}"));
+        // The prompt shows this path; a longer id there is copied into the Worker name.
+        assert!(!name.contains(run_id));
+    }
 
     #[test]
     fn contract_is_run_scoped_and_weights_total_one_hundred() {
