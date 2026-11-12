@@ -258,7 +258,6 @@ pub struct Captured {
     pub ready: bool,
     session: String,
     bank: String,
-    order: Vec<(String, String)>,
     pub invalid: bool,
     events: BTreeMap<(String, u64), Event>,
     foreign_sequences: BTreeSet<(String, u64)>,
@@ -274,9 +273,8 @@ pub struct Captured {
     notices: Vec<Value>,
     hooks: Vec<Value>,
     appends: Vec<Value>,
-    receipts: BTreeMap<String, (MemoryReceipt, usize)>,
+    receipts: BTreeMap<String, MemoryReceipt>,
     rejected_receipts: BTreeSet<String>,
-    notice_orders: BTreeMap<String, usize>,
 }
 
 impl Captured {
@@ -577,10 +575,6 @@ impl Captured {
                         return;
                     }
                 }
-                if !self.events.contains_key(&key) {
-                    self.order
-                        .push((source.into(), event.generation_id.clone()));
-                }
                 self.events.insert(key, event);
             }
             UPDATE => {
@@ -596,17 +590,11 @@ impl Captured {
                     self.invalid = true;
                     return;
                 };
-                let Some(generation) = update_generation(input) else {
+                // Callbacks arrive in no fixed order: an update may precede its
+                // response. delivery_for checks the pair exists when it reads.
+                if update_generation(input).is_none() {
                     self.reject(&payload);
                     return;
-                };
-                if input["session_id"] == self.session
-                    && !self.order.contains(&(RESPONSE.into(), generation.into()))
-                {
-                    self.reject(&payload);
-                    if self.rejections_sealed {
-                        return;
-                    }
                 }
                 self.updates
                     .entry(entry.into())
@@ -617,13 +605,6 @@ impl Captured {
                 if payload.pointer("/input/session_id").and_then(Value::as_str)
                     == Some(&self.session)
                 {
-                    self.order.push((
-                        APPEND.into(),
-                        payload["input"]["entry_id"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .into(),
-                    ));
                     self.appends.push(payload["input"].clone());
                 }
             }
@@ -631,7 +612,6 @@ impl Captured {
                 if payload.pointer("/input/session_id").and_then(Value::as_str)
                     == Some(&self.session)
                 {
-                    self.order.push((HOOK.into(), self.hooks.len().to_string()));
                     self.hooks.push(payload);
                 }
             }
@@ -657,18 +637,13 @@ impl Captured {
                     self.invalid = true;
                     return;
                 }
-                if let Some((previous, _)) = self.receipts.get(&receipt.receipt_id) {
+                if let Some(previous) = self.receipts.get(&receipt.receipt_id) {
                     if previous != &receipt {
                         self.rejected_receipts.insert(receipt.receipt_id.clone());
                     }
-                    // An exact redelivery never moves the original arrival time.
                     return;
                 }
-                let order = self.order.len();
-                self.order
-                    .push((RECEIPT.into(), receipt.receipt_id.clone()));
-                self.receipts
-                    .insert(receipt.receipt_id.clone(), (receipt, order));
+                self.receipts.insert(receipt.receipt_id.clone(), receipt);
             }
             NOTICE => {
                 if let Some(previous) = self.notices.iter().find(|previous| {
@@ -679,10 +654,6 @@ impl Captured {
                         self.reject(&payload);
                     }
                 } else {
-                    if let Some(entry) = payload["entry_id"].as_str() {
-                        self.notice_orders.insert(entry.into(), self.order.len());
-                        self.order.push((NOTICE.into(), entry.into()));
-                    }
                     self.notices.push(payload);
                 }
             }
@@ -692,12 +663,9 @@ impl Captured {
 
     // The producer certifies private ledger semantics; the consumer independently
     // binds the same entry/body to an authenticated Memory invocation receipt.
-    fn source_receipt_before(
-        &self,
-        slot: &SourceSlot,
-        notice: &Value,
-        generation: Option<&str>,
-    ) -> bool {
+    // Callbacks arrive in no fixed order, so hook, receipt, notice and request
+    // must each exist and match; which arrived first proves nothing.
+    fn source_receipt(&self, slot: &SourceSlot, notice: &Value, generation: Option<&str>) -> bool {
         if !valid_slot(slot) || notice["entry_id"] != slot.entry_id {
             return false;
         }
@@ -727,30 +695,13 @@ impl Captured {
         }) else {
             return false;
         };
-        let Some(request_order) = self
-            .order
-            .iter()
-            .position(|(source, id)| source == REQUEST && id == &event.generation_id)
-        else {
-            return false;
-        };
-        let Some(notice_order) = self.notice_orders.get(&slot.entry_id) else {
-            return false;
-        };
-        // Original notice provenance is fixed when first persisted. A later
-        // equal-output invocation cannot repair missing original authority.
-        self.receipts.values().any(|(receipt, receipt_order)| {
+        self.receipts.values().any(|receipt| {
             !self.rejected_receipts.contains(&receipt.receipt_id)
                 && receipt.producer_instance == event.producer_instance
                 && receipt.session_id == self.session
                 && receipt.turn_id == turn
                 && receipt.step == step
                 && receipt.observer_id == slot.observer_id
-                && receipt_order < notice_order
-                && !self.order[receipt_order + 1..*notice_order]
-                    .iter()
-                    .any(|(source, _)| matches!(source.as_str(), HOOK | RECEIPT | REQUEST))
-                && *notice_order < request_order
                 && receipt
                     .appends
                     .get(slot.append_ordinal)
@@ -758,25 +709,9 @@ impl Captured {
                         append.append_ordinal == slot.append_ordinal
                             && append.message_sha256 == slot.message_sha256
                     })
-                && self.hooks.iter().enumerate().any(|(index, hook)| {
-                    let hook_order = self
-                        .order
-                        .iter()
-                        .position(|(source, id)| source == HOOK && id == &index.to_string());
-                    // Receipt certifies the immediately preceding authenticated
-                    // invocation, not the first invocation sharing equal bytes.
-                    let intervening = hook_order.is_some_and(|order| {
-                        order >= *receipt_order
-                            || self.order[order + 1..*receipt_order]
-                                .iter()
-                                .any(|(source, _)| {
-                                    source == HOOK || source == RECEIPT || source == REQUEST
-                                })
-                    });
-                    hook_order.is_some_and(|order| order < *receipt_order)
-                        && !intervening
-                        && hook.pointer("/input/session_id").and_then(Value::as_str)
-                            == Some(self.session.as_str())
+                && self.hooks.iter().any(|hook| {
+                    hook.pointer("/input/session_id").and_then(Value::as_str)
+                        == Some(self.session.as_str())
                         && hook.pointer("/input/turn_id").and_then(Value::as_str) == Some(turn)
                         && hook.pointer("/input/step").and_then(Value::as_u64) == Some(step)
                         && hook
@@ -811,9 +746,9 @@ impl Captured {
                     .flat_map(|summary| summary.inputs.iter()),
             )
             .all(|slot| {
-                self.notices.iter().any(|notice| {
-                    self.source_receipt_before(slot, notice, Some(&event.generation_id))
-                })
+                self.notices
+                    .iter()
+                    .any(|notice| self.source_receipt(slot, notice, Some(&event.generation_id)))
             })
         {
             return None;
@@ -827,9 +762,9 @@ impl Captured {
         if source.is_none() && input.is_none() {
             // Complete v2 absence is an objective loss only with an independently
             // authenticated Memory hook receipt; a missing receipt stays unknown.
-            let known = self.receipts.values().any(|(receipt, _)| {
+            let known = self.receipts.values().any(|receipt| {
                 receipt.appends.iter().any(|append| {
-                    self.source_receipt_before(
+                    self.source_receipt(
                         &SourceSlot {
                             message_index: 0,
                             entry_id: id.into(),
@@ -846,7 +781,7 @@ impl Captured {
             return known.then_some(false);
         }
         let slot = source.or(input)?;
-        if !self.source_receipt_before(slot, notice, Some(&event.generation_id)) {
+        if !self.source_receipt(slot, notice, Some(&event.generation_id)) {
             return None;
         }
         let expected: Vec<Line> = message["content"]
@@ -879,7 +814,7 @@ impl Captured {
         if !summary.inputs.iter().all(|input| {
             self.notices
                 .iter()
-                .any(|notice| self.source_receipt_before(input, notice, Some(&event.generation_id)))
+                .any(|notice| self.source_receipt(input, notice, Some(&event.generation_id)))
         }) {
             return None;
         }
@@ -980,17 +915,6 @@ impl Captured {
             {
                 return None;
             }
-            let request_order = self
-                .order
-                .iter()
-                .position(|(source, id)| source == REQUEST && id == generation)?;
-            let terminal_order = self
-                .order
-                .iter()
-                .position(|(source, id)| source == RESPONSE && id == generation)?;
-            if request_order >= terminal_order {
-                return None;
-            }
             if self.events.values().any(|later| {
                 later.session_id == session
                     && later.assistant_entry_id == target
@@ -1011,8 +935,6 @@ impl Captured {
             {
                 return None;
             }
-            // A terminal cannot certify an earlier/unknown UUID update. Capture order
-            // is retained by authenticated callback ingestion, independently of gaps.
             let exchange = turns.iter().position(|turn| *turn == request.turn_id)?;
             let needed = required.and_then(|required| required.get(exchange));
             let mut wanted = BTreeSet::new();
@@ -1283,12 +1205,10 @@ async fn owner(client: &IIIClient, source: &str) -> Result<String> {
 }
 
 impl Capture {
-    /// Owners are resolved once, here. The collector is synchronous: it
-    /// authenticates against them and records before anything can yield, so
-    /// `order` follows delivery instead of the latency of a lookup.
-    // shortcut: the SDK still spawns one task per invocation, so two callbacks
-    // read in the same poll can run swapped; make the order proofs order-free
-    // if live runs show it.
+    /// Owners are resolved once, here, and the collector authenticates each
+    /// callback against them without awaiting. The SDK runs every callback in
+    /// its own task, so callbacks arrive in no fixed order; `Captured` checks
+    /// that each piece of evidence exists, never which one arrived first.
     pub async fn bind(context: &E2eContext, run_id: &str) -> Result<Self> {
         let client = context.client();
         let namespace = client.namespace().unwrap_or_else(|| "default".into());
@@ -1728,16 +1648,14 @@ mod tests {
     }
 
     #[test]
-    fn request_time_receipt_cannot_be_repaired_by_late_hook_or_append() {
+    fn receipt_chain_needs_every_piece_but_not_their_arrival_order() {
         let request: Event = serde_json::from_str(RAW_SUMMARY).unwrap();
         let mut late = raw_data(&request);
         late.hooks.clear();
-        late.order.retain(|(source, _)| source != HOOK);
-        late.record(HOOK, raw_hook(true));
         assert_eq!(late.slot_delivery(&request, &raw_notice(true)), None);
-        let mut absent = request.clone();
-        absent.summary = None;
-        assert_eq!(late.slot_delivery(&absent, &raw_notice(true)), None);
+        // The hook arriving after its receipt, notice and request still counts.
+        late.record(HOOK, raw_hook(true));
+        assert_eq!(late.slot_delivery(&request, &raw_notice(true)), Some(true));
         let mut base_only = request.clone();
         base_only.summary.as_mut().unwrap().lines.clear();
         assert_ne!(
@@ -2219,11 +2137,7 @@ mod tests {
         log["messages"][0]["entry_id"] = json!("e_prior_0_notice_0");
         historical.notices[0]["entry_id"] = json!("e_prior_0_notice_0");
         historical.hooks[0]["input"]["turn_id"] = json!("prior");
-        let notice_order = historical.notice_orders.remove("e_t_0_notice_0").unwrap();
-        historical
-            .notice_orders
-            .insert("e_prior_0_notice_0".into(), notice_order);
-        for (receipt, _) in historical.receipts.values_mut() {
+        for receipt in historical.receipts.values_mut() {
             receipt.turn_id = "prior".into();
         }
         assert_eq!(historical.delivery_for(&log, Some(&[vec![]])), Some(true));
@@ -3201,11 +3115,12 @@ mod tests {
         (E2eContext::from_client(client), tx, mode, server)
     }
 
-    /// A response and its update delivered back to back keep their emission
-    /// order: the collector records before anything can yield, so the update
-    /// never overtakes its response and is never tombstoned for it.
-    #[tokio::test]
-    async fn back_to_back_callbacks_keep_emission_order() {
+    /// The SDK runs each callback in its own task, so an update can be
+    /// recorded before its response. Sent in reverse emission order, on the
+    /// runner's multi-thread runtime, the pair is still proved and nothing is
+    /// tombstoned.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn callbacks_in_reverse_emission_order_still_prove_the_pair() {
         tokio::time::timeout(Duration::from_secs(15), async {
             let (context, tx, _, server) = sdk_session().await;
             let capture = Capture::bind(&context, "control").await.unwrap();
@@ -3213,9 +3128,9 @@ mod tests {
             let mut answers = Vec::new();
             // Every frame leaves the engine before the first callback answers.
             for (source, payload) in [
-                (REQUEST, serde_json::to_value(&request).unwrap()),
-                (RESPONSE, terminal(&request)),
                 (UPDATE, update(A)),
+                (RESPONSE, terminal(&request)),
+                (REQUEST, serde_json::to_value(&request).unwrap()),
             ] {
                 let (done, answer) = oneshot::channel();
                 tx.send(Callback {
@@ -3233,13 +3148,6 @@ mod tests {
                 assert_eq!(answer.await.unwrap()["accepted"], true);
             }
             let data = capture.snapshot();
-            assert_eq!(
-                data.order,
-                [
-                    (REQUEST.to_string(), A.to_string()),
-                    (RESPONSE.to_string(), A.to_string())
-                ]
-            );
             assert!(data.rejected_updates.is_empty() && data.rejected_generations.is_empty());
             assert_eq!(data.updates["e_t_0_assistant"].len(), 1);
             assert!(data.available());
@@ -3371,7 +3279,9 @@ mod tests {
               }
             }
             // Every receipt field mutation travels through the registered SDK
-            // callback. Missing/late/foreign/forged proofs remain unavailable.
+            // callback. Missing, foreign or forged proofs remain unavailable; a
+            // late receipt or an extra hook still counts, as callbacks arrive
+            // in no fixed order.
             {
             let fixture: Value = serde_json::from_str(include_str!("test_data/origin_memory_both.json")).unwrap();
             let calls = fixture["calls"].as_array().unwrap();
@@ -3429,7 +3339,7 @@ mod tests {
                 send(&tx,UPDATE,json!({"input":input,"output":{"updated":true}}),"harness-owner",true).await;
                 let transcript=json!({"messages":[notice,{"entry_id":input["entry_id"],"origin":input["origin"],"message":{"role":"assistant","content":input["content"]}}]});
                 let mut snapshot=crate::scenarios::memory::score::Snapshot::default(); negative.populate_snapshot(&mut snapshot);
-                let expected=if mutation==14 {Some(true)} else if mutation==26 {Some(false)} else {None};
+                let expected=if matches!(mutation, 11 | 12 | 14 | 19) {Some(true)} else if mutation==26 {Some(false)} else {None};
                 assert_eq!(snapshot.generations.as_ref().unwrap().delivery(&transcript),expected,"receipt/source mutation {mutation}");
                 snapshot.prompts.push(crate::scenarios::memory::score::PromptRecord {turn_id:request["turn_id"].as_str().unwrap().into(),step:0,system_prompt:String::new()});
                 assert_native_gates(snapshot,&transcript,expected);

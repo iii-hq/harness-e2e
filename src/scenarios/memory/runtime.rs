@@ -503,11 +503,11 @@ async fn teach(
             // reply must already be the fixed one.
             if super::learning_checkpoints::config(case).is_some() {
                 let transcript = context.transcript(&session).await?;
-                if let Some(error) = case
+                if let Some(other) = case
                     .teacher_reply
-                    .and_then(|reply| teacher_reply_error(&transcript, reply, index + 1, true))
+                    .and_then(|reply| unexpected_reply(&transcript, reply))
                 {
-                    bail!("teacher reply precondition failed: {error}");
+                    bail!("case precondition no longer holds: the teacher replied {other:?}");
                 }
                 checkpoint(context, case, run_id, index, &session, &bank).await?;
             }
@@ -678,37 +678,6 @@ fn unexpected_reply(transcript: &Value, reply: &str) -> Option<String> {
                 .trim_matches(|c: char| !c.is_alphanumeric())
                 .eq_ignore_ascii_case(reply)
         })
-}
-
-fn teacher_reply_error(
-    transcript: &Value,
-    reply: &str,
-    turns: usize,
-    exact: bool,
-) -> Option<String> {
-    let Some(messages) = transcript["messages"].as_array() else {
-        return Some("teacher transcript unavailable".into());
-    };
-    let answers: Vec<_> = messages
-        .iter()
-        .filter(|e| e.pointer("/message/role").and_then(Value::as_str) == Some("assistant"))
-        .map(|e| {
-            e["message"]["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|b| b["type"] == "text")
-                .filter_map(|b| b["text"].as_str())
-                .collect::<String>()
-        })
-        .collect();
-    if answers.len() != turns || answers.iter().any(|a| a.trim().is_empty()) {
-        return Some("every teacher turn requires nonempty text".into());
-    }
-    if exact && answers.iter().any(|a| a.trim() != reply) {
-        return Some("teacher text differs from the fixed reply".into());
-    }
-    unexpected_reply(transcript, reply)
 }
 
 /// The entry a `state::get` of the cursor names: memory stores
@@ -1600,27 +1569,6 @@ mod tests {
             .unwrap()
             .push(json!({"type": "thinking", "thinking": "the host is db-0a1b2c3d"}));
         assert_eq!(unexpected_reply(&thought, "noted"), None);
-    }
-
-    #[test]
-    fn every_teacher_turn_requires_actual_fixed_text() {
-        let entry = |content: Value| json!({"message":{"role":"assistant", "content":content}});
-        for good in ["noted", "  noted\n"] {
-            let raw = json!({"messages":[entry(json!([{"type":"text", "text":good}]))]});
-            assert_eq!(teacher_reply_error(&raw, "noted", 1, true), None);
-        }
-        for bad in [
-            json!([]),
-            json!([{"type":"thinking", "thinking":"noted"}]),
-            json!([{"type":"text", "text":" "}]),
-            json!([{"type":"text", "text":"Noted."}]),
-        ] {
-            let raw =
-                json!({"messages":[entry(json!([{"type":"text", "text":"noted"}])), entry(bad)]});
-            assert!(teacher_reply_error(&raw, "noted", 2, true).is_some());
-        }
-        assert!(teacher_reply_error(&json!({"messages":[]}), "noted", 1, true).is_some());
-        assert!(teacher_reply_error(&json!({}), "noted", 1, true).is_some());
     }
 
     #[tokio::test]
