@@ -310,11 +310,8 @@ impl Captured {
                         .updates
                         .get(&request.assistant_entry_id)
                         .is_some_and(|updates| {
-                            updates.last().is_some_and(|update| {
-                                update
-                                    .pointer("/origin/generation_id")
-                                    .and_then(Value::as_str)
-                                    == Some(request.generation_id.as_str())
+                            updates.iter().any(|update| {
+                                update_generation(update) == Some(request.generation_id.as_str())
                             })
                         })
             })
@@ -386,6 +383,11 @@ impl Captured {
         authentic: bool,
     ) {
         if !authenticated_source {
+            return;
+        }
+        // Streamed partials carry no generation and prove nothing; only
+        // generation-stamped updates are evidence, so they are never tombstones.
+        if source == UPDATE && observed.get("input").and_then(update_generation).is_none() {
             return;
         }
         if authentic {
@@ -592,10 +594,6 @@ impl Captured {
                 };
                 // Callbacks arrive in no fixed order: an update may precede its
                 // response. delivery_for checks the pair exists when it reads.
-                if update_generation(input).is_none() {
-                    self.reject(&payload);
-                    return;
-                }
                 self.updates
                     .entry(entry.into())
                     .or_default()
@@ -883,11 +881,26 @@ impl Captured {
             {
                 return None;
             }
-            let update = self.updates.get(target)?.last()?;
+            // Stamped updates arrive in no fixed order: the producer's dispatch
+            // index picks the latest. One that no event orders fails closed.
+            let mut latest: Option<(u64, &Value)> = None;
+            for update in self.updates.get(target)? {
+                let generation = update_generation(update)?;
+                let dispatch = self
+                    .events
+                    .values()
+                    .filter(|e| e.generation_id == generation)
+                    .map(|e| e.dispatch_index)
+                    .max()?;
+                if latest.is_none_or(|(newest, _)| dispatch > newest) {
+                    latest = Some((dispatch, update));
+                }
+            }
+            let (_, update) = latest?;
+            let generation = update_generation(update)?;
             if update["session_id"] != session || &update["content"] != content {
                 return None;
             }
-            let generation = update.pointer("/origin/generation_id")?.as_str()?;
             if self.rejected_entries.contains(target)
                 || self
                     .rejected_updates
@@ -2832,7 +2845,9 @@ mod tests {
                         _ => unreachable!(),
                     }
                     captured.record_callback(UPDATE, payload, true, outcome != 4);
-                    let accepted = name == "valid" && outcome == 0;
+                    // Updates without a usable generation are streamed partials:
+                    // ignored, so the stamped proof stands whatever their outcome.
+                    let accepted = name != "valid" || outcome == 0;
                     assert_eq!(
                         captured.available(),
                         accepted,
@@ -2914,6 +2929,9 @@ mod tests {
                 rejection_flood(&mut baseline);
             }
             for (name, generation) in update_id_cases() {
+                // A failed partial without a generation is ignored; a failed
+                // stamped update rejects its own generation only.
+                let affected = (name != "valid").then_some(false);
                 let mut captured = baseline.clone();
                 let mut failed = with_update_id(update(A), generation);
                 failed["output"]["updated"] = json!(false);
@@ -2921,7 +2939,7 @@ mod tests {
                 assert!(captured.available(), "independent retained B; id={name}");
                 assert_eq!(
                     captured.delivery(&transcript()),
-                    None,
+                    affected,
                     "affected A; id={name}"
                 );
                 let mut fresh_transcript = transcript();
@@ -2929,7 +2947,11 @@ mod tests {
                 fresh_transcript["messages"][1]["origin"]["turn_id"] = json!("next");
                 assert_eq!(captured.delivery(&fresh_transcript), Some(true));
                 captured.record_callback(UPDATE, update(A), true, true);
-                assert_eq!(captured.delivery(&transcript()), None, "A remains rejected");
+                assert_eq!(
+                    captured.delivery(&transcript()),
+                    affected,
+                    "A remains rejected"
+                );
                 assert!(!captured.invalid);
                 // A new legitimate generation can be admitted before sealing;
                 // after sealing recovery needs a new trusted bind, not a reset.
@@ -2937,7 +2959,7 @@ mod tests {
                 if flooded {
                     rejection_flood(&mut recovery);
                 }
-                let mut failed = with_update_id(update(A), None);
+                let mut failed = update(A);
                 failed["output"]["updated"] = json!(false);
                 recovery.record_callback(UPDATE, failed, true, true);
                 assert!(!recovery.available());
@@ -2976,6 +2998,7 @@ mod tests {
         }
         // A padded UUID is not the same generation as the exact producer UUID.
         let mut captured = data(&event(A, 41, false));
+        captured.updates.clear();
         captured.record_callback(UPDATE, update(&format!(" {A} ")), true, true);
         assert!(!captured.available());
         assert_eq!(captured.delivery(&transcript()), None);
@@ -3116,27 +3139,46 @@ mod tests {
     }
 
     /// The SDK runs each callback in its own task, so an update can be
-    /// recorded before its response. Sent in reverse emission order, on the
-    /// runner's multi-thread runtime, the pair is still proved and nothing is
+    /// recorded before its response, and the Harness streams unstamped
+    /// partials into the same entry before and after its stamped final
+    /// update. Sent in reverse emission order with those partials, on the
+    /// runner's multi-thread runtime, delivery is still proved and nothing is
     /// tombstoned.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn callbacks_in_reverse_emission_order_still_prove_the_pair() {
+    async fn streamed_partials_and_reverse_order_still_prove_delivery() {
         tokio::time::timeout(Duration::from_secs(15), async {
             let (context, tx, _, server) = sdk_session().await;
             let capture = Capture::bind(&context, "control").await.unwrap();
-            let request = event(A, 101, true);
+            let request = v2_event();
+            let mut observed_hook = hook();
+            observed_hook["source_observers"] = json!(["memory-observer"]);
+            let mut partial = with_update_id(update(A), None);
+            partial["input"]["content"] = json!([{"type":"text","text":"emb"}]);
             let mut answers = Vec::new();
             // Every frame leaves the engine before the first callback answers.
-            for (source, payload) in [
-                (UPDATE, update(A)),
-                (RESPONSE, terminal(&request)),
-                (REQUEST, serde_json::to_value(&request).unwrap()),
+            for (source, payload, caller) in [
+                (HOOK, observed_hook, "harness-owner"),
+                (
+                    RECEIPT,
+                    test_receipt(&request, &hook(), "memory-observer"),
+                    "harness-owner",
+                ),
+                (NOTICE, notice(), "session-owner"),
+                (UPDATE, partial.clone(), "harness-owner"),
+                (UPDATE, update(A), "harness-owner"),
+                (UPDATE, partial, "harness-owner"),
+                (RESPONSE, terminal(&request), "harness-owner"),
+                (
+                    REQUEST,
+                    serde_json::to_value(&request).unwrap(),
+                    "harness-owner",
+                ),
             ] {
                 let (done, answer) = oneshot::channel();
                 tx.send(Callback {
                     source,
                     payload,
-                    caller: "harness-owner",
+                    caller,
                     activation: true,
                     done,
                 })
@@ -3148,9 +3190,14 @@ mod tests {
                 assert_eq!(answer.await.unwrap()["accepted"], true);
             }
             let data = capture.snapshot();
-            assert!(data.rejected_updates.is_empty() && data.rejected_generations.is_empty());
+            assert!(
+                data.rejected_updates.is_empty()
+                    && data.rejected_entries.is_empty()
+                    && data.rejected_generations.is_empty()
+            );
             assert_eq!(data.updates["e_t_0_assistant"].len(), 1);
             assert!(data.available());
+            assert_eq!(data.delivery(&transcript()), Some(true));
             drop(capture);
             drop(tx);
             context.client().shutdown();
