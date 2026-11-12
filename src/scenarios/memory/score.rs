@@ -234,8 +234,7 @@ pub fn memory_section(prompt: &str) -> Option<&str> {
 pub fn evidence(case: &Case, run_id: &str, transcript: &Value, snapshot: Snapshot) -> Evidence {
     let strict =
         super::strict::enabled(case).then(|| super::strict::capture(case, transcript, &snapshot));
-    let mut evidence = assemble(case, run_id, observe(transcript), snapshot);
-    evidence.strict = strict;
+    let mut evidence = assemble(case, run_id, observe(transcript), snapshot, strict);
     if super::learning_checkpoints::config(case).is_some() {
         evidence.checkpoints = super::runtime::checkpoints(run_id);
     }
@@ -248,7 +247,13 @@ fn named_bank(text: &str) -> Option<&str> {
     Some(rest.split_once('\n').map_or(rest, |(bank, _)| bank))
 }
 
-fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapshot) -> Evidence {
+fn assemble(
+    case: &Case,
+    run_id: &str,
+    mut observed: Observed,
+    snapshot: Snapshot,
+    strict: Option<super::strict::EvidenceSnapshot>,
+) -> Evidence {
     let own = snapshot
         .generations
         .as_ref()
@@ -402,8 +407,9 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
             }
         })
         .collect();
+    // Strict evidence is in place before measuring: its audit normalizes whitespace.
     let mut evidence = Evidence {
-        strict: None,
+        strict,
         checkpoints: None,
         schema: SCHEMA.to_string(),
         bank: own.clone(),
@@ -1552,7 +1558,7 @@ mod tests {
         status: Option<&str>,
     ) -> Evidence {
         let snapshot = recorded(case, &mut observed, prompt, status);
-        assemble(case, RUN, observed, snapshot)
+        assemble(case, RUN, observed, snapshot, None)
     }
 
     fn evidence_of(case: &Case, observed: Observed) -> Evidence {
@@ -2327,7 +2333,7 @@ mod tests {
             let mut seen = observed(&answers, vec![]);
             let mut snapshot = snapshot_of(&mut seen);
             edit(&mut snapshot);
-            evaluate(case, &assemble(case, RUN, seen, snapshot)).infrastructure_error
+            evaluate(case, &assemble(case, RUN, seen, snapshot, None)).infrastructure_error
         };
         assert_eq!(infrastructure(&|_| {}), None);
         // The status read failed after exchange 1.
@@ -2360,7 +2366,7 @@ mod tests {
         let mut snapshot = recorded(recall, &mut seen, PROMPT, Some("ok"));
         snapshot.surface_digests.clear();
         assert_eq!(
-            evaluate(recall, &assemble(recall, RUN, seen, snapshot)).infrastructure_error,
+            evaluate(recall, &assemble(recall, RUN, seen, snapshot, None)).infrastructure_error,
             None
         );
     }
@@ -2434,7 +2440,7 @@ mod tests {
             ..Snapshot::default()
         };
         let seen = observed(&["x"], vec![block(0, vec![stored.clone(), line(case, 1)])]);
-        let evidence = assemble(case, RUN, seen, snapshot);
+        let evidence = assemble(case, RUN, seen, snapshot, None);
         assert_eq!(evidence.seeds[DISTRACTORS.len()].text, stored);
         assert_eq!(evidence.seeds[DISTRACTORS.len() + 1].text, line(case, 1));
         let found = audit(&evidence);
@@ -2745,7 +2751,7 @@ mod tests {
             teacher: Some(teacher),
             ..recorded(case, &mut seen, prompt, None)
         };
-        assemble(case, RUN, seen, snapshot)
+        assemble(case, RUN, seen, snapshot, None)
     }
 
     #[test]
@@ -2970,7 +2976,7 @@ mod tests {
                 bank_after: Some(bank),
                 ..recorded(case, &mut seen, PROMPT, None)
             };
-            evaluate(case, &assemble(case, RUN, seen, snapshot))
+            evaluate(case, &assemble(case, RUN, seen, snapshot, None))
         };
         let gate = "nothing_learned_from_automation";
         let quiet = after(read("e2e_a", &[], &[]));

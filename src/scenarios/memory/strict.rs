@@ -1385,6 +1385,18 @@ mod tests {
         let audit = score::audit(&evidence);
         assert!(audit.missing.is_empty() && audit.irrelevant.is_empty());
         assert_eq!(completed(&CASE, &evidence), CompletionState::Completed);
+        // The persisted counters match lines the way the judgment does.
+        let counted = |evidence: &Evidence| {
+            ["memory_expected_injected", "memory_irrelevant_injected"].map(|id| {
+                evidence
+                    .measurements
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .value
+            })
+        };
+        assert_eq!(counted(&evidence), [2.0, 0.0]);
         let legacy = Case {
             criteria: &CASE.criteria[1..],
             ..CASE
@@ -1392,6 +1404,7 @@ mod tests {
         let legacy = score::evidence(&legacy, "control", &transcript, snapshot());
         assert!(legacy.strict.is_none());
         assert!(!score::audit(&legacy).missing.is_empty());
+        assert_eq!(counted(&legacy), [0.0, 2.0]);
     }
 
     #[test]
