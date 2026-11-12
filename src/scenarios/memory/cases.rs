@@ -90,11 +90,13 @@ pub enum Check {
     },
     /// Exchange `exchange`'s answer gives each `(label, canary)` pair's canary
     /// under that label, for a prompt that asks for `Label: value` lines. A
-    /// label counts in any case when a colon or the line's end follows it,
-    /// with only spaces or markdown emphasis between, and its text runs to the
-    /// next label. The first of the check's canaries in each label's text must
-    /// be its own, and each label needs one text that holds it, so an answer
-    /// that puts a value under another label fails.
+    /// label counts, in any case and starting a word, when the line's end or a
+    /// colon follows it; spaces, markdown marks (`*`, `_`, backtick) and a short
+    /// qualifier holding no label or value ("Original plan:") may come between.
+    /// Its text runs to the next label. The first of the check's canaries in
+    /// each label's text must be its own, and each label needs at least one
+    /// text that holds it, so an answer that puts a value under another label
+    /// fails.
     AnswerLabelled {
         exchange: usize,
         labels: &'static [(&'static str, &'static str)],

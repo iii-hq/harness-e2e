@@ -458,6 +458,7 @@ mod tests {
             format!("Both plans, original and current:\n- **Original:** Tuesday at 09:00, export-{old}\n- **current**: Thursday at 18:00, export-{new} (replacing export-{old})"),
             format!("### ORIGINAL\nTuesday at 09:00, export-{old}\n### Current\nThursday at 18:00, export-{new}"),
             format!("Current: Thursday at 18:00, export-{new}. Original: Tuesday at 09:00, export-{old}."),
+            format!("Original plan: Tuesday at 09:00, export-{old}\nCurrent (corrected): Thursday at 18:00, export-{new}"),
         ] {
             let mut transcript = raw(&[&corrected()], &[&original()]);
             transcript["messages"][3]["message"]["content"][0]["text"] = answer.clone().into();

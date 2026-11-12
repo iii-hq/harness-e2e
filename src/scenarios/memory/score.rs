@@ -1291,7 +1291,18 @@ fn answer_labelled(text: &str, pairs: &[(&str, &str, &str)]) -> (bool, String) {
             let end = start + label.len();
             let word = !lower[..start].ends_with(|c: char| c.is_alphanumeric());
             let rest = lower[end..].trim_start_matches([' ', '\t', '*', '_', '`']);
-            if word && (rest.is_empty() || rest.starts_with([':', '\n', '\r'])) {
+            // A short qualifier may sit before the colon ("Original plan:",
+            // "Current (corrected):"), never another label or a value.
+            let line = rest.split(['\n', '\r']).next().unwrap_or_default();
+            let qualified = line.find(':').is_some_and(|colon| {
+                let qualifier = &line[..colon];
+                colon <= 40
+                    && !pairs.iter().any(|(other, _, value)| {
+                        qualifier.contains(&other.to_ascii_lowercase())
+                            || qualifier.contains(&value.to_ascii_lowercase())
+                    })
+            });
+            if word && (rest.is_empty() || rest.starts_with(['\n', '\r']) || qualified) {
                 marks.push((start, end, index));
             }
         }
