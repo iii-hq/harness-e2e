@@ -576,20 +576,18 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     for (id, fen, depth) in families {
         let expected_moves = chess_engine::legal_moves(fen)?;
         let expected_nodes = chess_engine::perft(fen, depth)?;
-        let legal = common::invoke(
-            context.client(),
+        let legal = common::invoke_candidate(
+            context,
             &contract.functions["legal_moves"],
             json!({"fen":fen}),
         )
-        .await;
-        let perft = common::invoke(
-            context.client(),
+        .await?;
+        let perft = common::invoke_candidate(
+            context,
             &contract.functions["perft"],
             json!({"fen":fen,"depth":depth}),
         )
-        .await;
-        ensure_remote_or_success(&legal, "invoke legal_moves probe")?;
-        ensure_remote_or_success(&perft, "invoke perft probe")?;
+        .await?;
         let actual_moves = legal
             .as_ref()
             .ok()
@@ -617,20 +615,18 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
 
     let pinned_expected_moves = chess_engine::legal_moves(PINNED_FEN)?;
     let pinned_expected_nodes = chess_engine::perft(PINNED_FEN, 1)?;
-    let pinned_legal = common::invoke(
-        context.client(),
+    let pinned_legal = common::invoke_candidate(
+        context,
         &contract.functions["legal_moves"],
         json!({"fen":PINNED_FEN}),
     )
-    .await;
-    let pinned_perft = common::invoke(
-        context.client(),
+    .await?;
+    let pinned_perft = common::invoke_candidate(
+        context,
         &contract.functions["perft"],
         json!({"fen":PINNED_FEN,"depth":1}),
     )
-    .await;
-    ensure_remote_or_success(&pinned_legal, "invoke pinned legal_moves probe")?;
-    ensure_remote_or_success(&pinned_perft, "invoke pinned perft probe")?;
+    .await?;
     let pinned_moves = pinned_legal
         .as_ref()
         .ok()
@@ -661,20 +657,18 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
 
     let expected_after = chess_engine::apply_move(START_FEN, "e2e4")?.new_fen;
     let expected_final = chess_engine::apply_move(&expected_after, "e7e5")?.new_fen;
-    let legal_play = common::invoke(
-        context.client(),
+    let legal_play = common::invoke_candidate(
+        context,
         &contract.functions["play"],
         json!({"fen":START_FEN,"move":"e2e4"}),
     )
-    .await;
-    let illegal_play = common::invoke(
-        context.client(),
+    .await?;
+    let illegal_play = common::invoke_candidate(
+        context,
         &contract.functions["play"],
         json!({"fen":START_FEN,"move":"e2e5"}),
     )
-    .await;
-    ensure_remote_or_success(&legal_play, "invoke legal play probe")?;
-    ensure_remote_or_success(&illegal_play, "invoke illegal play probe")?;
+    .await?;
     let actual_after = legal_play
         .as_ref()
         .ok()
@@ -682,19 +676,16 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         .map(str::to_string);
     let second_play = if let Some(actual_after) = &actual_after {
         Some(
-            common::invoke(
-                context.client(),
+            common::invoke_candidate(
+                context,
                 &contract.functions["play"],
                 json!({"fen":actual_after,"move":"e7e5"}),
             )
-            .await,
+            .await?,
         )
     } else {
         None
     };
-    if let Some(second_play) = &second_play {
-        ensure_remote_or_success(second_play, "invoke second legal play probe")?;
-    }
     let actual_final = second_play
         .as_ref()
         .and_then(|result| result.as_ref().ok())
@@ -720,37 +711,30 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         "illegal":result_value(illegal_play)
     }));
 
-    let invalid_fen = common::invoke(
-        context.client(),
+    let invalid_fen = common::invoke_candidate(
+        context,
         &contract.functions["legal_moves"],
         json!({"fen":"not a fen"}),
     )
-    .await;
-    let invalid_depth = common::invoke(
-        context.client(),
+    .await?;
+    let invalid_depth = common::invoke_candidate(
+        context,
         &contract.functions["perft"],
         json!({"fen":START_FEN,"depth":5}),
     )
-    .await;
-    let invalid_move = common::invoke(
-        context.client(),
+    .await?;
+    let invalid_move = common::invoke_candidate(
+        context,
         &contract.functions["play"],
         json!({"fen":START_FEN,"move":"wat"}),
     )
-    .await;
-    ensure_remote_or_success(&invalid_fen, "invoke malformed FEN probe")?;
-    ensure_remote_or_success(&invalid_depth, "invoke invalid depth probe")?;
-    ensure_remote_or_success(&invalid_move, "invoke malformed move probe")?;
-    let health_after_rejections = common::invoke(
-        context.client(),
+    .await?;
+    let health_after_rejections = common::invoke_candidate(
+        context,
         &contract.functions["legal_moves"],
         json!({"fen":START_FEN}),
     )
-    .await;
-    ensure_remote_or_success(
-        &health_after_rejections,
-        "verify Worker health after invalid inputs",
-    )?;
+    .await?;
     let healthy = health_after_rejections
         .as_ref()
         .ok()
@@ -771,20 +755,18 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         && healthy;
     checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid requests were rejected and Worker stayed healthy"} else {"invalid-input rejection or post-rejection health failed"},"observed":[result_value(invalid_fen),result_value(invalid_depth),result_value(invalid_move)],"health_after_rejections":result_value(health_after_rejections)}));
 
-    let script = common::invoke(
-        context.client(),
+    let script = common::invoke_candidate(
+        context,
         &contract.functions["ui-content"],
         json!({"path":contract.script_path()}),
     )
-    .await;
-    let style = common::invoke(
-        context.client(),
+    .await?;
+    let style = common::invoke_candidate(
+        context,
         &contract.functions["ui-content"],
         json!({"path":contract.style_path()}),
     )
-    .await;
-    ensure_remote_or_success(&script, "fetch candidate Console script")?;
-    ensure_remote_or_success(&style, "fetch candidate Console style")?;
+    .await?;
 
     let console_status = context.trigger_value("ade::status", json!({})).await;
     ensure_remote_or_success(&console_status, "inspect iii Console status")?;
@@ -869,6 +851,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         && source_sha256.is_some()
         && compose_sha256.is_some();
     checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser probe was blocked by prerequisites"} else if evidence_ok {"portable screenshots are bound to candidate and checked FENs"} else {"screenshot or identity evidence is incomplete"}}));
+    common::name_unanswered_calls(&mut checks);
     Ok(json!({"identity":identity,"checks":checks,"files":files}))
 }
 
@@ -1051,9 +1034,11 @@ async fn capture_browser(
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await;
     stop.context("stop chess evidence browser session")?;
-    result
+    common::settle_page_capture(result?, &url, common::browser_answers(context)).await
 }
 
+/// The outer error is infrastructure: the browser could not size its window or
+/// load the Console. The inner result is the page phase, settled by the caller.
 async fn capture_browser_session(
     context: &E2eContext,
     session: &str,
@@ -1061,7 +1046,7 @@ async fn capture_browser_session(
     identity: &Value,
     actual_after: &str,
     actual_final: &str,
-) -> Result<Value> {
+) -> Result<Result<Value>> {
     context
         .trigger_value(
             "browser::resize",
@@ -1075,10 +1060,21 @@ async fn capture_browser_session(
         )
         .await?;
     if navigation["ok"] != true || navigation["timed_out"] == true {
-        return Ok(
+        return Ok(Ok(
             json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"captures":[],"url":url}),
-        );
+        ));
     }
+    Ok(capture_browser_page(context, session, url, identity, actual_after, actual_final).await)
+}
+
+async fn capture_browser_page(
+    context: &E2eContext,
+    session: &str,
+    url: &str,
+    identity: &Value,
+    actual_after: &str,
+    actual_final: &str,
+) -> Result<Value> {
     context
         .trigger_value(
             "browser::execute",

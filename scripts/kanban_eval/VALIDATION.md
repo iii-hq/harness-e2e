@@ -1,5 +1,46 @@
 # Kanban validation — 2026-09-20
 
+## Candidate-caused failures count — 2026-11-12
+
+A Kanban app that did not come back from a restart, or kept no
+`/data/tickets.json`, ended the round as `evaluation_failed`, so a broken
+delivery left the software-engineering mean instead of scoring 0 (MOT-5688).
+
+The controller now charges the application only when the trusted side is
+cleared: a restart not ready within 60 s while the runtime process still runs
+and `iii trigger compose::status` exits 0, or the probe's own "no ticket store"
+text. The probe records that control as a failed check and the round counts. A
+runtime process that exited, a `compose::status` that fails or hangs, and every
+other controller, container runtime or stack failure still invalidate the
+evaluation. A `typecheck` or `build` past 90 s now fails its check, as `test`
+already did, instead of ending the evaluation. A probe that cannot plant its own fixture in the store marks the check
+`unverified` instead of failing the evaluation; a C2 store that keeps tickets
+outside any array skips only the duplicate-record probe. The monitor's
+1,800-second cut is `resource_limit` with failure code
+`subject_deadline_exceeded`: it scores 0 and stays in the mean.
+
+Sabotage gate on iii 0.26.0, from local fixture branches that were never
+pushed:
+
+| Variant | Expected | Observed |
+| --- | --- | --- |
+| V1 C2 app exits at boot once `/data/tickets.json` exists | `failed`, restart check fails, exit 1 | Exit 1, `failed`. Both restart checks fail with "runtime process still running and Compose answers"; the corruption check fails with `function_not_found`. `criterion_restart` and `criterion_corruption` 0; score 75. |
+| V2 C2 persists to `tickets.db` | invalid-input check fails with the "no ticket store" text | Exit 1, `failed`. The invalid-input and corruption checks fail with "no ticket store at /data/tickets.json"; `criterion_invalid` and `criterion_corruption` 0; score 75. |
+| V3 C1 throws when configuration `kanban` is missing | `criterion_initial_config` fails, exit 1, hot reload recorded as a check | Exit 1, `failed`, coverage incomplete. Both restart-with-reset checks fail with the Compose reason, both settings checks with `ERR_CONNECTION_REFUSED`, hot reload because the marker was never observed. Score 15, task incomplete. |
+| V4 C2 `build` script sleeps 600 s | `build` fails with exit 124 | Exit 1, `failed`. `build` fails with "isolated command exit 124" after 90.1 s; every criterion 0 through the build prerequisite. |
+| V5 trusted engine killed as the restart starts it | `evaluation_failed`, exit 2 | Exit 2, `evaluation_failed`. `compose::status` hung past its 5 s bound, so the restart stayed a control failure. |
+| V6 restart's Compose pointed at a closed engine port | `evaluation_failed`, exit 2 | Exit 2, `evaluation_failed`. Compose stayed up and `compose::status` answered `function_not_found`. |
+
+`iii compose --up` never exited in any variant: when the app died (V1) Compose
+logged `CHILD_EXITED_BEFORE_REGISTRATION` and kept serving, with the container
+`failed`. So an exited runtime process is never charged to the candidate. The
+slowest control took 65.9 s (V3 hot reload, unchanged by this work); the probe's
+control deadline is now 100 s. V1–V4's `result.json` and `coverage.json` are
+fixtures under `tests/fixtures/kanban-evaluator/candidate-faults/`, scored 75,
+75, 15 and 0 by `candidate_faults_from_the_kanban_gate_score_zero_not_infrastructure`.
+Not run locally: the 1,800-second cut through the native monitor, and a real
+stack for the Worker and browser changes.
+
 ## C7 store switch on iii 0.26 — 2026-11-11
 
 The C1–C7 snapshots reload their store from a `configuration` trigger
@@ -113,6 +154,9 @@ Corrections since the historical controls below:
   and Node inspector checks. Control protocol errors stay evaluator failures;
   missing hot reload is a functional failure. A real, separate Node HTTP/inspector
   process validates SSE response counting, collection and deliberate retention.
+- Superseded on 2026-11-12: a control the application itself made fail is a
+  failed check that counts, not an evaluator failure (see "Candidate-caused
+  failures count" above).
 - Replaced host system-library mounts with the pinned official Playwright image
   `mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6`.
   CI uses Node 24.18.0, locked JavaScript tooling, no install lifecycle scripts

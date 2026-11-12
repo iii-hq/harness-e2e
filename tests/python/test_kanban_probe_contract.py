@@ -782,6 +782,46 @@ export function registerWorker() {
                     self.assertEqual(triggers.read_text().splitlines()[0], f"{namespace} kanban::tickets::create")
 
     def test_direct_configuration_waits_for_the_resolved_path(self):
+        result, direct_reads = self.run_c1_against_fake_app(lambda request: {
+            "ok": True,
+            "value": {"observed": True} if request["operation"] == "hot_reload" else {},
+        })
+        configuration = next(check for check in result["checks"] if check["id"] == "foundation_configuration_contract")
+        self.assertEqual(configuration["status"], "passed", configuration)
+        self.assertGreaterEqual(direct_reads, 2)
+        criteria = {
+            check["id"]: check["status"]
+            for check in result["checks"] if check["id"].startswith("criterion_")
+        }
+        self.assertEqual(criteria, {
+            "criterion_startup": "passed",
+            "criterion_asset_paths": "passed",
+            "criterion_initial_config": "passed",
+            "criterion_preserve_config": "passed",
+            "criterion_direct_config": "passed",
+            "criterion_invalid_config": "passed",
+            "criterion_config_restart": "passed",
+            "criterion_settings_mobile": "failed",
+            "criterion_settings_desktop": "unverified",
+            "criterion_hot_reload": "passed",
+        })
+
+    def test_a_restart_the_application_does_not_survive_fails_the_c1_gate(self):
+        reason = ("application did not become ready within 60 s after restart: "
+                  "runtime process still running and Compose answers; see runtime.log")
+        result, _ = self.run_c1_against_fake_app(lambda request: (
+            {"ok": False, "candidate": True, "error": reason} if request["operation"] == "restart"
+            else {"ok": True, "value": {"observed": True}}
+        ))
+        self.assertEqual((result["status"], result["functional_status"]), ("failed", "failed"), result)
+        self.assertNotIn("error", result)
+        checks = {check["id"]: check for check in result["checks"]}
+        self.assertEqual(checks["criterion_initial_config"]["status"], "failed")
+        self.assertIn(reason, checks["criterion_initial_config"]["detail"])
+        self.assertEqual(checks["foundation_development_hot_reload"]["status"], "passed")
+
+    def run_c1_against_fake_app(self, answer):
+        """Runs C1 against a fake app and engine; `answer(request)` builds each control response."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = root / "config.json"
@@ -880,11 +920,7 @@ export const chromium = {
                     if request["id"] in seen:
                         continue
                     seen.add(request["id"])
-                    response = {
-                        "id": request["id"],
-                        "ok": True,
-                        "value": {"observed": True} if request["operation"] == "hot_reload" else {},
-                    }
+                    response = {"id": request["id"], **answer(request)}
                     temporary = output / "control-response.tmp"
                     temporary.write_text(json.dumps(response))
                     temporary.replace(output / "control-response.json")
@@ -913,26 +949,48 @@ export const chromium = {
                 server_thread.join()
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            result = json.loads((output / "result.json").read_text())
-            configuration = next(check for check in result["checks"] if check["id"] == "foundation_configuration_contract")
-            self.assertEqual(configuration["status"], "passed", configuration)
-            self.assertGreaterEqual(direct_reads, 2)
-            criteria = {
-                check["id"]: check["status"]
-                for check in result["checks"] if check["id"].startswith("criterion_")
-            }
-            self.assertEqual(criteria, {
-                "criterion_startup": "passed",
-                "criterion_asset_paths": "passed",
-                "criterion_initial_config": "passed",
-                "criterion_preserve_config": "passed",
-                "criterion_direct_config": "passed",
-                "criterion_invalid_config": "passed",
-                "criterion_config_restart": "passed",
-                "criterion_settings_mobile": "failed",
-                "criterion_settings_desktop": "unverified",
-                "criterion_hot_reload": "passed",
-            })
+            return json.loads((output / "result.json").read_text()), direct_reads
+
+    def test_candidate_fault_from_control_fails_the_check_not_the_evaluation(self):
+        reason = "application did not become ready within 60 s after restart"
+        for answer, expected in [
+            ({"ok": False, "candidate": True, "error": reason},
+             {"recorded": False, "checks": [{"id": "restart", "status": "failed", "detail": reason}]}),
+            ({"ok": False, "error": reason},
+             {"recorded": f"rejected: control restart failed: {reason}", "checks": []}),
+        ]:
+            with self.subTest(answer=answer), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+
+                def respond():
+                    request_path = root / "control-request.json"
+                    for _ in range(500):
+                        if request_path.exists():
+                            break
+                        time.sleep(.01)
+                    else:
+                        return
+                    request = json.loads(request_path.read_text())
+                    temporary = root / "response.tmp"
+                    temporary.write_text(json.dumps({"id": request["id"], **answer}))
+                    temporary.replace(root / "control-response.json")
+
+                thread = threading.Thread(target=respond)
+                thread.start()
+                script = f"""
+import {{ control, createCheckRecorder }} from {json.dumps(PROBE.as_uri())}
+const checks = []
+const recorded = await createCheckRecorder(checks).check('restart', () => control({json.dumps(directory)}, 'restart'))
+  .catch((error) => `rejected: ${{error.message}}`)
+console.log(JSON.stringify({{ recorded, checks }}))
+"""
+                completed = subprocess.run(
+                    ["node", "--input-type=module", "--eval", script],
+                    cwd=ROOT, text=True, capture_output=True, check=False, timeout=20,
+                )
+                thread.join()
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(json.loads(completed.stdout), expected)
 
     def test_control_request_is_atomic_correlated_and_has_object_payload(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -305,6 +305,48 @@ console.log(JSON.stringify({stages,retained:tickets.filter(t=>t.deleted_at&&t.co
 """)
         self.assertEqual(result, {'stages': ['discussion_preservation', 'discussion_restart'], 'retained': 1})
 
+    def test_discussion_store_without_the_fixture_is_unverified_not_a_control_error(self):
+        result = self.node("""
+const tickets=[];const records=[];const recorder=probe.createCheckRecorder(records);
+const trigger=async(fn,payload={})=>{
+ if(fn==='kanban::tickets::create'){const t={id:`id-${tickets.length}`,key:`KAN-${tickets.length+1}`,title:payload.title,comments:[]};tickets.push(t);return structuredClone(t)}
+ const t=tickets.find(({id})=>id===payload.id);
+ if(fn==='kanban::tickets::comment')t.comments.push({id:`c-${t.comments.length}`,...payload.comment});
+ return structuredClone(t);
+};
+await probe.PROBES.kanban_c6_discussion({trigger,stage:()=>{},api:async()=>({status:400}),
+ control:async op=>op==='read_store'?'{"version":1,"records":[]}':undefined,
+ check:async(id,action)=>{if(id==='discussion_invalid_input_and_corrupt_store_fail_closed')await recorder.check(id,action)}});
+console.log(JSON.stringify(records));
+""")
+        self.assertEqual([(c['status'], c['detail'].split(':')[0]) for c in result],
+                         [('unverified', 'Cannot plant a malformed discussion')])
+
+    def test_duplicate_planting_follows_the_shape_of_the_persisted_store(self):
+        # The task fixes no store shape: one keyed by id cannot hold a duplicate record.
+        for shape, status, detail in [
+            ('{version:1,records:[]}', 'unverified', 'Cannot plant a duplicate'),
+            ('{tickets:Object.fromEntries(tickets.map(t=>[t.id,t]))}', 'passed',
+             'no duplicate record could be planted'),
+        ]:
+            with self.subTest(shape=shape):
+                result = self.node("""
+const tickets=[];const records=[];const recorder=probe.createCheckRecorder(records);let store;
+const trigger=async(fn,payload={})=>{
+ const now=new Date().toISOString();
+ if(fn==='kanban::tickets::create'){const t={status:'backlog',priority:'medium',description:'',assignee:null,...payload,id:crypto.randomUUID(),key:`KAN-${tickets.length+1}`,title:payload.title.trim(),created_at:now,updated_at:now};tickets.push(t);return structuredClone(t)}
+ if(fn==='kanban::tickets::list'){if(store?.startsWith('{broken'))throw new Error('corrupt');return {tickets:structuredClone(tickets)}}
+ return structuredClone(tickets.find(({id,key})=>id===payload.id||key===payload.id));
+};
+await probe.PROBES.kanban_c2_persistence({trigger,stage:()=>{},api:async()=>({status:200,json:async()=>({})}),
+ control:async(op,p)=>{if(op==='read_store')return store??JSON.stringify(SHAPE);if(op==='write_store')store=p.value},
+ check:async(id,action)=>id==='persistence_iii_crud'?(await action(),true)
+  :(id==='persistence_corrupt_and_duplicate_store_fail_closed'&&recorder.check(id,action))});
+console.log(JSON.stringify(records));
+""".replace('SHAPE', shape))
+                self.assertEqual([c['status'] for c in result], [status])
+                self.assertIn(detail, result[0]['detail'])
+
 
 if __name__ == '__main__':
     unittest.main()

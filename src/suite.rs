@@ -2582,22 +2582,22 @@ async fn execute(
         if exchange == 0 && armed.resends_first_send() {
             armed.resend(context, &response.turn_id, request).await;
         }
+        let waited = context
+            .wait_for_turn(
+                spec.id,
+                session_id,
+                &response.turn_id,
+                module.expected_root_outcome(),
+                stuck_timeout,
+                progress_interval.is_some(),
+                control.map(|control| &control.cancellation),
+            )
+            .await
+            .map_err(|error| error.to_string());
         metrics = Some(
-            match context
-                .wait_for_turn(
-                    spec.id,
-                    session_id,
-                    &response.turn_id,
-                    module.expected_root_outcome(),
-                    stuck_timeout,
-                    progress_interval.is_some(),
-                    control.map(|control| &control.cancellation),
-                )
-                .await
-            {
+            match turn_wait_outcome(spec.id, waited, module.subject_deadline(run_id)) {
                 Ok(metrics) => metrics,
-                Err(error) => {
-                    let failure = subject_failure(FailurePhase::Execute, error.to_string());
+                Err(failure) => {
                     if failure.status == RunStatus::ResourceLimit {
                         wait_for_stopped_turn(context, session_id).await;
                     }
@@ -3484,6 +3484,34 @@ fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
         RunStatus::SubjectError
     };
     RunFailure::new(status, phase, message)
+}
+
+/// How a turn wait ended, given the scenario's own deadline: a turn the
+/// scenario stopped at its deadline is a resource limit. An operator
+/// cancellation, or a wait the stack could not observe, stays one. A turn
+/// that completed is left alone: it may have ended inside the deadline and
+/// been observed late.
+fn turn_wait_outcome<T>(
+    scenario: &str,
+    waited: Result<T, String>,
+    deadline: Option<String>,
+) -> Result<T, RunFailure> {
+    let waited = waited.map_err(|error| subject_failure(FailurePhase::Execute, error));
+    match (waited, deadline) {
+        (Err(failure), Some(reason))
+            if failure.code != "execution_cancelled"
+                && failure.status != RunStatus::InfrastructureError =>
+        {
+            let mut failure = RunFailure::new(
+                RunStatus::ResourceLimit,
+                FailurePhase::Execute,
+                format!("scenario {scenario} subject exceeded its wall-clock deadline: {reason}"),
+            );
+            failure.code = "subject_deadline_exceeded".into();
+            Err(failure)
+        }
+        (waited, _) => waited,
+    }
 }
 
 fn subject_dispatch_failure(error: anyhow::Error) -> RunFailure {
@@ -5415,6 +5443,87 @@ mod tests {
             .assessment_results
             .iter()
             .all(|result| result.outcome == AssessmentOutcome::Failed));
+    }
+
+    const SUBJECT_DEADLINE: &str = "external subject did not complete within 1800 seconds";
+    const STOPPED_TURN: &str = "turn ended as Cancelled: no error was reported";
+
+    #[test]
+    fn a_scenario_deadline_decides_how_the_turn_wait_ended() {
+        let deadline = || Some(SUBJECT_DEADLINE.to_string());
+
+        assert!(turn_wait_outcome("kanban-c1", Ok(()), None).is_ok());
+
+        let failure =
+            turn_wait_outcome("kanban-c1", Err::<(), _>(STOPPED_TURN.into()), None).unwrap_err();
+        assert_eq!(failure.status, RunStatus::SubjectError);
+        assert_eq!(failure.message, STOPPED_TURN);
+
+        let failure = turn_wait_outcome("kanban-c1", Err::<(), _>(STOPPED_TURN.into()), deadline())
+            .unwrap_err();
+        assert_eq!(failure.status, RunStatus::ResourceLimit);
+        assert_eq!(failure.phase, FailurePhase::Execute);
+        assert_eq!(failure.code, "subject_deadline_exceeded");
+        assert_eq!(
+            failure.message,
+            format!(
+                "scenario kanban-c1 subject exceeded its wall-clock deadline: {SUBJECT_DEADLINE}"
+            )
+        );
+        assert!(!failure.message.contains("Cancelled"));
+
+        // A completed turn may have ended inside the deadline and been observed late.
+        assert!(turn_wait_outcome("kanban-c1", Ok(()), deadline()).is_ok());
+
+        // A wait the stack could not observe, or a provider outage, is not the subject's.
+        for stack_fault in [
+            format!(
+                "scenario kanban-c1 {} e2e_x for 1800s: connection refused",
+                crate::observe::UNOBSERVABLE
+            ),
+            format!("turn ended as Failed: {}", PROVIDER_TRANSPORT_FAILURES[0]),
+        ] {
+            let failure =
+                turn_wait_outcome("kanban-c1", Err::<(), _>(stack_fault), deadline()).unwrap_err();
+            assert_eq!(failure.status, RunStatus::InfrastructureError);
+            assert_ne!(failure.code, "subject_deadline_exceeded");
+        }
+
+        let failure = turn_wait_outcome(
+            "kanban-c1",
+            Err::<(), _>(crate::report::EXECUTION_CANCELLED.into()),
+            deadline(),
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, "execution_cancelled");
+    }
+
+    #[test]
+    fn a_scenario_deadline_counts_as_a_resource_limit_with_its_own_code() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        let failure = turn_wait_outcome(
+            spec.id,
+            Err::<(), _>(STOPPED_TURN.into()),
+            Some(SUBJECT_DEADLINE.into()),
+        )
+        .unwrap_err();
+        report.push_typed_failure(
+            failure.status,
+            failure.phase,
+            failure.code,
+            failure.retry_scope,
+            failure.contamination,
+            failure.message,
+        );
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.failures[0].code, "subject_deadline_exceeded");
+        assert_eq!(report.cause, Some(crate::report::RunCause::ResourceLimit));
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.score, Some(0));
+        assert!(report.criteria.iter().all(|criterion| {
+            criterion.awarded == Some(0) && criterion.reason.contains("wall-clock deadline")
+        }));
     }
 
     #[test]

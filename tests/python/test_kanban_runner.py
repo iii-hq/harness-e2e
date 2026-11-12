@@ -36,6 +36,26 @@ class KanbanRunnerTest(unittest.TestCase):
                 self.assertEqual(test_call.args[2], 120)
                 self.assertIsNone(test_call.args[3])
 
+    def test_typecheck_and_build_hangs_are_candidate_failures(self):
+        for codes in ((124,), (0, 0, 124)):
+            with self.subTest(codes=codes), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(runner, 'bounded', side_effect=codes) as bounded:
+                checks, ready = runner.run_candidate_build_checks('candidate-id', Path(directory))
+                self.assertFalse(ready)
+                self.assertEqual([check['id'] for check in checks],
+                                 ['typecheck', 'test', 'build'][:len(codes)])
+                self.assertEqual(checks[-1]['status'], 'failed')
+                self.assertEqual(checks[-1]['detail'], 'isolated command exit 124')
+                hung_call = bounded.call_args_list[-1]
+                self.assertEqual(hung_call.args[0][3:8], [
+                    '/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '90s',
+                    'pnpm',
+                ])
+                self.assertEqual(hung_call.args[2], 120)
+                self.assertIsNone(hung_call.args[3])
+                for check in checks:
+                    self.assertIsInstance(check['seconds'], float)
+
     def test_hard_build_failure_still_stops_before_runtime(self):
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.object(runner, 'bounded', side_effect=(0, 0, 2)) as bounded:
@@ -199,11 +219,55 @@ class KanbanRunnerTest(unittest.TestCase):
                     mock.patch.object(runner, 'start_runtime', return_value=replacement) as start, \
                     mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
                 self.assertEqual(runner.restart_runtime(
-                    'candidate-id', 'evaluator-id', Path(directory), runtime), {'ready': True})
+                    'candidate-id', 'evaluator-id', Path(directory), runtime, 'default'), {'ready': True})
             self.assertEqual(bounded.call_args_list[0].args[0][-1], '7')
             self.assertFalse(start.call_args.args[2])
             self.assertIs(runtime[0], replacement)
         self.assertIn('except (FileNotFoundError,ProcessLookupError)', runner.STOP_RUNTIME)
+
+    def test_restart_that_never_becomes_ready_is_a_candidate_fault_only_when_the_trusted_side_is_cleared(self):
+        timeout = subprocess.TimeoutExpired([], 5)
+        # runtime exit code (None: still running), compose::status exit, expected fault.
+        # Compose keeps serving when the application exits (Kanban gate variant 1), so an
+        # exited runtime process is never charged to the application.
+        for exited, status, fault in (
+                (None, 0, 'did not become ready within 60 s after restart: '
+                          'runtime process still running and Compose answers'),
+                (None, 1, None),
+                (None, timeout, None),
+                (0, 0, None),
+                (1, 0, None),
+                (126, 0, None),
+                (-9, 0, None)):
+            with self.subTest(exited=exited, status=status), \
+                    tempfile.TemporaryDirectory() as directory:
+                def trusted(command, _log, *_args, status=status, **_kwargs):
+                    if 'compose::status' in command:
+                        self.assertIsNone(exited)
+                        self.assertEqual(command[2], 'candidate-id')
+                        self.assertEqual(command[command.index('--namespace') + 1], 'kanban')
+                        code = status
+                    else:
+                        return 0
+                    if isinstance(code, Exception):
+                        raise code
+                    return code
+
+                replacement = mock.Mock()
+                replacement.poll.return_value = exited
+                with mock.patch.object(runner, 'bounded', side_effect=trusted), \
+                        mock.patch.object(runner, 'start_runtime', return_value=replacement), \
+                        mock.patch.object(runner, 'wait_runtime_ready', return_value=False), \
+                        self.assertRaises(RuntimeError) as raised:
+                    runner.restart_runtime('candidate-id', 'evaluator-id', Path(directory),
+                                           [mock.Mock(), 0, '7'], 'kanban')
+                self.assertNotIsInstance(raised.exception, runner.InfrastructureError)
+                if fault:
+                    self.assertIsInstance(raised.exception, runner.CandidateFault)
+                    self.assertIn(fault, str(raised.exception))
+                else:
+                    self.assertNotIsInstance(raised.exception, runner.CandidateFault)
+                    self.assertEqual(str(raised.exception), 'runtime did not become ready after restart')
 
     def test_evaluator_shares_only_candidate_network(self):
         source = Path(runner.__file__).read_text()
@@ -268,6 +332,19 @@ class KanbanRunnerTest(unittest.TestCase):
             (output / 'subject-complete').write_text('{"model_invoked":"yes"}')
             with self.assertRaisesRegex(runner.EvaluationError, 'completion marker is invalid'):
                 runner.wait_for_external_subject(output, ready, timeout=1)
+
+    def test_external_subject_deadline_names_the_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with mock.patch.object(runner.time, 'monotonic', side_effect=(0, 1800)), \
+                    self.assertRaises(runner.EvaluationError) as raised:
+                runner.wait_for_external_subject(output, {})
+            result = runner.write_failure(output, 'kanban_c2', raised.exception)
+            # The Kanban scenario (src/scenarios/kanban/mod.rs) reports this result.error prefix as
+            # subject_deadline_exceeded, so the text is a contract with the Rust side.
+            self.assertEqual(json.loads((output / 'result.json').read_text())['error'],
+                             'external subject did not complete within 1800 seconds')
+            self.assertEqual(result['status'], 'evaluation_failed')
 
     def test_external_subject_arguments_are_base_only_and_mutually_exclusive(self):
         required = ['--fixture', '/unused', '--catalog', '/unused', '--case', 'C2',
@@ -346,6 +423,43 @@ class KanbanRunnerTest(unittest.TestCase):
                 with self.assertRaisesRegex(runner.InfrastructureError, 'invalid inspector'):
                     poll()
 
+    def test_control_reports_candidate_faults_apart_from_control_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            runtime = [mock.Mock(), 0]
+            poll = runner.control_callback(evidence, 'candidate', 'evaluator', runtime, 'kanban')
+
+            def answer(request_id, operation, payload=None):
+                runner.atomic_json(evidence / 'control-request.json',
+                                   {'id': request_id, 'operation': operation, 'payload': payload or {}})
+                poll()
+                return json.loads((evidence / 'control-response.json').read_text())
+
+            absent = (b'no ticket store at /data/tickets.json: the application is not '
+                      b'persisting to the configured data_dir\n')
+            with mock.patch.object(runner.subprocess, 'run',
+                                   return_value=subprocess.CompletedProcess([], 1, stdout=b'', stderr=absent)):
+                self.assertEqual(answer('absent', 'read_store'),
+                                 {'id': 'absent', 'ok': False, 'candidate': True,
+                                  'error': absent.decode().strip()})
+
+            daemon = b'Error response from daemon: container is not running\n'
+            with mock.patch.object(runner.subprocess, 'run',
+                                   return_value=subprocess.CompletedProcess([], 1, stdout=b'', stderr=daemon)):
+                self.assertEqual(answer('daemon', 'read_store'),
+                                 {'id': 'daemon', 'ok': False, 'error': daemon.decode()})
+
+            for payload in ({}, {'register_configuration': False, 'reset_configuration': True}):
+                with self.subTest(payload=payload), \
+                        mock.patch.object(runner, 'restart_runtime',
+                                          side_effect=runner.CandidateFault('application did not become ready')) as restart:
+                    request_id = f'restart-{len(payload)}'
+                    self.assertEqual(answer(request_id, 'restart', payload),
+                                     {'id': request_id, 'ok': False, 'candidate': True,
+                                      'error': 'application did not become ready'})
+                    self.assertEqual(restart.call_args.args,
+                                     ('candidate', 'evaluator', evidence, runtime, 'kanban', None))
+
     def test_runtime_can_start_without_grader_configuration_registration(self):
         with tempfile.TemporaryDirectory() as directory:
             process = mock.Mock()
@@ -404,6 +518,29 @@ class KanbanRunnerTest(unittest.TestCase):
                     mock.patch.object(runner.time, 'monotonic', side_effect=[0, 1, 56]):
                 with self.assertRaisesRegex(runner.InfrastructureError, 'logs were unavailable'):
                     runner.hot_reload('candidate', 'evaluator', evidence, [process, 0], 'default')
+
+    def test_hot_reload_on_an_exited_runtime_stays_infrastructure(self):
+        # Compose outlives the application (Kanban gate variant 1), so a runtime process
+        # that exited before the hot-reload check is Compose's or Docker's own failure.
+        marker = 'KANBAN_HOT_RELOAD_' + ('01' * 16)
+        for exited in (0, 1, 137):
+            with self.subTest(exited=exited), tempfile.TemporaryDirectory() as directory:
+                calls = []
+
+                def docker(command, **_kwargs):
+                    calls.append(command)
+                    return subprocess.CompletedProcess(
+                        command, 0, stdout=b'{"count":1}' if marker in command else b'', stderr=b'')
+
+                process = mock.Mock()
+                process.poll.return_value = exited
+                with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
+                        mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                        mock.patch.object(runner, 'bounded', return_value=0) as bounded, \
+                        self.assertRaisesRegex(runner.InfrastructureError, 'logs were unavailable'):
+                    runner.hot_reload('candidate', 'evaluator', Path(directory), [process, 0], 'default')
+                self.assertTrue(any('shutil.rmtree' in part for part in calls[1]))
+                bounded.assert_not_called()
 
     def test_compose_namespace_resolves_like_compose(self):
         for text, expected in [

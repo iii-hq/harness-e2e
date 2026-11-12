@@ -526,8 +526,14 @@ async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot>
     }
     snapshot.function_registered = context.function_exists(FUNCTION_ID).await?;
     if snapshot.function_registered {
-        snapshot.match_cases =
-            probe_match_cases(|payload| context.trigger_value(FUNCTION_ID, payload)).await?;
+        snapshot.match_cases = probe_match_cases(|payload| {
+            common::settle_candidate_call(
+                FUNCTION_ID,
+                move || context.trigger_value(FUNCTION_ID, payload.clone()),
+                || context.function_exists(FUNCTION_ID),
+            )
+        })
+        .await?;
     }
     Ok(snapshot)
 }
@@ -566,16 +572,18 @@ async fn checkout_snapshot(checkout: &Path) -> Snapshot {
     }
 }
 
-/// Calls `route::match` through `call` on every oracle case.
+/// Calls `route::match` through `call` on every oracle case. The outer error
+/// of `call` is infrastructure; the inner one is the candidate's.
 async fn probe_match_cases<F, Fut>(mut call: F) -> Result<Vec<(String, bool, String)>>
 where
     F: FnMut(Value) -> Fut,
-    Fut: std::future::Future<Output = Result<Value>>,
+    Fut: std::future::Future<Output = Result<Result<Value>>>,
 {
     let oracle = oracle()?;
     let (noise_name, noise_value) = noise_label(&oracle);
     let mut results = Vec::new();
-    for case in oracle.cases {
+    let mut cases = oracle.cases.into_iter();
+    while let Some(case) = cases.next() {
         let route = match case.tree.as_str() {
             "route_test" => oracle.trees.route_test.as_str(),
             "conf_good" => oracle.trees.conf_good.as_str(),
@@ -590,7 +598,10 @@ where
             "route": route,
             "labels": labels,
         });
-        match call(payload).await {
+        match call(payload)
+            .await
+            .context("route-match probe infrastructure failed")?
+        {
             Ok(value) => match parse_match_result(&value) {
                 Some(observed) if equivalent(&expected_result(&case), &observed) => {
                     results.push((case.id, true, "oracle match".into()));
@@ -608,7 +619,17 @@ where
             Err(error) if common::is_remote_failure(&error) => {
                 results.push((case.id, false, format!("{error:#}")))
             }
-            Err(error) => return Err(error).context("route-match probe infrastructure failed"),
+            Err(silence) => {
+                results.push((case.id, false, format!("{silence:#}")));
+                results.extend(cases.map(|case| {
+                    (
+                        case.id,
+                        false,
+                        format!("not probed: {FUNCTION_ID} stopped answering"),
+                    )
+                }));
+                break;
+            }
         }
     }
     Ok(results)
@@ -1203,7 +1224,7 @@ pub(crate) mod tests {
         reference.delegation_wired = true;
         reference.function_registered = true;
         reference.match_cases = probe_match_cases(|payload| async move {
-            oracle_answer(&payload).context("no oracle case")
+            oracle_answer(&payload).context("no oracle case").map(Ok)
         })
         .await
         .unwrap();
@@ -1222,7 +1243,7 @@ pub(crate) mod tests {
         let mut stub = checkout_snapshot(&checkout).await;
         assert!(stub.revision_pinned() && stub.scope_exact() && !stub.dispatch_changed);
         stub.function_registered = true;
-        stub.match_cases = probe_match_cases(|_| async { Ok(json!({ "receivers": [] })) })
+        stub.match_cases = probe_match_cases(|_| async { Ok(Ok(json!({ "receivers": [] }))) })
             .await
             .unwrap();
         let awards = evaluate_snapshot(&stub)
@@ -1248,6 +1269,60 @@ pub(crate) mod tests {
         };
         assert_eq!(awarded("revision_pinned"), Some(REVISION_PINNED.weight()));
         assert_eq!(awarded("scope_exact"), Some(SCOPE_EXACT.weight()));
+    }
+
+    #[tokio::test]
+    async fn a_route_match_that_stops_answering_fails_its_cases_instead_of_the_evaluator() {
+        let calls = AtomicUsize::new(0);
+        let cases = probe_match_cases(|_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async {
+                Ok(Err(anyhow::anyhow!(
+                    "route::match did not answer twice while the stack still answered"
+                )))
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(cases.len(), oracle().unwrap().cases.len());
+        assert!(cases.iter().all(|(_, passed, _)| !passed), "{cases:?}");
+        assert!(cases[0].2.contains(common::UNANSWERED), "{cases:?}");
+        assert!(
+            cases[1..]
+                .iter()
+                .all(|(_, _, reason)| reason == "not probed: route::match stopped answering"),
+            "{cases:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_route_match_that_rejects_one_case_keeps_probing_the_rest() {
+        let calls = AtomicUsize::new(0);
+        let cases = probe_match_cases(|payload| {
+            let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+            async move {
+                if first {
+                    return Ok(Err(anyhow::Error::new(iii_sdk::errors::Error::Remote {
+                        code: "invocation_failed".into(),
+                        message: "rejected".into(),
+                        stacktrace: None,
+                    })));
+                }
+                oracle_answer(&payload).context("no oracle case").map(Ok)
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), oracle().unwrap().cases.len());
+        assert!(!cases[0].1, "{cases:?}");
+        assert!(cases[1..].iter().all(|(_, passed, _)| *passed), "{cases:?}");
+        assert!(
+            cases
+                .iter()
+                .all(|(_, _, reason)| !reason.contains("not probed")),
+            "{cases:?}"
+        );
     }
 
     #[test]

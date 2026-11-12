@@ -1,0 +1,58 @@
+{
+  "schema": "kanban-evaluation-coverage",
+  "rubric_version": 3,
+  "case_id": "kanban_c1_foundation",
+  "complete": false,
+  "criteria": [
+    {
+      "id": "criterion_startup",
+      "status": "passed",
+      "detail": "Compose starts the standalone application and serves HTML. foundation_startup: Observed through the running application."
+    },
+    {
+      "id": "criterion_asset_paths",
+      "status": "passed",
+      "detail": "Prototype-like asset paths return 404. foundation_asset_paths: Observed through the running application."
+    },
+    {
+      "id": "criterion_initial_config",
+      "status": "failed",
+      "detail": "Missing configuration initializes the default data directory. foundation_initial_config: application did not become ready within 60 s after restart: runtime process still running and Compose answers; see runtime.log"
+    },
+    {
+      "id": "criterion_preserve_config",
+      "status": "unverified",
+      "detail": "Saving preserves unrelated configuration fields. foundation_preserve_config: not reached; prerequisite evidence unavailable"
+    },
+    {
+      "id": "criterion_direct_config",
+      "status": "unverified",
+      "detail": "Direct iii configuration changes update the effective directory. foundation_direct_config: not reached; prerequisite evidence unavailable"
+    },
+    {
+      "id": "criterion_invalid_config",
+      "status": "unverified",
+      "detail": "An empty data directory is rejected with HTTP 400. foundation_invalid_config: not reached; prerequisite evidence unavailable"
+    },
+    {
+      "id": "criterion_config_restart",
+      "status": "unverified",
+      "detail": "Configuration survives restart. foundation_config_restart: not reached; prerequisite evidence unavailable"
+    },
+    {
+      "id": "criterion_settings_mobile",
+      "status": "failed",
+      "detail": "The mobile settings form loads and saves the effective directory. foundation_settings_mobile: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:3000/\nCall log:\n  - navigating to \"http://127.0.0.1:3000/\", waiting until \"load\"\n"
+    },
+    {
+      "id": "criterion_settings_desktop",
+      "status": "unverified",
+      "detail": "The desktop settings form remains usable without horizontal overflow. foundation_settings_desktop: not reached; prerequisite evidence unavailable"
+    },
+    {
+      "id": "criterion_hot_reload",
+      "status": "failed",
+      "detail": "A source change takes effect without manually rebuilding. foundation_development_hot_reload: source marker was not observed by the running development process"
+    }
+  ]
+}

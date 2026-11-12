@@ -259,6 +259,12 @@ pub trait Scenario: Send + Sync {
     fn evaluates_failed_subjects(&self) -> bool {
         false
     }
+    /// The scenario's own reason for having stopped the subject at its
+    /// wall-clock deadline, read once the turn wait ends. The run then counts
+    /// as a resource limit when the turn wait ended in the subject's error.
+    fn subject_deadline(&self, _run_id: &str) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
