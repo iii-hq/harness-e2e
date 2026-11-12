@@ -281,7 +281,14 @@ impl ScenarioId {
                 | Self::MemoryLinkedUpdate
                 | Self::MemoryLearnFromLongMessage
                 | Self::MemoryHonorsDoNotKeep
-                | Self::MemoryKeepsWithoutARule => (&[W::Memory], A::Memory, &[]),
+                | Self::MemoryKeepsWithoutARule
+                | Self::MemoryKafkaAttribute
+                | Self::MemoryTripAttribute
+                | Self::MemoryTeamAttribute
+                | Self::MemoryWorkshopAttribute
+                | Self::MemoryUserOtherPerson
+                | Self::MemoryCurrentAndHistory
+                | Self::MemoryIncrementalLongRecall => (&[W::Memory], A::Memory, &[]),
                 Self::SpawnDepthCap => (&[W::State], A::Coordination, &[]),
                 // The call guards and their fixtures are the Harness's own;
                 // the fixtures are the runner's, not a worker's.

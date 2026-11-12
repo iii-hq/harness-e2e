@@ -1,0 +1,47 @@
+{
+  "assistant_entry_id": "e_synthetic-turn_7_assistant",
+  "complete": true,
+  "dispatch_index": 63,
+  "generation_id": "f30653e5-9109-4517-a2f0-b74ee9218197",
+  "lines": [
+    {
+      "line": 0,
+      "location": [
+        0,
+        0
+      ],
+      "role": "user",
+      "sha256": "3ce6d0c89822ed2d567883921665e32e1d6c8241643d542caa1d99fa0bc1ac14"
+    },
+    {
+      "line": 0,
+      "location": [
+        1,
+        0
+      ],
+      "role": "user",
+      "sha256": "3ce6d0c89822ed2d567883921665e32e1d6c8241643d542caa1d99fa0bc1ac14"
+    }
+  ],
+  "message_count": 2,
+  "origins_complete": true,
+  "phase": "request",
+  "producer_instance": "b674a59b-9992-43aa-bcc0-23d2ef9188ac",
+  "sequence": 51,
+  "session_id": "synthetic-session-origin_both",
+  "sources": [
+    {
+      "append_ordinal": 0,
+      "entry_id": "e_synthetic-turn_7_notice_0",
+      "message_index": 1,
+      "message_sha256": "f1c3f843b27b413d57193626a671df4072e48aa19b9f82c80db4e23e05503cfc",
+      "observer_id": "source-observer",
+      "source": "replay_memory"
+    }
+  ],
+  "step": 7,
+  "summary": null,
+  "text_bytes": 38,
+  "turn_id": "synthetic-turn",
+  "version": 2
+}

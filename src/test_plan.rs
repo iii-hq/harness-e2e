@@ -200,6 +200,13 @@ const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::MemoryLearnFromLongMessage,
     ScenarioId::MemoryHonorsDoNotKeep,
     ScenarioId::MemoryKeepsWithoutARule,
+    ScenarioId::MemoryKafkaAttribute,
+    ScenarioId::MemoryTripAttribute,
+    ScenarioId::MemoryTeamAttribute,
+    ScenarioId::MemoryWorkshopAttribute,
+    ScenarioId::MemoryUserOtherPerson,
+    ScenarioId::MemoryCurrentAndHistory,
+    ScenarioId::MemoryIncrementalLongRecall,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -747,7 +754,7 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 19);
+        assert_eq!(plan.suites.len(), 20);
         for (id, cases, runs) in [
             ("regression", 21, 231),
             ("null-canary", 15, 15),
@@ -764,6 +771,7 @@ mod tests {
             ("after-release", 5, 5),
             ("memory", 22, 66),
             ("memory-learning", 7, 21),
+            ("memory-strict", 7, 21),
             ("approvals", 1, 1),
             ("memory-smoke", 3, 3),
             ("harness-weekly", 1, 1),
@@ -970,7 +978,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:ca9ceb3c500d154316cd5a9a5c8b68da2c332d1cbd2acbc084ce816171015592"
+            "sha256:efb8c593909bf5aa8eba4ad649f5ac2922d5e468c44f7c28260e6cc1da6bd2f1"
         );
     }
 
@@ -1061,6 +1069,7 @@ mod tests {
             "linkly",
             "memory",
             "memory-learning",
+            "memory-strict",
             "memory-smoke",
             "harness-weekly",
             "context-thinking",
@@ -1135,12 +1144,13 @@ mod tests {
     /// Every memory case is its own group, so a retry reruns one case and a
     /// case never shares a stack with its baseline. The learning cases run in
     /// a suite of their own, after the deterministic ones; their baselines
-    /// stay in `memory`.
+    /// stay in `memory`. The strict delivery cases run only in the opt-in
+    /// `memory-strict`.
     #[test]
     fn memory_runs_each_case_alone_three_times_with_one_retry() {
         let plan = embedded().unwrap();
         let mut every_case = Vec::new();
-        for suite in ["memory", "memory-learning"] {
+        for suite in ["memory", "memory-learning", "memory-strict"] {
             let snapshot = plan.materialize(suite).unwrap();
             assert_eq!(snapshot.campaigns.len(), 3);
             for campaign in &snapshot.campaigns {
@@ -1154,12 +1164,19 @@ mod tests {
             }
             every_case.extend(snapshot.scenario_ids);
         }
-        assert_eq!(every_case, crate::scenarios::memory::IDS);
+        // The two scheduled suites hold exactly the 29 original cases.
+        let (scheduled, opt_in) = every_case.split_at(29);
+        assert_eq!(scheduled, &crate::scenarios::memory::IDS[..29]);
+        assert_eq!(opt_in, &crate::scenarios::memory::IDS[29..]);
         // Exactly the cases whose outcome rests on memory's extraction.
-        use crate::scenarios::memory::cases::{audits_bank_after, CASES};
+        use crate::scenarios::memory::{
+            cases::{audits_bank_after, CASES},
+            strict,
+        };
         let learning: Vec<&str> = CASES
             .iter()
             .filter(|case| !case.teacher.is_empty() || audits_bank_after(case))
+            .filter(|case| !strict::enabled(case))
             .map(|case| case.id)
             .collect();
         assert_eq!(
@@ -1431,6 +1448,13 @@ mod tests {
         (ScenarioId::MemoryLearnFromLongMessage, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryHonorsDoNotKeep, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryKeepsWithoutARule, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryKafkaAttribute, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryTripAttribute, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryTeamAttribute, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryWorkshopAttribute, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryUserOtherPerson, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryCurrentAndHistory, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryIncrementalLongRecall, MEMORY_LIVE, &[]),
         (ScenarioId::HarnessContractProbe, HARNESS_LIVE, &[]),
         (ScenarioId::DispatchPipeline, HARNESS_LIVE, &[]),
         (ScenarioId::BindingContractProbe, HARNESS_LIVE, &[]),

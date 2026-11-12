@@ -168,6 +168,19 @@
       ]
     },
     {
+      "id": "memory-strict",
+      "label": "Memory strict delivery",
+      "scenarios": [
+        "memory_kafka_attribute",
+        "memory_trip_attribute",
+        "memory_team_attribute",
+        "memory_workshop_attribute",
+        "memory_user_other_person",
+        "memory_current_and_history",
+        "memory_incremental_long_recall"
+      ]
+    },
+    {
       "id": "m11",
       "label": "Harness mechanisms",
       "scenarios": [
@@ -627,6 +640,23 @@
       "repetitions": 3,
       "technical_retries": 1,
       "lane": "local-memory-learning"
+    },
+    {
+      "id": "memory-strict",
+      "label": "Memory strict delivery",
+      "purpose": "Opt-in, in no schedule. Does the memory worker deliver exactly the facts a question needs, as the final model request recorded them? Four cases ask for an attribute memory never stored next to one it did, one tells the user's booking from another person's, one asks for the plan a record labels current and then for both plans, and one learns a long note and its update in two teacher turns. It runs on the memory-strict stack, whose Harness is started with III_HARNESS_SYNTHETIC_GENERATION_CAPTURE=1; each case reads that generation capture, which needs Harness, memory and context-manager builds that are not released yet; on released workers every run reports strict capture unavailable as an infrastructure error. Advisory for one cycle: the cases move into Memory quality and Memory learning after one live pass against released workers.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [
+        "memory-strict"
+      ],
+      "scenarios": [],
+      "repetitions": 3,
+      "technical_retries": 1,
+      "lane": "local-memory-strict"
     },
     {
       "id": "memory-smoke",

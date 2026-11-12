@@ -28,6 +28,9 @@ use crate::wire::{
     FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit, TurnStatus,
 };
 
+#[path = "generation_capture.rs"]
+pub mod generation_capture;
+
 const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
 const EMBEDDER: &str = "all-MiniLM-L6-v2";
 const POLL: Duration = Duration::from_secs(2);
@@ -49,6 +52,9 @@ const TEACHER_MODEL: &str = "deepseek-flash";
 
 /// What one attempt holds between `setup` and `cleanup`.
 struct Run {
+    generation: Option<generation_capture::Capture>,
+    /// Why `Capture::bind` failed, for the strict cases' infrastructure error.
+    generation_error: Option<String>,
     prompts: Arc<Mutex<Vec<PromptRecord>>>,
     retrieval: Option<Retrieval>,
     compaction: Option<String>,
@@ -64,6 +70,7 @@ struct Run {
     strays: Vec<String>,
     /// The bank once extraction read the teacher session.
     taught: Option<Extraction>,
+    checkpoints: Option<Vec<super::learning_checkpoints::EvidenceCheckpoint>>,
     /// Each answered exchange's prompt prefix digest, in order, or why the
     /// status could not be read.
     surface_digests: Vec<Result<Option<String>, String>>,
@@ -117,8 +124,10 @@ pub fn embedder(doctor: &Value) -> Embedder {
     }
 }
 
-/// Stores the prompt of a step of the attempt's own session. A pre-generate
-/// hook has no session filter, so every session on the stack reaches this one.
+/// Stores a pre-generate chain observation, NOT the final sent request.
+/// Harness may append notices, repair messages and reassemble after this hook;
+/// its router client also strips file blocks before the SDK dispatch.
+/// A pre-generate hook has no session filter, so every session reaches this one.
 pub fn record(sink: &Mutex<Vec<PromptRecord>>, session_id: &str, input: &Value) -> Value {
     if input["session_id"] == session_id {
         lock_unpoisoned(sink).push(PromptRecord {
@@ -260,6 +269,8 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
     lock_unpoisoned(runs()).insert(
         run_id.to_string(),
         Run {
+            generation: None,
+            generation_error: None,
             prompts: prompts.clone(),
             retrieval: None,
             compaction: None,
@@ -270,6 +281,7 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
             teacher: None,
             strays: Vec::new(),
             taught: None,
+            checkpoints: super::learning_checkpoints::config(case).map(|_| Vec::new()),
             surface_digests: Vec::new(),
         },
     );
@@ -280,6 +292,18 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
 pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()> {
     // Registered first, so `cleanup` undoes whatever a failed setup left.
     let prompts = register(case, run_id);
+    if super::strict::enabled(case) {
+        // Before any own dispatch, including setup's teacher. Older/disabled
+        // producers remain unavailable, never a successful delivery witness.
+        let bound = generation_capture::Capture::bind(context, run_id).await;
+        let mut held = lock_unpoisoned(runs());
+        let run = held.get_mut(run_id).expect("registered above");
+        match bound {
+            Ok(capture) => run.generation = Some(capture),
+            Err(error) => run.generation_error = Some(format!("{error:#}")),
+        }
+        drop(held);
+    }
 
     let retrieval = wait_for_embedder(context).await?;
     lock_unpoisoned(runs())
@@ -354,7 +378,9 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         .get_mut(run_id)
         .expect("registered above")
         .function = Some(function);
-    // Last in the chain, and open on error: it never changes or stops a turn.
+    // Late priority, not a final-request boundary: later hooks may still run,
+    // and turn_loop assembly/retry and clients/router sanitization follow it.
+    // Open on error: this observer never changes or stops a turn.
     let trigger = crate::observe::active(
         context.client(),
         iii_sdk::Source::function(PRE_GENERATE)
@@ -473,6 +499,18 @@ async fn teach(
                 )
                 .await
                 .with_context(|| format!("teacher turn {index}"))?;
+            // A checkpoint reads the bank after each teacher turn, so each
+            // reply must already be the fixed one.
+            if super::learning_checkpoints::config(case).is_some() {
+                let transcript = context.transcript(&session).await?;
+                if let Some(other) = case
+                    .teacher_reply
+                    .and_then(|reply| unexpected_reply(&transcript, reply))
+                {
+                    bail!("case precondition no longer holds: the teacher replied {other:?}");
+                }
+                checkpoint(context, case, run_id, index, &session, &bank).await?;
+            }
         }
         Ok(())
     }
@@ -491,7 +529,13 @@ async fn teach(
     let transcript = transcript?;
     // Waited for even when memory read another bank: cleanup then retires
     // what extraction wrote there once it is all in.
-    let taught = extraction(context, &session, &bank, &transcript).await?;
+    let taught = if super::learning_checkpoints::config(case).is_some() {
+        lock_unpoisoned(runs())
+            .get(run_id)
+            .and_then(|run| run.taught.clone())
+    } else {
+        Some(extraction(context, &session, &bank, &transcript).await?)
+    };
     if read.len() != case.teacher.len() || read.iter().any(|read| read.as_deref() != Some(&bank)) {
         bail!("memory did not read the attempt's bank on every teacher turn: {read:?}");
     }
@@ -503,12 +547,110 @@ async fn teach(
     }
     // Lexical-only stores no vector to wait for.
     if retrieval == Retrieval::Minilm {
-        for memory in taught.learned() {
+        for memory in taught.iter().flat_map(Extraction::learned) {
             wait_for_vector(context, &bank, &memory.id, &memory.text).await?;
         }
     }
     if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
-        run.taught = Some(taught);
+        run.taught = taught;
+    }
+    Ok(())
+}
+
+/// Optional records are separate from Snapshot: its legacy/strict shape stays
+/// unchanged, as do teacher operations for every case without the new check.
+pub fn checkpoints(run_id: &str) -> Option<Vec<super::learning_checkpoints::EvidenceCheckpoint>> {
+    lock_unpoisoned(runs())
+        .get(run_id)
+        .and_then(|run| run.checkpoints.clone())
+}
+
+/// Bounded read-only checkpoint, before the next teacher send. Transport errors
+/// stop capture immediately, never a direct extraction retry or cursor rewrite.
+async fn checkpoint(
+    context: &E2eContext,
+    case: &Case,
+    run_id: &str,
+    turn: usize,
+    session: &str,
+    bank: &str,
+) -> Result<()> {
+    use super::learning_checkpoints::{capture, CaptureIssue, RawCheckpoint};
+    let started = Instant::now();
+    let mut transcript = Value::Null;
+    let mut cursor = Value::Null;
+    let mut list = Value::Null;
+    let mut rules = Value::Null;
+    let mut issue = None;
+    let read = async {
+        transcript = context.transcript(session).await?;
+        record_strays(run_id, &transcript);
+        let Some(target) = cursor_target(&transcript) else {
+            return Ok(());
+        };
+        loop {
+            cursor = context
+                .trigger_value("state::get", json!({"scope": CURSOR_SCOPE, "key": session}))
+                .await?;
+            if cursor_entry(&cursor) == Some(target) {
+                break;
+            }
+            sleep(POLL).await;
+        }
+        list = context
+            .trigger_value(
+                "memory::list",
+                json!({"bank": bank, "include_superseded": true, "limit": 500}),
+            )
+            .await?;
+        rules = context
+            .trigger_value("memory::rule::list", json!({"bank": bank}))
+            .await?;
+        Ok::<(), anyhow::Error>(())
+    };
+    match tokio::time::timeout(EXTRACTION_WAIT, read).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => issue = Some(CaptureIssue::TransportUnavailable),
+        Err(_) => issue = Some(CaptureIssue::CursorTimeout),
+    }
+    let canaries = labels(case)
+        .into_iter()
+        .map(|label| (label.to_string(), canary(run_id, label)))
+        .collect();
+    let mut checkpoint = capture(
+        turn,
+        session,
+        &canaries,
+        RawCheckpoint {
+            transcript: &transcript,
+            cursor: &cursor,
+            list: &list,
+            rules: &rules,
+        },
+    );
+    // No eligible message is an objective missing-target defect, not an API
+    // failure caused by deliberately not reading lists without a target.
+    if transcript["messages"].is_array() && checkpoint.target_entry_id.is_none() {
+        checkpoint.issue = None;
+    }
+    checkpoint.issue = issue.or(checkpoint.issue);
+    checkpoint.waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let unavailable = checkpoint.issue.is_some();
+    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
+        if !unavailable && checkpoint.target_entry_id.is_some() {
+            run.taught = Some(Extraction {
+                session_id: session.into(),
+                waited_ms: checkpoint.waited_ms,
+                memories: memories_of(&list),
+                rules: rules_of(&rules),
+            });
+        }
+        if let Some(checkpoints) = &mut run.checkpoints {
+            checkpoints.push(checkpoint);
+        }
+    }
+    if unavailable {
+        bail!("teacher checkpoint capture unavailable (transport, timeout or malformed reply)");
     }
     Ok(())
 }
@@ -834,7 +976,7 @@ pub async fn compact(context: &E2eContext, run_id: &str, session_id: &str) {
 
 /// What the attempt recorded so far; empty for an attempt never set up.
 pub fn snapshot(run_id: &str) -> Snapshot {
-    lock_unpoisoned(runs())
+    let mut snapshot = lock_unpoisoned(runs())
         .get(run_id)
         .map_or_else(Snapshot::default, |run| Snapshot {
             prompts: lock_unpoisoned(&run.prompts).clone(),
@@ -849,7 +991,21 @@ pub fn snapshot(run_id: &str) -> Snapshot {
             changes: run.changes.clone(),
             teacher: run.taught.clone(),
             bank_after: None,
-        })
+            generation_messages_unavailable: true,
+            generations: None,
+            generation_error: run.generation_error.clone(),
+        });
+    if let Some(capture) = lock_unpoisoned(runs())
+        .get(run_id)
+        .and_then(|run| run.generation.as_ref())
+    {
+        capture.populate_snapshot(&mut snapshot);
+    }
+    // An absent run has no authenticated final-SDK observations.
+    if snapshot.generations.is_none() {
+        snapshot.generation_messages_unavailable = true;
+    }
+    snapshot
 }
 
 /// One thing `cleanup` undoes.
@@ -1032,6 +1188,48 @@ mod tests {
                 system_prompt: "prompt a".into(),
             }]
         );
+    }
+
+    #[test]
+    fn pre_generate_messages_and_caller_metadata_never_certify_a_sent_request() {
+        let run_id = "early-request-capture-control";
+        let sink = register(&CASES[0], run_id);
+        let session = format!("e2e_{run_id}");
+        let mut early = input(&session, 0, "early prompt");
+        early["generate"]["messages"] = json!([{
+            "role": "user", "content": [{"type": "text", "text": "early fact"}]
+        }]);
+        early["metadata"] = json!({
+            "generation_messages_unavailable": false,
+            "final_request": true, "request_id": "t_1:0",
+            "generation_id": "claimed-generation", "retry": 0
+        });
+        record(&sink, &session, &early);
+        let captured = snapshot(run_id);
+        assert_eq!(captured.prompts.len(), 1);
+        assert_eq!(captured.prompts[0].system_prompt, "early prompt");
+        assert!(captured.generation_messages_unavailable);
+        lock_unpoisoned(runs()).remove(run_id);
+    }
+
+    #[test]
+    fn lagged_hook_delivery_does_not_claim_final_generation_order() {
+        let run_id = "lagged-request-capture-control";
+        let sink = register(&CASES[0], run_id);
+        let session = format!("e2e_{run_id}");
+        record(&sink, &session, &input(&session, 1, "newer prompt"));
+        record(&sink, &session, &input(&session, 0, "lagged prompt"));
+        record(
+            &sink,
+            &session,
+            &input("foreign-session", 0, "foreign prompt"),
+        );
+        let captured = snapshot(run_id);
+        assert_eq!(captured.prompts.len(), 2);
+        assert_eq!(captured.prompts[0].step, 1);
+        assert_eq!(captured.prompts[1].step, 0);
+        assert!(captured.generation_messages_unavailable);
+        lock_unpoisoned(runs()).remove(run_id);
     }
 
     #[test]
@@ -1371,6 +1569,44 @@ mod tests {
             .unwrap()
             .push(json!({"type": "thinking", "thinking": "the host is db-0a1b2c3d"}));
         assert_eq!(unexpected_reply(&thought, "noted"), None);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_transport_failure_is_recorded_without_a_live_connection() {
+        use super::super::cases::{Check, Criterion};
+        use super::super::learning_checkpoints::{CaptureIssue, ExpectedCheckpoint};
+        let case = Case {
+            criteria: &[Criterion {
+                id: "checkpoint",
+                weight: 100,
+                gate: true,
+                description: "Checkpoint",
+                label: "Checkpoint",
+                check: Check::LearningCheckpoints {
+                    expected: &[ExpectedCheckpoint {
+                        canaries: &["port"],
+                        holders_per_canary: 1,
+                    }],
+                },
+            }],
+            teacher: &["Port {port}"],
+            ..CASES[0]
+        };
+        let run_id = "checkpoint-inert-transport";
+        register(&case, run_id);
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            checkpoint(&context, &case, run_id, 0, &teacher(run_id), &bank(run_id)),
+        )
+        .await;
+        assert!(result.expect("inert context must return promptly").is_err());
+        let recorded = checkpoints(run_id).unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].issue, Some(CaptureIssue::TransportUnavailable));
+        assert!(recorded[0].cursor_entry_id.is_none());
+        assert!(recorded[0].memories.is_empty());
+        lock_unpoisoned(runs()).remove(run_id);
     }
 
     #[test]

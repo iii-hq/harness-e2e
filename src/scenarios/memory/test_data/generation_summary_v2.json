@@ -1,0 +1,91 @@
+{
+  "assistant_entry_id": "e_synthetic-turn_7_assistant",
+  "complete": true,
+  "dispatch_index": 56,
+  "generation_id": "10707182-f4c4-4a51-91e0-231e5d8fd7a8",
+  "lines": [
+    {
+      "line": 0,
+      "location": [],
+      "role": "system",
+      "sha256": "3ce6d0c89822ed2d567883921665e32e1d6c8241643d542caa1d99fa0bc1ac14"
+    },
+    {
+      "line": 1,
+      "location": [],
+      "role": "system",
+      "sha256": "23ecec41d9779fa456fcdef68fee6ce1d7b71a15b6d26bf67f584e789da2be97"
+    },
+    {
+      "line": 3,
+      "location": [],
+      "role": "system",
+      "sha256": "b5a25620649bc1349a415e8930ceacb7e048c169cf2cd3b14256b2f0d1d941c3"
+    },
+    {
+      "line": 5,
+      "location": [],
+      "role": "system",
+      "sha256": "3ce6d0c89822ed2d567883921665e32e1d6c8241643d542caa1d99fa0bc1ac14"
+    },
+    {
+      "line": 6,
+      "location": [],
+      "role": "system",
+      "sha256": "23ecec41d9779fa456fcdef68fee6ce1d7b71a15b6d26bf67f584e789da2be97"
+    },
+    {
+      "line": 0,
+      "location": [
+        0,
+        0
+      ],
+      "role": "user",
+      "sha256": "0c62f876ef1dea830de9f32c2f4b46dd6d74d50d15896e09ef5a2fcd4ac7e1d7"
+    }
+  ],
+  "message_count": 1,
+  "origins_complete": true,
+  "phase": "request",
+  "producer_instance": "b674a59b-9992-43aa-bcc0-23d2ef9188ac",
+  "sequence": 42,
+  "session_id": "synthetic-session-origin_summary",
+  "sources": [],
+  "step": 7,
+  "summary": {
+    "assembly_id": "42fee874-4fdb-458a-a569-f6ed4fecc098",
+    "inputs": [
+      {
+        "append_ordinal": 0,
+        "entry_id": "e_synthetic-turn_7_notice_0",
+        "message_index": 1,
+        "message_sha256": "0d0383187176b209f30f105a632e7dda8a5284fecf44161890326b8ca6896e78",
+        "observer_id": "source-observer",
+        "source": "replay_memory"
+      }
+    ],
+    "lines": [
+      {
+        "line": 5,
+        "location": [],
+        "role": "system",
+        "sha256": "3ce6d0c89822ed2d567883921665e32e1d6c8241643d542caa1d99fa0bc1ac14"
+      },
+      {
+        "line": 6,
+        "location": [],
+        "role": "system",
+        "sha256": "23ecec41d9779fa456fcdef68fee6ce1d7b71a15b6d26bf67f584e789da2be97"
+      }
+    ],
+    "span": {
+      "byte_end": 86,
+      "byte_start": 56,
+      "summary_sha256": "8879a9fed0fc03a3dd046668e8340a637cdcd87cf2dad2a6f06ae5ba83691ef3",
+      "system_sha256": "d16061b9d5d52ed4d1582926c110298111e090eb98b9ee087af6235301fdb45a"
+    }
+  },
+  "text_bytes": 90,
+  "turn_id": "synthetic-turn",
+  "version": 2
+}
