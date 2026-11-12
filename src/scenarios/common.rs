@@ -628,6 +628,10 @@ pub fn is_unanswered(error: &anyhow::Error) -> bool {
 /// The SDK also reports a connection that dropped during the call as a
 /// timeout, so a silent call is the candidate's only when the stack answers
 /// right after and the same call, sent once more, is silent again.
+///
+/// Nothing cancels the first attempt, so the second can run after or beside
+/// it: send through here only a call the candidate's contract makes safe to
+/// repeat.
 // shortcut: every silent call is confirmed with a second attempt, add a per-capture flag if capture time starts to matter.
 pub async fn settle_candidate_call<Call, Sent, Alive, Checked, T>(
     function_id: &str,
@@ -773,8 +777,9 @@ pub async fn settle_page_capture(
 }
 
 /// Runs the browser's own command paths in a fresh session. The session stays
-/// on its blank page, so no candidate code runs in it.
-pub async fn browser_answers(context: &E2eContext) -> Result<()> {
+/// on its blank page, so no candidate code runs in it. `page_commands` are the
+/// further commands the caller's page phase sends; each gets the session's id.
+pub async fn browser_answers(context: &E2eContext, page_commands: &[(&str, Value)]) -> Result<()> {
     let started = context
         .trigger_value(
             "browser::sessions::start",
@@ -799,6 +804,11 @@ pub async fn browser_answers(context: &E2eContext) -> Result<()> {
             .await?;
         if answer["result"] != 1 {
             bail!("browser check script answered {answer}");
+        }
+        for (function, payload) in page_commands {
+            let mut payload = payload.clone();
+            payload["session_id"] = session.into();
+            context.trigger_value(function, payload).await?;
         }
         screenshot_png(context, session).await?;
         Ok(())
@@ -1316,6 +1326,37 @@ mod tests {
             anyhow::anyhow!("{:#}", page_error("handler error: navigation failed")),
         ] {
             assert_eq!(page_step_failure(&error, PAGE_URL), None, "{error:#}");
+        }
+    }
+
+    #[test]
+    fn the_browser_check_runs_the_browser_functions_its_scenario_calls_and_no_others() {
+        fn functions(text: &str) -> impl Iterator<Item = &str> {
+            text.match_indices("\"browser::")
+                .map(move |(at, _)| &text[at..at + 2 + text[at + 1..].find('"').unwrap()])
+        }
+        let common = include_str!("common.rs");
+        let shared = &common[common.find("pub async fn browser_answers").unwrap()..];
+        let shared = &shared[..shared.find("\npub fn ").unwrap()];
+        for source in [
+            include_str!("chess_engine_build.rs"),
+            include_str!("visual_worker_build.rs"),
+        ] {
+            let own = &source[source.find("browser_answers(").unwrap()..];
+            let own = &own[..own.find("\n}").unwrap()];
+            for function in functions(source) {
+                // Navigation loads the candidate page; the blank session has none.
+                if function != "\"browser::navigate\"" {
+                    assert!(
+                        shared.contains(function) || own.contains(function),
+                        "{function}"
+                    );
+                }
+            }
+            // A command the scenario never sends must not decide its page faults.
+            for function in functions(shared) {
+                assert!(source.contains(function), "{function}");
+            }
         }
     }
 

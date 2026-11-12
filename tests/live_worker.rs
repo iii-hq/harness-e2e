@@ -220,6 +220,25 @@ async fn validate_requests(live: &Live) {
     );
 }
 
+/// A healthy browser passes its own check. If it did not, every failed
+/// candidate page step would leave the mean as infrastructure.
+#[test]
+#[ignore = "requires HARNESS_E2E_LIVE_URL pointing at an engine with the browser worker"]
+fn a_healthy_browser_passes_its_own_check() {
+    let _serial = one_at_a_time();
+    let live = live();
+    runtime()
+        // The widest check a scenario runs: the visual Worker's page commands.
+        .block_on(harness_e2e::scenarios::common::browser_answers(
+            &live.context,
+            &[
+                ("browser::act", json!({"action":"press","key":"Tab"})),
+                ("browser::history", json!({"action":"reload"})),
+            ],
+        ))
+        .expect("the browser answers every command of its own check");
+}
+
 /// One real scenario goes through the whole worker: admission, materialization,
 /// setup, the subject turn, capture, evaluation over the captured deliverable,
 /// persistence and a report readable back through the control plane.

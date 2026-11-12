@@ -1034,7 +1034,7 @@ async fn capture_browser(
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await;
     stop.context("stop chess evidence browser session")?;
-    common::settle_page_capture(result?, &url, common::browser_answers(context)).await
+    common::settle_page_capture(result?, &url, common::browser_answers(context, &[])).await
 }
 
 /// The outer error is infrastructure: the browser could not size its window or
