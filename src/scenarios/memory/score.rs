@@ -445,15 +445,14 @@ pub fn audit(evidence: &Evidence) -> Audit {
         ..evidence.observed.clone()
     };
     let observed = &own;
-    let seed_of = |line: &str| {
-        evidence.seeds.iter().find(|seed| {
-            if evidence.strict.is_some() {
-                super::strict::normalize(&seed.text) == super::strict::normalize(line)
-            } else {
-                seed.text == line
-            }
-        })
+    let same = |seed: &SeedEvidence, line: &str| {
+        if evidence.strict.is_some() {
+            super::strict::normalize(&seed.text) == super::strict::normalize(line)
+        } else {
+            seed.text == line
+        }
     };
+    let seed_of = |line: &str| evidence.seeds.iter().find(|seed| same(seed, line));
     let holds = |block: &MemoryBlock, group: &str| {
         if evidence.strict.is_some() {
             return block
@@ -480,7 +479,11 @@ pub fn audit(evidence: &Evidence) -> Audit {
         for (index, line) in block.lines.iter().enumerate() {
             audit.injected.push((exchange, line.clone()));
             let seed = seed_of(line);
-            let needed = seed.is_some_and(|seed| seed.needed_on.contains(&exchange));
+            // A learned memory's requirement rides on a later alias of the same text.
+            let needed = evidence
+                .seeds
+                .iter()
+                .any(|seed| same(seed, line) && seed.needed_on.contains(&exchange));
             let related = seed.is_some_and(|seed| seed.related_on.contains(&exchange));
             let Some(seed) = seed.filter(|_| needed || related) else {
                 audit.irrelevant.push((exchange, line.clone()));

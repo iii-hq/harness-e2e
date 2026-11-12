@@ -350,8 +350,20 @@ mod tests {
 
     #[test]
     fn merged_split_and_prior_control_combined_pass_actual_raw_evaluation() {
-        for layout in [Layout::Merged, Layout::Split, Layout::PriorControlCombined] {
+        // Each delivered line holding a needed fact counts once: the merged
+        // memory holds host and port in one line, the others in two.
+        for (layout, expected_injected) in [
+            (Layout::Merged, 1.0),
+            (Layout::Split, 2.0),
+            (Layout::PriorControlCombined, 2.0),
+        ] {
             let evidence = evidence(&list(0, layout), &list(1, layout));
+            let injected = evidence
+                .measurements
+                .iter()
+                .find(|m| m.id == "memory_expected_injected")
+                .unwrap();
+            assert_eq!(injected.value, expected_injected, "{layout:?}");
             assert!(
                 checkpoints::failures(&INCREMENTAL_LONG_RECALL, &evidence).is_empty(),
                 "{layout:?}"
