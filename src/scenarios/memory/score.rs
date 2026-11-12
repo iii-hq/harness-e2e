@@ -1289,7 +1289,9 @@ fn answer_labelled(text: &str, pairs: &[(&str, &str, &str)]) -> (bool, String) {
         let label = label.to_ascii_lowercase();
         for (start, _) in lower.match_indices(&label) {
             let end = start + label.len();
-            let word = !lower[..start].ends_with(|c: char| c.is_alphanumeric());
+            // Whole words only: "Originality" or "Currently" is not the label.
+            let word = !lower[..start].ends_with(|c: char| c.is_alphanumeric())
+                && !lower[end..].starts_with(|c: char| c.is_alphanumeric());
             let rest = lower[end..].trim_start_matches([' ', '\t', '*', '_', '`']);
             // A short qualifier may sit before the colon ("Original plan:",
             // "Current (corrected):"), never another label or a value.

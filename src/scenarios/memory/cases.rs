@@ -90,7 +90,7 @@ pub enum Check {
     },
     /// Exchange `exchange`'s answer gives each `(label, canary)` pair's canary
     /// under that label, for a prompt that asks for `Label: value` lines. A
-    /// label counts, in any case and starting a word, when the line's end or a
+    /// label counts, in any case and as a whole word, when the line's end or a
     /// colon follows it; spaces, markdown marks (`*`, `_`, backtick) and a short
     /// qualifier holding no label or value ("Original plan:") may come between.
     /// Its text runs to the next label. The first of the check's canaries in

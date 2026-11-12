@@ -442,6 +442,8 @@ mod tests {
         for answer in [
             format!("Current: export-{old}; Original: export-{new}"),
             format!("Original: export-{old}, export-{new}\nCurrent: export-{old}, export-{new}"),
+            // A label inside a longer word is not the label.
+            format!("Originality: Tuesday at 09:00, export-{old}\nCurrently: Thursday at 18:00, export-{new}"),
         ] {
             let mut transcript = raw(&[&corrected()], &[&original()]);
             transcript["messages"][3]["message"]["content"][0]["text"] = answer.into();
