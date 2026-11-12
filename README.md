@@ -776,8 +776,8 @@ model request held, not only what the pre-generate hook returned:
   same topic, each delivered only to the question about its owner.
 - `memory_current_and_history`: two planted records label themselves as the
   original and the current plan; the first question gets only the current
-  one, the follow-up both. It tests selection by label, not how memory learns
-  a correction.
+  one, the follow-up both, original first, so an answer that swaps the two
+  fails. It tests selection by label, not how memory learns a correction.
 - `memory_incremental_long_recall`: two teacher turns, a long note with a host
   in its middle and then a named port; memory must hold each fact once after
   each turn, and the later session needs the host and the port.

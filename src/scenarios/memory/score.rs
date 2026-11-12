@@ -766,6 +766,26 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                 )
             }
         }
+        Check::AnswerInOrder { exchange, canaries } => {
+            let text = answer(evidence, exchange);
+            let mut last = 0;
+            for canary in canaries {
+                let Some(value) = evidence.canaries.get(*canary) else {
+                    return (false, format!("no canary recorded for {canary}"));
+                };
+                let Some(at) = text.find(value.as_str()) else {
+                    return (false, format!("the answer lacks {canary} ({value})"));
+                };
+                if at < last {
+                    return (
+                        false,
+                        format!("the answer gives {canary} ({value}) before an earlier label"),
+                    );
+                }
+                last = at;
+            }
+            (true, format!("the answer gives {canaries:?} in that order"))
+        }
         Check::UpdateOn {
             exchange,
             holds,

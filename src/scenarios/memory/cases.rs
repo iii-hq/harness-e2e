@@ -88,6 +88,13 @@ pub enum Check {
         exchange: Option<usize>,
         canary: &'static str,
     },
+    /// Exchange `exchange`'s answer holds the canary for each label in
+    /// `canaries`, their first occurrences in that order. A prompt that asks
+    /// for the values in this order then fails an answer that swaps them.
+    AnswerInOrder {
+        exchange: usize,
+        canaries: &'static [&'static str],
+    },
     /// The answer is exactly the abstention the prompt asks for
     /// (`score::ABSTENTION`) and omits the canary for the label `canary`.
     AnswerAbstains {
@@ -165,6 +172,7 @@ impl Check {
             Check::UpdateOn { holds, omits, .. } | Check::ReminderOn { holds, omits, .. } => {
                 (holds, omits)
             }
+            Check::AnswerInOrder { canaries, .. } => (None, canaries),
             _ => (None, &[]),
         };
         let checkpoints = match self {

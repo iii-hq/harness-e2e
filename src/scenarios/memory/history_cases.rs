@@ -30,7 +30,7 @@ pub const CURRENT_AND_HISTORY: Case = Case {
     ],
     rules: &[],
     prompt: "What is the current corrected schedule for the analytics export, and which bucket does it write to? Give only the current plan, not the original one.",
-    followups: &["Now give both the original user-stated analytics export schedule and bucket, and the user's explicitly corrected schedule and bucket. Clearly label which plan is original and which is current."],
+    followups: &["Now give both plans: first the original user-stated analytics export schedule and bucket, then the user's explicitly corrected schedule and bucket. Clearly label which plan is original and which is current."],
     compact_before: None,
     preview_first: &[],
     teacher: &[],
@@ -92,25 +92,14 @@ pub const CURRENT_AND_HISTORY: Case = Case {
             },
         },
         Criterion {
-            id: "history_answer_has_old",
-            weight: 10,
+            id: "history_answer_original_first",
+            weight: 20,
             gate: true,
-            description: "Does the explicit history answer contain the run's original bucket value?",
-            label: "History answer includes the original",
-            check: Check::AnswerContains {
-                exchange: Some(1),
-                canary: "old",
-            },
-        },
-        Criterion {
-            id: "history_answer_has_new",
-            weight: 10,
-            gate: true,
-            description: "Does the explicit history answer also contain the run's corrected bucket value?",
-            label: "History answer includes the correction",
-            check: Check::AnswerContains {
-                exchange: Some(1),
-                canary: "new",
+            description: "Does the explicit history answer give the run's original bucket value and then its corrected one, in the order the follow-up asks for?",
+            label: "History answer gives both plans, original first",
+            check: Check::AnswerInOrder {
+                exchange: 1,
+                canaries: &["old", "new"],
             },
         },
     ],
@@ -286,11 +275,11 @@ mod tests {
         assert!(case.preview_first.is_empty());
         assert_eq!(case.followups.len(), 1);
         assert!(case.prompt.contains("only the current plan"));
-        assert!(case.followups[0].contains("both the original"));
+        assert!(case.followups[0].contains("first the original"));
         assert!(case.memories[0].text.contains("Tuesday at 09:00"));
         assert!(case.memories[1].text.contains("user explicitly corrected"));
         assert!(case.memories[1].text.contains("Thursday at 18:00"));
-        assert_eq!(case.criteria.len(), 8);
+        assert_eq!(case.criteria.len(), 7);
         assert_eq!(
             case.criteria
                 .iter()
@@ -315,13 +304,9 @@ mod tests {
                     exchange: Some(0),
                     canary: "old"
                 },
-                Check::AnswerContains {
-                    exchange: Some(1),
-                    canary: "old"
-                },
-                Check::AnswerContains {
-                    exchange: Some(1),
-                    canary: "new"
+                Check::AnswerInOrder {
+                    exchange: 1,
+                    canaries: &["old", "new"]
                 },
             ]
         );
@@ -436,6 +421,21 @@ mod tests {
     }
 
     #[test]
+    fn swapped_plan_labels_fail_the_history_answer() {
+        let mut transcript = raw(&[&corrected()], &[&original()]);
+        transcript["messages"][3]["message"]["content"][0]["text"] = format!(
+            "Original: Tuesday at 09:00, export-{}. Current: Thursday at 18:00, export-{}.",
+            canary(RUN, "new"),
+            canary(RUN, "old")
+        )
+        .into();
+        let evidence = capture(&transcript);
+        assert!(strict::failures(&CURRENT_AND_HISTORY, &evidence).is_empty());
+        assert_eq!(completion(&evidence), CompletionState::TaskIncomplete);
+        assert_gate_failed(&evidence, "history_answer_original_first");
+    }
+
+    #[test]
     fn answer_checks_are_exchange_specific_and_cannot_be_satisfied_by_delivery_alone() {
         for (entry, answer, gate) in [
             (
@@ -455,12 +455,12 @@ mod tests {
             (
                 3,
                 format!("Corrected bucket export-{} only.", canary(RUN, "new")),
-                "history_answer_has_old",
+                "history_answer_original_first",
             ),
             (
                 3,
                 format!("Original bucket export-{} only.", canary(RUN, "old")),
-                "history_answer_has_new",
+                "history_answer_original_first",
             ),
         ] {
             let mut transcript = raw(&[&corrected()], &[&original()]);
