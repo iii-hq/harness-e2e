@@ -88,12 +88,16 @@ pub enum Check {
         exchange: Option<usize>,
         canary: &'static str,
     },
-    /// Exchange `exchange`'s answer holds the canary for each label in
-    /// `canaries`, their first occurrences in that order. A prompt that asks
-    /// for the values in this order then fails an answer that swaps them.
-    AnswerInOrder {
+    /// Exchange `exchange`'s answer gives each `(label, canary)` pair's canary
+    /// under that label, for a prompt that asks for `Label: value` lines. A
+    /// label counts in any case when a colon or the line's end follows it,
+    /// with only spaces or markdown emphasis between, and its text runs to the
+    /// next label. The first of the check's canaries in each label's text must
+    /// be its own, and each label needs one text that holds it, so an answer
+    /// that puts a value under another label fails.
+    AnswerLabelled {
         exchange: usize,
-        canaries: &'static [&'static str],
+        labels: &'static [(&'static str, &'static str)],
     },
     /// The answer is exactly the abstention the prompt asks for
     /// (`score::ABSTENTION`) and omits the canary for the label `canary`.
@@ -172,18 +176,25 @@ impl Check {
             Check::UpdateOn { holds, omits, .. } | Check::ReminderOn { holds, omits, .. } => {
                 (holds, omits)
             }
-            Check::AnswerInOrder { canaries, .. } => (None, canaries),
             _ => (None, &[]),
         };
         let checkpoints = match self {
             Check::LearningCheckpoints { expected } => expected,
             _ => &[],
         };
-        first.into_iter().chain(rest.iter().copied()).chain(
-            checkpoints
-                .iter()
-                .flat_map(|checkpoint| checkpoint.canaries.iter().copied()),
-        )
+        let labelled = match self {
+            Check::AnswerLabelled { labels, .. } => labels,
+            _ => &[],
+        };
+        first
+            .into_iter()
+            .chain(rest.iter().copied())
+            .chain(
+                checkpoints
+                    .iter()
+                    .flat_map(|checkpoint| checkpoint.canaries.iter().copied()),
+            )
+            .chain(labelled.iter().map(|&(_, canary)| canary))
     }
 }
 

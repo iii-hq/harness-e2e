@@ -772,25 +772,15 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                 )
             }
         }
-        Check::AnswerInOrder { exchange, canaries } => {
-            let text = answer(evidence, exchange);
-            let mut last = 0;
-            for canary in canaries {
-                let Some(value) = evidence.canaries.get(*canary) else {
+        Check::AnswerLabelled { exchange, labels } => {
+            let mut pairs = Vec::new();
+            for &(label, canary) in labels {
+                let Some(value) = evidence.canaries.get(canary) else {
                     return (false, format!("no canary recorded for {canary}"));
                 };
-                let Some(at) = text.find(value.as_str()) else {
-                    return (false, format!("the answer lacks {canary} ({value})"));
-                };
-                if at < last {
-                    return (
-                        false,
-                        format!("the answer gives {canary} ({value}) before an earlier label"),
-                    );
-                }
-                last = at;
+                pairs.push((label, canary, value.as_str()));
             }
-            (true, format!("the answer gives {canaries:?} in that order"))
+            answer_labelled(answer(evidence, exchange), &pairs)
         }
         Check::UpdateOn {
             exchange,
@@ -1288,6 +1278,59 @@ fn answer(evidence: &Evidence, index: usize) -> &str {
         .exchanges
         .get(index)
         .map_or("", |exchange| exchange.answer.as_str())
+}
+
+/// `Check::AnswerLabelled` over `(label, canary, value)` triples.
+fn answer_labelled(text: &str, pairs: &[(&str, &str, &str)]) -> (bool, String) {
+    // ASCII lowercasing keeps every byte offset valid in `text`.
+    let lower = text.to_ascii_lowercase();
+    let mut marks = Vec::new();
+    for (index, (label, ..)) in pairs.iter().enumerate() {
+        let label = label.to_ascii_lowercase();
+        for (start, _) in lower.match_indices(&label) {
+            let end = start + label.len();
+            let word = !lower[..start].ends_with(|c: char| c.is_alphanumeric());
+            let rest = lower[end..].trim_start_matches([' ', '\t', '*', '_', '`']);
+            if word && (rest.is_empty() || rest.starts_with([':', '\n', '\r'])) {
+                marks.push((start, end, index));
+            }
+        }
+    }
+    marks.sort_unstable();
+    let mut held = vec![false; pairs.len()];
+    for (n, &(_, end, index)) in marks.iter().enumerate() {
+        let next = marks.get(n + 1).map_or(text.len(), |mark| mark.0.max(end));
+        let first = pairs
+            .iter()
+            .enumerate()
+            .filter_map(|(other, (.., value))| text[end..next].find(value).map(|at| (at, other)))
+            .min();
+        match first {
+            Some((_, other)) if other != index => {
+                let (label, ..) = pairs[index];
+                let (_, canary, value) = pairs[other];
+                return (
+                    false,
+                    format!("the answer gives {canary} ({value}) under {label}"),
+                );
+            }
+            Some(_) => held[index] = true,
+            None => {}
+        }
+    }
+    match held.iter().position(|held| !held) {
+        Some(index) => {
+            let (label, canary, value) = pairs[index];
+            (
+                false,
+                format!("the answer gives no {canary} ({value}) under {label}"),
+            )
+        }
+        None => (
+            true,
+            "the answer gives each value under its own label".into(),
+        ),
+    }
 }
 
 /// A run that cannot show memory ran is an infrastructure failure, not a score.

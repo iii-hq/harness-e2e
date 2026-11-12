@@ -30,7 +30,7 @@ pub const CURRENT_AND_HISTORY: Case = Case {
     ],
     rules: &[],
     prompt: "What is the current corrected schedule for the analytics export, and which bucket does it write to? Give only the current plan, not the original one.",
-    followups: &["Now give both plans: first the original user-stated analytics export schedule and bucket, then the user's explicitly corrected schedule and bucket. Clearly label which plan is original and which is current."],
+    followups: &["Now give both plans on two separate lines, in exactly this shape: `Original: <schedule>, <bucket>` for the original user-stated analytics export schedule and bucket, then `Current: <schedule>, <bucket>` for the user's explicitly corrected schedule and bucket."],
     compact_before: None,
     preview_first: &[],
     teacher: &[],
@@ -92,14 +92,14 @@ pub const CURRENT_AND_HISTORY: Case = Case {
             },
         },
         Criterion {
-            id: "history_answer_original_first",
+            id: "history_answer_labels_each_plan",
             weight: 20,
             gate: true,
-            description: "Does the explicit history answer give the run's original bucket value and then its corrected one, in the order the follow-up asks for?",
-            label: "History answer gives both plans, original first",
-            check: Check::AnswerInOrder {
+            description: "Does the explicit history answer give the run's original bucket value under the Original label and its corrected one under the Current label, as the follow-up asks?",
+            label: "History answer labels each plan",
+            check: Check::AnswerLabelled {
                 exchange: 1,
-                canaries: &["old", "new"],
+                labels: &[("Original", "old"), ("Current", "new")],
             },
         },
     ],
@@ -153,7 +153,7 @@ mod tests {
             notice("current", current),
             assistant("current", current.len(), &format!("Current: Thursday at 18:00, export-{}.", canary(RUN, "new"))),
             notice("history", history),
-            assistant("history", history.len(), &format!("Original: Tuesday at 09:00, export-{}. Corrected: Thursday at 18:00, export-{}.", canary(RUN, "old"), canary(RUN, "new")))
+            assistant("history", history.len(), &format!("Original: Tuesday at 09:00, export-{}\nCurrent: Thursday at 18:00, export-{}", canary(RUN, "old"), canary(RUN, "new")))
         ]})
     }
 
@@ -275,7 +275,8 @@ mod tests {
         assert!(case.preview_first.is_empty());
         assert_eq!(case.followups.len(), 1);
         assert!(case.prompt.contains("only the current plan"));
-        assert!(case.followups[0].contains("first the original"));
+        assert!(case.followups[0].contains("`Original: <schedule>, <bucket>`"));
+        assert!(case.followups[0].contains("`Current: <schedule>, <bucket>`"));
         assert!(case.memories[0].text.contains("Tuesday at 09:00"));
         assert!(case.memories[1].text.contains("user explicitly corrected"));
         assert!(case.memories[1].text.contains("Thursday at 18:00"));
@@ -304,9 +305,9 @@ mod tests {
                     exchange: Some(0),
                     canary: "old"
                 },
-                Check::AnswerInOrder {
+                Check::AnswerLabelled {
                     exchange: 1,
-                    canaries: &["old", "new"]
+                    labels: &[("Original", "old"), ("Current", "new")]
                 },
             ]
         );
@@ -432,7 +433,42 @@ mod tests {
         let evidence = capture(&transcript);
         assert!(strict::failures(&CURRENT_AND_HISTORY, &evidence).is_empty());
         assert_eq!(completion(&evidence), CompletionState::TaskIncomplete);
-        assert_gate_failed(&evidence, "history_answer_original_first");
+        assert_gate_failed(&evidence, "history_answer_labels_each_plan");
+    }
+
+    #[test]
+    fn values_under_the_wrong_labels_fail_even_in_the_requested_order() {
+        let (old, new) = (canary(RUN, "old"), canary(RUN, "new"));
+        for answer in [
+            format!("Current: export-{old}; Original: export-{new}"),
+            format!("Original: export-{old}, export-{new}\nCurrent: export-{old}, export-{new}"),
+        ] {
+            let mut transcript = raw(&[&corrected()], &[&original()]);
+            transcript["messages"][3]["message"]["content"][0]["text"] = answer.into();
+            let evidence = capture(&transcript);
+            assert!(strict::failures(&CURRENT_AND_HISTORY, &evidence).is_empty());
+            assert_gate_failed(&evidence, "history_answer_labels_each_plan");
+        }
+    }
+
+    #[test]
+    fn labels_match_in_any_case_with_markdown_and_a_lead_in() {
+        let (old, new) = (canary(RUN, "old"), canary(RUN, "new"));
+        for answer in [
+            format!("Both plans, original and current:\n- **Original:** Tuesday at 09:00, export-{old}\n- **current**: Thursday at 18:00, export-{new} (replacing export-{old})"),
+            format!("### ORIGINAL\nTuesday at 09:00, export-{old}\n### Current\nThursday at 18:00, export-{new}"),
+            format!("Current: Thursday at 18:00, export-{new}. Original: Tuesday at 09:00, export-{old}."),
+        ] {
+            let mut transcript = raw(&[&corrected()], &[&original()]);
+            transcript["messages"][3]["message"]["content"][0]["text"] = answer.clone().into();
+            let evaluation = score::evaluate(&CURRENT_AND_HISTORY, &capture(&transcript));
+            let award = evaluation
+                .awards
+                .iter()
+                .find(|a| a.id == "history_answer_labels_each_plan")
+                .unwrap();
+            assert_eq!(award.awarded, Some(20), "{answer}: {}", award.reason);
+        }
     }
 
     #[test]
@@ -455,12 +491,12 @@ mod tests {
             (
                 3,
                 format!("Corrected bucket export-{} only.", canary(RUN, "new")),
-                "history_answer_original_first",
+                "history_answer_labels_each_plan",
             ),
             (
                 3,
                 format!("Original bucket export-{} only.", canary(RUN, "old")),
-                "history_answer_original_first",
+                "history_answer_labels_each_plan",
             ),
         ] {
             let mut transcript = raw(&[&corrected()], &[&original()]);
