@@ -435,7 +435,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Harness mechanisms (weekly) | `harness-weekly` | `mechanical_reaction`: a state call binding mirrors its event without a model turn and wakes only its session. |
 | Context pressure with signed thinking (weekly) | `context-thinking` | `context_pressure` on a Claude 5.5 model, on the `context-thinking` stack: compaction with thinking that the API rejects when its prefix changed. |
 | Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
-| Memory strict delivery | `memory-strict` | Opt-in, in no schedule: whether memory delivers exactly the facts each question needs, as the final model request recorded them, seven cases three times each, on the `memory` stack. Needs unreleased Harness, memory and context-manager builds; advisory for one cycle. |
+| Memory strict delivery | `memory-strict` | Opt-in, in no schedule: whether memory delivers exactly the facts each question needs, as the final model request recorded them, seven cases three times each, on the `memory-strict` stack. Needs unreleased Harness, memory and context-manager builds; advisory for one cycle. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -721,11 +721,7 @@ included. The measured session then runs as in `memory`:
 - `memory_automation_not_learned`: a non-user session asking memory to
   remember a release command leaves the bank as setup planted it, once
   extraction has read the session. It runs as the runner's own `e2e` kind,
-  which memory treats like `automation` and every other non-user kind. When
-  memory emits its private `memory::on-extraction-decision` event, setup also
-  says the prompt in an `e2e` teacher session and records memory's skip
-  decision: a bank change across that skip fails the gate. Without the event
-  the case scores on the bank after the session alone.
+  which memory treats like `automation` and every other non-user kind.
 - `memory_learn_from_long_message`: one user message of about 4,400
   characters states a release command near its start and a staging database
   host in its middle, and both must be learned. A memory that cuts a
@@ -764,8 +760,11 @@ memory read another bank on a teacher turn, it retires there what the
 teacher's extraction wrote.
 
 The `memory-strict` suite holds seven delivery cases, three rounds and one
-technical retry each (21 runs), on the `memory` stack. It is opt-in: no
-schedule, workflow or default group runs it. Each case reads what the final
+technical retry each (21 runs), on the `memory-strict` stack: the `memory`
+stack plus the capture variable on the harness and a declared context-manager,
+so the scheduled memory suites keep a harness without capture and a pinned run
+can build all three workers. It is opt-in: no schedule, workflow or default
+group runs it. Each case reads what the final
 model request held, not only what the pre-generate hook returned:
 
 - `memory_kafka_attribute`, `memory_trip_attribute`, `memory_team_attribute`
@@ -784,8 +783,8 @@ model request held, not only what the pre-generate hook returned:
   each turn, and the later session needs the host and the port.
 
 The cases read the generation capture: a Harness started with
-`III_HARNESS_SYNTHETIC_GENERATION_CAPTURE=1` (set on the `memory` stack's
-harness) registers `harness::on-generation-request`,
+`III_HARNESS_SYNTHETIC_GENERATION_CAPTURE=1` (set on the `memory-strict`
+stack's harness) registers `harness::on-generation-request`,
 `harness::on-generation-response` and `harness::on-synthetic-memory-receipt`,
 and stamps `origin.generation_id` on the assistant `session::update-message`.
 The runner also observes `session::on-message-added`,

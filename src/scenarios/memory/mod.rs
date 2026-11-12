@@ -19,7 +19,6 @@ use crate::context::E2eContext;
 
 pub mod attribute_cases;
 pub mod cases;
-pub mod extraction_decision;
 pub mod history_cases;
 pub mod incremental_cases;
 pub mod learning_checkpoints;

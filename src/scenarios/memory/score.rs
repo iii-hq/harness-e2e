@@ -137,7 +137,6 @@ impl Extraction {
 /// What `capture` reads of an attempt.
 #[derive(Debug, Default)]
 pub struct Snapshot {
-    pub extraction_decision: Option<super::extraction_decision::Evidence>,
     /// Internal capture limitation, not a field supplied by any worker API.
     /// Runtime requires authenticated final-SDK pairs and current updates. Pure raw
     /// transcript fixtures leave this false to test mechanical contracts only;
@@ -174,8 +173,6 @@ pub enum Retrieval {
 /// The captured deliverable of a memory case.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Evidence {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extraction_decision: Option<super::extraction_decision::Evidence>,
     /// Raw capture diagnostics for opt-in delivery checks only; absent on legacy cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<super::strict::EvidenceSnapshot>,
@@ -406,7 +403,6 @@ fn assemble(case: &Case, run_id: &str, mut observed: Observed, snapshot: Snapsho
         })
         .collect();
     let mut evidence = Evidence {
-        extraction_decision: snapshot.extraction_decision,
         strict: None,
         checkpoints: None,
         schema: SCHEMA.to_string(),
@@ -1221,26 +1217,16 @@ fn bank_unchanged(evidence: &Evidence) -> (bool, String) {
         })
         .map(|(name, _)| format!("rule {name}"));
     let changed: Vec<String> = memories.chain(rules).collect();
-    if !changed.is_empty() {
-        return (
-            false,
-            format!("memory changed the bank: {}", changed.join("; ")),
-        );
-    }
-    // Memory's skip decision, when it sent one, is extra evidence only.
-    match &evidence.extraction_decision {
-        Some(skip) if !skip.before_teacher.unchanged(&skip.after_skip) => (
-            false,
-            "memory changed the bank across its skip of the non-user turn".to_string(),
-        ),
-        Some(_) => (
-            true,
-            "the bank holds what setup planted, and nothing else; memory reported skipping the non-user turn".to_string(),
-        ),
-        None => (
+    if changed.is_empty() {
+        (
             true,
             "the bank holds what setup planted, and nothing else".to_string(),
-        ),
+        )
+    } else {
+        (
+            false,
+            format!("memory changed the bank: {}", changed.join("; ")),
+        )
     }
 }
 
@@ -2949,69 +2935,6 @@ mod tests {
         let moved = run(&change, false, vec![change.clone()]);
         assert_eq!(award(&moved, "stale_fact_left_out"), Some(30));
         assert_eq!(award(&moved, "stale_fact_retired"), Some(15));
-    }
-
-    /// Memory's skip decision is extra evidence for the bank-after gate: a
-    /// write it witnesses fails the gate, its absence changes nothing.
-    #[tokio::test]
-    async fn sdk_skip_decision_is_extra_evidence_for_the_bank_after_gate() {
-        use super::super::extraction_decision::{
-            read_bank,
-            tests::{raw, Mock},
-            Capture,
-        };
-        use std::sync::atomic::Ordering;
-        let case = case_named("memory_automation_not_learned");
-        for mutation in [0, 6, 7, 19] {
-            let mock = Mock::start().await;
-            let before = read_bank(&mock.context, "bank").await.unwrap();
-            let capture = Capture::bind(&mock.context, "teacher", "e2e")
-                .await
-                .unwrap();
-            capture.arm();
-            capture.turn("own-turn").unwrap();
-            assert_eq!(
-                mock.send(raw(), Some("memory-owner"), true).await["accepted"],
-                true
-            );
-            mock.mode.store(mutation, Ordering::SeqCst);
-            let skip = capture
-                .wait_then_read(&mock.context, "bank", before)
-                .await
-                .unwrap();
-            let mut evidence = evidence_of(case, observed(&["Noted."], vec![]));
-            evidence.bank_after = Some(read("teacher", &[], &[]));
-            evidence.extraction_decision = Some(skip);
-            let evaluation = evaluate(case, &evidence);
-            assert_eq!(
-                award(&evaluation, "nothing_learned_from_automation"),
-                Some(if mutation == 0 { 100 } else { 0 })
-            );
-            assert_eq!(evaluation.infrastructure_error, None);
-            assert_eq!(evaluation.completion, None);
-            assert_eq!(mock.reads.load(Ordering::SeqCst), 4);
-        }
-        // Without the decision, the bank after the session decides alone.
-        let mut evidence = evidence_of(case, observed(&["Noted."], vec![]));
-        evidence.bank_after = Some(read("teacher", &[], &[]));
-        let evaluation = evaluate(case, &evidence);
-        assert_eq!(
-            award(&evaluation, "nothing_learned_from_automation"),
-            Some(100)
-        );
-        assert_eq!(evaluation.infrastructure_error, None);
-        // A forged SDK delivery is not memory's decision.
-        let mock = Mock::start().await;
-        let capture = Capture::bind(&mock.context, "teacher", "e2e")
-            .await
-            .unwrap();
-        capture.arm();
-        capture.turn("own-turn").unwrap();
-        assert_eq!(
-            mock.send(raw(), Some("attacker"), true).await["accepted"],
-            false
-        );
-        assert_eq!(mock.reads.load(Ordering::SeqCst), 0);
     }
 
     #[test]

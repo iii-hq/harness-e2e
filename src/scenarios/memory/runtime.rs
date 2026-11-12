@@ -55,7 +55,6 @@ struct Run {
     generation: Option<generation_capture::Capture>,
     /// Why `Capture::bind` failed, for the strict cases' infrastructure error.
     generation_error: Option<String>,
-    skip: Option<super::extraction_decision::Evidence>,
     prompts: Arc<Mutex<Vec<PromptRecord>>>,
     retrieval: Option<Retrieval>,
     compaction: Option<String>,
@@ -272,7 +271,6 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
         Run {
             generation: None,
             generation_error: None,
-            skip: None,
             prompts: prompts.clone(),
             retrieval: None,
             compaction: None,
@@ -359,11 +357,7 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
                 .context("a previewed seed was never planted")?;
             preview_leads(&reply, &wanted)?;
         }
-        if super::cases::audits_bank_after(case) {
-            // Extra evidence only: without memory's skip event the case
-            // scores on the bank after the session, as it always has.
-            let _ = teach_non_user(context, case, run_id).await;
-        } else if !case.teacher.is_empty() {
+        if !case.teacher.is_empty() {
             teach(context, case, run_id, retrieval).await?;
         }
     }
@@ -559,68 +553,6 @@ async fn teach(
     }
     if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
         run.taught = taught;
-    }
-    Ok(())
-}
-
-/// Only the BankUnchanged case has a non-user teacher: it says the case's
-/// prompt and records memory's skip decision for it, when memory sends one.
-async fn teach_non_user(context: &E2eContext, case: &Case, run_id: &str) -> Result<()> {
-    use super::extraction_decision::{read_bank, Capture};
-    let session = teacher(run_id);
-    let bank = bank(run_id);
-    let before = read_bank(context, &bank).await?;
-    let kind = crate::wire::E2E_SESSION_KIND;
-    let capture = Capture::bind(context, &session, kind)
-        .await
-        .context("NOT_MEASURED non-user extraction source setup")?;
-    enroll_teacher(run_id);
-    let mut request = teacher_send(run_id, 0, format!("{} Reply only noted.", case.prompt));
-    request.session.as_mut().expect("initial teacher").kind = Some(kind.into());
-    capture.arm();
-    let response: SendResponse = context.trigger("harness::send", request).await?;
-    if !response.accepted
-        || response.session_id != session
-        || response.merged == Some(true)
-        || response.queued == Some(true)
-    {
-        bail!("NOT_MEASURED non-user teacher send refused or mismatched");
-    }
-    capture.turn(&response.turn_id)?;
-    context
-        .wait_for_turn(
-            case.id,
-            &session,
-            &response.turn_id,
-            TurnStatus::Completed,
-            TEACHER_WAIT,
-            false,
-            None,
-        )
-        .await
-        .context("NOT_MEASURED non-user teacher incomplete")?;
-    let transcript = context.transcript(&session).await?;
-    if let Some(error) = teacher_reply_error(&transcript, "noted", 1, true) {
-        bail!("NOT_MEASURED non-user teacher reply: {error}");
-    }
-    let answers = transcript["messages"]
-        .as_array()
-        .context("teacher messages unavailable")?;
-    if !answers
-        .iter()
-        .any(|e| e["message"]["role"] == "assistant" && e["origin"]["turn_id"] == response.turn_id)
-    {
-        bail!("NOT_MEASURED teacher reply belongs to another turn");
-    }
-    let meta = context
-        .trigger_value("session::get", json!({"session_id":session}))
-        .await?;
-    if meta["meta"]["session_id"] != session || meta["meta"]["kind"] != kind {
-        bail!("NOT_MEASURED non-user teacher kind readback mismatch");
-    }
-    let evidence = capture.wait_then_read(context, &bank, before).await?;
-    if let Some(run) = lock_unpoisoned(runs()).get_mut(run_id) {
-        run.skip = Some(evidence);
     }
     Ok(())
 }
@@ -1078,7 +1010,6 @@ pub fn snapshot(run_id: &str) -> Snapshot {
     let mut snapshot = lock_unpoisoned(runs())
         .get(run_id)
         .map_or_else(Snapshot::default, |run| Snapshot {
-            extraction_decision: run.skip.clone(),
             prompts: lock_unpoisoned(&run.prompts).clone(),
             surface_digests: run.surface_digests.clone(),
             compaction: run.compaction.clone(),
@@ -1212,11 +1143,9 @@ pub async fn cleanup(context: &E2eContext, case: &Case, run_id: &str) -> Result<
                 // Memory extracts a failed or stopped turn too, and `teach` skips
                 // its wait when a turn failed: a pass landing after the purge
                 // below would leave its writes in a stray bank. Best effort.
-                if !case.teacher.is_empty() {
-                    if let Ok(transcript) = context.transcript(&session).await {
-                        if let Some(entry) = cursor_target(&transcript) {
-                            let _ = wait_cursor(context, &session, entry).await;
-                        }
+                if let Ok(transcript) = context.transcript(&session).await {
+                    if let Some(entry) = cursor_target(&transcript) {
+                        let _ = wait_cursor(context, &session, entry).await;
                     }
                 }
                 context

@@ -68,13 +68,8 @@ class BuildStackTests(unittest.TestCase):
             "repository": "iii-hq/workers",
             "commit": COMMIT,
         })
-        # Only what the stack declares is built: the harness stays released,
-        # with the stack's environment.
-        self.assertEqual(stack["containers"]["harness"], {
-            "worker": "package://harness",
-            "version": "latest",
-            "environment": {"III_HARNESS_SYNTHETIC_GENERATION_CAPTURE": "1"},
-        })
+        # Only what the stack declares is built: the harness stays released.
+        self.assertEqual(stack["containers"]["harness"], {"worker": "package://harness", "version": "latest"})
 
     def test_a_named_stack_ignores_workers_it_does_not_declare(self):
         stack = verify_stack.build_stack(["memory", "ade"], COMMIT, "", set(), stack="memory")

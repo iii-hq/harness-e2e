@@ -1,0 +1,55 @@
+# The stack the opt-in `memory-strict` suite runs on: the `memory` stack plus
+# the generation capture on the Harness, kept apart so the scheduled `memory`
+# and `memory-learning` suites never run a Harness in capture mode. The capture
+# needs Harness, memory and context-manager builds that are not released yet
+# (release order: context-manager, Harness, memory); a released Harness ignores
+# the variable, and every memory-strict run then reports `strict capture
+# unavailable` with the bind error, as an infrastructure error. Its cases are
+# advisory for one cycle. Keep the other containers in step with memory.yaml.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+    start_after:
+    - context-manager
+    environment:
+      III_HARNESS_SYNTHETIC_GENERATION_CAPTURE: "1"
+
+  # Declared, and held by the edge above, so a pinned run builds the
+  # context-manager whose window provenance the capture reads.
+  context-manager:
+    worker: package://context-manager
+    version: latest
+
+  # The worker under test. Its extraction model is pinned: left empty, memory
+  # takes the first model the router lists, in no set order. The router reads
+  # `provider::model` as that provider's model.
+  memory:
+    worker: package://memory
+    version: latest
+    config_override:
+      extraction_model: deepseek::deepseek-flash
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s
