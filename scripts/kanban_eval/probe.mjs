@@ -646,6 +646,18 @@ export function barrierEventIndex(events, start, store) {
   return events.findIndex((event, index) => index >= start && event?.store === store)
 }
 
+// The C7 base snapshot reloads its store from a `configuration` trigger that
+// iii 0.26 removed (observers replaced triggers), so the engine no longer
+// tells the app about a direct change. Deliver that reload the way the
+// trigger did, so the check measures the app's reaction to a store switch on
+// every engine version. Best effort: an app that drops the function may watch
+// the configuration its own way, and a second reload on an older engine finds
+// the store unchanged.
+export async function setKanbanConfiguration(trigger, value) {
+  await trigger('configuration::set', { id: 'kanban', value })
+  await trigger('kanban::config::reload').catch(() => {})
+}
+
 async function create(trigger, fields = {}) {
   return trigger('kanban::tickets::create', { title: `Probe ${Date.now()}-${Math.random()}`, ...fields })
 }
@@ -1651,14 +1663,14 @@ export const PROBES = {
           await page.getByText('Updated during drag', { exact: true }).count(), 'ordinary update did not reach the other sessions during drag')))
         expect(await dragged.evaluate((element) => element.isConnected && !globalThis.__kanbanDragEnded), 'ordinary live update replaced or ended the active drag')
         stage('live_store')
-        await trigger('configuration::set', { id: 'kanban', value: { ...configuration.value, data_dir: '/data/live-alternate' } })
+        await setKanbanConfiguration(trigger, { ...configuration.value, data_dir: '/data/live-alternate' })
         await eventually(async () => await boardTicketTotal(sessions[2].page, 0).count() === 1
           && await ticketCard(sessions[2].page, { title: 'Dirty local title' }).count() === 0,
         'store switch during drag did not load the empty store')
       } finally {
         await mouse.up()
       }
-      await trigger('configuration::set', { id: 'kanban', value: configuration.value })
+      await setKanbanConfiguration(trigger, configuration.value)
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => await page.getByRole('heading', { name: 'Dirty local title' }).count(), 'detail did not recover after restoring the store')))
       await Promise.all(sessions.slice(0, 2).map(({ page }) => assertClearedDiscussionDraft(page, 'Dirty local title')))
 
