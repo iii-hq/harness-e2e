@@ -170,8 +170,8 @@ mod tests {
 
     fn teacher_transcript(turn: usize) -> Value {
         let mut messages = Vec::new();
-        for index in 0..=turn {
-            messages.push(json!({"entry_id":format!("u{index}"), "message":{"role":"user", "content":cases::render(INCREMENTAL_LONG_RECALL.teacher[index], RUN)}}));
+        for (index, teacher) in INCREMENTAL_LONG_RECALL.teacher[..=turn].iter().enumerate() {
+            messages.push(json!({"entry_id":format!("u{index}"), "message":{"role":"user", "content":cases::render(teacher, RUN)}}));
             messages.push(json!({"entry_id":format!("a{index}"), "message":{"role":"assistant", "content":[{"type":"text", "text":"noted"}]}}));
         }
         // Neither a notice nor a tool entry is an extraction cursor target.
