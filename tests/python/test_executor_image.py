@@ -91,6 +91,50 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, status, result.stderr)
         return result, calls(self.log) if self.log.exists() else []
 
+    def checkout_tree(self):
+        """What a real checkout holds besides scripts/: the evaluator's source and fixtures among it."""
+        for directory in ("config", "stacks", "schemas", "docs", "src/scenarios/kanban",
+                          "tests/fixtures/chess-worker", "tests/fixtures/visual-worker",
+                          "tests/fixtures/alertmanager-route-match", "fixtures/release_train_recovery",
+                          "fixtures/cross_repo_contract_migration"):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        (self.root / "src/scenarios/kanban/catalog.json").write_text("{}")
+        (self.root / "src/scenarios/alertmanager_route_match.rs").write_text("")
+        (self.root / "tests/fixtures/alertmanager-route-match/oracle.json").write_text("{}")
+
+    def group_volumes(self, group):
+        if self.log.exists():
+            self.log.unlink()
+        _, invoked = self.run_wrapper("group", env={"HARNESS_E2E_CAMPAIGN_GROUP_ID": group})
+        run = next(call for call in invoked if call[0] == "run")
+        return sorted(value for flag, value in pairs(run) if flag == "--volume")
+
+    def test_a_group_sees_the_fixtures_its_own_case_reads_and_no_others(self):
+        self.checkout_tree()
+        root = self.root.resolve()
+        base = [f"{root}/{path}:{root}/{path}:ro" for path in ("scripts", "config", "stacks", "schemas")]
+        base.append(f"{root}/target:{root}/target")
+        # What a released runner or the launcher reads from disk for that
+        # case alone; src/, the rest of tests/ and docs/ are never there.
+        for group, extra in [
+            ("case-alertmanager-route-match", None),
+            ("case-kanban-c1-foundation", "src/scenarios/kanban/catalog.json"),
+            ("case-chess-engine-build", "tests/fixtures/chess-worker"),
+            ("case-form-flow-build", "tests/fixtures/visual-worker"),
+            ("case-state-machine-canvas-build", "tests/fixtures/visual-worker"),
+            ("case-release-train-recovery", "fixtures/release_train_recovery"),
+            ("case-cross-repo-contract-migration", "fixtures/cross_repo_contract_migration"),
+        ]:
+            with self.subTest(group=group):
+                expected = base + ([f"{root}/{extra}:{root}/{extra}:ro"] if extra else [])
+                self.assertEqual(self.group_volumes(group), sorted(expected))
+        # A path the checkout lacks (the Console writes only what the
+        # scripts read) is not mounted.
+        shutil.rmtree(self.root / "tests/fixtures/chess-worker")
+        shutil.rmtree(self.root / "schemas")
+        self.assertEqual(self.group_volumes("case-chess-engine-build"),
+                         sorted(base[:3] + [f"{root}/target:{root}/target"]))
+
     def test_a_group_runs_in_the_published_image_with_the_checkout_mounted_where_it_is(self):
         root = self.root.resolve()
         result, invoked = self.run_wrapper("group", env={
@@ -118,9 +162,10 @@ class WrapperTests(unittest.TestCase):
             ("--mount", "type=volume,dst=/var/lib/docker,volume-label=harness-e2e.execution=42,"
                         "volume-label=harness-e2e.phase=group,volume-label=harness-e2e.group=case-minimal-path"),
             ("--security-opt", "no-new-privileges"),
-            # The checkout read-only, target/ alone writable: the group's
-            # subject cannot rewrite the scripts the host runs after it.
-            ("--volume", f"{root}:{root}:ro"),
+            # The scripts read-only, target/ alone writable: the group's
+            # subject cannot rewrite the scripts the host runs after it, and
+            # sees no more of the checkout than the group reads.
+            ("--volume", f"{root}/scripts:{root}/scripts:ro"),
             ("--volume", f"{root}/target:{root}/target"),
             ("--workdir", str(root)),
             ("--env", f"HARNESS_E2E_EXECUTOR_IMAGE={DIGEST}"),
@@ -130,7 +175,7 @@ class WrapperTests(unittest.TestCase):
         ]:
             self.assertIn(pair, options)
         self.assertEqual(sorted(value for flag, value in options if flag == "--volume"),
-                         [f"{root}/target:{root}/target", f"{root}:{root}:ro"])
+                         [f"{root}/scripts:{root}/scripts:ro", f"{root}/target:{root}/target"])
         for flag in ("--group-add", "--network", "--env-file"):
             self.assertNotIn(flag, run)
         self.assertFalse(any("docker.sock" in value or value.startswith("TMPDIR=") for value in run))

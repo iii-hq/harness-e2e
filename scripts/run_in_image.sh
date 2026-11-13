@@ -7,8 +7,9 @@
 #   scripts/run_in_image.sh image    print the image this checkout runs in
 #
 # The image holds only tools (the Dockerfile beside scripts/). The scripts are
-# this checkout's: its root is mounted read-only at the same path, and only
-# the target/ directory, where every phase writes, read-write. What a pinned
+# this checkout's: its root is mounted read-only at the same path (for a group,
+# only the parts its scripts and its case's runner read), and only the
+# target/ directory, where every phase writes, read-write. What a pinned
 # commit's build, the stack's runner or a group's subject writes stays below
 # target/; the scripts the host runs afterwards are out of its reach (short of
 # the root a group's user can reach, below). No container can gain privileges,
@@ -123,6 +124,24 @@ labels=(--label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.
   --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}")
 mkdir -p "$root/target"
 mounts=(--volume "$root:$root:ro" --volume "$root/target:$root/target")
+if [[ "$phase" == group ]]; then
+  # A group's subject has a shell: it sees what the group's scripts and its
+  # case's released runner read from disk, never the evaluator's source,
+  # fixtures or expected outputs (src/, the rest of tests/, docs/).
+  readable=(scripts config stacks schemas)
+  case "${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}" in
+    case-kanban-*) readable+=(src/scenarios/kanban/catalog.json) ;;
+    case-chess-engine-build) readable+=(tests/fixtures/chess-worker) ;;
+    case-form-flow-build | case-state-machine-canvas-build) readable+=(tests/fixtures/visual-worker) ;;
+    case-release-train-recovery) readable+=(fixtures/release_train_recovery) ;;
+    case-cross-repo-contract-migration) readable+=(fixtures/cross_repo_contract_migration) ;;
+  esac
+  mounts=()
+  for path in "${readable[@]}"; do
+    [[ ! -e "$root/$path" ]] || mounts+=(--volume "$root/$path:$root/$path:ro")
+  done
+  mounts+=(--volume "$root/target:$root/target")
+fi
 args=(run --rm --init --cidfile "$cidfile" "${labels[@]}"
   --security-opt no-new-privileges
   "${mounts[@]}" --workdir "$root"
