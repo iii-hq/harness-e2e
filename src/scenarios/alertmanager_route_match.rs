@@ -53,7 +53,12 @@ const PROTECTED_PATHS: &[&str] = &["notify", "api", "config/testdata"];
 
 const PUBLIC_MANIFEST: &str =
     include_str!("../../tests/fixtures/alertmanager-route-match/manifest.json");
-const ORACLE_JSON: &str = include_str!("../../tests/fixtures/alertmanager-route-match/oracle.json");
+// shortcut: hides the oracle from `strings` and `grep -a` on the runner binary only, replace when the oracle must resist a deliberate reader.
+const ORACLE_LEN: usize =
+    include_bytes!("../../tests/fixtures/alertmanager-route-match/oracle.json").len();
+static ORACLE_MASKED: [u8; ORACLE_LEN] = mask(*include_bytes!(
+    "../../tests/fixtures/alertmanager-route-match/oracle.json"
+));
 const BUNDLE_BYTES: &[u8] =
     include_bytes!("../../tests/fixtures/alertmanager-route-match/repository.bundle");
 
@@ -212,7 +217,7 @@ impl Scenario for AlertmanagerRouteMatch {
                 "fixture_tree": PINNED_TREE,
                 "bundle_sha256": sha256_bytes(BUNDLE_BYTES),
                 "bundle_size_bytes": BUNDLE_BYTES.len() as u64,
-                "oracle_sha256": sha256_bytes(ORACLE_JSON.as_bytes()),
+                "oracle_sha256": sha256_bytes(oracle_json().as_bytes()),
                 "oracle_cases": oracle.cases.len(),
                 "function_id": FUNCTION_ID,
             }),
@@ -368,8 +373,24 @@ fn evaluate_snapshot(snapshot: &Snapshot) -> Result<ObjectiveEvaluation> {
     ]))
 }
 
+/// XOR with a key that changes at every position; applied twice it gives the input back.
+const fn mask<const N: usize>(mut bytes: [u8; N]) -> [u8; N] {
+    let mut i = 0;
+    while i < N {
+        bytes[i] ^= (i as u8).wrapping_mul(167).wrapping_add(0x5b) | 1;
+        i += 1;
+    }
+    bytes
+}
+
+fn oracle_json() -> String {
+    // black_box: the optimizer must not fold the clear text back into the binary.
+    let clear = mask(*std::hint::black_box(&ORACLE_MASKED));
+    String::from_utf8(clear.to_vec()).expect("the embedded oracle is UTF-8")
+}
+
 fn oracle() -> Result<Oracle> {
-    serde_json::from_str(ORACLE_JSON).context("decode embedded Alertmanager route-match oracle")
+    serde_json::from_str(&oracle_json()).context("decode embedded Alertmanager route-match oracle")
 }
 
 #[cfg(test)]
@@ -1431,6 +1452,38 @@ pub(crate) mod tests {
             ExecutionRealism::FrozenRealArtifact
         );
         assert_eq!(case.characterization.human_horizon.min_minutes, Some(180));
+    }
+
+    const PLAIN_ORACLE: &str =
+        include_str!("../../tests/fixtures/alertmanager-route-match/oracle.json");
+
+    #[test]
+    fn the_runner_reads_the_oracle_byte_for_byte() {
+        assert_eq!(oracle_json(), PLAIN_ORACLE);
+    }
+
+    #[test]
+    fn the_binary_does_not_carry_the_oracle_as_text() {
+        // A subject's shell can run `strings` on the runner binary.
+        let masked: &[u8] = &ORACLE_MASKED;
+        for marker in [
+            "service_database_owner_y",
+            "alertmanager-route-match-oracle",
+        ] {
+            assert!(PLAIN_ORACLE.contains(marker));
+            assert!(
+                !masked.windows(marker.len()).any(|w| w == marker.as_bytes()),
+                "{marker}"
+            );
+        }
+        let plain = PLAIN_ORACLE.as_bytes();
+        let leaked = plain
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .filter(|chunk| masked.windows(16).any(|w| w == chunk.as_slice()))
+            .count();
+        assert_eq!(leaked, 0, "16-byte runs of the oracle left in clear");
     }
 
     #[test]
