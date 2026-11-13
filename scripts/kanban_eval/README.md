@@ -82,8 +82,16 @@ fixtures where possible. A reached failing checkpoint receives zero; previous
 passes retain their credit; later dependent checkpoints are `unverified` with
 `awarded: null`. An absent prerequisite is not a fabricated failure of every
 downstream behavior. A failed application build/startup still means an incomplete
-task, while unavailable functional criteria remain unscored. Infrastructure or
-control failures continue to invalidate the evaluation.
+task, and every criterion it left unreached scores 0. A control the
+application made fail is a failed check, and the round still counts: an app
+that is not ready 60 s after a restart while its runtime process runs and
+`compose::status` answers, one whose own start failure made Compose exit while
+the engine still answers, or one that keeps no `/data/tickets.json`.
+`typecheck`, `test` and `build` each run under a 90-second limit; a
+`typecheck` or `build` past it fails like any broken build. A probe that cannot
+plant its own fixture in the candidate's store leaves that check `unverified`.
+Only controller, container runtime and stack failures invalidate the
+evaluation.
 
 Native evaluation rejects missing, duplicate, stale-version and contradictory
 criterion evidence. `coverage.complete` stays false when any required evidence is
@@ -203,6 +211,11 @@ and evaluated diffs, source-integrity diagnostics, any provisional functional
 result, bounded log tails and PNG screenshots encoded as base64. Raw runtime files are private; they
 are not subject filesystem artifacts.
 
+A subject still working at the controller's 1,800-second deadline is stopped,
+and the run is `resource_limit` with failure code `subject_deadline_exceeded`:
+it scores 0 and stays in the mean. A turn that had already completed when the
+stop arrived is not charged.
+
 To enable this in Release Control's exact-stack workflow:
 
 1. Checkout, with full history, the commit of the public
@@ -225,8 +238,9 @@ To enable this in Release Control's exact-stack workflow:
 
 Do not declare CI readiness from unit tests alone: complete reference/base
 controls, a native real-model attempt, compatible catalog/worker identity and
-remote fixture access must all be verified. Evaluator unavailability is not a
-candidate zero score; an application that fails build/startup is a task failure.
+remote fixture access must all be verified. Controller, container runtime or
+stack unavailability is not a candidate zero score; an application that fails
+build/startup, or makes a control fail, is a task failure that counts.
 
 ```sh
 python3 -m unittest discover -s tests/python -p 'test_kanban*.py'

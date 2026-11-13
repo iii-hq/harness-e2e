@@ -74,6 +74,8 @@ async function eventually(action, message, timeout = 8_000) {
 }
 
 class ControlError extends Error {}
+// The controller cleared the trusted side, so the application caused this failure.
+class CandidateFault extends Error {}
 
 export async function control(output, operation, payload = {}) {
   try {
@@ -82,11 +84,13 @@ export async function control(output, operation, payload = {}) {
     const temporary = `${request}.${id}.tmp`
     await writeFile(temporary, `${JSON.stringify({ id, operation, payload })}\n`)
     await rename(temporary, request)
-    const deadline = Date.now() + 90_000
+    // Above run.py's slowest control, a restart with reset: stop 10 + wait 5 + reset 10 + ready ~62 + compose::status 5 s.
+    const deadline = Date.now() + 100_000
     while (Date.now() < deadline) {
       let response
       try { response = JSON.parse(await readFile(join(output, 'control-response.json'), 'utf8')) } catch {}
       if (response?.id === id) {
+        if (response.candidate === true) throw new CandidateFault(response.error)
         if (!response.ok) throw new Error(`control ${operation} failed: ${response.error ?? 'unknown error'}`)
         return response.value
       }
@@ -94,6 +98,7 @@ export async function control(output, operation, payload = {}) {
     }
     throw new Error(`control ${operation} timed out`)
   } catch (error) {
+    if (error instanceof CandidateFault) throw error
     throw new ControlError(details(error))
   }
 }
@@ -810,17 +815,19 @@ export const PROBES = {
         expect(rejected, `${label} store was accepted`)
         expect(await control('read_store') === content, `${label} store was replaced after rejection`)
       }
+      let duplicates = ' and duplicate records fail'
       try {
         await rejectsWithoutRewrite('{broken json', 'corrupt')
         const records = JSON.parse(original)
-        if (!duplicateStoredTicket(records, first.id)) throw new ControlError('Cannot locate the ticket collection for a duplicate-store probe')
-        const duplicate = `${JSON.stringify(records, null, 2)}\n`
-        await rejectsWithoutRewrite(duplicate, 'duplicate')
+        requireEvidence(findStoredTicket(records, first.id), 'Cannot plant a duplicate: the persisted store has no record with the ticket id')
+        // The task fixes no store shape: one that keeps tickets outside any array (e.g. keyed by id) cannot hold a duplicate record.
+        if (duplicateStoredTicket(records, first.id)) await rejectsWithoutRewrite(`${JSON.stringify(records, null, 2)}\n`, 'duplicate')
+        else duplicates = ' fails (the store keeps tickets outside any array, so no duplicate record could be planted)'
       } finally {
         await control('write_store', { value: original })
       }
       expect((await trigger('kanban::tickets::get', { id: first.id })).id === first.id, 'restored valid store is unusable')
-      return 'Corrupt JSON and duplicate records fail closed without byte changes; the original store is restored afterward.'
+      return `Corrupt JSON${duplicates} closed without byte changes; the original store is restored afterward.`
     })
   },
 
@@ -918,20 +925,23 @@ export const PROBES = {
       // (see foundation_accessible_settings above); filling it before that load lands
       // races the field and can silently revert to the old value once it does.
       const settingsFormLoaded = (expected) => eventually(async () => await dataDirField.inputValue() === expected, 'settings form did not load the current directory')
+      // A late form load reverts the fill and an earlier "saved" status hides it, so the API confirms each save; the 2 s poll lets a slow save land before a refill.
+      const saveDirectory = (directory) => eventually(async () => {
+        await dataDirField.fill(directory)
+        await page.getByRole('button', { name: 'Save settings' }).click()
+        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        return eventually(async () => (await json(await api('/api/config'))).data_dir === directory, 'the save carried another directory', 2_000)
+      }, 'settings form did not save the selected directory')
       try {
         const alternateDir = `./board-probe-${randomUUID()}`
         await page.getByRole('link', { name: /^settings$/i }).click()
         await settingsFormLoaded(initialConfig.data_dir)
-        await dataDirField.fill(alternateDir)
-        await page.getByRole('button', { name: 'Save settings' }).click()
-        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        await saveDirectory(alternateDir)
         await boardNavigation(page).click()
         await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', STORE_SWITCH_TIMEOUT_MS)
         await page.getByRole('link', { name: /^settings$/i }).click()
         await settingsFormLoaded(alternateDir)
-        await dataDirField.fill(initialConfig.data_dir)
-        await page.getByRole('button', { name: 'Save settings' }).click()
-        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        await saveDirectory(initialConfig.data_dir)
         await boardNavigation(page).click()
         await eventually(async () => await boardTicketTitle(page, restored.title).count() > 0, 'returning from settings did not reload the restored store', STORE_SWITCH_TIMEOUT_MS)
       } finally {
@@ -1412,7 +1422,7 @@ export const PROBES = {
       const rejectsWithoutRewrite = async (mutate, label) => {
         const records = JSON.parse(original)
         const stored = findStoredTicket(records, ticket.id)
-        if (!stored) throw new ControlError('Cannot locate the discussion fixture in the persisted store')
+        requireEvidence(stored, 'Cannot plant a malformed discussion: the persisted store has no record with the fixture id')
         mutate(stored.comments)
         const malformed = `${JSON.stringify(records, null, 2)}\n`
         await control('write_store', { value: malformed })

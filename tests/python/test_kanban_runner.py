@@ -14,6 +14,13 @@ runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 
 
+# What iii compose 0.26 printed when a `required: true` container exited during a restart.
+COMPOSE_CRASHED = ("\u2717 kanban CHILD_EXITED_BEFORE_REGISTRATION container 'kanban' exited with 1 before it registered. It last said:\n"
+                   '  stderr\t[sabotage] exiting at boot\n'
+                   'up failed [CHILD_EXITED_BEFORE_REGISTRATION] after 204ms\n'
+                   'error[PROJECT_DID_NOT_START]: /workspace/worker-compose.yaml did not start\n')
+
+
 class KanbanRunnerTest(unittest.TestCase):
     def test_candidate_tests_are_advisory_but_typecheck_and_build_are_prerequisites(self):
         self.assertEqual(runner.HARD_BUILD_STEPS, {'typecheck', 'build'})
@@ -35,6 +42,26 @@ class KanbanRunnerTest(unittest.TestCase):
                 ])
                 self.assertEqual(test_call.args[2], 120)
                 self.assertIsNone(test_call.args[3])
+
+    def test_typecheck_and_build_hangs_are_candidate_failures(self):
+        for codes in ((124,), (0, 0, 124)):
+            with self.subTest(codes=codes), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(runner, 'bounded', side_effect=codes) as bounded:
+                checks, ready = runner.run_candidate_build_checks('candidate-id', Path(directory))
+                self.assertFalse(ready)
+                self.assertEqual([check['id'] for check in checks],
+                                 ['typecheck', 'test', 'build'][:len(codes)])
+                self.assertEqual(checks[-1]['status'], 'failed')
+                self.assertEqual(checks[-1]['detail'], 'isolated command exit 124')
+                hung_call = bounded.call_args_list[-1]
+                self.assertEqual(hung_call.args[0][3:8], [
+                    '/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '90s',
+                    'pnpm',
+                ])
+                self.assertEqual(hung_call.args[2], 120)
+                self.assertIsNone(hung_call.args[3])
+                for check in checks:
+                    self.assertIsInstance(check['seconds'], float)
 
     def test_hard_build_failure_still_stops_before_runtime(self):
         with tempfile.TemporaryDirectory() as directory, \
@@ -193,17 +220,96 @@ class KanbanRunnerTest(unittest.TestCase):
             self.assertEqual(runner.container_keeper('candidate-id'), '7')
 
         with tempfile.TemporaryDirectory() as directory:
-            runtime = [mock.Mock(), 0, '7']
+            (Path(directory) / 'runtime.log').touch()
+            runtime = [mock.Mock(), 0, '7', 0]
             replacement = mock.Mock()
             with mock.patch.object(runner, 'bounded', return_value=0) as bounded, \
                     mock.patch.object(runner, 'start_runtime', return_value=replacement) as start, \
                     mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
                 self.assertEqual(runner.restart_runtime(
-                    'candidate-id', 'evaluator-id', Path(directory), runtime), {'ready': True})
+                    'candidate-id', 'evaluator-id', Path(directory), runtime, 'default'), {'ready': True})
             self.assertEqual(bounded.call_args_list[0].args[0][-1], '7')
             self.assertFalse(start.call_args.args[2])
             self.assertIs(runtime[0], replacement)
         self.assertIn('except (FileNotFoundError,ProcessLookupError)', runner.STOP_RUNTIME)
+
+    def test_restart_that_never_becomes_ready_is_a_candidate_fault_only_when_the_trusted_side_is_cleared(self):
+        timeout = subprocess.TimeoutExpired([], 5)
+        # Compose relays application output indented, so `relayed` is not Compose's own error.
+        crashed = COMPOSE_CRASHED
+        did_not_start = 'error[PROJECT_DID_NOT_START]: /workspace/worker-compose.yaml did not start\n'
+        env_gone = "error[MISSING_ENV_FILE]: container 'kanban': env_file /workspace/kanban/dist/kanban.env does not exist\n"
+        relayed = '  stderr\terror[MISSING_ENV_FILE]: printed by the application\n'
+
+        def required(code):
+            return f'up failed [{code}] after 10.0s\n' + did_not_start
+
+        # runtime exit (None: running), compose::status or engine::health::check exit, this start's output, fault.
+        for exited, status, output, fault in (
+                (None, 0, '', 'did not become ready within 60 s after restart: '
+                              'runtime process still running and Compose answers'),
+                (None, 1, '', None),
+                (None, timeout, '', None),
+                (0, 0, '', None),
+                (1, 0, '', None),  # the failure an earlier restart left in runtime.log is not this one's
+                (126, 0, '', None),
+                (-9, 0, '', None),
+                (1, 0, crashed, 'Compose exited: required container failed with CHILD_EXITED_BEFORE_REGISTRATION'),
+                (1, 0, env_gone, 'Compose exited with MISSING_ENV_FILE'),
+                (1, 1, crashed, None),
+                (1, timeout, crashed, None),
+                (1, 0, required('STARTUP_TIMEOUT'), 'Compose exited: required container failed with STARTUP_TIMEOUT'),
+                (1, 0, required('HOOK_FAILED'), 'Compose exited: required container failed with HOOK_FAILED'),
+                (1, 0, required('HOOK_TIMEOUT'), None),
+                (1, 0, required('SPAWN_FAILED'), None),
+                (1, 0, required('ENGINE_CALL_FAILED'), None),
+                (1, 0, 'up failed [ENGINE_CALL_FAILED] after 10.0s\n  stderr\tup failed [HOOK_FAILED] after 1ms\n' + did_not_start, None),
+                (1, 0, did_not_start, None),
+                (1, 0, relayed, None),
+                (1, 0, 'Error response from daemon: No such container: candidate-id\n', None),
+                (137, 0, crashed, None)):
+            with self.subTest(exited=exited, status=status, output=output[-40:]), \
+                    tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / 'runtime.log').write_text(crashed)
+
+                def started(*_args, output=output):
+                    with (Path(directory) / 'runtime.log').open('a') as log:
+                        log.write(output)
+                    return replacement
+
+                def trusted(command, _log, *_args, status=status, **_kwargs):
+                    if 'compose::status' in command:
+                        self.assertIsNone(exited)
+                        self.assertEqual(command[2], 'candidate-id')
+                        self.assertEqual(command[command.index('--namespace') + 1], 'kanban')
+                        code = status
+                    elif 'engine::health::check' in command:
+                        self.assertEqual(exited, 1)
+                        self.assertEqual(command[2], 'candidate-id')
+                        code = status
+                    else:
+                        return 0
+                    if isinstance(code, Exception):
+                        raise code
+                    return code
+
+                replacement = mock.Mock()
+                replacement.poll.return_value = exited
+                runtime = [mock.Mock(), 0, '7', 0]
+                with mock.patch.object(runner, 'bounded', side_effect=trusted), \
+                        mock.patch.object(runner, 'start_runtime', side_effect=started), \
+                        mock.patch.object(runner, 'wait_runtime_ready', return_value=False), \
+                        self.assertRaises(RuntimeError) as raised:
+                    runner.restart_runtime('candidate-id', 'evaluator-id', Path(directory), runtime, 'kanban')
+                # hot_reload reads this start's output from the same offset.
+                self.assertEqual(runtime[3], len(crashed.encode()))
+                self.assertNotIsInstance(raised.exception, runner.InfrastructureError)
+                if fault:
+                    self.assertIsInstance(raised.exception, runner.CandidateFault)
+                    self.assertIn(fault, str(raised.exception))
+                else:
+                    self.assertNotIsInstance(raised.exception, runner.CandidateFault)
+                    self.assertEqual(str(raised.exception), 'runtime did not become ready after restart')
 
     def test_evaluator_shares_only_candidate_network(self):
         source = Path(runner.__file__).read_text()
@@ -268,6 +374,19 @@ class KanbanRunnerTest(unittest.TestCase):
             (output / 'subject-complete').write_text('{"model_invoked":"yes"}')
             with self.assertRaisesRegex(runner.EvaluationError, 'completion marker is invalid'):
                 runner.wait_for_external_subject(output, ready, timeout=1)
+
+    def test_external_subject_deadline_names_the_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with mock.patch.object(runner.time, 'monotonic', side_effect=(0, 1800)), \
+                    self.assertRaises(runner.EvaluationError) as raised:
+                runner.wait_for_external_subject(output, {})
+            result = runner.write_failure(output, 'kanban_c2', raised.exception)
+            # The Kanban scenario (src/scenarios/kanban/mod.rs) reports this result.error prefix as
+            # subject_deadline_exceeded, so the text is a contract with the Rust side.
+            self.assertEqual(json.loads((output / 'result.json').read_text())['error'],
+                             'external subject did not complete within 1800 seconds')
+            self.assertEqual(result['status'], 'evaluation_failed')
 
     def test_external_subject_arguments_are_base_only_and_mutually_exclusive(self):
         required = ['--fixture', '/unused', '--catalog', '/unused', '--case', 'C2',
@@ -346,6 +465,43 @@ class KanbanRunnerTest(unittest.TestCase):
                 with self.assertRaisesRegex(runner.InfrastructureError, 'invalid inspector'):
                     poll()
 
+    def test_control_reports_candidate_faults_apart_from_control_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            runtime = [mock.Mock(), 0]
+            poll = runner.control_callback(evidence, 'candidate', 'evaluator', runtime, 'kanban')
+
+            def answer(request_id, operation, payload=None):
+                runner.atomic_json(evidence / 'control-request.json',
+                                   {'id': request_id, 'operation': operation, 'payload': payload or {}})
+                poll()
+                return json.loads((evidence / 'control-response.json').read_text())
+
+            absent = (b'no ticket store at /data/tickets.json: the application is not '
+                      b'persisting to the configured data_dir\n')
+            with mock.patch.object(runner.subprocess, 'run',
+                                   return_value=subprocess.CompletedProcess([], 1, stdout=b'', stderr=absent)):
+                self.assertEqual(answer('absent', 'read_store'),
+                                 {'id': 'absent', 'ok': False, 'candidate': True,
+                                  'error': absent.decode().strip()})
+
+            daemon = b'Error response from daemon: container is not running\n'
+            with mock.patch.object(runner.subprocess, 'run',
+                                   return_value=subprocess.CompletedProcess([], 1, stdout=b'', stderr=daemon)):
+                self.assertEqual(answer('daemon', 'read_store'),
+                                 {'id': 'daemon', 'ok': False, 'error': daemon.decode()})
+
+            for payload in ({}, {'register_configuration': False, 'reset_configuration': True}):
+                with self.subTest(payload=payload), \
+                        mock.patch.object(runner, 'restart_runtime',
+                                          side_effect=runner.CandidateFault('application did not become ready')) as restart:
+                    request_id = f'restart-{len(payload)}'
+                    self.assertEqual(answer(request_id, 'restart', payload),
+                                     {'id': request_id, 'ok': False, 'candidate': True,
+                                      'error': 'application did not become ready'})
+                    self.assertEqual(restart.call_args.args,
+                                     ('candidate', 'evaluator', evidence, runtime, 'kanban', None))
+
     def test_runtime_can_start_without_grader_configuration_registration(self):
         with tempfile.TemporaryDirectory() as directory:
             process = mock.Mock()
@@ -404,6 +560,48 @@ class KanbanRunnerTest(unittest.TestCase):
                     mock.patch.object(runner.time, 'monotonic', side_effect=[0, 1, 56]):
                 with self.assertRaisesRegex(runner.InfrastructureError, 'logs were unavailable'):
                     runner.hot_reload('candidate', 'evaluator', evidence, [process, 0], 'default')
+
+    def test_hot_reload_on_an_exited_runtime_follows_the_restart_rule(self):
+        # runtime exit, engine::health::check exit, output after the earlier failure the offset skips, charged.
+        marker = 'KANBAN_HOT_RELOAD_' + ('01' * 16)
+        for exited, health, output, charged in (
+                (0, 0, '', False),
+                (1, 0, '', False),
+                (137, 0, COMPOSE_CRASHED, False),
+                (1, 1, COMPOSE_CRASHED, False),
+                (1, 0, COMPOSE_CRASHED, True)):
+            with self.subTest(exited=exited, health=health, output=output[-40:]), \
+                    tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / 'runtime.log').write_text(COMPOSE_CRASHED + output)
+                offset = len(COMPOSE_CRASHED.encode())
+                calls = []
+
+                def docker(command, **_kwargs):
+                    calls.append(command)
+                    return subprocess.CompletedProcess(
+                        command, 0, stdout=b'{"count":1}' if marker in command else b'', stderr=b'')
+
+                process = mock.Mock()
+                process.poll.return_value = exited
+
+                def trusted(command, _log, *_args, health=health, **_kwargs):
+                    self.assertIn('engine::health::check', command)
+                    return health
+
+                with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
+                        mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                        mock.patch.object(runner, 'bounded', side_effect=trusted), \
+                        self.assertRaises(RuntimeError) as raised:
+                    runner.hot_reload('candidate', 'evaluator', Path(directory),
+                                      [process, 1, '7', offset], 'default')
+                self.assertTrue(any('shutil.rmtree' in part for part in calls[1]))
+                if charged:
+                    self.assertIsInstance(raised.exception, runner.CandidateFault)
+                    self.assertIn('Compose exited: required container failed with '
+                                  'CHILD_EXITED_BEFORE_REGISTRATION', str(raised.exception))
+                else:
+                    self.assertIsInstance(raised.exception, runner.InfrastructureError)
+                    self.assertIn('logs were unavailable', str(raised.exception))
 
     def test_compose_namespace_resolves_like_compose(self):
         for text, expected in [

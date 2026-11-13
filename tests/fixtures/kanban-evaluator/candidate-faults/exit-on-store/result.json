@@ -1,0 +1,110 @@
+{
+  "schema": "kanban-evaluation",
+  "rubric_version": 3,
+  "case_id": "kanban_c2_persistence",
+  "checks": [
+    {
+      "id": "persistence_defaults",
+      "status": "passed",
+      "detail": "Observed through the running application."
+    },
+    {
+      "id": "persistence_identity",
+      "status": "passed",
+      "detail": "Observed through the running application."
+    },
+    {
+      "id": "persistence_lookup",
+      "status": "passed",
+      "detail": "Observed through the running application."
+    },
+    {
+      "id": "persistence_iii_crud",
+      "status": "passed",
+      "detail": "Real iii create/list/get calls prove defaults, normalized titles, identifiers, timestamps and ordering."
+    },
+    {
+      "id": "persistence_invalid_input_no_write",
+      "status": "passed",
+      "detail": "Invalid fields and values are rejected without adding a ticket."
+    },
+    {
+      "id": "persistence_isolation",
+      "status": "passed",
+      "detail": "Observed through the running application."
+    },
+    {
+      "id": "persistence_restart",
+      "status": "failed",
+      "detail": "application did not become ready within 60 s after restart: runtime process still running and Compose answers; see runtime.log"
+    },
+    {
+      "id": "persistence_directory_isolation_and_restart",
+      "status": "failed",
+      "detail": "application did not become ready within 60 s after restart: runtime process still running and Compose answers; see runtime.log"
+    },
+    {
+      "id": "persistence_corrupt_and_duplicate_store_fail_closed",
+      "status": "failed",
+      "detail": "function_not_found: Function kanban::tickets::get not found in namespace default."
+    },
+    {
+      "id": "criterion_defaults",
+      "status": "passed",
+      "detail": "Creation normalizes the title and uses the requested default field values. persistence_defaults: Observed through the running application."
+    },
+    {
+      "id": "criterion_identity",
+      "status": "passed",
+      "detail": "UUIDs, timestamps and increasing readable keys are valid. persistence_identity: Observed through the running application."
+    },
+    {
+      "id": "criterion_lookup",
+      "status": "passed",
+      "detail": "Real iii list/get preserve creation order and accept UUID and readable key. persistence_lookup: Observed through the running application."
+    },
+    {
+      "id": "criterion_invalid",
+      "status": "passed",
+      "detail": "Invalid fields and values are rejected without adding tickets. persistence_invalid_input_no_write: Invalid fields and values are rejected without adding a ticket."
+    },
+    {
+      "id": "criterion_isolation",
+      "status": "passed",
+      "detail": "Configured directories retain independent stores and key sequences. persistence_isolation: Observed through the running application."
+    },
+    {
+      "id": "criterion_restart",
+      "status": "failed",
+      "detail": "Persisted tickets survive runtime restart. persistence_restart: application did not become ready within 60 s after restart: runtime process still running and Compose answers; see runtime.log"
+    },
+    {
+      "id": "criterion_corruption",
+      "status": "failed",
+      "detail": "Corrupt and duplicate stores fail closed without replacing stored bytes. persistence_corrupt_and_duplicate_store_fail_closed: function_not_found: Function kanban::tickets::get not found in namespace default."
+    }
+  ],
+  "status": "failed",
+  "functional_status": "failed",
+  "duration_ms": 72416,
+  "build_checks": [
+    {
+      "id": "typecheck",
+      "status": "passed",
+      "detail": "isolated command exit 0",
+      "seconds": 1.0
+    },
+    {
+      "id": "test",
+      "status": "passed",
+      "detail": "isolated command exit 0",
+      "seconds": 0.6
+    },
+    {
+      "id": "build",
+      "status": "passed",
+      "detail": "isolated command exit 0",
+      "seconds": 1.2
+    }
+  ]
+}

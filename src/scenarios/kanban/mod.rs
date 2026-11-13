@@ -217,6 +217,14 @@ impl Scenario for Kanban {
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
         cleanup(context, run_id).await
     }
+
+    fn subject_deadline(&self, run_id: &str) -> Option<String> {
+        // The controller's text (scripts/kanban_eval/run.py, wait_for_external_subject).
+        diagnostics(run_id).ok()?["result"]["error"]
+            .as_str()
+            .filter(|error| error.starts_with("external subject did not complete within"))
+            .map(str::to_owned)
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1008,6 +1016,112 @@ mod tests {
         );
     }
 
+    /// MOT-5688 gate: result.json and coverage.json copied verbatim from
+    /// `run.py --revision reference` against fixture commits that break the
+    /// application. Each round validates as evaluated and zeroes only the
+    /// criteria the fault reached.
+    #[test]
+    fn candidate_faults_from_the_kanban_gate_score_zero_not_infrastructure() {
+        macro_rules! evidence {
+            ($name:literal) => {
+                include_str!(concat!(
+                    "../../../tests/fixtures/kanban-evaluator/candidate-faults/",
+                    $name
+                ))
+            };
+        }
+        let restart = "application did not become ready within 60 s after restart: \
+                       runtime process still running and Compose answers; see runtime.log";
+        let store = "no ticket store at /data/tickets.json: \
+                     the application is not persisting to the configured data_dir";
+        let build = "prerequisite 'build' failed: isolated command exit 124";
+        // (fixture, case index, result.json, coverage.json, zeroed criteria, reason, score, completion)
+        let rounds = [
+            (
+                "dev.mjs exits at boot once /data/tickets.json exists",
+                1,
+                evidence!("exit-on-store/result.json"),
+                Some(evidence!("exit-on-store/coverage.json")),
+                vec!["criterion_restart", "criterion_corruption"],
+                restart,
+                75,
+                CompletionState::Completed,
+            ),
+            (
+                "tickets persisted to tickets.db",
+                1,
+                evidence!("tickets-db/result.json"),
+                Some(evidence!("tickets-db/coverage.json")),
+                vec!["criterion_invalid", "criterion_corruption"],
+                store,
+                75,
+                CompletionState::Completed,
+            ),
+            (
+                "throws when configuration 'kanban' is missing",
+                0,
+                evidence!("throw-missing-config/result.json"),
+                Some(evidence!("throw-missing-config/coverage.json")),
+                vec![
+                    "criterion_initial_config",
+                    "criterion_settings_mobile",
+                    "criterion_hot_reload",
+                ],
+                restart,
+                15,
+                CompletionState::TaskIncomplete,
+            ),
+            (
+                "build script sleeps 600 s",
+                1,
+                evidence!("build-sleep/result.json"),
+                None,
+                vec![
+                    "criterion_defaults",
+                    "criterion_identity",
+                    "criterion_lookup",
+                    "criterion_invalid",
+                    "criterion_isolation",
+                    "criterion_restart",
+                    "criterion_corruption",
+                ],
+                build,
+                0,
+                CompletionState::TaskIncomplete,
+            ),
+        ];
+        for (name, index, result, coverage, zeroed, reason, score, completed) in rounds {
+            let mut value = json!({"result": serde_json::from_str::<Value>(result).unwrap()});
+            if let Some(coverage) = coverage {
+                value["coverage"] = serde_json::from_str(coverage).unwrap();
+            }
+            validate_evaluation(&value).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let result = &value["result"];
+            validate_rubric(index, result).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let awards = criterion_awards(index, result);
+            let zeros = awards
+                .iter()
+                .filter(|award| award.awarded == Some(0))
+                .map(|award| award.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(zeros, zeroed, "{name}");
+            assert!(
+                awards
+                    .iter()
+                    .filter(|award| award.awarded == Some(0))
+                    .any(|award| award.reason.contains(reason)),
+                "{name}: no zero names the fault"
+            );
+            let total = awards
+                .iter()
+                .filter_map(|award| award.awarded)
+                .map(u16::from)
+                .sum::<u16>();
+            assert_eq!(total, score, "{name}");
+            assert_eq!(completion(index, result), completed, "{name}");
+        }
+    }
+
     #[test]
     fn completion_follows_the_gate_criteria_not_the_whole_rubric() {
         let checks = |entries: &[(&str, &str)]| {
@@ -1217,6 +1331,33 @@ mod tests {
             "runtime evidence"
         );
         assert!(evidence.get("metrics").is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn the_controllers_subject_deadline_is_the_scenarios_stop_reason() {
+        let run_id = format!("kanban-deadline-test-{}", uuid::Uuid::new_v4());
+        assert_eq!(Kanban(0).subject_deadline(&run_id), None);
+        let path = root(&run_id);
+        fs::create_dir_all(path.join("run/evidence")).unwrap();
+        fs::write(path.join("controller.log"), "").unwrap();
+        for (error, is_deadline) in [
+            (
+                "external subject did not complete within 1800 seconds",
+                true,
+            ),
+            ("external subject cancelled", false),
+        ] {
+            fs::write(
+                path.join("run/evidence/result.json"),
+                json!({"status":"evaluation_failed","functional_status":null,"error":error})
+                    .to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                Kanban(0).subject_deadline(&run_id).as_deref(),
+                is_deadline.then_some(error)
+            );
+        }
         fs::remove_dir_all(path).unwrap();
     }
     #[test]

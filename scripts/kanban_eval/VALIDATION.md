@@ -1,5 +1,93 @@
 # Kanban validation — 2026-09-20
 
+## Candidate-caused failures count — 2026-11-12
+
+A Kanban app that did not come back from a restart, or kept no
+`/data/tickets.json`, ended the round as `evaluation_failed`, so a broken
+delivery left the software-engineering mean instead of scoring 0 (MOT-5688).
+
+The controller now charges the application only when the trusted side is
+cleared: a restart not ready within 60 s while the runtime process still runs
+and `iii trigger compose::status` exits 0; a restart whose `iii compose --up`
+exited 1 blaming the application while `iii trigger engine::health::check`
+exits 0; or the probe's own "no ticket store" text. Compose blames the
+application when the last `error[...]` line of that start's output is
+`MISSING_ENV_FILE`, or `PROJECT_DID_NOT_START` after `up failed
+[CHILD_EXITED_BEFORE_REGISTRATION]`, `[STARTUP_TIMEOUT]` or `[HOOK_FAILED]` for
+a `required: true` container. The
+probe records that control as a failed check and the round counts. A hot reload
+on a runtime that exited that way fails the same way. A runtime process that
+exited any other way, a `compose::status` that fails or hangs, and every other
+controller, container runtime or stack failure still invalidate the
+evaluation. A `typecheck` or `build` past 90 s now fails its check, as `test`
+already did, instead of ending the evaluation. A probe that cannot plant its own fixture in the store marks the check
+`unverified` instead of failing the evaluation; a C2 store that keeps tickets
+outside any array skips only the duplicate-record probe. The monitor's
+1,800-second cut is `resource_limit` with failure code
+`subject_deadline_exceeded`: it scores 0 and stays in the mean.
+
+Sabotage gate on iii 0.26.0, from local fixture branches that were never
+pushed:
+
+| Variant | Expected | Observed |
+| --- | --- | --- |
+| V1 C2 app exits at boot once `/data/tickets.json` exists | `failed`, restart check fails, exit 1 | Exit 1, `failed`. Both restart checks fail with "runtime process still running and Compose answers"; the corruption check fails with `function_not_found`. `criterion_restart` and `criterion_corruption` 0; score 75. |
+| V2 C2 persists to `tickets.db` | invalid-input check fails with the "no ticket store" text | Exit 1, `failed`. The invalid-input and corruption checks fail with "no ticket store at /data/tickets.json"; `criterion_invalid` and `criterion_corruption` 0; score 75. |
+| V3 C1 throws when configuration `kanban` is missing | `criterion_initial_config` fails, exit 1, hot reload recorded as a check | Exit 1, `failed`, coverage incomplete. Both restart-with-reset checks fail with the Compose reason, both settings checks with `ERR_CONNECTION_REFUSED`, hot reload because the marker was never observed. Score 15, task incomplete. |
+| V4 C2 `build` script sleeps 600 s | `build` fails with exit 124 | Exit 1, `failed`. `build` fails with "isolated command exit 124" after 90.1 s; every criterion 0 through the build prerequisite. |
+| V5 trusted engine killed as the restart starts it | `evaluation_failed`, exit 2 | Exit 2, `evaluation_failed`. `compose::status` hung past its 5 s bound, so the restart stayed a control failure. |
+| V6 restart's Compose pointed at a closed engine port | `evaluation_failed`, exit 2 | Exit 2, `evaluation_failed`. Compose stayed up and `compose::status` answered `function_not_found`. |
+
+`iii compose --up` never exited in V1–V6: when the app died (V1) Compose
+logged `CHILD_EXITED_BEFORE_REGISTRATION` and kept serving, with the container
+`failed`. Compose does exit when a `required: true` container does not start or
+an `env_file` is missing, and also when the trusted engine dies during the
+start, so the engine check decides (V7–V13 below). The slowest control took
+65.9 s (V3 hot reload, unchanged by this work); the probe's
+control deadline is now 100 s. V1–V4's `result.json` and `coverage.json` are
+fixtures under `tests/fixtures/kanban-evaluator/candidate-faults/`, scored 75,
+75, 15 and 0 by `candidate_faults_from_the_kanban_gate_score_zero_not_infrastructure`.
+Not run locally: the 1,800-second cut through the native monitor, and a real
+stack for the Worker and browser changes.
+
+Exited-Compose gate on iii 0.26.0, also from local fixture branches:
+
+| Variant | Expected | Observed |
+| --- | --- | --- |
+| V7 C2 `required: true` container exits at boot | `failed`, restart check fails, exit 1 | Exit 1, `failed`. The restart fails in 3.8 s with "Compose exited: required container failed with CHILD_EXITED_BEFORE_REGISTRATION". `criterion_restart` and `criterion_corruption` 0; the other 5 criteria pass. |
+| V8 C2 `required: true` container hangs past its `startup_timeout: 10s` | same as V7 | Exit 1, `failed`, `STARTUP_TIMEOUT`; the restart fails in 13.6 s. |
+| V9 C2 `pre_run` hook exits 1 | same as V7 | Exit 1, `failed`, `HOOK_FAILED`; 3.6 s. |
+| V10 C2 `env_file` under `kanban/dist` deleted at runtime | same as V7 | Exit 1, `failed`, `MISSING_ENV_FILE`; 3.5 s. |
+| V11 C1 with the V10 sabotage | restart and hot reload fail as checks, exit 1 | Exit 1, `failed`. The restart (`initial_config`) and the hot reload both fail with "Compose exited with MISSING_ENV_FILE". |
+| V12 trusted engine killed 5 s into the restart | `evaluation_failed`, exit 2 | Exit 2, `evaluation_failed`. Compose still printed `up failed [STARTUP_TIMEOUT]`, but `engine::health::check` did not answer, so the restart stayed a control failure. |
+| V13 C2 reference app with `required: true` | `passed`, exit 0 | Exit 0, `passed`. |
+
+V7–V10 ended exit 2, `evaluation_failed` before this rule. `STARTUP_TIMEOUT`
+is measured against the subject's own `startup_timeout`, and the engine is
+checked after Compose exited. So an engine that stalls past that timer and then
+recovers would be charged to the candidate; no such stall was seen.
+
+## C3 settings save race — 2026-11-12
+
+`board_settings` filled the Settings directory field, saved, and trusted the
+"saved" status. Two races could cost the app the 10-point `criterion_settings`.
+A form load that landed after the fill put the old directory back, and the
+return-leg guard missed it because it waited on the value the probe had typed.
+A "saved" status left from the first save also let the board load overtake a
+slow second save.
+
+The probe now confirms each save through `GET /api/config`, polling up to 2 s,
+and fills and saves again until the API returns the typed directory. An app
+whose form never saves it still fails after 8 s with "settings form did not
+save the selected directory".
+
+`test_kanban_browser_flows` failed 3 of 13 runs on `main`'s evaluator and 4 of
+11 on this branch before; a C3-only copy of the probe, three runs at a time,
+failed 6 of 75. The test fixture's form now loads 300 ms late, and a save waits
+for that load: the old probe failed all 10 runs and the new one passed all 42.
+With the new probe the unmodified fixture passed 12 of 12, and the C3
+reference control passes 23 of 23 checks.
+
 ## C7 store switch on iii 0.26 — 2026-11-11
 
 The C1–C7 snapshots reload their store from a `configuration` trigger
@@ -113,6 +201,9 @@ Corrections since the historical controls below:
   and Node inspector checks. Control protocol errors stay evaluator failures;
   missing hot reload is a functional failure. A real, separate Node HTTP/inspector
   process validates SSE response counting, collection and deliberate retention.
+- Superseded on 2026-11-12: a control the application itself made fail is a
+  failed check that counts, not an evaluator failure (see "Candidate-caused
+  failures count" above).
 - Replaced host system-library mounts with the pinned official Playwright image
   `mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6`.
   CI uses Node 24.18.0, locked JavaScript tooling, no install lifecycle scripts

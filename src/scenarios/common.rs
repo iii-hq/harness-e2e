@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -610,6 +611,102 @@ pub async fn invoke(client: &IIIClient, function_id: &str, payload: Value) -> Re
         .map_err(anyhow::Error::new)
         .with_context(|| format!("invoke {function_id}"))
 }
+
+/// Text the runner puts in the error of a candidate call it charges as silent.
+pub const UNANSWERED: &str = "did not answer";
+
+pub fn is_unanswered(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<iii_sdk::errors::Error>(),
+        Some(iii_sdk::errors::Error::Timeout)
+    )
+}
+
+/// Settles one call to a function the candidate owns. The outer error is
+/// infrastructure; the inner result is the candidate's answer or its silence.
+///
+/// The SDK also reports a connection that dropped during the call as a
+/// timeout, so a silent call is the candidate's only when the same call, sent
+/// once more, is silent again and the stack answers after each silence.
+///
+/// Nothing cancels the first attempt, so the second can run after or beside
+/// it: send through here only a call the candidate's contract makes safe to
+/// repeat.
+// shortcut: every silent call is confirmed with a second attempt, add a per-capture flag if capture time starts to matter.
+pub async fn settle_candidate_call<Call, Sent, Alive, Checked, T>(
+    function_id: &str,
+    mut call: Call,
+    mut stack_alive: Alive,
+) -> Result<Result<Value>>
+where
+    Call: FnMut() -> Sent,
+    Sent: Future<Output = Result<Value>>,
+    Alive: FnMut() -> Checked,
+    Checked: Future<Output = Result<T>>,
+{
+    let mut result = call().await;
+    if result.as_ref().is_err_and(is_unanswered) {
+        if let Err(error) = stack_alive().await {
+            bail!("invoke {function_id} infrastructure failure: the stack stopped answering after the call timed out: {error:#}");
+        }
+        result = call().await;
+        if result.as_ref().is_err_and(is_unanswered) {
+            if let Err(error) = stack_alive().await {
+                bail!("invoke {function_id} infrastructure failure: the stack stopped answering after the call timed out again: {error:#}");
+            }
+            return Ok(result.context(format!(
+                "{function_id} {UNANSWERED} twice while the stack still answered"
+            )));
+        }
+    }
+    match result {
+        Err(error) if !is_remote_failure(&error) => {
+            bail!("invoke {function_id} infrastructure failure: {error:#}")
+        }
+        answer => Ok(answer),
+    }
+}
+
+pub async fn invoke_candidate(
+    context: &E2eContext,
+    function_id: &str,
+    payload: Value,
+) -> Result<Result<Value>> {
+    settle_candidate_call(
+        function_id,
+        || invoke(context.client(), function_id, payload.clone()),
+        || context.function_exists(function_id),
+    )
+    .await
+}
+
+/// Appends the silence of a candidate call to the reason of the failed check
+/// that observed it. Expected rejections are remote errors and never match.
+pub fn name_unanswered_calls(checks: &mut serde_json::Map<String, Value>) {
+    fn unanswered(value: &Value) -> Option<&str> {
+        match value {
+            Value::Object(fields) => fields
+                .get("error")
+                .and_then(Value::as_str)
+                .filter(|error| error.contains(UNANSWERED))
+                .or_else(|| fields.values().find_map(unanswered)),
+            Value::Array(items) => items.iter().find_map(unanswered),
+            _ => None,
+        }
+    }
+    for check in checks
+        .values_mut()
+        .filter(|check| check.is_object() && check["passed"] != true)
+    {
+        if let Some(error) = unanswered(check).map(str::to_owned) {
+            check["reason"] = match check["reason"].as_str() {
+                Some(reason) => format!("{reason}; {error}").into(),
+                None => error.into(),
+            };
+        }
+    }
+}
+
 pub fn bounded_value(value: Value) -> Value {
     let encoded = value.to_string();
     if encoded.len() <= 16 * 1024 {
@@ -646,6 +743,93 @@ pub async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value
     Ok(
         json!({"data":data,"sha256":crate::artifact::sha256_bytes(&bytes),"details":value["details"]}),
     )
+}
+
+/// The failed browser check for a step the loaded candidate page rejected.
+/// It carries no `status`, so it scores as failed, not blocked.
+pub fn page_step_failure(error: &anyhow::Error, url: &str) -> Option<Value> {
+    let Some(iii_sdk::errors::Error::Remote { message, .. }) = error.downcast_ref() else {
+        return None;
+    };
+    // shortcut: a hung page gets the browser's answer for a crashed or frozen renderer (its CDP "Request timed out", or none: an SDK timeout), so it stays infrastructure; charge it once the browser reports whether the renderer still answers.
+    // Only at the end: a page can echo that text inside its own error, never after the browser's suffix.
+    if message.ends_with("Request timed out.") {
+        return None;
+    }
+    let text = format!("{error:#}");
+    Some(
+        json!({"passed":false,"reason":format!("the candidate page failed a browser step while the browser passed its own check: {text}"),"captures":[],"url":url}),
+    )
+}
+
+/// Settles the page phase of a browser capture: a failed page step is the
+/// candidate's only when the browser still held the session and then passes
+/// its own check.
+pub async fn settle_page_capture(
+    result: Result<Value>,
+    session_was_running: bool,
+    url: &str,
+    browser_healthy: impl Future<Output = Result<()>>,
+) -> Result<Value> {
+    let error = match result {
+        Ok(captured) => return Ok(captured),
+        Err(error) => error,
+    };
+    // A session the browser closed under the step (its Chromium died or the tab's deadline passed) fails that step whatever page was in it.
+    let Some(failure) = page_step_failure(&error, url).filter(|_| session_was_running) else {
+        return Err(error);
+    };
+    match browser_healthy.await {
+        Ok(()) => Ok(failure),
+        Err(unhealthy) => Err(error.context(format!(
+            "the browser failed its own check after a page step failed: {unhealthy:#}"
+        ))),
+    }
+}
+
+/// Runs the browser's own command paths in a fresh session. The session stays
+/// on its blank page, so no candidate code runs in it. `page_commands` are the
+/// further commands the caller's page phase sends; each gets the session's id.
+pub async fn browser_answers(context: &E2eContext, page_commands: &[(&str, Value)]) -> Result<()> {
+    let started = context
+        .trigger_value(
+            "browser::sessions::start",
+            json!({"incognito":true,"ttl_ms":60000}),
+        )
+        .await?;
+    let session = started["session_id"]
+        .as_str()
+        .context("browser session omitted session_id")?;
+    let checked = async {
+        context
+            .trigger_value(
+                "browser::resize",
+                json!({"session_id":session,"width":1280,"height":900}),
+            )
+            .await?;
+        let answer = context
+            .trigger_value(
+                "browser::execute",
+                json!({"session_id":session,"code":"return 1"}),
+            )
+            .await?;
+        if answer["result"] != 1 {
+            bail!("browser check script answered {answer}");
+        }
+        for (function, payload) in page_commands {
+            let mut payload = payload.clone();
+            payload["session_id"] = session.into();
+            context.trigger_value(function, payload).await?;
+        }
+        screenshot_png(context, session).await?;
+        Ok(())
+    }
+    .await;
+    context
+        .trigger_value("browser::sessions::stop", json!({"session_id":session}))
+        .await
+        .context("stop browser check session")?;
+    checked
 }
 pub fn sql_statements(arguments: &Value) -> Vec<&str> {
     arguments
@@ -969,5 +1153,378 @@ mod tests {
             response(&[("b", "harness::spawn")]),
         ]});
         assert_eq!(back_to_back_spawns(&next_turn), 1);
+    }
+
+    const CANDIDATE_FUNCTION: &str = "chess_ab12::health";
+
+    fn sdk(error: iii_sdk::errors::Error) -> anyhow::Error {
+        anyhow::Error::new(error).context("sent")
+    }
+
+    fn silent() -> anyhow::Error {
+        sdk(iii_sdk::errors::Error::Timeout)
+    }
+
+    fn rejected() -> anyhow::Error {
+        sdk(iii_sdk::errors::Error::Remote {
+            code: "invocation_failed".into(),
+            message: "illegal move".into(),
+            stacktrace: None,
+        })
+    }
+
+    /// Settles one candidate call over scripted answers and returns the
+    /// outcome, the calls sent and the stack checks run.
+    async fn settle(
+        answers: Vec<Result<Value>>,
+        stack: Vec<Result<()>>,
+    ) -> (Result<Result<Value>>, usize, usize) {
+        let mut answers = answers.into_iter();
+        let mut stack = stack.into_iter();
+        let (mut calls, mut stack_checks) = (0, 0);
+        let outcome = settle_candidate_call(
+            CANDIDATE_FUNCTION,
+            || {
+                calls += 1;
+                let answer = answers.next().expect("no further call is sent");
+                async move { answer }
+            },
+            || {
+                stack_checks += 1;
+                let checked = stack.next().expect("no further stack check is run");
+                async move { checked }
+            },
+        )
+        .await;
+        (outcome, calls, stack_checks)
+    }
+
+    #[tokio::test]
+    async fn a_silent_candidate_call_is_charged_only_when_the_stack_answers_and_it_stays_silent() {
+        let (outcome, calls, stack_checks) = settle(vec![Ok(json!({"ok":true}))], vec![]).await;
+        assert_eq!(outcome.unwrap().unwrap(), json!({"ok":true}));
+        assert_eq!((calls, stack_checks), (1, 0));
+
+        let (outcome, calls, stack_checks) = settle(vec![Err(rejected())], vec![]).await;
+        let rejection = outcome.unwrap().unwrap_err();
+        assert!(is_remote_failure(&rejection) && !is_unanswered(&rejection));
+        assert_eq!((calls, stack_checks), (1, 0));
+
+        let (outcome, calls, stack_checks) =
+            settle(vec![Err(silent()), Err(silent())], vec![Ok(()), Ok(())]).await;
+        let silence = outcome.unwrap().unwrap_err();
+        let text = format!("{silence:#}");
+        assert!(
+            text.contains(CANDIDATE_FUNCTION) && text.contains(UNANSWERED),
+            "{text}"
+        );
+        assert!(is_unanswered(&silence) && !is_remote_failure(&silence));
+        assert_eq!((calls, stack_checks), (2, 2));
+
+        // The stack went down while the second attempt waited.
+        let (outcome, calls, stack_checks) = settle(
+            vec![Err(silent()), Err(silent())],
+            vec![Ok(()), Err(anyhow::anyhow!("engine gone"))],
+        )
+        .await;
+        let text = format!("{:#}", outcome.unwrap_err());
+        assert!(
+            text.contains("infrastructure failure") && text.contains(CANDIDATE_FUNCTION),
+            "{text}"
+        );
+        assert_eq!((calls, stack_checks), (2, 2));
+
+        let (outcome, calls, stack_checks) =
+            settle(vec![Err(silent()), Ok(json!("late"))], vec![Ok(())]).await;
+        assert_eq!(outcome.unwrap().unwrap(), json!("late"));
+        assert_eq!((calls, stack_checks), (2, 1));
+
+        let (outcome, calls, stack_checks) =
+            settle(vec![Err(silent()), Err(rejected())], vec![Ok(())]).await;
+        assert!(is_remote_failure(&outcome.unwrap().unwrap_err()));
+        assert_eq!((calls, stack_checks), (2, 1));
+
+        let (outcome, calls, stack_checks) = settle(
+            vec![Err(silent())],
+            vec![Err(anyhow::anyhow!("engine gone"))],
+        )
+        .await;
+        let text = format!("{:#}", outcome.unwrap_err());
+        assert!(
+            text.contains("infrastructure failure") && text.contains(CANDIDATE_FUNCTION),
+            "{text}"
+        );
+        assert_eq!((calls, stack_checks), (1, 1));
+
+        let (outcome, calls, stack_checks) =
+            settle(vec![Err(sdk(iii_sdk::errors::Error::NotConnected))], vec![]).await;
+        assert!(format!("{:#}", outcome.unwrap_err()).contains("infrastructure failure"));
+        assert_eq!((calls, stack_checks), (1, 0));
+
+        let (outcome, calls, stack_checks) = settle(
+            vec![
+                Err(silent()),
+                Err(sdk(iii_sdk::errors::Error::NotConnected)),
+            ],
+            vec![Ok(())],
+        )
+        .await;
+        assert!(format!("{:#}", outcome.unwrap_err()).contains("infrastructure failure"));
+        assert_eq!((calls, stack_checks), (2, 1));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires iii on PATH; CI runs this explicitly with the pinned Engine"]
+    async fn a_real_engine_tells_a_hung_candidate_function_from_its_own_death() {
+        use std::time::Duration;
+        const HUNG: &str = "harness_e2e_test::hung";
+        let temp = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let config = temp.path().join("engine.yaml");
+        fs::write(&config, format!("workers:\n  - name: iii-worker-manager\n    config:\n      host: 127.0.0.1\n      port: {port}\n")).unwrap();
+        let mut engine = tokio::process::Command::new("iii")
+            .arg("--no-update-check")
+            .arg("--config")
+            .arg(&config)
+            .current_dir(temp.path())
+            .env("III_TELEMETRY_ENABLED", "false")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let context = E2eContext::connect(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .expect("isolated engine ready");
+        // Without local_dispatch(false) the SDK runs a call to this client's own function in-process, and nothing here would cross the engine.
+        let hung = context.client().register_function(
+            HUNG,
+            iii_sdk::RegisterFunction::new_async(|_: Value| {
+                std::future::pending::<Result<Value, iii_sdk::errors::Error>>()
+            })
+            .local_dispatch(false),
+        );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !context.function_exists(HUNG).await.unwrap() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !hung.local_dispatch_active(),
+            "the hung call must cross the engine"
+        );
+        // invoke_candidate with a 3 s timeout in place of its 30 s.
+        let call = || async {
+            let request = CallRequest {
+                function_id: HUNG.into(),
+                payload: json!({}),
+                action: None,
+                timeout_ms: Some(3_000),
+            };
+            Ok(context.client().call(request).await?)
+        };
+        let stack_alive = || context.function_exists(HUNG);
+
+        let silence = settle_candidate_call(HUNG, call, stack_alive)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(is_unanswered(&silence), "{silence:#}");
+        assert!(format!("{silence:#}").contains(UNANSWERED), "{silence:#}");
+
+        let (dead, killed) = tokio::join!(settle_candidate_call(HUNG, call, stack_alive), async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            engine.kill().await
+        });
+        killed.unwrap();
+        let text = format!("{:#}", dead.unwrap_err());
+        assert!(text.contains("infrastructure failure"), "{text}");
+    }
+
+    #[test]
+    fn chess_and_visual_call_candidate_functions_only_through_invoke_candidate() {
+        for source in [
+            include_str!("chess_engine_build.rs"),
+            include_str!("visual_worker_build.rs"),
+        ] {
+            let flat: String = source.split_whitespace().collect();
+            for (at, _) in flat.match_indices("common::invoke(") {
+                // A plain invoke must name a stack function by literal.
+                assert!(
+                    flat[at..].starts_with("common::invoke(context.client(),\""),
+                    "{}",
+                    &flat[at..at + 80]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_unanswered_candidate_calls_are_named_in_a_failed_check() {
+        let silence = format!(
+            "{CANDIDATE_FUNCTION} {UNANSWERED} twice while the stack still answered: sent: invocation timed out"
+        );
+        let rejection = "sent: remote error (invocation_failed): illegal move";
+        let mut checks = serde_json::Map::new();
+        checks.insert(
+            "silent".into(),
+            json!({"passed":false,"reason":"play contract failed","observed":[{"ok":false,"error":rejection},{"ok":false,"error":silence}]}),
+        );
+        checks.insert(
+            "rejected".into(),
+            json!({"passed":false,"reason":"play contract failed","observed":{"ok":false,"error":rejection}}),
+        );
+        checks.insert(
+            "passed".into(),
+            json!({"passed":true,"reason":"Worker stayed healthy","observed":{"ok":false,"error":silence}}),
+        );
+        let before = checks.clone();
+
+        name_unanswered_calls(&mut checks);
+
+        assert_eq!(
+            checks["silent"]["reason"],
+            format!("play contract failed; {silence}")
+        );
+        assert_eq!(checks["silent"]["observed"], before["silent"]["observed"]);
+        assert_eq!(checks["rejected"], before["rejected"]);
+        assert_eq!(checks["passed"], before["passed"]);
+    }
+
+    const PAGE_URL: &str = "http://127.0.0.1:3113/#/worker/chess_ab12/chess";
+
+    fn page_error(message: &str) -> anyhow::Error {
+        sdk(iii_sdk::errors::Error::Remote {
+            code: "invocation_failed".into(),
+            message: message.into(),
+            stacktrace: None,
+        })
+    }
+
+    #[test]
+    fn only_a_page_step_error_becomes_a_failed_browser_check() {
+        let error = page_error("handler error: navigation failed");
+        let failure = page_step_failure(&error, PAGE_URL).expect("page step failure");
+        assert_eq!(failure["passed"], false);
+        assert!(failure.get("status").is_none());
+        assert_eq!(failure["captures"], json!([]));
+        assert_eq!(failure["url"], PAGE_URL);
+        assert!(failure["reason"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{error:#}")));
+        // The page serializes its own script envelope, so it can echo the
+        // browser's words back; serde's position suffix then ends the text.
+        for forged in [
+            "handler error: script envelope did not parse: invalid type: string \"unknown session 'b1'; list tabs with browser::sessions::list\", expected struct Envelope at line 1 column 62",
+            "handler error: script envelope did not parse: invalid type: string \"screenshot failed: Request timed out.\", expected struct Envelope at line 1 column 39",
+        ] {
+            assert!(
+                page_step_failure(&page_error(forged), PAGE_URL).is_some(),
+                "{forged}"
+            );
+        }
+        for error in [
+            // A hung page and a crashed renderer both end in one of these.
+            page_error("handler error: key down failed: Request timed out."),
+            page_error("handler error: resize failed: Request timed out."),
+            page_error("handler error: screenshot failed: Request timed out."),
+            silent(),
+            sdk(iii_sdk::errors::Error::NotConnected),
+            anyhow::anyhow!("browser screenshot session identity mismatch"),
+            // The Canvas-page steps drop the SDK error type this way.
+            anyhow::anyhow!("{:#}", page_error("handler error: navigation failed")),
+        ] {
+            assert_eq!(page_step_failure(&error, PAGE_URL), None, "{error:#}");
+        }
+    }
+
+    #[test]
+    fn the_browser_check_runs_the_browser_functions_its_scenario_calls_and_no_others() {
+        fn functions(text: &str) -> impl Iterator<Item = &str> {
+            text.match_indices("\"browser::")
+                .map(move |(at, _)| &text[at..at + 2 + text[at + 1..].find('"').unwrap()])
+        }
+        let common = include_str!("common.rs");
+        let shared = &common[common.find("pub async fn browser_answers").unwrap()..];
+        let shared = &shared[..shared.find("\npub fn ").unwrap()];
+        for source in [
+            include_str!("chess_engine_build.rs"),
+            include_str!("visual_worker_build.rs"),
+        ] {
+            let own = &source[source.find("browser_answers(").unwrap()..];
+            let own = &own[..own.find("\n}").unwrap()];
+            for function in functions(source) {
+                // Navigation loads the candidate page; the blank session has none.
+                if function != "\"browser::navigate\"" {
+                    assert!(
+                        shared.contains(function) || own.contains(function),
+                        "{function}"
+                    );
+                }
+            }
+            // A command the scenario never sends must not decide its page faults.
+            for function in functions(shared) {
+                assert!(source.contains(function), "{function}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_step_failure_counts_only_when_the_browser_passes_its_own_check() {
+        let page_failed = || Err(page_error("handler error: navigation failed"));
+
+        let charged = settle_page_capture(page_failed(), true, PAGE_URL, async { Ok(()) })
+            .await
+            .unwrap();
+        assert_eq!(charged["passed"], false);
+        assert!(charged.get("status").is_none());
+
+        let unhealthy = settle_page_capture(page_failed(), true, PAGE_URL, async {
+            Err(anyhow::anyhow!("browser::resize timed out"))
+        })
+        .await
+        .unwrap_err();
+        let unhealthy = format!("{unhealthy:#}");
+        assert!(unhealthy.contains("navigation failed") && unhealthy.contains("resize timed out"));
+
+        let checked = std::cell::Cell::new(false);
+        let browser_check = || async {
+            checked.set(true);
+            Ok(())
+        };
+        let captured = json!({"passed":true,"captures":["before"]});
+        assert_eq!(
+            settle_page_capture(Ok(captured.clone()), true, PAGE_URL, browser_check())
+                .await
+                .unwrap(),
+            captured
+        );
+        let internal = settle_page_capture(
+            Err(anyhow::anyhow!("browser screenshot omitted PNG")),
+            true,
+            PAGE_URL,
+            browser_check(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(format!("{internal:#}"), "browser screenshot omitted PNG");
+        // The browser closed the session under the step (Chromium died) or
+        // lost its record of it.
+        for message in [
+            "handler error: screenshot failed: oneshot canceled",
+            "handler error: unknown session 'b1'; list tabs with browser::sessions::list",
+        ] {
+            let closed =
+                settle_page_capture(Err(page_error(message)), false, PAGE_URL, browser_check())
+                    .await
+                    .unwrap_err();
+            assert!(format!("{closed:#}").contains(message));
+        }
+        assert!(!checked.get());
     }
 }

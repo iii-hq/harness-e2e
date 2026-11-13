@@ -15,7 +15,7 @@ const labels={backlog:'Backlog',todo:'To do',in_progress:'In progress',in_review
 const el=id=>document.getElementById(id);
 function text(tag,value){const node=document.createElement(tag);node.textContent=value;return node}
 async function request(path,options){const response=await fetch(path,options);const body=await response.json();if(!response.ok)throw Error(body.error);return body}
-let boardGeneration=0;
+let boardGeneration=0,configLoad;
 async function board(){
  const generation=++boardGeneration;
  el('board-status').textContent='Loading tickets…';el('total').textContent='';el('lanes').replaceChildren();el('empty').hidden=true;el('retry').hidden=true;
@@ -32,7 +32,8 @@ async function board(){
 }
 async function show(){
  const route=location.hash;el('settings-view').hidden=route!=='#settings';el('board-view').hidden=route==='#settings';el('details').hidden=true;
- if(route==='#settings'){el('data-dir').value=(await request('/api/config')).data_dir;return}
+ // The form loads slowly and a save waits for that load, so a fill that lands before the load is overwritten.
+ if(route==='#settings'){await(configLoad=new Promise(done=>setTimeout(done,300)).then(()=>request('/api/config')).then(config=>{el('data-dir').value=config.data_dir}));return}
  await board();
  if(route.startsWith('#ticket/')){
   const {ticket}=await request('/api/tickets/'+route.slice(8));if(location.hash!==route)return;
@@ -44,7 +45,7 @@ async function show(){
  }
 }
 el('refresh').onclick=board;el('retry').onclick=board;
-el('settings').onsubmit=async event=>{event.preventDefault();await request('/api/config',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({data_dir:el('data-dir').value})});el('settings-status').textContent='Settings saved.'};
+el('settings').onsubmit=async event=>{event.preventDefault();await configLoad;await request('/api/config',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({data_dir:el('data-dir').value})});el('settings-status').textContent='Settings saved.'};
 el('new').onclick=()=>{el('create').reset();el('create-error').textContent='';el('dialog').showModal();(window.noFocus?el('create-description'):el('create-title')).focus()};
 el('create').onsubmit=async event=>{
  event.preventDefault();

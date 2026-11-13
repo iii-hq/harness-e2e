@@ -6,9 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
-use iii_sdk::IIIClient;
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -621,8 +620,16 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     } else {
         machine_source()
     };
-    let canvas = common::invoke(context.client(), &contract.functions["canvas"], json!({})).await;
-    ensure_remote_or_success(&canvas, "invoke candidate Canvas projection")?;
+    // shortcut: the canvas contract makes this call safe to repeat after the first attempt, not beside it; a Canvas stall past 30 s that then recovers can overlap two creates and charge the id mismatch to the candidate, extend the contract to overlapping calls if such a stall is seen.
+    let canvas = settle_canvas_projection(
+        common::invoke_candidate(context, &contract.functions["canvas"], json!({})).await?,
+        common::invoke(
+            context.client(),
+            "canvas::get",
+            json!({"id":CANVAS_PROBE_ID}),
+        ),
+    )
+    .await?;
     let canvas_id = canvas
         .as_ref()
         .ok()
@@ -636,7 +643,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     // A missing canvas_id is the candidate's miss, scored below, not infrastructure.
     let first_get = if let Some(id) = &canvas_id {
         let get = common::invoke(context.client(), "canvas::get", json!({"id":id})).await;
-        ensure_remote_or_success(&get, "read candidate Canvas record")?;
+        ensure_canvas_read(&get, id, "read candidate Canvas record")?;
         get
     } else {
         Err(anyhow::anyhow!("candidate omitted canvas_id"))
@@ -702,7 +709,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     } else {
         let second_get = if let Some(id) = &canvas_id {
             let get = common::invoke(context.client(), "canvas::get", json!({"id":id})).await;
-            ensure_remote_or_success(&get, "read browser-updated Canvas record")?;
+            ensure_canvas_read(&get, id, "read browser-updated Canvas record")?;
             get
         } else {
             Err(anyhow::anyhow!("candidate omitted canvas_id"))
@@ -719,12 +726,9 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     }
 
     let (primary, branch, invalid, health, direct, _) = match kind {
-        Kind::Form => form_probes(context.client(), &contract).await,
-        Kind::Machine => machine_probes(context.client(), &contract).await,
+        Kind::Form => form_probes(context, &contract).await?,
+        Kind::Machine => machine_probes(context, &contract).await?,
     };
-    for result in [&primary, &branch, &invalid, &health, &direct] {
-        ensure_remote_or_success(result, "invoke visual Worker domain probe")?;
-    }
     let (primary_ok, branch_ok, invalid_ok) =
         domain_results(kind, &primary, &branch, &invalid, &health, &direct);
     checks.insert("domain_primary".into(), json!({"passed":primary_ok,"reason":if primary_ok {"primary domain path matches the oracle"} else {"primary domain path differs from the oracle"},"observed":result_value(primary)}));
@@ -762,57 +766,63 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         && source_sha256.is_some()
         && compose_sha256.is_some();
     checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser prerequisites failed"} else if evidence_ok {"Worker page and Canvas graph screenshots are identity-bound"} else {"Worker page or Canvas screenshot, or identity evidence, is incomplete"}}));
+    common::name_unanswered_calls(&mut checks);
     Ok(json!({"identity":identity,"checks":checks,"files":files}))
 }
 
 async fn form_probes(
-    client: &IIIClient,
+    context: &E2eContext,
     contract: &WorkerContract,
-) -> (
+) -> Result<(
     Result<Value>,
     Result<Value>,
     Result<Value>,
     Result<Value>,
     Result<Value>,
     &'static str,
-) {
+)> {
     let id = &contract.functions["preview"];
-    let primary = common::invoke(client, id, json!({"values":{"title":"Login crashes","work_type":"feature","user_story":"As a user I can use passkeys","acceptance_criteria":"Passkey login succeeds"}})).await;
-    let branch = common::invoke(client, id, json!({"edit":"add_environment","values":{"title":"Login crashes","work_type":"bug","reproduction":"Open login","expected_behavior":"Dashboard opens","environment":"Chrome"}})).await;
-    let invalid = common::invoke(client, id, json!({"values":{"work_type":"chore"}})).await;
-    let health = common::invoke(client, id, json!({"values":{"work_type":"bug"}})).await;
-    let unknown_edit = common::invoke(client, id, json!({"edit":"unknown_edit","values":{"title":"x","work_type":"bug","reproduction":"x","expected_behavior":"x","environment":"x"}})).await;
-    let malformed_values = common::invoke(client, id, json!({"values":[]})).await;
+    let primary = common::invoke_candidate(context, id, json!({"values":{"title":"Login crashes","work_type":"feature","user_story":"As a user I can use passkeys","acceptance_criteria":"Passkey login succeeds"}})).await?;
+    let branch = common::invoke_candidate(context, id, json!({"edit":"add_environment","values":{"title":"Login crashes","work_type":"bug","reproduction":"Open login","expected_behavior":"Dashboard opens","environment":"Chrome"}})).await?;
+    let invalid =
+        common::invoke_candidate(context, id, json!({"values":{"work_type":"chore"}})).await?;
+    let health =
+        common::invoke_candidate(context, id, json!({"values":{"work_type":"bug"}})).await?;
+    let unknown_edit = common::invoke_candidate(context, id, json!({"edit":"unknown_edit","values":{"title":"x","work_type":"bug","reproduction":"x","expected_behavior":"x","environment":"x"}})).await?;
+    let malformed_values = common::invoke_candidate(context, id, json!({"values":[]})).await?;
     let direct = rejection_results([
         ("unknown_edit", unknown_edit),
         ("malformed_values", malformed_values),
     ]);
-    (primary, branch, invalid, health, direct, form_source())
+    Ok((primary, branch, invalid, health, direct, form_source()))
 }
 
 async fn machine_probes(
-    client: &IIIClient,
+    context: &E2eContext,
     contract: &WorkerContract,
-) -> (
+) -> Result<(
     Result<Value>,
     Result<Value>,
     Result<Value>,
     Result<Value>,
     Result<Value>,
     &'static str,
-) {
+)> {
     let id = &contract.functions["transition"];
-    let primary = common::invoke(client, id, json!({"state":"queued","event":"start"})).await;
-    let branch = common::invoke(
-        client,
+    let primary =
+        common::invoke_candidate(context, id, json!({"state":"queued","event":"start"})).await?;
+    let branch = common::invoke_candidate(
+        context,
         id,
         json!({"state":"running","event":"cancel","edit":"add_cancel"}),
     )
-    .await;
-    let invalid = common::invoke(client, id, json!({"state":"queued","event":"pass"})).await;
-    let health = common::invoke(client, id, json!({"state":"running","event":"cancel"})).await;
-    let direct = machine_matrix_probes(client, id).await;
-    (primary, branch, invalid, health, direct, machine_source())
+    .await?;
+    let invalid =
+        common::invoke_candidate(context, id, json!({"state":"queued","event":"pass"})).await?;
+    let health =
+        common::invoke_candidate(context, id, json!({"state":"running","event":"cancel"})).await?;
+    let direct = machine_matrix_probes(context, id).await?;
+    Ok((primary, branch, invalid, health, direct, machine_source()))
 }
 
 fn rejection_results<const N: usize>(entries: [(&str, Result<Value>); N]) -> Result<Value> {
@@ -832,7 +842,7 @@ fn rejection_results<const N: usize>(entries: [(&str, Result<Value>); N]) -> Res
     Ok(json!({"passed":passed,"observed":observed}))
 }
 
-async fn machine_matrix_probes(client: &IIIClient, id: &str) -> Result<Value> {
+async fn machine_matrix_probes(context: &E2eContext, id: &str) -> Result<Result<Value>> {
     let states = ["queued", "running", "passed", "failed", "cancelled"];
     let events = ["start", "pass", "fail", "retry", "cancel"];
     let mut passed = true;
@@ -847,13 +857,14 @@ async fn machine_matrix_probes(client: &IIIClient, id: &str) -> Result<Value> {
                 ("running", "cancel") => Some("cancelled"),
                 _ => None,
             };
-            let result = common::invoke(client, id, json!({"state":state,"event":event})).await;
+            let result =
+                common::invoke_candidate(context, id, json!({"state":state,"event":event})).await?;
             if result
                 .as_ref()
                 .err()
                 .is_some_and(|error| !common::is_remote_failure(error))
             {
-                return result.with_context(|| format!("invoke {state}/{event} matrix probe"));
+                return Ok(result.with_context(|| format!("invoke {state}/{event} matrix probe")));
             }
             let matches = match expected {
                 Some(next) => result
@@ -866,25 +877,27 @@ async fn machine_matrix_probes(client: &IIIClient, id: &str) -> Result<Value> {
             observed.push(json!({"state":state,"event":event,"expected":expected,"passed":matches,"result":result_value(result)}));
         }
     }
-    let unknown_edit = common::invoke(
-        client,
+    let unknown_edit = common::invoke_candidate(
+        context,
         id,
         json!({"state":"queued","event":"start","edit":"unknown_edit"}),
     )
-    .await;
+    .await?;
     if unknown_edit
         .as_ref()
         .err()
         .is_some_and(|error| !common::is_remote_failure(error))
     {
-        return unknown_edit.context("invoke unknown state-machine edit probe");
+        return Ok(unknown_edit.context("invoke unknown state-machine edit probe"));
     }
     let unknown_rejected = unknown_edit
         .as_ref()
         .err()
         .is_some_and(common::is_remote_failure);
     passed &= unknown_rejected;
-    Ok(json!({"passed":passed,"matrix":observed,"unknown_edit":result_value(unknown_edit)}))
+    Ok(Ok(
+        json!({"passed":passed,"matrix":observed,"unknown_edit":result_value(unknown_edit)}),
+    ))
 }
 
 fn domain_results(
@@ -990,20 +1003,18 @@ async fn inspect_console(
     contract: &WorkerContract,
     ready: bool,
 ) -> Result<(bool, Option<u16>, Value, Result<Value>, Result<Value>)> {
-    let script = common::invoke(
-        context.client(),
+    let script = common::invoke_candidate(
+        context,
         &contract.functions["ui-content"],
         json!({"path":contract.script_path()}),
     )
-    .await;
-    let style = common::invoke(
-        context.client(),
+    .await?;
+    let style = common::invoke_candidate(
+        context,
         &contract.functions["ui-content"],
         json!({"path":contract.style_path()}),
     )
-    .await;
-    ensure_remote_or_success(&script, "fetch Console script")?;
-    ensure_remote_or_success(&style, "fetch Console style")?;
+    .await?;
     let console_status = context.trigger_value("ade::status", json!({})).await;
     ensure_remote_or_success(&console_status, "inspect Console status")?;
     let port = console_status
@@ -1104,11 +1115,23 @@ async fn capture_browser(
         .context("browser session omitted session_id")?
         .to_string();
     let result = capture_browser_session(context, kind, &session, &url, identity).await;
-    context
+    let stopped = context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await
         .context("stop visual Worker browser session")?;
-    result
+    common::settle_page_capture(
+        result?,
+        stopped["was_running"] == true,
+        &url,
+        common::browser_answers(
+            context,
+            &[
+                ("browser::act", json!({"action":"press","key":"Tab"})),
+                ("browser::history", json!({"action":"reload"})),
+            ],
+        ),
+    )
+    .await
 }
 
 /// `browser::navigate` answers only after the page's `load` event, which its CDP
@@ -1255,13 +1278,15 @@ fn keyboard_and_theme_passed(keyboard: &Value, appearance: &Value) -> bool {
         && appearance["dark"]["usable"] == true
 }
 
+/// The outer error is infrastructure: the browser could not size its window or
+/// load the Console. The inner result is the page phase, settled by the caller.
 async fn capture_browser_session(
     context: &E2eContext,
     kind: Kind,
     session: &str,
     url: &str,
     identity: &Value,
-) -> Result<Value> {
+) -> Result<Result<Value>> {
     context
         .trigger_value(
             "browser::resize",
@@ -1270,10 +1295,21 @@ async fn capture_browser_session(
         .await?;
     let navigation = navigate(context, session, url).await?;
     if navigation["ok"] != true {
-        return Ok(
+        return Ok(Ok(
             json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"captures":[],"url":url}),
-        );
+        ));
     }
+    Ok(capture_browser_page(context, kind, session, url, identity, navigation).await)
+}
+
+async fn capture_browser_page(
+    context: &E2eContext,
+    kind: Kind,
+    session: &str,
+    url: &str,
+    identity: &Value,
+    navigation: Value,
+) -> Result<Value> {
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
     let before_state = inspect_ui(context, kind, session, "initial").await?;
     let before = common::screenshot_png(context, session).await?;
@@ -1394,8 +1430,16 @@ return {{visible,same_id:sameId,url,canvas_route:/^#\/worker\/[^/]+\/canvas$/.te
     let canvas_url = open_canvas["result"]["url"].as_str().map(str::to_string);
     let opens_canvas = open_canvas["result"]["canvas_route"] == true
         && open_canvas["result"]["context_canvas_id"] == identity["canvas_id"];
-    let graph = match canvas_url.as_deref().filter(|_| opens_canvas) {
+    let on_canvas = canvas_url.as_deref().filter(|_| opens_canvas);
+    // The Canvas page is the stack's own: a step that fails on it loses its SDK
+    // error type, so it is never charged to the candidate page.
+    let stack_page = |error: anyhow::Error| match on_canvas {
+        Some(_) => anyhow!("{error:#}"),
+        None => error,
+    };
+    let graph = match on_canvas {
         Some(canvas_url) => {
+            // Sent from the candidate's page, so it keeps its SDK error type.
             route(context, session, canvas_url).await?;
             context
                 .trigger_value(
@@ -1419,13 +1463,16 @@ for(let i=0;i<200;i++){{
 return {{rendered_graph:false,label_painted:false}};
 }})();"#, serde_json::to_string(if kind == Kind::Form { "Environment" } else { "cancelled" })?)}),
                 )
-                .await?["result"]
+                .await
+                .map_err(stack_page)?["result"]
                 .clone()
         }
         None => json!({"rendered_graph":false}),
     };
-    let canvas = common::screenshot_png(context, session).await?;
-    route(context, session, url).await?;
+    let canvas = common::screenshot_png(context, session)
+        .await
+        .map_err(stack_page)?;
+    route(context, session, url).await.map_err(stack_page)?;
     let reload = reload(context, session).await?;
     let reloaded_state = if reload["ok"] == true {
         inspect_ui(context, kind, session, "reloaded").await?
@@ -1826,6 +1873,47 @@ fn directory_sha256(root: &Path) -> Result<String> {
     Ok(crate::artifact::sha256_bytes(&bytes))
 }
 
+/// The id the runner reads to see whether the Canvas worker answers.
+const CANVAS_PROBE_ID: &str = "harness-e2e-liveness";
+
+/// The candidate's Canvas handler calls canvas::, so a projection that brought
+/// no canvas_id (silence, a rejection, an answer without one) is the
+/// candidate's only when the Canvas worker still serves a read to the runner.
+/// The probe reads one id, so its work does not grow with the shared store.
+async fn settle_canvas_projection(
+    canvas: Result<Value>,
+    canvas_probe: impl std::future::Future<Output = Result<Value>>,
+) -> Result<Result<Value>> {
+    if !matches!(&canvas, Ok(value) if value["canvas_id"].is_string()) {
+        ensure_canvas_read(
+            &canvas_probe.await,
+            CANVAS_PROBE_ID,
+            "check Canvas worker after a candidate Canvas projection without a canvas_id",
+        )?;
+    }
+    Ok(canvas)
+}
+
+/// A `canvas::get` the runner sends answered when it returned a record or
+/// Canvas said that `id` is unknown. Any other error, whatever its code, is
+/// the Canvas worker's or its state backend's, never the candidate's: a lost
+/// state backend also says "not found", about its own function.
+// shortcut: reads Canvas's "canvas '<id>' not found" wording, so a reworded miss counts as infrastructure; match a dedicated code once Canvas answers with one.
+fn ensure_canvas_read(result: &Result<Value>, id: &str, action: &str) -> Result<()> {
+    if let Err(error) = result {
+        let missing = matches!(
+            error.downcast_ref::<iii_sdk::errors::Error>(),
+            Some(iii_sdk::errors::Error::Remote { code, message, .. })
+                if code == "invocation_failed"
+                    && message.contains(&format!("canvas '{id}' not found"))
+        );
+        if !missing {
+            bail!("{action} infrastructure failure: {error:#}");
+        }
+    }
+    Ok(())
+}
+
 fn ensure_remote_or_success(result: &Result<Value>, action: &str) -> Result<()> {
     if let Err(error) = result {
         if !common::is_remote_failure(error) {
@@ -1864,6 +1952,88 @@ fn insert_binary_file(files: &mut serde_json::Map<String, Value>, name: &str, by
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_canvas_projection_without_an_id_is_the_candidates_only_when_the_canvas_worker_answers(
+    ) {
+        use iii_sdk::errors::Error as Sdk;
+        let sdk = |error: Sdk| Err::<Value, _>(anyhow::Error::new(error).context("sent"));
+        let coded = |code: &str, message: &str| Sdk::Remote {
+            code: code.into(),
+            message: message.into(),
+            stacktrace: None,
+        };
+        let remote = |message: &str| sdk(coded("invocation_failed", message));
+        let silence = || sdk(Sdk::Timeout).context(format!("canvas {} twice", common::UNANSWERED));
+
+        let stack_faults = || {
+            [
+                Sdk::Timeout,
+                Sdk::NotConnected,
+                // Canvas is not registered, or dropped while the read was in flight.
+                coded(
+                    "function_not_found",
+                    "Function canvas::get not found in namespace default.",
+                ),
+                coded("invocation_stopped", "Invocation stopped"),
+                // Canvas answers, but its own state backend does not.
+                coded(
+                    "invocation_failed",
+                    "handler error: state::get failed: invocation timed out",
+                ),
+                // Canvas 0.2.1 with the state worker stopped, verbatim.
+                coded(
+                    "invocation_failed",
+                    "handler error: state::get failed: remote error (function_not_found): Function state::get not found in namespace default.",
+                ),
+                // A miss, but for an id the runner did not ask for.
+                coded(
+                    "invocation_failed",
+                    "handler error: canvas 'other' not found — canvas::list shows the stored ids",
+                ),
+            ]
+        };
+        let answers = |id: &str| {
+            [
+                remote(&format!(
+                    "handler error: canvas '{id}' not found — canvas::list shows the stored ids"
+                )),
+                Ok(json!({})),
+            ]
+        };
+
+        // Silence, a rejection and an answer without a canvas_id can each be the
+        // candidate passing on a Canvas outage.
+        let rejection = || remote("handler error: canvas::create failed");
+        let no_id = || Ok(json!({"source":"x"}));
+        let without_canvas_id: [&dyn Fn() -> Result<Value>; 3] = [&silence, &rejection, &no_id];
+        for candidate in without_canvas_id {
+            let text = |result: Result<Value>| result.map_err(|error| format!("{error:#}"));
+            for stack_gone in stack_faults() {
+                let outcome = settle_canvas_projection(candidate(), async { sdk(stack_gone) });
+                assert!(
+                    format!("{:#}", outcome.await.unwrap_err()).contains("infrastructure failure")
+                );
+            }
+            for answered in answers(CANVAS_PROBE_ID) {
+                let charged = settle_canvas_projection(candidate(), async { answered }).await;
+                assert_eq!(text(charged.unwrap()), text(candidate()));
+            }
+        }
+        // The runner's reads of the candidate's record follow the same rule.
+        for stack_fault in stack_faults() {
+            let read = ensure_canvas_read(&sdk(stack_fault), "c1", "read candidate Canvas record");
+            assert!(format!("{:#}", read.unwrap_err()).contains("infrastructure failure"));
+        }
+        for answered in answers("c1") {
+            ensure_canvas_read(&answered, "c1", "read candidate Canvas record").unwrap();
+        }
+        // A projection that brought a canvas_id never runs the probe.
+        let projected = json!({"canvas_id":"c1"});
+        let settled =
+            settle_canvas_projection(Ok(projected.clone()), async { panic!("probe ran") });
+        assert_eq!(settled.await.unwrap().unwrap(), projected);
+    }
 
     #[test]
     fn harness_places_candidate_compose_in_the_worker_workspace() {

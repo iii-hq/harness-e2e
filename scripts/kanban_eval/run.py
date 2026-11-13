@@ -103,6 +103,10 @@ class EvaluationError(RuntimeError):
     pass
 
 
+class CandidateFault(RuntimeError):
+    pass
+
+
 def limit_log_size():
     resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 ** 2, 16 * 1024 ** 2))
 
@@ -297,17 +301,13 @@ def atomic_json(path, value):
 def run_candidate_build_checks(candidate, evidence, cancel=None):
     checks = []
     for step in ('typecheck', 'test', 'build'):
-        command = ['pnpm', '--dir', 'kanban', step]
-        timeout = 90
-        owned_container = candidate
-        if step == 'test':
-            command = ['/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '90s', *command]
-            timeout = 120
-            owned_container = None
-        code = bounded(docker_exec(candidate, command), evidence / f'{step}.log',
-                       timeout, owned_container, cancel)
+        command = ['/usr/bin/timeout', '--signal=TERM', '--kill-after=5s', '90s',
+                   'pnpm', '--dir', 'kanban', step]
+        started = time.monotonic()
+        code = bounded(docker_exec(candidate, command), evidence / f'{step}.log', 120, None, cancel)
         checks.append({'id': step, 'status': 'passed' if code == 0 else 'failed',
-                       'detail': f'isolated command exit {code}'})
+                       'detail': f'isolated command exit {code}',
+                       'seconds': round(time.monotonic() - started, 1)})
         if code and step in HARD_BUILD_STEPS:
             return checks, False
     return checks, True
@@ -359,7 +359,42 @@ def wait_runtime_ready(process, evaluator, cancel=None, timeout=30):
     return False
 
 
-def restart_runtime(candidate, evaluator, evidence, runtime, cancel=None,
+def exited_compose_fault(returncode, output):
+    # Only iii compose 0.26's own exit 1 naming an application cause is the candidate's; Docker exits and engine codes are not.
+    errors = re.findall(r'^error\[([A-Z0-9_]+)\]: ', output, re.M)
+    failed = re.findall(r'^up failed \[([A-Z0-9_]+)\] after ', output, re.M)
+    if returncode != 1 or not errors:
+        return None
+    if errors[-1] == 'MISSING_ENV_FILE':
+        return 'Compose exited with MISSING_ENV_FILE'
+    if errors[-1] == 'PROJECT_DID_NOT_START' and failed and failed[-1] in (
+            'CHILD_EXITED_BEFORE_REGISTRATION', 'STARTUP_TIMEOUT', 'HOOK_FAILED'):
+        return f'Compose exited: required container failed with {failed[-1]}'
+    return None
+
+
+def application_fault(process, candidate, namespace, log, runtime_log, offset):
+    # None unless the trusted side (Docker, the engine, Compose) is cleared of the failure.
+    returncode = process.poll()
+    if returncode is not None:
+        fault = exited_compose_fault(returncode, runtime_log.read_bytes()[offset:].decode(errors='replace'))
+        # The engine outlives an exited Compose: one that no longer answers caused the exit.
+        check = docker_exec(candidate, ['/runtime/iii', 'trigger', 'engine::health::check',
+                            '--engine', 'ws://127.0.0.1:50179', '--json', '{}'])
+        try:
+            return fault if fault and not bounded(check, log, 5) else None
+        except subprocess.TimeoutExpired:
+            return None
+    check = docker_exec(candidate, ['/runtime/iii', 'trigger', 'compose::status',
+                        '--engine', 'ws://127.0.0.1:50179', '--namespace', namespace,
+                        '--json', json.dumps({'file': '/workspace/worker-compose.yaml'})])
+    try:
+        return None if bounded(check, log, 5) else 'runtime process still running and Compose answers'
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def restart_runtime(candidate, evaluator, evidence, runtime, namespace, cancel=None,
                     register_configuration=False, reset_configuration=False):
     number = runtime[1] + 1
     if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME, runtime[2]]),
@@ -380,9 +415,16 @@ p.mkdir(parents=True)
         if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', reset]),
                    evidence / f'control-reset-{number}.log', 10, candidate, cancel):
             raise RuntimeError('configuration reset failed')
-    runtime[0] = start_runtime(candidate, evidence / 'runtime.log', register_configuration)
+    runtime_log = evidence / 'runtime.log'
+    runtime[3] = runtime_log.stat().st_size  # where this start's output begins
+    runtime[0] = start_runtime(candidate, runtime_log, register_configuration)
     runtime[1] = number
     if not wait_runtime_ready(runtime[0], evaluator, cancel, timeout=60):
+        fault = application_fault(runtime[0], candidate, namespace,
+                                  evidence / f'control-restart-{number}-fault.log', runtime_log, runtime[3])
+        if fault:
+            raise CandidateFault('application did not become ready within 60 s after restart: '
+                                 f'{fault}; see runtime.log')
         raise RuntimeError('runtime did not become ready after restart')
     return {'ready': True}
 
@@ -478,6 +520,12 @@ def hot_reload(candidate, evaluator, evidence, runtime, namespace, cancel=None):
             raise InfrastructureError('hot reload source restoration failed: '
                                       + restored.stderr.decode(errors='replace')[-4096:])
     if not successful_log_queries:
+        if runtime[0].poll() is not None:
+            # A Compose exit the restart rule charges to the application is the same fault here.
+            fault = application_fault(runtime[0], candidate, namespace, evidence / 'hot-reload-fault.log',
+                                      evidence / 'runtime.log', runtime[3])
+            if fault:
+                raise CandidateFault(f'application is not running for the hot-reload check: {fault}; see runtime.log')
         raise InfrastructureError(f'Compose worker logs were unavailable during hot reload in namespace {namespace}')
     recovered = wait_runtime_ready(runtime[0], evaluator, cancel, timeout=10)
     return {'observed': observed and recovered, 'source_restored': True}
@@ -570,7 +618,10 @@ def control_callback(evidence, candidate, evaluator, runtime, namespace, cancel=
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, check=False, timeout=90)
                 if completed.returncode:
-                    raise RuntimeError(completed.stderr.decode(errors='replace')[-4096:])
+                    message = completed.stderr.decode(errors='replace')[-4096:]
+                    if 'no ticket store at /data/tickets.json' in message:
+                        raise CandidateFault(message.strip())
+                    raise RuntimeError(message)
                 value = completed.stdout.decode(errors='replace')
             elif operation == 'write_store' and set(payload) == {'value'} and isinstance(payload['value'], str):
                 value_bytes = payload['value'].encode()
@@ -584,10 +635,10 @@ def control_callback(evidence, candidate, evaluator, runtime, namespace, cancel=
                     raise RuntimeError(completed.stderr.decode(errors='replace')[-4096:])
                 value = {'bytes': len(value_bytes)}
             elif operation == 'restart' and not payload:
-                value = restart_runtime(candidate, evaluator, evidence, runtime, cancel)
+                value = restart_runtime(candidate, evaluator, evidence, runtime, namespace, cancel)
             elif operation == 'restart' and payload == {
                     'register_configuration': False, 'reset_configuration': True}:
-                value = restart_runtime(candidate, evaluator, evidence, runtime, cancel,
+                value = restart_runtime(candidate, evaluator, evidence, runtime, namespace, cancel,
                                         register_configuration=False, reset_configuration=True)
             elif operation == 'hot_reload' and not payload:
                 value = hot_reload(candidate, evaluator, evidence, runtime, namespace, cancel)
@@ -598,6 +649,8 @@ def control_callback(evidence, candidate, evaluator, runtime, namespace, cancel=
             response = {'id': request_id, 'ok': True, 'value': value}
         except InfrastructureError:
             raise
+        except CandidateFault as error:
+            response = {'id': request_id, 'ok': False, 'candidate': True, 'error': str(error)}
         except subprocess.TimeoutExpired as error:
             if operation == 'inspect_runtime':
                 raise InfrastructureError('Node inspector control timed out') from error
@@ -843,7 +896,7 @@ print('workspace readable; trusted files, evaluator process and external network
                     subprocess.run(['docker', 'exec', '-i', candidate, '/usr/bin/tee', '/runtime-state/config.json'],
                                    input=json.dumps(config).encode(), stdout=subprocess.DEVNULL, check=True, timeout=10)
                 process = start_runtime(candidate, evidence / 'runtime.log')
-                runtime = [process, 0, keeper]
+                runtime = [process, 0, keeper, 0]
                 started = time.monotonic()
                 if not wait_runtime_ready(process, evaluator, cancel):
                     build_checks.append({'id': 'application_startup', 'status': 'failed',
