@@ -1644,6 +1644,39 @@ mod tests {
         assert!(plan.materialize_scope(profile, None).is_err());
     }
 
+    /// Cases whose fixture scripts/run_in_image.sh mounts by group id, and a
+    /// group's id names only its first case.
+    fn grouped_cases_with_mounted_fixtures(plan: &MasterPlan) -> Vec<String> {
+        let mounted = [
+            "chess_engine_build",
+            "form_flow_build",
+            "state_machine_canvas_build",
+        ];
+        plan.suites
+            .iter()
+            .flat_map(|suite| suite.scenario_groups.iter().flatten())
+            .filter(|id| mounted.contains(&id.as_str()) || id.starts_with("kanban_"))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn no_case_whose_fixture_is_mounted_by_group_id_is_grouped() {
+        let plan = embedded().unwrap();
+        assert_eq!(
+            grouped_cases_with_mounted_fixtures(&plan),
+            Vec::<String>::new()
+        );
+        let mut grouped = plan.clone();
+        grouped.suites[0]
+            .scenario_groups
+            .push(vec!["minimal_path".into(), "chess_engine_build".into()]);
+        assert_eq!(
+            grouped_cases_with_mounted_fixtures(&grouped),
+            ["chess_engine_build"]
+        );
+    }
+
     #[test]
     fn source_rejects_lost_coverage_overlap_and_invalid_samples() {
         let plan = embedded().unwrap();
