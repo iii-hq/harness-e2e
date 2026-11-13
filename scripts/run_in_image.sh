@@ -129,6 +129,8 @@ if [[ "$phase" == group ]]; then
   # case's released runner read from disk, never the evaluator's source,
   # fixtures or expected outputs (src/, the rest of tests/, docs/).
   readable=(scripts config stacks schemas)
+  # By group id, which names only a group's first case: a test fails if any
+  # case below is grouped (no_case_whose_fixture_is_mounted_by_group_id_is_grouped).
   case "${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}" in
     case-kanban-*) readable+=(src/scenarios/kanban/catalog.json) ;;
     case-chess-engine-build) readable+=(tests/fixtures/chess-worker) ;;
