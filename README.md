@@ -87,11 +87,14 @@ A fault of the delivered application is the subject's too: the check that met
 it scores 0, later checks still run, and the run stays in the mean. That covers
 a function the candidate owns that stays silent twice while the stack answers,
 a step its own page rejects in the browser, a Kanban app that is not ready 60
-seconds after a restart while Compose still answers or that keeps no
+seconds after a restart while Compose still answers, whose own start failure
+made Compose exit while the engine still answers, or that keeps no
 `/data/tickets.json`, and a Kanban `typecheck` or `build` past its 90-second
 limit, which, like any failed build, scores the whole round 0. While
 a delivery is evaluated, only a fault of the controller, the container runtime
-or the stack leaves the mean.
+or the stack leaves the mean. A candidate page that stops answering the browser
+after it loaded (a hang, a blocking dialog) leaves the mean too: the browser
+answers the same way for a crashed or frozen renderer.
 
 A function the subject registered that outlives its workers at cleanup is
 recorded as the subject's `subject_leftover` failure; the run keeps its

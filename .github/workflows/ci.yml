@@ -56,7 +56,7 @@ jobs:
           fi
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --all-targets
-      - name: Prove evaluator delegation against an isolated Engine
+      - name: Prove evaluator delegation and candidate-call settling against an isolated Engine
         env:
           III_TELEMETRY_ENABLED: "false"
         run: |
@@ -69,8 +69,9 @@ jobs:
             ef42cd139b4f9f47d1530e2156699781ea29e85653185424c0f073f2d4f248dd \
             "$RUNNER_TEMP/evaluator-engine.tar.gz" | sha256sum --check --status
           tar -xzf "$RUNNER_TEMP/evaluator-engine.tar.gz" -C "$RUNNER_TEMP/evaluator-bin"
-          PATH="$RUNNER_TEMP/evaluator-bin:$PATH" cargo test --locked --lib \
-            delegation_probe_accepts_real_rpc_and_rejects_tcp_only_routing -- --ignored
+          PATH="$RUNNER_TEMP/evaluator-bin:$PATH" cargo test --locked --lib -- --ignored \
+            delegation_probe_accepts_real_rpc_and_rejects_tcp_only_routing \
+            a_real_engine_tells_a_hung_candidate_function_from_its_own_death
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: node --test tests/dashboard/*.test.cjs
       - name: Verify trending topics evaluator and delivery contracts

@@ -625,7 +625,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         common::invoke(
             context.client(),
             "canvas::get",
-            json!({"id":"harness-e2e-liveness"}),
+            json!({"id":CANVAS_PROBE_ID}),
         ),
     )
     .await?;
@@ -642,7 +642,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     // A missing canvas_id is the candidate's miss, scored below, not infrastructure.
     let first_get = if let Some(id) = &canvas_id {
         let get = common::invoke(context.client(), "canvas::get", json!({"id":id})).await;
-        ensure_canvas_read(&get, "read candidate Canvas record")?;
+        ensure_canvas_read(&get, id, "read candidate Canvas record")?;
         get
     } else {
         Err(anyhow::anyhow!("candidate omitted canvas_id"))
@@ -708,7 +708,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     } else {
         let second_get = if let Some(id) = &canvas_id {
             let get = common::invoke(context.client(), "canvas::get", json!({"id":id})).await;
-            ensure_canvas_read(&get, "read browser-updated Canvas record")?;
+            ensure_canvas_read(&get, id, "read browser-updated Canvas record")?;
             get
         } else {
             Err(anyhow::anyhow!("candidate omitted canvas_id"))
@@ -1114,12 +1114,13 @@ async fn capture_browser(
         .context("browser session omitted session_id")?
         .to_string();
     let result = capture_browser_session(context, kind, &session, &url, identity).await;
-    context
+    let stopped = context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await
         .context("stop visual Worker browser session")?;
     common::settle_page_capture(
         result?,
+        stopped["was_running"] == true,
         &url,
         common::browser_answers(
             context,
@@ -1872,32 +1873,39 @@ fn directory_sha256(root: &Path) -> Result<String> {
     Ok(crate::artifact::sha256_bytes(&bytes))
 }
 
-/// The candidate's Canvas handler calls canvas::, so its silence is the
+/// The id the runner reads to see whether the Canvas worker answers.
+const CANVAS_PROBE_ID: &str = "harness-e2e-liveness";
+
+/// The candidate's Canvas handler calls canvas::, so a projection that brought
+/// no canvas_id (silence, a rejection, an answer without one) is the
 /// candidate's only when the Canvas worker still serves a read to the runner.
 /// The probe reads one id, so its work does not grow with the shared store.
 async fn settle_canvas_projection(
     canvas: Result<Value>,
     canvas_probe: impl std::future::Future<Output = Result<Value>>,
 ) -> Result<Result<Value>> {
-    if canvas.as_ref().is_err_and(common::is_unanswered) {
+    if !matches!(&canvas, Ok(value) if value["canvas_id"].is_string()) {
         ensure_canvas_read(
             &canvas_probe.await,
-            "check Canvas worker after a silent candidate Canvas projection",
+            CANVAS_PROBE_ID,
+            "check Canvas worker after a candidate Canvas projection without a canvas_id",
         )?;
     }
     Ok(canvas)
 }
 
-/// A `canvas::get` the runner sends answered when it returned a record or said
-/// the id is unknown. Any other error, whatever its code, is the Canvas
-/// worker's or its state backend's, never the candidate's.
-// shortcut: reads Canvas's "not found" wording, so a reworded miss counts as infrastructure; match a dedicated code once Canvas answers with one.
-fn ensure_canvas_read(result: &Result<Value>, action: &str) -> Result<()> {
+/// A `canvas::get` the runner sends answered when it returned a record or
+/// Canvas said that `id` is unknown. Any other error, whatever its code, is
+/// the Canvas worker's or its state backend's, never the candidate's: a lost
+/// state backend also says "not found", about its own function.
+// shortcut: reads Canvas's "canvas '<id>' not found" wording, so a reworded miss counts as infrastructure; match a dedicated code once Canvas answers with one.
+fn ensure_canvas_read(result: &Result<Value>, id: &str, action: &str) -> Result<()> {
     if let Err(error) = result {
         let missing = matches!(
             error.downcast_ref::<iii_sdk::errors::Error>(),
             Some(iii_sdk::errors::Error::Remote { code, message, .. })
-                if code == "invocation_failed" && message.contains("not found")
+                if code == "invocation_failed"
+                    && message.contains(&format!("canvas '{id}' not found"))
         );
         if !missing {
             bail!("{action} infrastructure failure: {error:#}");
@@ -1946,7 +1954,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn a_silent_canvas_projection_is_the_candidates_only_when_the_canvas_worker_answers() {
+    async fn a_canvas_projection_without_an_id_is_the_candidates_only_when_the_canvas_worker_answers(
+    ) {
         use iii_sdk::errors::Error as Sdk;
         let sdk = |error: Sdk| Err::<Value, _>(anyhow::Error::new(error).context("sent"));
         let coded = |code: &str, message: &str| Sdk::Remote {
@@ -1972,46 +1981,58 @@ mod tests {
                     "invocation_failed",
                     "handler error: state::get failed: invocation timed out",
                 ),
+                // Canvas 0.2.1 with the state worker stopped, verbatim.
+                coded(
+                    "invocation_failed",
+                    "handler error: state::get failed: remote error (function_not_found): Function state::get not found in namespace default.",
+                ),
+                // A miss, but for an id the runner did not ask for.
+                coded(
+                    "invocation_failed",
+                    "handler error: canvas 'other' not found — canvas::list shows the stored ids",
+                ),
             ]
         };
-        let answers = || {
+        let answers = |id: &str| {
             [
-                remote("handler error: canvas 'c1' not found — canvas::list shows the stored ids"),
+                remote(&format!(
+                    "handler error: canvas '{id}' not found — canvas::list shows the stored ids"
+                )),
                 Ok(json!({})),
             ]
         };
 
-        for stack_gone in stack_faults() {
-            let outcome = settle_canvas_projection(silence(), async { sdk(stack_gone) }).await;
-            assert!(format!("{:#}", outcome.unwrap_err()).contains("infrastructure failure"));
-        }
-        for answered in answers() {
-            let charged = settle_canvas_projection(silence(), async { answered }).await;
-            assert!(common::is_unanswered(&charged.unwrap().unwrap_err()));
+        // Silence, a rejection and an answer without a canvas_id can each be the
+        // candidate passing on a Canvas outage.
+        let rejection = || remote("handler error: canvas::create failed");
+        let no_id = || Ok(json!({"source":"x"}));
+        let without_canvas_id: [&dyn Fn() -> Result<Value>; 3] = [&silence, &rejection, &no_id];
+        for candidate in without_canvas_id {
+            let text = |result: Result<Value>| result.map_err(|error| format!("{error:#}"));
+            for stack_gone in stack_faults() {
+                let outcome = settle_canvas_projection(candidate(), async { sdk(stack_gone) });
+                assert!(
+                    format!("{:#}", outcome.await.unwrap_err()).contains("infrastructure failure")
+                );
+            }
+            for answered in answers(CANVAS_PROBE_ID) {
+                let charged = settle_canvas_projection(candidate(), async { answered }).await;
+                assert_eq!(text(charged.unwrap()), text(candidate()));
+            }
         }
         // The runner's reads of the candidate's record follow the same rule.
         for stack_fault in stack_faults() {
-            let read = ensure_canvas_read(&sdk(stack_fault), "read candidate Canvas record");
+            let read = ensure_canvas_read(&sdk(stack_fault), "c1", "read candidate Canvas record");
             assert!(format!("{:#}", read.unwrap_err()).contains("infrastructure failure"));
         }
-        for answered in answers() {
-            ensure_canvas_read(&answered, "read candidate Canvas record").unwrap();
+        for answered in answers("c1") {
+            ensure_canvas_read(&answered, "c1", "read candidate Canvas record").unwrap();
         }
-        // An answer never runs the probe, whatever its text says.
-        for answer in [
-            remote("canvas::validate did not answer"),
-            Ok(json!({"canvas_id":"c1"})),
-        ] {
-            let expected = answer
-                .as_ref()
-                .map_err(|error| format!("{error:#}"))
-                .cloned();
-            let settled = settle_canvas_projection(answer, async { panic!("probe ran") }).await;
-            assert_eq!(
-                settled.unwrap().map_err(|error| format!("{error:#}")),
-                expected
-            );
-        }
+        // A projection that brought a canvas_id never runs the probe.
+        let projected = json!({"canvas_id":"c1"});
+        let settled =
+            settle_canvas_projection(Ok(projected.clone()), async { panic!("probe ran") });
+        assert_eq!(settled.await.unwrap().unwrap(), projected);
     }
 
     #[test]

@@ -925,20 +925,23 @@ export const PROBES = {
       // (see foundation_accessible_settings above); filling it before that load lands
       // races the field and can silently revert to the old value once it does.
       const settingsFormLoaded = (expected) => eventually(async () => await dataDirField.inputValue() === expected, 'settings form did not load the current directory')
+      // A late form load reverts the fill and an earlier "saved" status hides it, so the API confirms each save; the 2 s poll lets a slow save land before a refill.
+      const saveDirectory = (directory) => eventually(async () => {
+        await dataDirField.fill(directory)
+        await page.getByRole('button', { name: 'Save settings' }).click()
+        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        return eventually(async () => (await json(await api('/api/config'))).data_dir === directory, 'the save carried another directory', 2_000)
+      }, 'settings form did not save the selected directory')
       try {
         const alternateDir = `./board-probe-${randomUUID()}`
         await page.getByRole('link', { name: /^settings$/i }).click()
         await settingsFormLoaded(initialConfig.data_dir)
-        await dataDirField.fill(alternateDir)
-        await page.getByRole('button', { name: 'Save settings' }).click()
-        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        await saveDirectory(alternateDir)
         await boardNavigation(page).click()
         await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', STORE_SWITCH_TIMEOUT_MS)
         await page.getByRole('link', { name: /^settings$/i }).click()
         await settingsFormLoaded(alternateDir)
-        await dataDirField.fill(initialConfig.data_dir)
-        await page.getByRole('button', { name: 'Save settings' }).click()
-        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        await saveDirectory(initialConfig.data_dir)
         await boardNavigation(page).click()
         await eventually(async () => await boardTicketTitle(page, restored.title).count() > 0, 'returning from settings did not reload the restored store', STORE_SWITCH_TIMEOUT_MS)
       } finally {

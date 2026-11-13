@@ -746,18 +746,22 @@ pub async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value
 /// It carries no `status`, so it scores as failed, not blocked.
 pub fn page_step_failure(error: &anyhow::Error, url: &str) -> Option<Value> {
     let text = format!("{error:#}");
-    // A lost session is the browser's fault, whatever page was in it. An SDK
-    // timeout is a lost answer: the browser bounds page work itself.
-    let page_fault = is_remote_failure(error) && !text.contains("unknown session");
+    // A lost session is the browser's fault, whatever page was in it.
+    // shortcut: a hung page gets the browser's answer for a crashed or frozen renderer (its CDP "Request timed out", or none: an SDK timeout), so it stays infrastructure; charge it once the browser reports whether the renderer still answers.
+    let page_fault = is_remote_failure(error)
+        && !text.contains("unknown session")
+        && !text.contains("Request timed out");
     page_fault.then(|| {
         json!({"passed":false,"reason":format!("the candidate page failed a browser step while the browser passed its own check: {text}"),"captures":[],"url":url})
     })
 }
 
 /// Settles the page phase of a browser capture: a failed page step is the
-/// candidate's only when the browser then passes its own check.
+/// candidate's only when the browser still held the session and then passes
+/// its own check.
 pub async fn settle_page_capture(
     result: Result<Value>,
+    session_was_running: bool,
     url: &str,
     browser_healthy: impl Future<Output = Result<()>>,
 ) -> Result<Value> {
@@ -765,7 +769,8 @@ pub async fn settle_page_capture(
         Ok(captured) => return Ok(captured),
         Err(error) => error,
     };
-    let Some(failure) = page_step_failure(&error, url) else {
+    // A session the browser closed under the step (its Chromium died or the tab's deadline passed) fails that step whatever page was in it.
+    let Some(failure) = page_step_failure(&error, url).filter(|_| session_was_running) else {
         return Err(error);
     };
     match browser_healthy.await {
@@ -1244,6 +1249,78 @@ mod tests {
         assert_eq!((calls, stack_checks), (2, 1));
     }
 
+    #[tokio::test]
+    #[ignore = "requires iii on PATH; CI runs this explicitly with the pinned Engine"]
+    async fn a_real_engine_tells_a_hung_candidate_function_from_its_own_death() {
+        use std::time::Duration;
+        const HUNG: &str = "harness_e2e_test::hung";
+        let temp = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let config = temp.path().join("engine.yaml");
+        fs::write(&config, format!("workers:\n  - name: iii-worker-manager\n    config:\n      host: 127.0.0.1\n      port: {port}\n")).unwrap();
+        let mut engine = tokio::process::Command::new("iii")
+            .arg("--no-update-check")
+            .arg("--config")
+            .arg(&config)
+            .current_dir(temp.path())
+            .env("III_TELEMETRY_ENABLED", "false")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let context = E2eContext::connect(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .expect("isolated engine ready");
+        // Without local_dispatch(false) the SDK runs a call to this client's own function in-process, and nothing here would cross the engine.
+        let hung = context.client().register_function(
+            HUNG,
+            iii_sdk::RegisterFunction::new_async(|_: Value| {
+                std::future::pending::<Result<Value, iii_sdk::errors::Error>>()
+            })
+            .local_dispatch(false),
+        );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !context.function_exists(HUNG).await.unwrap() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !hung.local_dispatch_active(),
+            "the hung call must cross the engine"
+        );
+        // invoke_candidate with a 3 s timeout in place of its 30 s.
+        let call = || async {
+            let request = CallRequest {
+                function_id: HUNG.into(),
+                payload: json!({}),
+                action: None,
+                timeout_ms: Some(3_000),
+            };
+            Ok(context.client().call(request).await?)
+        };
+        let stack_alive = || context.function_exists(HUNG);
+
+        let silence = settle_candidate_call(HUNG, call, stack_alive)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(is_unanswered(&silence), "{silence:#}");
+        assert!(format!("{silence:#}").contains(UNANSWERED), "{silence:#}");
+
+        let (dead, killed) = tokio::join!(settle_candidate_call(HUNG, call, stack_alive), async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            engine.kill().await
+        });
+        killed.unwrap();
+        let text = format!("{:#}", dead.unwrap_err());
+        assert!(text.contains("infrastructure failure"), "{text}");
+    }
+
     #[test]
     fn chess_and_visual_call_candidate_functions_only_through_invoke_candidate() {
         for source in [
@@ -1318,7 +1395,10 @@ mod tests {
             .ends_with(&format!("{error:#}")));
         for error in [
             page_error("unknown session 'x'"),
-            // The browser bounds page work itself, so an SDK timeout is a lost answer.
+            // A hung page and a crashed renderer both end in one of these.
+            page_error("handler error: key down failed: Request timed out."),
+            page_error("handler error: resize failed: Request timed out."),
+            page_error("handler error: screenshot failed: Request timed out."),
             silent(),
             sdk(iii_sdk::errors::Error::NotConnected),
             anyhow::anyhow!("browser screenshot session identity mismatch"),
@@ -1364,13 +1444,13 @@ mod tests {
     async fn a_page_step_failure_counts_only_when_the_browser_passes_its_own_check() {
         let page_failed = || Err(page_error("handler error: navigation failed"));
 
-        let charged = settle_page_capture(page_failed(), PAGE_URL, async { Ok(()) })
+        let charged = settle_page_capture(page_failed(), true, PAGE_URL, async { Ok(()) })
             .await
             .unwrap();
         assert_eq!(charged["passed"], false);
         assert!(charged.get("status").is_none());
 
-        let unhealthy = settle_page_capture(page_failed(), PAGE_URL, async {
+        let unhealthy = settle_page_capture(page_failed(), true, PAGE_URL, async {
             Err(anyhow::anyhow!("browser::resize timed out"))
         })
         .await
@@ -1385,19 +1465,32 @@ mod tests {
         };
         let captured = json!({"passed":true,"captures":["before"]});
         assert_eq!(
-            settle_page_capture(Ok(captured.clone()), PAGE_URL, browser_check())
+            settle_page_capture(Ok(captured.clone()), true, PAGE_URL, browser_check())
                 .await
                 .unwrap(),
             captured
         );
         let internal = settle_page_capture(
             Err(anyhow::anyhow!("browser screenshot omitted PNG")),
+            true,
             PAGE_URL,
             browser_check(),
         )
         .await
         .unwrap_err();
         assert_eq!(format!("{internal:#}"), "browser screenshot omitted PNG");
+        // The browser closed the session under the step: Chromium died.
+        let closed = settle_page_capture(
+            Err(page_error(
+                "handler error: screenshot failed: oneshot canceled",
+            )),
+            false,
+            PAGE_URL,
+            browser_check(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{closed:#}").contains("oneshot canceled"));
         assert!(!checked.get());
     }
 }

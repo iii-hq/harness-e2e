@@ -85,7 +85,8 @@ downstream behavior. A failed application build/startup still means an incomplet
 task, and every criterion it left unreached scores 0. A control the
 application made fail is a failed check, and the round still counts: an app
 that is not ready 60 s after a restart while its runtime process runs and
-`compose::status` answers, or one that keeps no `/data/tickets.json`.
+`compose::status` answers, one whose own start failure made Compose exit while
+the engine still answers, or one that keeps no `/data/tickets.json`.
 `typecheck`, `test` and `build` each run under a 90-second limit; a
 `typecheck` or `build` past it fails like any broken build. A probe that cannot
 plant its own fixture in the candidate's store leaves that check `unverified`.

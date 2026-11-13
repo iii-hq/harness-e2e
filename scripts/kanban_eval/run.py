@@ -359,12 +359,32 @@ def wait_runtime_ready(process, evaluator, cancel=None, timeout=30):
     return False
 
 
-def application_fault(process, candidate, namespace, log):
-    # None unless the trusted side (Docker, the engine, Compose) is cleared of the failure.
-    # Compose keeps serving after the application exits ("the project is up without it"),
-    # so a runtime process that exited is Compose's or Docker's own failure.
-    if process.poll() is not None:
+def exited_compose_fault(returncode, output):
+    # Only iii compose 0.26's own exit 1 naming an application cause is the candidate's; Docker exits and engine codes are not.
+    errors = re.findall(r'^error\[([A-Z0-9_]+)\]: ', output, re.M)
+    failed = re.findall(r'^up failed \[([A-Z0-9_]+)\] after ', output, re.M)
+    if returncode != 1 or not errors:
         return None
+    if errors[-1] == 'MISSING_ENV_FILE':
+        return 'Compose exited with MISSING_ENV_FILE'
+    if errors[-1] == 'PROJECT_DID_NOT_START' and failed and failed[-1] in (
+            'CHILD_EXITED_BEFORE_REGISTRATION', 'STARTUP_TIMEOUT', 'HOOK_FAILED'):
+        return f'Compose exited: required container failed with {failed[-1]}'
+    return None
+
+
+def application_fault(process, candidate, namespace, log, runtime_log, offset):
+    # None unless the trusted side (Docker, the engine, Compose) is cleared of the failure.
+    returncode = process.poll()
+    if returncode is not None:
+        fault = exited_compose_fault(returncode, runtime_log.read_bytes()[offset:].decode(errors='replace'))
+        # The engine outlives an exited Compose: one that no longer answers caused the exit.
+        check = docker_exec(candidate, ['/runtime/iii', 'trigger', 'engine::health::check',
+                            '--engine', 'ws://127.0.0.1:50179', '--json', '{}'])
+        try:
+            return fault if fault and not bounded(check, log, 5) else None
+        except subprocess.TimeoutExpired:
+            return None
     check = docker_exec(candidate, ['/runtime/iii', 'trigger', 'compose::status',
                         '--engine', 'ws://127.0.0.1:50179', '--namespace', namespace,
                         '--json', json.dumps({'file': '/workspace/worker-compose.yaml'})])
@@ -395,11 +415,13 @@ p.mkdir(parents=True)
         if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', reset]),
                    evidence / f'control-reset-{number}.log', 10, candidate, cancel):
             raise RuntimeError('configuration reset failed')
-    runtime[0] = start_runtime(candidate, evidence / 'runtime.log', register_configuration)
+    runtime_log = evidence / 'runtime.log'
+    runtime[3] = runtime_log.stat().st_size  # where this start's output begins
+    runtime[0] = start_runtime(candidate, runtime_log, register_configuration)
     runtime[1] = number
     if not wait_runtime_ready(runtime[0], evaluator, cancel, timeout=60):
         fault = application_fault(runtime[0], candidate, namespace,
-                                  evidence / f'control-restart-{number}-fault.log')
+                                  evidence / f'control-restart-{number}-fault.log', runtime_log, runtime[3])
         if fault:
             raise CandidateFault('application did not become ready within 60 s after restart: '
                                  f'{fault}; see runtime.log')
@@ -498,6 +520,12 @@ def hot_reload(candidate, evaluator, evidence, runtime, namespace, cancel=None):
             raise InfrastructureError('hot reload source restoration failed: '
                                       + restored.stderr.decode(errors='replace')[-4096:])
     if not successful_log_queries:
+        if runtime[0].poll() is not None:
+            # A Compose exit the restart rule charges to the application is the same fault here.
+            fault = application_fault(runtime[0], candidate, namespace, evidence / 'hot-reload-fault.log',
+                                      evidence / 'runtime.log', runtime[3])
+            if fault:
+                raise CandidateFault(f'application is not running for the hot-reload check: {fault}; see runtime.log')
         raise InfrastructureError(f'Compose worker logs were unavailable during hot reload in namespace {namespace}')
     recovered = wait_runtime_ready(runtime[0], evaluator, cancel, timeout=10)
     return {'observed': observed and recovered, 'source_restored': True}
@@ -868,7 +896,7 @@ print('workspace readable; trusted files, evaluator process and external network
                     subprocess.run(['docker', 'exec', '-i', candidate, '/usr/bin/tee', '/runtime-state/config.json'],
                                    input=json.dumps(config).encode(), stdout=subprocess.DEVNULL, check=True, timeout=10)
                 process = start_runtime(candidate, evidence / 'runtime.log')
-                runtime = [process, 0, keeper]
+                runtime = [process, 0, keeper, 0]
                 started = time.monotonic()
                 if not wait_runtime_ready(process, evaluator, cancel):
                     build_checks.append({'id': 'application_startup', 'status': 'failed',
