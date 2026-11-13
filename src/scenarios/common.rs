@@ -626,8 +626,8 @@ pub fn is_unanswered(error: &anyhow::Error) -> bool {
 /// infrastructure; the inner result is the candidate's answer or its silence.
 ///
 /// The SDK also reports a connection that dropped during the call as a
-/// timeout, so a silent call is the candidate's only when the stack answers
-/// right after and the same call, sent once more, is silent again.
+/// timeout, so a silent call is the candidate's only when the same call, sent
+/// once more, is silent again and the stack answers after each silence.
 ///
 /// Nothing cancels the first attempt, so the second can run after or beside
 /// it: send through here only a call the candidate's contract makes safe to
@@ -636,12 +636,12 @@ pub fn is_unanswered(error: &anyhow::Error) -> bool {
 pub async fn settle_candidate_call<Call, Sent, Alive, Checked, T>(
     function_id: &str,
     mut call: Call,
-    stack_alive: Alive,
+    mut stack_alive: Alive,
 ) -> Result<Result<Value>>
 where
     Call: FnMut() -> Sent,
     Sent: Future<Output = Result<Value>>,
-    Alive: FnOnce() -> Checked,
+    Alive: FnMut() -> Checked,
     Checked: Future<Output = Result<T>>,
 {
     let mut result = call().await;
@@ -651,6 +651,9 @@ where
         }
         result = call().await;
         if result.as_ref().is_err_and(is_unanswered) {
+            if let Err(error) = stack_alive().await {
+                bail!("invoke {function_id} infrastructure failure: the stack stopped answering after the call timed out again: {error:#}");
+            }
             return Ok(result.context(format!(
                 "{function_id} {UNANSWERED} twice while the stack still answered"
             )));
@@ -745,15 +748,18 @@ pub async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value
 /// The failed browser check for a step the loaded candidate page rejected.
 /// It carries no `status`, so it scores as failed, not blocked.
 pub fn page_step_failure(error: &anyhow::Error, url: &str) -> Option<Value> {
-    let text = format!("{error:#}");
-    // A lost session is the browser's fault, whatever page was in it.
+    let Some(iii_sdk::errors::Error::Remote { message, .. }) = error.downcast_ref() else {
+        return None;
+    };
     // shortcut: a hung page gets the browser's answer for a crashed or frozen renderer (its CDP "Request timed out", or none: an SDK timeout), so it stays infrastructure; charge it once the browser reports whether the renderer still answers.
-    let page_fault = is_remote_failure(error)
-        && !text.contains("unknown session")
-        && !text.contains("Request timed out");
-    page_fault.then(|| {
-        json!({"passed":false,"reason":format!("the candidate page failed a browser step while the browser passed its own check: {text}"),"captures":[],"url":url})
-    })
+    // Only at the end: a page can echo that text inside its own error, never after the browser's suffix.
+    if message.ends_with("Request timed out.") {
+        return None;
+    }
+    let text = format!("{error:#}");
+    Some(
+        json!({"passed":false,"reason":format!("the candidate page failed a browser step while the browser passed its own check: {text}"),"captures":[],"url":url}),
+    )
 }
 
 /// Settles the page phase of a browser capture: a failed page step is the
@@ -1171,9 +1177,10 @@ mod tests {
     /// outcome, the calls sent and the stack checks run.
     async fn settle(
         answers: Vec<Result<Value>>,
-        stack: Result<()>,
+        stack: Vec<Result<()>>,
     ) -> (Result<Result<Value>>, usize, usize) {
         let mut answers = answers.into_iter();
+        let mut stack = stack.into_iter();
         let (mut calls, mut stack_checks) = (0, 0);
         let outcome = settle_candidate_call(
             CANDIDATE_FUNCTION,
@@ -1184,7 +1191,8 @@ mod tests {
             },
             || {
                 stack_checks += 1;
-                async move { stack }
+                let checked = stack.next().expect("no further stack check is run");
+                async move { checked }
             },
         )
         .await;
@@ -1193,17 +1201,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_silent_candidate_call_is_charged_only_when_the_stack_answers_and_it_stays_silent() {
-        let (outcome, calls, stack_checks) = settle(vec![Ok(json!({"ok":true}))], Ok(())).await;
+        let (outcome, calls, stack_checks) = settle(vec![Ok(json!({"ok":true}))], vec![]).await;
         assert_eq!(outcome.unwrap().unwrap(), json!({"ok":true}));
         assert_eq!((calls, stack_checks), (1, 0));
 
-        let (outcome, calls, stack_checks) = settle(vec![Err(rejected())], Ok(())).await;
+        let (outcome, calls, stack_checks) = settle(vec![Err(rejected())], vec![]).await;
         let rejection = outcome.unwrap().unwrap_err();
         assert!(is_remote_failure(&rejection) && !is_unanswered(&rejection));
         assert_eq!((calls, stack_checks), (1, 0));
 
         let (outcome, calls, stack_checks) =
-            settle(vec![Err(silent()), Err(silent())], Ok(())).await;
+            settle(vec![Err(silent()), Err(silent())], vec![Ok(()), Ok(())]).await;
         let silence = outcome.unwrap().unwrap_err();
         let text = format!("{silence:#}");
         assert!(
@@ -1211,20 +1219,36 @@ mod tests {
             "{text}"
         );
         assert!(is_unanswered(&silence) && !is_remote_failure(&silence));
-        assert_eq!((calls, stack_checks), (2, 1));
+        assert_eq!((calls, stack_checks), (2, 2));
+
+        // The stack went down while the second attempt waited.
+        let (outcome, calls, stack_checks) = settle(
+            vec![Err(silent()), Err(silent())],
+            vec![Ok(()), Err(anyhow::anyhow!("engine gone"))],
+        )
+        .await;
+        let text = format!("{:#}", outcome.unwrap_err());
+        assert!(
+            text.contains("infrastructure failure") && text.contains(CANDIDATE_FUNCTION),
+            "{text}"
+        );
+        assert_eq!((calls, stack_checks), (2, 2));
 
         let (outcome, calls, stack_checks) =
-            settle(vec![Err(silent()), Ok(json!("late"))], Ok(())).await;
+            settle(vec![Err(silent()), Ok(json!("late"))], vec![Ok(())]).await;
         assert_eq!(outcome.unwrap().unwrap(), json!("late"));
         assert_eq!((calls, stack_checks), (2, 1));
 
         let (outcome, calls, stack_checks) =
-            settle(vec![Err(silent()), Err(rejected())], Ok(())).await;
+            settle(vec![Err(silent()), Err(rejected())], vec![Ok(())]).await;
         assert!(is_remote_failure(&outcome.unwrap().unwrap_err()));
         assert_eq!((calls, stack_checks), (2, 1));
 
-        let (outcome, calls, stack_checks) =
-            settle(vec![Err(silent())], Err(anyhow::anyhow!("engine gone"))).await;
+        let (outcome, calls, stack_checks) = settle(
+            vec![Err(silent())],
+            vec![Err(anyhow::anyhow!("engine gone"))],
+        )
+        .await;
         let text = format!("{:#}", outcome.unwrap_err());
         assert!(
             text.contains("infrastructure failure") && text.contains(CANDIDATE_FUNCTION),
@@ -1233,7 +1257,7 @@ mod tests {
         assert_eq!((calls, stack_checks), (1, 1));
 
         let (outcome, calls, stack_checks) =
-            settle(vec![Err(sdk(iii_sdk::errors::Error::NotConnected))], Ok(())).await;
+            settle(vec![Err(sdk(iii_sdk::errors::Error::NotConnected))], vec![]).await;
         assert!(format!("{:#}", outcome.unwrap_err()).contains("infrastructure failure"));
         assert_eq!((calls, stack_checks), (1, 0));
 
@@ -1242,7 +1266,7 @@ mod tests {
                 Err(silent()),
                 Err(sdk(iii_sdk::errors::Error::NotConnected)),
             ],
-            Ok(()),
+            vec![Ok(())],
         )
         .await;
         assert!(format!("{:#}", outcome.unwrap_err()).contains("infrastructure failure"));
@@ -1393,8 +1417,18 @@ mod tests {
             .as_str()
             .unwrap()
             .ends_with(&format!("{error:#}")));
+        // The page serializes its own script envelope, so it can echo the
+        // browser's words back; serde's position suffix then ends the text.
+        for forged in [
+            "handler error: script envelope did not parse: invalid type: string \"unknown session 'b1'; list tabs with browser::sessions::list\", expected struct Envelope at line 1 column 62",
+            "handler error: script envelope did not parse: invalid type: string \"screenshot failed: Request timed out.\", expected struct Envelope at line 1 column 39",
+        ] {
+            assert!(
+                page_step_failure(&page_error(forged), PAGE_URL).is_some(),
+                "{forged}"
+            );
+        }
         for error in [
-            page_error("unknown session 'x'"),
             // A hung page and a crashed renderer both end in one of these.
             page_error("handler error: key down failed: Request timed out."),
             page_error("handler error: resize failed: Request timed out."),
@@ -1479,18 +1513,18 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(format!("{internal:#}"), "browser screenshot omitted PNG");
-        // The browser closed the session under the step: Chromium died.
-        let closed = settle_page_capture(
-            Err(page_error(
-                "handler error: screenshot failed: oneshot canceled",
-            )),
-            false,
-            PAGE_URL,
-            browser_check(),
-        )
-        .await
-        .unwrap_err();
-        assert!(format!("{closed:#}").contains("oneshot canceled"));
+        // The browser closed the session under the step (Chromium died) or
+        // lost its record of it.
+        for message in [
+            "handler error: screenshot failed: oneshot canceled",
+            "handler error: unknown session 'b1'; list tabs with browser::sessions::list",
+        ] {
+            let closed =
+                settle_page_capture(Err(page_error(message)), false, PAGE_URL, browser_check())
+                    .await
+                    .unwrap_err();
+            assert!(format!("{closed:#}").contains(message));
+        }
         assert!(!checked.get());
     }
 }

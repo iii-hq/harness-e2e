@@ -620,6 +620,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     } else {
         machine_source()
     };
+    // shortcut: the canvas contract makes this call safe to repeat after the first attempt, not beside it; a Canvas stall past 30 s that then recovers can overlap two creates and charge the id mismatch to the candidate, extend the contract to overlapping calls if such a stall is seen.
     let canvas = settle_canvas_projection(
         common::invoke_candidate(context, &contract.functions["canvas"], json!({})).await?,
         common::invoke(
@@ -1438,9 +1439,8 @@ return {{visible,same_id:sameId,url,canvas_route:/^#\/worker\/[^/]+\/canvas$/.te
     };
     let graph = match on_canvas {
         Some(canvas_url) => {
-            route(context, session, canvas_url)
-                .await
-                .map_err(stack_page)?;
+            // Sent from the candidate's page, so it keeps its SDK error type.
+            route(context, session, canvas_url).await?;
             context
                 .trigger_value(
                     "browser::execute",
