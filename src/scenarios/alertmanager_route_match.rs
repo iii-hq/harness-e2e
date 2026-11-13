@@ -1478,8 +1478,10 @@ pub(crate) mod tests {
         }
         let plain = PLAIN_ORACLE.as_bytes();
         let leaked = plain
-            .chunks_exact(16)
-            .filter(|chunk| masked.windows(16).any(|w| w == *chunk))
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .filter(|chunk| masked.windows(16).any(|w| w == chunk.as_slice()))
             .count();
         assert_eq!(leaked, 0, "16-byte runs of the oracle left in clear");
     }
