@@ -207,6 +207,12 @@ const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::MemoryUserOtherPerson,
     ScenarioId::MemoryCurrentAndHistory,
     ScenarioId::MemoryIncrementalLongRecall,
+    ScenarioId::MemoryPreciseAmount,
+    ScenarioId::MemoryPreciseDate,
+    ScenarioId::MemoryPrecisePort,
+    ScenarioId::MemoryPreciseEnvVar,
+    ScenarioId::MemoryPreciseCommand,
+    ScenarioId::MemoryPreciseLongMessage,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -754,7 +760,7 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.suites.len(), 20);
+        assert_eq!(plan.suites.len(), 21);
         for (id, cases, runs) in [
             ("regression", 21, 231),
             ("null-canary", 15, 15),
@@ -772,6 +778,7 @@ mod tests {
             ("memory", 22, 66),
             ("memory-learning", 7, 21),
             ("memory-strict", 7, 21),
+            ("memory-gain", 35, 105),
             ("approvals", 1, 1),
             ("memory-smoke", 3, 3),
             ("harness-weekly", 1, 1),
@@ -978,7 +985,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:efb8c593909bf5aa8eba4ad649f5ac2922d5e468c44f7c28260e6cc1da6bd2f1"
+            "sha256:8b0afb3bb687b771df3a5d2df21ac069d4ed11d866c8b29261f394bbf386da49"
         );
     }
 
@@ -1070,6 +1077,7 @@ mod tests {
             "memory",
             "memory-learning",
             "memory-strict",
+            "memory-gain",
             "memory-smoke",
             "harness-weekly",
             "context-thinking",
@@ -1145,12 +1153,14 @@ mod tests {
     /// case never shares a stack with its baseline. The learning cases run in
     /// a suite of their own, after the deterministic ones; their baselines
     /// stay in `memory`. The strict delivery cases run only in the opt-in
-    /// `memory-strict`.
+    /// `memory-strict`, the precise cases only in `memory-gain`, which runs
+    /// the two scheduled suites' cases beside them.
     #[test]
     fn memory_runs_each_case_alone_three_times_with_one_retry() {
+        use crate::scenarios::memory::IDS;
         let plan = embedded().unwrap();
         let mut every_case = Vec::new();
-        for suite in ["memory", "memory-learning", "memory-strict"] {
+        for suite in ["memory", "memory-learning", "memory-strict", "memory-gain"] {
             let snapshot = plan.materialize(suite).unwrap();
             assert_eq!(snapshot.campaigns.len(), 3);
             for campaign in &snapshot.campaigns {
@@ -1162,12 +1172,22 @@ mod tests {
                     assert_eq!(group["technical_retries"], 1);
                 }
             }
-            every_case.extend(snapshot.scenario_ids);
+            if suite != "memory-gain" {
+                every_case.extend(snapshot.scenario_ids);
+            }
         }
         // The two scheduled suites hold exactly the 29 original cases.
         let (scheduled, opt_in) = every_case.split_at(29);
-        assert_eq!(scheduled, &crate::scenarios::memory::IDS[..29]);
-        assert_eq!(opt_in, &crate::scenarios::memory::IDS[29..]);
+        assert_eq!(scheduled, &IDS[..29]);
+        assert_eq!(opt_in, &IDS[29..36]);
+        assert_eq!(
+            plan.materialize("memory-gain").unwrap().scenario_ids,
+            IDS[..29]
+                .iter()
+                .chain(&IDS[36..])
+                .copied()
+                .collect::<Vec<_>>()
+        );
         // Exactly the cases whose outcome rests on memory's extraction.
         use crate::scenarios::memory::{
             cases::{audits_bank_after, CASES},
@@ -1177,6 +1197,7 @@ mod tests {
             .iter()
             .filter(|case| !case.teacher.is_empty() || audits_bank_after(case))
             .filter(|case| !strict::enabled(case))
+            .filter(|case| !IDS[36..].contains(&case.id))
             .map(|case| case.id)
             .collect();
         assert_eq!(
@@ -1455,6 +1476,12 @@ mod tests {
         (ScenarioId::MemoryUserOtherPerson, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryCurrentAndHistory, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryIncrementalLongRecall, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryPreciseAmount, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryPreciseDate, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryPrecisePort, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryPreciseEnvVar, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryPreciseCommand, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryPreciseLongMessage, MEMORY_LIVE, &[]),
         (ScenarioId::HarnessContractProbe, HARNESS_LIVE, &[]),
         (ScenarioId::DispatchPipeline, HARNESS_LIVE, &[]),
         (ScenarioId::BindingContractProbe, HARNESS_LIVE, &[]),

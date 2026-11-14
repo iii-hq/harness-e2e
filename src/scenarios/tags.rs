@@ -16,6 +16,9 @@
 //! What only the evaluator uses to measure (the browser behind screenshots,
 //! compose in cleanup) does not count. The harness is never a tag: every test
 //! exercises it, and a test with no worker protects the harness alone.
+//!
+//! A memory case that scores an answer also has a class, which no selection
+//! reads: whether the answer returns a stored value or builds on stored facts.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -110,6 +113,15 @@ vocabulary! {
     }
 }
 
+vocabulary! {
+    /// Memory cases only: whether the answer returns a stored value as it was
+    /// stored, or builds on stored facts or rules.
+    Class {
+        Lookup = "lookup",
+        Synthesis = "synthesis",
+    }
+}
+
 impl Area {
     pub const fn label(self) -> &'static str {
         match self {
@@ -155,6 +167,9 @@ pub struct ScenarioTags {
     pub area: Option<Area>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disciplines: Vec<Discipline>,
+    /// A memory case that scores an answer; none for every other test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Class>,
 }
 
 impl ScenarioId {
@@ -288,7 +303,13 @@ impl ScenarioId {
                 | Self::MemoryWorkshopAttribute
                 | Self::MemoryUserOtherPerson
                 | Self::MemoryCurrentAndHistory
-                | Self::MemoryIncrementalLongRecall => (&[W::Memory], A::Memory, &[]),
+                | Self::MemoryIncrementalLongRecall
+                | Self::MemoryPreciseAmount
+                | Self::MemoryPreciseDate
+                | Self::MemoryPrecisePort
+                | Self::MemoryPreciseEnvVar
+                | Self::MemoryPreciseCommand
+                | Self::MemoryPreciseLongMessage => (&[W::Memory], A::Memory, &[]),
                 Self::SpawnDepthCap => (&[W::State], A::Coordination, &[]),
                 // The call guards and their fixtures are the Harness's own;
                 // the fixtures are the runner's, not a worker's.
@@ -316,6 +337,10 @@ impl ScenarioId {
             workers: workers.to_vec(),
             area: Some(area),
             disciplines: disciplines.to_vec(),
+            class: super::memory::cases::CASES
+                .iter()
+                .find(|case| case.id == self.as_str())
+                .and_then(super::memory::cases::class),
         }
     }
 }
@@ -343,6 +368,24 @@ mod tests {
                 "{id} disciplines"
             );
         }
+    }
+
+    #[test]
+    fn a_memory_case_that_scores_an_answer_carries_its_class() {
+        assert_eq!(
+            ScenarioId::MemoryValueProject.tags().class,
+            Some(Class::Lookup)
+        );
+        assert_eq!(
+            ScenarioId::MemoryRuleFit.tags().class,
+            Some(Class::Synthesis)
+        );
+        assert_eq!(ScenarioId::MemorySmallTalk.tags().class, None);
+        assert_eq!(ScenarioId::MinimalPath.tags().class, None);
+        let untagged = serde_json::to_value(ScenarioId::MinimalPath.tags()).unwrap();
+        assert!(untagged.get("class").is_none(), "{untagged}");
+        let tagged = serde_json::to_value(ScenarioId::MemoryRuleFit.tags()).unwrap();
+        assert_eq!(tagged["class"], "synthesis");
     }
 
     #[test]

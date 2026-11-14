@@ -1,0 +1,40 @@
+name: Report the memory gain
+description: >-
+  Reads the `memory-gain` runs of each model on the memory, memory-off and
+  memory-consolidated stacks, compares the arms with the latest released
+  runner's `harness-e2e compare` and reports the gain per class. It fails only
+  when a model has no gain to report or its memory-off arm injected.
+
+inputs:
+  token:
+    description: Token that can read runs and artifacts of iii-hq/harness-e2e (actions read)
+    required: true
+  runs:
+    description: JSON list of {model, arm, run_url}, one per model and stack; `arm` is the stack's name
+    required: true
+
+outputs:
+  report:
+    description: Directory holding memory-gain.md and memory-gain.json
+    value: ${{ steps.gain.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - id: gain
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ACTION_PATH: ${{ github.action_path }}
+        RUNS: ${{ inputs.runs }}
+      # `compare` reads results.json files; any released runner has it.
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/memory-gain-runner"
+        report="$RUNNER_TEMP/memory-gain"
+        mkdir -p "$bin" "$report"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        gh release download -R iii-hq/harness-e2e -p 'harness-e2e-x86_64-unknown-linux-gnu.tar.gz' -D "$bin"
+        tar -xzf "$bin/harness-e2e-x86_64-unknown-linux-gnu.tar.gz" -C "$bin" harness-e2e
+        HARNESS_E2E_BIN="$bin/harness-e2e" python3 "$ACTION_PATH/../../../scripts/memory_gain.py" \
+          --runs "$RUNS" --output "$report"

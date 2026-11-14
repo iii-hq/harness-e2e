@@ -88,9 +88,10 @@ def graph_workers() -> set[str]:
 
 
 def build_stack(pins: list[str], commit: str, iii: str, graph: set[str], stack: str = "default",
-                versions: dict[str, str] | None = None) -> dict[str, Any] | None:
-    """The `stack` of stacks/ with the pinned workers built from `commit` and
-    `versions` of its workers installed.
+                versions: dict[str, str] | None = None, extraction_model: str = "") -> dict[str, Any] | None:
+    """The `stack` of stacks/ with the pinned workers built from `commit`,
+    `versions` of its workers installed and, when given, the model memory
+    extracts with.
 
     On the default stack a pinned worker outside the harness graph is not part
     of what runs, so it is dropped, and the harness is always pinned with the
@@ -109,6 +110,10 @@ def build_stack(pins: list[str], commit: str, iii: str, graph: set[str], stack: 
         if name not in containers:
             raise VerifyError(f"the {stack} stack declares no {name} to install {version} of")
         containers[name]["version"] = version
+    if extraction_model:
+        if "memory" not in containers:
+            raise VerifyError(f"the {stack} stack declares no memory to set an extraction model on")
+        containers["memory"].setdefault("config_override", {})["extraction_model"] = extraction_model
     pinned = sorted(set(pins) & (set(containers) if named else graph))
     if pins and not pinned and not (versions or iii):
         return None
@@ -352,6 +357,8 @@ def main() -> int:
     parser.add_argument("--suite", default="pr")
     parser.add_argument("--stack", default="default", help="the stack of stacks/ the suite runs on")
     parser.add_argument("--model", default="deepseek/deepseek-flash")
+    parser.add_argument("--extraction-model", default="",
+                        help="provider::model memory extracts with, instead of the stack's")
     parser.add_argument("--comment-pr", default="", metavar="OWNER/REPO#N")
     parser.add_argument("--exit-zero", action="store_true", help="exit 0 whatever the verdict")
     args = parser.parse_args()
@@ -366,7 +373,7 @@ def main() -> int:
     run_url, stack = "", None
     try:
         graph = graph_workers() if pins and args.stack == "default" else set()
-        stack = build_stack(pins, args.commit, args.iii, graph, args.stack, versions)
+        stack = build_stack(pins, args.commit, args.iii, graph, args.stack, versions, args.extraction_model)
         if stack is None:
             result = {"status": "skipped", "passed": 0, "planned": 0, "failed": [], "not_measured": []}
             if args.stack != "default":
