@@ -476,14 +476,15 @@ The `software-engineering` suite runs each selected case three independent
 times (`-r01` to `-r03`), with no technical retries: the seven Kanban cases, Registry implementation and verification,
 the trending-topics build, Alertmanager route migration, and the chess,
 form-flow and state-machine Workers in the Console. That is 14 cases and 42
-planned runs, in 13 execution groups a round (39 jobs). One attempt run alone
+planned runs, in 14 execution groups a round (42 jobs). One attempt run alone
 moved the suite by up to 7 points: on 2026-11-11 a chess Worker that never
 registered and a Kanban board whose cards did not render took it from 92.7 to
 78.5, and the same stack scored 94.9 when dispatched again. Three rounds cut
 what one failed attempt moves to about a third, at about US$5.5 an execution
 on `deepseek-flash`. Registry
-implementation and verification share a group, in that order, so verification
-receives the implementation delivery. Trending topics runs in
+implementation and verification run in groups of their own: verification
+checks a fixed delivery pinned by e2e-fixture commit, not the implementation's
+delivery. Trending topics runs in
 `case-trending-topics-build`. Baseline worker versions come from the resolved
 stack contract. Alertmanager runs in its own group, needs Go 1.25+, and has no
 turn or token ceiling.

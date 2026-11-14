@@ -3304,7 +3304,18 @@ mod tests {
 
     #[test]
     fn a_reviewed_suite_is_sent_by_id_and_any_other_whole() {
-        let master = test_plan::embedded().unwrap();
+        // A sequential group, which the master plan holds none of today.
+        let mut master = test_plan::embedded().unwrap();
+        master
+            .suites
+            .iter_mut()
+            .find(|suite| suite.id == "software-engineering")
+            .unwrap()
+            .scenario_groups
+            .push(vec![
+                "registry_implementation".into(),
+                "alertmanager_route_match".into(),
+            ]);
         let mut parameters = suite_parameters("software-engineering");
         assert_eq!(
             dispatch_suite(&parameters, &master).unwrap(),
@@ -3318,7 +3329,7 @@ mod tests {
         assert_eq!(sent["repetitions"], 2);
         assert_eq!(
             sent["scenario_groups"],
-            json!([["registry_implementation", "registry_verification"]])
+            json!([["registry_implementation", "alertmanager_route_match"]])
         );
         master
             .materialize_suite(serde_json::from_value(sent).unwrap())

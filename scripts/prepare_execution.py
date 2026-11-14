@@ -915,8 +915,9 @@ def command_contracts(args: argparse.Namespace) -> None:
                 }
             )
     # The fixture heads the groups check out (scripts/executor.sh) and the
-    # reports name: only those of a fixture some group uses.
-    groups = [entry["group_id"] for entry in include]
+    # reports name: only those of a fixture some group uses. Verification
+    # checks out its own pin there, never the head.
+    groups = [entry["group_id"] for entry in include if entry["group_id"] != "case-registry-verification"]
     used = {name for name in FIXTURES if any(group.startswith(FIXTURES[name][2]) for group in groups)}
     fixtures = {name: revision for name, revision in (execution.get("fixtures") or {}).items() if name in used}
     fallbacks = {name: fallback for name, fallback in (execution.get("fixture_fallbacks") or {}).items()

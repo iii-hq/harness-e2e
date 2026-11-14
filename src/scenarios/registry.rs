@@ -35,7 +35,7 @@ const SUMMARIES: [&str; 4] = [
     "Create an evidence-based plan for adding version comparison to a pinned Registry codebase.",
     "In a private container with the Registry code at a pinned commit, implement version comparison from the requirements and a reference plan: a compare API, a Changelog tab with version pickers, and shareable URLs. Test it against the running app and write a report with real screenshots.",
     "Reproduce the Registry test environment, including build, startup, isolation, restart, and cleanup.",
-    "Run the feature that registry_implementation just delivered, check its 23 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
+    "Run a fixed delivery of the Registry version comparison feature, pinned by commit, check its 23 required behaviours through the API and browser, and write a report plus checks.json marking each one pass, fail or blocked, with the exact command and evidence files. Do not fix anything.",
 ];
 const PROTECTS: [Option<&str>; 4] = [
     None,
@@ -54,6 +54,34 @@ const PROMPTS: [&str; 4] = [
     include_str!("../../tests/fixtures/registry-version-comparison/test-2-implementation.md"),
     include_str!("../../tests/fixtures/registry-version-comparison/test-3-environment.md"),
     include_str!("../../tests/fixtures/registry-version-comparison/test-4-verification.md"),
+];
+
+/// The e2e-fixture commit that carries registry_verification's delivery and
+/// the environment it was proven in. `scripts/executor.sh` names it too.
+const VERIFICATION_FIXTURE_SHA: &str = "f1d3773318511dd31f993a8f588071f1b8ba5c21";
+/// How many of the 23 checks that delivery fails: a count, never which ones.
+const PLANTED_FAILURES: u8 = 4;
+/// What setup writes beside the lifecycle: never the validator or its probe,
+/// which would hand the truth to a subject that runs them.
+const SETUP_ASSETS: [(&str, &str); 4] = [
+    (
+        "lifecycle.py",
+        include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
+    ),
+    ("capture.cjs", CAPTURE_SCRIPT),
+    ("requirements.md", REQUIREMENTS),
+    ("reference-plan.md", REFERENCE),
+];
+/// What capture writes just before it validates.
+const CAPTURE_ASSETS: [(&str, &str); 2] = [
+    (
+        "validate.py",
+        include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
+    ),
+    (
+        "validate-feature.cjs",
+        include_str!("../../tests/fixtures/registry-version-comparison/validate-feature.cjs"),
+    ),
 ];
 
 #[derive(Clone, Copy)]
@@ -140,15 +168,6 @@ fn root(test: u8, run_id: &str) -> PathBuf {
 fn assets(test: u8, run_id: &str) -> PathBuf {
     root(test, run_id).with_extension("assets")
 }
-fn publish_implementation(
-    context: &E2eContext,
-    attempt_id: &str,
-    directory: &std::path::Path,
-) -> bool {
-    directory.join("implementation.patch").is_file()
-        && directory.join("manifest.json").is_file()
-        && context.publish_execution_output(IMPLEMENTATION_ID, attempt_id, directory)
-}
 fn function_id(scenario_id: &str, run_id: &str) -> String {
     format!(
         "{}_{}::exec",
@@ -197,10 +216,15 @@ impl Scenario for Registry {
 
     fn case(&self, _seed: u64) -> Result<ScenarioCase> {
         let id = self.id();
+        let mut inputs =
+            json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":self.0});
+        if self.0 == 4 {
+            inputs["verification_fixture_sha"] = json!(VERIFICATION_FIXTURE_SHA);
+        }
         ScenarioCase::new(
             id,
             stable_seed(id),
-            json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":self.0}),
+            inputs,
             vec![Capability::IiiFunctions, Capability::Docker],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
@@ -215,6 +239,16 @@ impl Scenario for Registry {
                 capture_before_cleanup: true,
             },
         )
+    }
+
+    /// Verification's delivery is what setup plants; never shown to the subject.
+    fn planted_state(&self, _run_id: &str) -> Option<Value> {
+        (self.0 == 4).then(|| {
+            json!({
+                "verification_fixture_sha": VERIFICATION_FIXTURE_SHA,
+                "planted_failures": PLANTED_FAILURES,
+            })
+        })
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
@@ -348,23 +382,7 @@ fn lifecycle(test: u8, run_id: &str, action: &str) -> Command {
 async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
     let directory = assets(N, run_id);
     std::fs::create_dir_all(&directory)?;
-    for (name, data) in [
-        (
-            "lifecycle.py",
-            include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
-        ),
-        ("capture.cjs", CAPTURE_SCRIPT),
-        (
-            "validate.py",
-            include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
-        ),
-        (
-            "validate-feature.cjs",
-            include_str!("../../tests/fixtures/registry-version-comparison/validate-feature.cjs"),
-        ),
-        ("requirements.md", REQUIREMENTS),
-        ("reference-plan.md", REFERENCE),
-    ] {
+    for (name, data) in SETUP_ASSETS {
         std::fs::write(directory.join(name), data)?;
     }
     for (index, name) in ["planning", "implementation", "environment", "verification"]
@@ -390,14 +408,7 @@ async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
         &api_port,
     ]);
     if N == 4 {
-        let implementation = match context.execution_output(IMPLEMENTATION_ID)? {
-            Some(output) => {
-                tracing::info!(producer_attempt = output.attempt_id, "using execution-scoped Registry implementation");
-                output.directory
-            }
-            None => PathBuf::from(std::env::var_os("HARNESS_E2E_REGISTRY_IMPLEMENTATION").context("standalone registry_verification requires HARNESS_E2E_REGISTRY_IMPLEMENTATION pointing to a delivery directory")?),
-        };
-        prepare.arg("--implementation").arg(implementation);
+        prepare.args(["--fixture-revision", VERIFICATION_FIXTURE_SHA]);
     }
     drop((web, api));
     checked(&mut prepare).await?;
@@ -708,9 +719,6 @@ async fn capture<const N: u8>(
         },
     ]);
     let delivery = checked(&mut finish).await?;
-    if N == 2 {
-        publish_implementation(context, run_id, &directory.join("delivery"));
-    }
     if matches!(N, 2 | 4) && delivery["runtime_ready"] == true {
         if let Err(error) = capture_browser_evidence(context, &directory).await {
             std::fs::write(
@@ -726,6 +734,9 @@ async fn capture<const N: u8>(
             anyhow::anyhow!("Delivered source could not be started for validation: {delivery}")
         })
     } else {
+        for (name, data) in CAPTURE_ASSETS {
+            std::fs::write(assets(N, run_id).join(name), data)?;
+        }
         let mut command = Command::new("python3");
         command
             .arg(assets(N, run_id).join("validate.py"))
@@ -733,6 +744,9 @@ async fn capture<const N: u8>(
             .arg(&directory)
             .arg("--assets")
             .arg(assets(N, run_id));
+        if N == 4 {
+            command.args(["--planted-failures", &PLANTED_FAILURES.to_string()]);
+        }
         checked(&mut command).await
     };
     let validation =
@@ -804,8 +818,10 @@ const EVALUATOR_UNAVAILABLE: &[&str] = &[
     "independent_case_missing",
     "independent_case_invalid",
     "independent_case_unavailable",
-    // registry_verification: the truth comes from another task's delivery.
+    // registry_verification: the truth is the pinned delivery's, confirmed by
+    // the probe.
     "independent_truth_incomplete",
+    "fixed_delivery_truth_mismatch",
     "reported_failure_truth_unavailable",
 ];
 
@@ -866,30 +882,6 @@ async fn cleanup<const N: u8>(_context: &E2eContext, run_id: &str) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn implementation_handoff_requires_both_files_and_accepts_incomplete_delivery() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
-        context.initialize_execution_outputs([IMPLEMENTATION_ID]);
-
-        assert!(!publish_implementation(&context, "missing", temp.path()));
-        std::fs::write(temp.path().join("implementation.patch"), "").unwrap();
-        assert!(!publish_implementation(&context, "missing", temp.path()));
-        std::fs::write(
-            temp.path().join("manifest.json"),
-            r#"{"subject_status":"incomplete"}"#,
-        )
-        .unwrap();
-
-        assert!(publish_implementation(&context, "incomplete", temp.path()));
-        let output = context
-            .execution_output(IMPLEMENTATION_ID)
-            .unwrap()
-            .unwrap();
-        assert_eq!(output.attempt_id, "incomplete");
-        assert_eq!(output.directory, temp.path());
-    }
 
     #[test]
     fn browser_jpeg_is_bound_to_the_requested_session() {
@@ -1100,6 +1092,55 @@ mod tests {
         ] {
             assert!(awarded(test, unmeasured, reason).is_err(), "{reason}");
         }
+    }
+    /// The delivery and its planted count sit in the behavior definition too,
+    /// so rotating either marks the verification runs Redefined in Trends.
+    #[test]
+    fn only_the_verification_case_names_its_pinned_fixture() {
+        for test in 1..=4 {
+            let case = Registry(test).case(0).unwrap();
+            assert_eq!(
+                case.inputs.get("verification_fixture_sha").cloned(),
+                (test == 4).then(|| json!(VERIFICATION_FIXTURE_SHA)),
+                "test {test}"
+            );
+            let definition = behavior_definition(&Registry(test), &case).unwrap();
+            assert_eq!(
+                definition.get("planted_state").cloned(),
+                (test == 4).then(|| json!({
+                    "verification_fixture_sha": VERIFICATION_FIXTURE_SHA,
+                    "planted_failures": PLANTED_FAILURES,
+                })),
+                "test {test}"
+            );
+        }
+    }
+    #[test]
+    fn the_planted_count_leaves_checks_to_find_and_checks_to_clear() {
+        assert!((1..23).contains(&PLANTED_FAILURES));
+    }
+    #[test]
+    fn the_validator_and_its_probe_are_written_only_at_capture() {
+        assert!(SETUP_ASSETS
+            .iter()
+            .all(|(name, _)| !name.starts_with("validate")));
+        assert!(CAPTURE_ASSETS
+            .iter()
+            .all(|(name, _)| name.starts_with("validate")));
+    }
+    #[test]
+    fn a_truth_that_is_not_the_planted_delivery_s_sets_the_run_aside() {
+        let observations: Vec<_> = metrics(4)
+            .iter()
+            .map(|metric| {
+                if metric["id"] == "verification.recall" {
+                    json!({"id":metric["id"],"status":"unavailable","reason":"fixed_delivery_truth_mismatch"})
+                } else {
+                    json!({"id":metric["id"],"status":"measured","value":1,"numerator":1,"denominator":1})
+                }
+            })
+            .collect();
+        assert!(awards(4, &json!({ "observations": observations })).is_err());
     }
     #[test]
     fn explicit_zero_denominator_values_are_scored() {

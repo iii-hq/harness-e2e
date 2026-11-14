@@ -186,9 +186,16 @@ def prepare(args):
              "base_registry_sha": REGISTRY_SHA, "runner_image": RUNNER_IMAGE}
     write_json(root / "state.json", state)
     state["fixture_files"] = {}
-    if args.test != 1:
+    if args.test == 4:
+        # Verification checks a fixed delivery, in the environment it was proven in.
+        checkout = root / "fixture-checkout"
+        run(["git", "init", "--quiet", checkout])
+        run(["git", "fetch", "--quiet", "--depth=1", FIXTURE_URL, args.fixture_revision], cwd=checkout)
+        run(["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"], cwd=checkout)
+    elif args.test != 1:
         # Always use the newest default branch when an application environment is needed.
         run(["git", "clone", "--depth", "1", FIXTURE_URL, root / "fixture-checkout"])
+    if args.test != 1:
         fixture = root / "fixture-checkout" / "registry-version-comparison"
         if not fixture.is_dir():
             raise RuntimeError("Latest e2e-fixture default branch lacks registry-version-comparison; merge the fixture PR first")
@@ -197,7 +204,8 @@ def prepare(args):
     run(["git", "clone", "--no-checkout", REGISTRY_URL, workspace / "registry"])
     run(["git", "checkout", "--detach", REGISTRY_SHA], cwd=workspace / "registry")
     if args.test == 4:
-        state["implementation"] = apply_delivery(workspace / "registry", args.implementation)
+        state["implementation"] = apply_delivery(
+            workspace / "registry", root / "fixture-checkout" / "registry-verification-delivery")
         write_json(root / "state.json", state)
     shutil.copyfile(args.assets / "requirements.md", inputs / "requirements.md")
     if args.test == 2:
@@ -342,6 +350,9 @@ def finish(args):
         try:
             # Visible in the delivery: what the subject left running.
             result["removed_containers"] = remove_other_stacks(state).decode().split()
+            if state["test"] == 4:
+                # The truth is the fixed delivery's: no row the tester inserted.
+                fixture_action(state, "down")
             # Rebuild before the controller captures the host-mapped application.
             (root / "final-start.log").write_bytes(fixture_action(state, "up"))
             result["runtime_ready"] = True
@@ -380,7 +391,7 @@ def main():
     parser.add_argument("--test", type=int, choices=TASKS)
     parser.add_argument("--web-port", type=int)
     parser.add_argument("--api-port", type=int)
-    parser.add_argument("--implementation", type=Path)
+    parser.add_argument("--fixture-revision")
     parser.add_argument("--command")
     parser.add_argument("--subject-status", default="not_run")
     parser.add_argument("--timeout-ms", type=int, default=120000)
@@ -389,8 +400,8 @@ def main():
     if args.action == "prepare":
         if args.test is None or args.web_port is None or args.api_port is None:
             parser.error("prepare requires --test, --web-port and --api-port")
-        if args.test == 4 and args.implementation is None:
-            parser.error("Test 4 requires --implementation")
+        if args.test == 4 and args.fixture_revision is None:
+            parser.error("Test 4 requires --fixture-revision")
     if args.action == "exec" and (not args.command or not 0 < args.timeout_ms <= 120000):
         parser.error("exec requires --command and 0 < --timeout-ms <= 120000")
     action = {"prepare": prepare, "exec": execute, "finish": finish, "cleanup": cleanup}[args.action]
