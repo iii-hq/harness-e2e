@@ -8,8 +8,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::cases::{
-    audits_bank_after, bank, canary, labels, learned_labels, render, trashed_after, Case, Change,
-    Check, Criterion, DISTRACTORS,
+    audits_bank_after, bank, canary, labels, learned_labels, placeholders, render, trashed_after,
+    Case, Change, Check, Criterion, DISTRACTORS,
 };
 use super::observe::{observe, visible_at, MemoryBlock, Observed, RulesUpdate};
 use crate::report::EvaluationDimension;
@@ -134,6 +134,14 @@ impl Extraction {
     }
 }
 
+/// What a `memory-consolidate::run` pass did to the attempt's bank.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Consolidation {
+    pub superseded: u64,
+    pub llm_calls: u64,
+    pub notes: u64,
+}
+
 /// What `capture` reads of an attempt.
 #[derive(Debug, Default)]
 pub struct Snapshot {
@@ -156,6 +164,8 @@ pub struct Snapshot {
     pub changes: Vec<ChangeOutcome>,
     /// The bank once extraction read the teacher session.
     pub teacher: Option<Extraction>,
+    /// What the consolidation pass did, on a stack that runs one.
+    pub consolidation: Option<Consolidation>,
     /// The bank once extraction read the measured session.
     pub bank_after: Option<Extraction>,
 }
@@ -254,6 +264,7 @@ fn assemble(
     snapshot: Snapshot,
     strict: Option<super::strict::EvidenceSnapshot>,
 ) -> Evidence {
+    let consolidation = snapshot.consolidation;
     let own = snapshot
         .generations
         .as_ref()
@@ -434,6 +445,18 @@ fn assemble(
         measurements: Vec::new(),
     };
     evidence.measurements = measurements(case, &evidence);
+    if let Some(pass) = consolidation {
+        let count = |id: &str, value: u64| Measurement {
+            id: id.to_string(),
+            value: value as f64,
+            unit: "count".to_string(),
+        };
+        evidence.measurements.extend([
+            count("memory_consolidation_superseded", pass.superseded),
+            count("memory_consolidation_llm_calls", pass.llm_calls),
+            count("memory_consolidation_notes", pass.notes),
+        ]);
+    }
     evidence
 }
 
@@ -589,6 +612,24 @@ fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
         .any(|(_, change)| matches!(change, Change::RuleSet { .. } | Change::DeleteBank));
     if moves_rules {
         measured.push(count("memory_rules_updates", observed.rules_updates.len()));
+    }
+    // The answer's points alone, apart from what memory delivered: what a
+    // comparison with an arm whose memory injects nothing reads.
+    let answers: Vec<&Criterion> = case
+        .criteria
+        .iter()
+        .filter(|criterion| criterion.check.reads_answer())
+        .collect();
+    if !answers.is_empty() {
+        let points = answers
+            .iter()
+            .filter(|criterion| judge(criterion.check, case, evidence, &audit).0)
+            .map(|criterion| usize::from(criterion.weight))
+            .sum();
+        measured.push(Measurement {
+            unit: "points".to_string(),
+            ..count("memory_answer_points", points)
+        });
     }
     // Teacher and extraction run outside the subject's session and cost cap,
     // so what they did is recorded here.
@@ -770,6 +811,20 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                     false,
                     format!("exchanges without {canary} ({value}): {lacking:?}"),
                 )
+            }
+        }
+        Check::AnswerHolds { exchange, value } => {
+            let mut wanted = value.to_string();
+            for label in placeholders(value) {
+                let Some(canary) = evidence.canaries.get(label) else {
+                    return (false, format!("no canary recorded for {label}"));
+                };
+                wanted = wanted.replace(&format!("{{{label}}}"), canary);
+            }
+            if answer(evidence, exchange).contains(&wanted) {
+                (true, format!("the answer carries {wanted:?}"))
+            } else {
+                (false, format!("the answer lacks {wanted:?}"))
             }
         }
         Check::AnswerLabelled { exchange, labels } => {
@@ -2166,8 +2221,82 @@ mod tests {
         assert_eq!(score(&[]), Some(0));
     }
 
+    /// A consolidated arm says what its pass did; every other arm's runs
+    /// keep the measurements they had.
     #[test]
-    fn measurements_are_seven_and_counted_in_tokens() {
+    fn a_consolidation_pass_adds_its_three_counts() {
+        let case = case_named("memory_precise_port");
+        let ids = |consolidation: Option<Consolidation>| {
+            let mut seen = observed(&["a"], Vec::new());
+            let snapshot = Snapshot {
+                consolidation,
+                ..recorded(case, &mut seen, PROMPT, Some("ok"))
+            };
+            assemble(case, RUN, seen, snapshot, None)
+                .measurements
+                .into_iter()
+                .filter(|m| m.id.starts_with("memory_consolidation_"))
+                .map(|m| (m.id, m.value, m.unit))
+                .collect::<Vec<_>>()
+        };
+        assert!(ids(None).is_empty());
+        let count = |id: &str, value: f64| (id.to_string(), value, "count".to_string());
+        assert_eq!(
+            ids(Some(Consolidation {
+                superseded: 1,
+                llm_calls: 2,
+                notes: 3
+            })),
+            [
+                count("memory_consolidation_superseded", 1.0),
+                count("memory_consolidation_llm_calls", 2.0),
+                count("memory_consolidation_notes", 3.0),
+            ]
+        );
+    }
+
+    /// The command is checked whole, flags included, and the answer's points
+    /// are the same whether memory injected the command or not.
+    #[test]
+    fn a_precise_command_scores_whole_and_its_answer_points_ignore_the_injection() {
+        let case = case_named("memory_precise_command");
+        let shard = canary(RUN, "restart");
+        let command = format!("indexctl restart --env staging --shard {shard} --drain 15m");
+        let judged = |answer: &str, injected: bool| {
+            let blocks = if injected {
+                vec![block(0, vec![line(case, 0)])]
+            } else {
+                Vec::new()
+            };
+            let evidence = evidence_of(case, observed(&[answer], blocks));
+            let evaluation = evaluate(case, &evidence);
+            let points = evidence
+                .measurements
+                .iter()
+                .find(|m| m.id == "memory_answer_points")
+                .map(|m| (m.value, m.unit.clone()));
+            (
+                award(&evaluation, "exact_value_injected"),
+                award(&evaluation, "answer_has_exact_value"),
+                points,
+            )
+        };
+        let points = |value: f64| Some((value, "points".to_string()));
+        assert_eq!(
+            judged(&format!("`{command}`"), true),
+            (Some(40), Some(60), points(60.0))
+        );
+        // The shard alone, the drain dropped: not the stored command.
+        assert_eq!(
+            judged(&format!("indexctl restart --shard {shard}"), true),
+            (Some(40), Some(0), points(0.0))
+        );
+        assert_eq!(judged(&command, false), (Some(0), Some(60), points(60.0)));
+        assert_eq!(judged("no idea", false), (Some(0), Some(0), points(0.0)));
+    }
+
+    #[test]
+    fn measurements_are_eight_and_counted_in_tokens() {
         let case = case_named("memory_relevant_recall");
         let mut first = block(0, vec![line(case, 0), line(case, 1)]);
         first.memory_bytes = 9;
@@ -2195,6 +2324,7 @@ mod tests {
                 "memory_turns_without_hook",
                 "memory_rules_tokens",
                 "memory_reminder_tokens",
+                "memory_answer_points",
             ]
         );
         let measured = |id: &str| {
@@ -2210,6 +2340,8 @@ mod tests {
         // A section with no rules: memory's fixed header alone counts nothing.
         assert_eq!(measured("memory_rules_tokens"), (0.0, "tokens"));
         assert_eq!(measured("memory_reminder_tokens"), (3.0, "tokens"));
+        // Neither answer carries a canary.
+        assert_eq!(measured("memory_answer_points"), (0.0, "points"));
     }
 
     #[test]

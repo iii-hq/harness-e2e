@@ -1,0 +1,56 @@
+# The consolidated arm of the `memory-gain` suite: stacks/memory.yaml plus
+# memory-consolidate. It runs no scheduled pass: the runner calls
+# `memory-consolidate::run` on each attempt's bank once the case planted and
+# taught it, so the session reads a consolidated bank. On a lexical-only stack
+# the semantic tier stops with a note. memory-consolidate depends on memory, so
+# it starts after memory: that edge holds memory at the version this stack
+# declares (the one a dispatch measures) instead of the one memory-consolidate's
+# graph would bring. Keep the other containers in step with memory.yaml.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The worker under test, as on the memory stack.
+  memory:
+    worker: package://memory
+    version: latest
+    config_override:
+      extraction_model: deepseek::deepseek-flash
+
+  # Manual passes only, with the judge and the semantic tier on. Its config
+  # refuses unknown keys, so only keys the released worker knows are set.
+  memory-consolidate:
+    worker: package://memory-consolidate
+    version: latest
+    start_after:
+    - memory
+    config_override:
+      enabled: false
+      llm_assist_enabled: true
+      semantic_enabled: true
+      llm_model: deepseek::deepseek-flash
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

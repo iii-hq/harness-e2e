@@ -1,9 +1,11 @@
 //! The memory cases: what each plants, what the session does, and how the
 //! result is judged. Seeds and rules are templates: `{label}` becomes a
-//! run-scoped 8-hex canary, so the subject cannot know a value unless memory
-//! delivered it.
+//! run-scoped canary, eight hex characters unless the label's suffix asks for
+//! an amount, a date or a number, so the subject cannot know a value unless
+//! memory delivered it.
 
 use crate::scenarios::stable_seed;
+use crate::scenarios::tags::Class;
 
 /// One memory to save, with the exchanges that need it.
 #[derive(Debug)]
@@ -87,6 +89,12 @@ pub enum Check {
     AnswerContains {
         exchange: Option<usize>,
         canary: &'static str,
+    },
+    /// Exchange `exchange`'s answer holds the template `value` with each
+    /// `{label}` filled in: a value checked whole, its fixed parts included.
+    AnswerHolds {
+        exchange: usize,
+        value: &'static str,
     },
     /// Exchange `exchange`'s answer gives each `(label, canary)` pair's canary
     /// under that label, for a prompt that asks for `Label: value` lines. A
@@ -188,6 +196,10 @@ impl Check {
             Check::AnswerLabelled { labels, .. } => labels,
             _ => &[],
         };
+        let held = match self {
+            Check::AnswerHolds { value, .. } => value,
+            _ => "",
+        };
         first
             .into_iter()
             .chain(rest.iter().copied())
@@ -197,6 +209,19 @@ impl Check {
                     .flat_map(|checkpoint| checkpoint.canaries.iter().copied()),
             )
             .chain(labelled.iter().map(|&(_, canary)| canary))
+            .chain(placeholders(held))
+    }
+
+    /// Whether the check reads nothing but the subject's answers.
+    pub fn reads_answer(self) -> bool {
+        matches!(
+            self,
+            Check::AnswerContains { .. }
+                | Check::AnswerHolds { .. }
+                | Check::AnswerLabelled { .. }
+                | Check::AnswerAbstains { .. }
+                | Check::AnswerOmits { .. }
+        )
     }
 }
 
@@ -248,7 +273,7 @@ pub struct Case {
     pub criteria: &'static [Criterion],
 }
 
-const fn gate(
+pub(super) const fn gate(
     id: &'static str,
     weight: u8,
     check: Check,
@@ -265,7 +290,7 @@ const fn gate(
     }
 }
 
-const fn scored(
+pub(super) const fn scored(
     id: &'static str,
     weight: u8,
     check: Check,
@@ -278,7 +303,11 @@ const fn scored(
     }
 }
 
-const fn seed(text: &'static str, group: &'static str, needed_on: &'static [usize]) -> Seed {
+pub(super) const fn seed(
+    text: &'static str,
+    group: &'static str,
+    needed_on: &'static [usize],
+) -> Seed {
     Seed {
         text,
         group,
@@ -444,7 +473,7 @@ const DO_NOT_KEEP_TEACHER: &[&str] = &[
 const DO_NOT_KEEP_PROMPT: &str =
     "Suggest one dinner for me tonight that suits my diagnosed condition. Reply with the dish only.";
 
-pub const CASES: [Case; 36] = [
+pub const CASES: [Case; 42] = [
     Case {
         id: "memory_relevant_recall",
         title: "Memory recalls what the task needs",
@@ -1981,22 +2010,71 @@ pub const CASES: [Case; 36] = [
     super::ownership_cases::USER_OTHER_PERSON,
     super::history_cases::CURRENT_AND_HISTORY,
     super::incremental_cases::INCREMENTAL_LONG_RECALL,
+    super::precise_cases::AMOUNT,
+    super::precise_cases::DATE,
+    super::precise_cases::PORT,
+    super::precise_cases::ENV_VAR,
+    super::precise_cases::COMMAND,
+    super::precise_cases::LONG_MESSAGE,
 ];
+
+/// The cases whose answer builds on stored facts or rules; every other case
+/// that scores an answer returns a stored value as it was stored.
+const SYNTHESIS: [&str; 7] = [
+    "memory_value_preference",
+    "memory_rule_fit",
+    "memory_user_fact_needed",
+    "memory_about_me",
+    "memory_rule_changed_mid_session",
+    "memory_linked_update",
+    "memory_learn_rule_then_obey",
+];
+
+/// What the case's answer does with what memory stored; none for a baseline
+/// and for a case that scores no answer.
+pub fn class(case: &Case) -> Option<Class> {
+    let answers = case.criteria.iter().any(|criterion| {
+        matches!(
+            criterion.check,
+            Check::AnswerContains { .. } | Check::AnswerHolds { .. }
+        )
+    });
+    if case.baseline || !answers {
+        None
+    } else if SYNTHESIS.contains(&case.id) {
+        Some(Class::Synthesis)
+    } else {
+        Some(Class::Lookup)
+    }
+}
 
 pub fn bank(run_id: &str) -> String {
     format!("e2e-{run_id}")
 }
 
-/// Eight bare hex characters, fixed by the run and the label.
+/// Fixed by the run and the label: eight bare hex characters, or an amount
+/// (`_usd`), a date (`_date`) or a five-digit number (`_num`).
 pub fn canary(run_id: &str, label: &str) -> String {
-    format!(
-        "{:08x}",
-        stable_seed(&format!("memory:{run_id}:{label}")) as u32
-    )
+    let seed = stable_seed(&format!("memory:{run_id}:{label}"));
+    // A label's suffix picks the shape of an exact value.
+    if label.ends_with("_usd") {
+        format!("{}.{:02}", 100 + seed % 900, seed / 900 % 100)
+    } else if label.ends_with("_date") {
+        format!(
+            "{}-{:02}-{:02}",
+            2027 + seed % 40,
+            1 + seed / 40 % 12,
+            1 + seed / 480 % 28
+        )
+    } else if label.ends_with("_num") {
+        (10_000 + seed % 50_000).to_string()
+    } else {
+        format!("{:08x}", seed as u32)
+    }
 }
 
 /// The `{label}` placeholders in `text`.
-fn placeholders(text: &str) -> impl Iterator<Item = &str> {
+pub(super) fn placeholders(text: &str) -> impl Iterator<Item = &str> {
     text.split('{')
         .skip(1)
         .filter_map(|rest| rest.split_once('}').map(|(label, _)| label))
@@ -2563,7 +2641,7 @@ mod tests {
                 taught += 1;
             }
         }
-        assert_eq!(taught, 14);
+        assert_eq!(taught, 16);
     }
 
     /// Each case past the per-turn cap needs more lines on its one turn than
@@ -2664,7 +2742,7 @@ mod tests {
             .iter()
             .filter(|case| case.teacher_reply.is_some())
             .collect();
-        assert_eq!(fixed.len(), 4);
+        assert_eq!(fixed.len(), 5);
         for case in fixed {
             let ask = format!(
                 "Reply to this message with exactly one word: {}",
@@ -2938,6 +3016,130 @@ mod tests {
         );
         assert!(planted_memories(case_named("memory_rule_fit"), "a").is_empty());
         assert!(planted_memories(case_named("memory_value_project_baseline"), "a").is_empty());
+    }
+
+    /// The long precise message lands where memory cuts a user line past
+    /// 12,000 characters today: the control fact in the first 6,000 it
+    /// keeps, the port wholly in the cut, more than 6,000 from either end.
+    #[test]
+    fn the_precise_long_message_puts_its_port_where_memory_cuts_a_long_line() {
+        let case = case_named("memory_precise_long_message");
+        let [message] = case.teacher else {
+            panic!("one teacher message")
+        };
+        let text = render(message, "a");
+        assert!(text.is_ascii(), "bytes and characters must agree");
+        assert!((15_000..16_000).contains(&text.len()), "{}", text.len());
+        let span = |fact: &str| {
+            let fact = render(fact, "a");
+            let start = text.find(&fact).unwrap_or_else(|| panic!("{fact}"));
+            assert_eq!(text.matches(&fact).count(), 1, "{fact}");
+            (start, start + fact.len())
+        };
+        let (_, head_end) = span("the build cache bucket is cache-{notes_head}");
+        assert!(head_end < 6_000, "{head_end}");
+        let (start, end) = span(
+            "the billing webhook receiver listens on port {notes_num} and nothing else may bind it",
+        );
+        assert!(start > 6_000 && end + 6_000 < text.len(), "{start}..{end}");
+        assert_eq!(text.matches(&canary("a", "notes_num")).count(), 1);
+    }
+
+    /// Lookup returns a stored value; synthesis builds on it. A baseline
+    /// and a case that scores no answer have no class.
+    #[test]
+    fn the_class_says_whether_an_answer_returns_or_builds_on_a_stored_value() {
+        for id in SYNTHESIS {
+            assert_eq!(class(case_named(id)), Some(Class::Synthesis), "{id}");
+        }
+        assert_eq!(class(case_named("memory_value_project_baseline")), None);
+        assert_eq!(class(case_named("memory_small_talk")), None);
+        assert_eq!(
+            class(case_named("memory_value_project")),
+            Some(Class::Lookup)
+        );
+        for case in &CASES[36..] {
+            assert!(case.id.starts_with("memory_precise_"), "{}", case.id);
+            assert_eq!(class(case), Some(Class::Lookup), "{}", case.id);
+        }
+        // The 29 scheduled cases: 12 lookup, 7 synthesis, 10 without a class.
+        let count = |want: Option<Class>| {
+            CASES[..29]
+                .iter()
+                .filter(|case| class(case) == want)
+                .count()
+        };
+        assert_eq!(
+            (
+                count(Some(Class::Lookup)),
+                count(Some(Class::Synthesis)),
+                count(None)
+            ),
+            (12, 7, 10)
+        );
+    }
+
+    /// A planted precise case asks for the value its one seed states, whole.
+    #[test]
+    fn a_precise_answer_holds_the_value_its_seed_plants() {
+        let planted: Vec<&Case> = CASES[36..]
+            .iter()
+            .filter(|case| !case.memories.is_empty())
+            .collect();
+        assert_eq!(planted.len(), 5);
+        for case in planted {
+            let [seed] = case.memories else {
+                panic!("{}: one seed", case.id)
+            };
+            let held = case
+                .criteria
+                .iter()
+                .find_map(|criterion| match criterion.check {
+                    Check::AnswerHolds { value, .. } => Some(value),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{}: no whole-value check", case.id));
+            assert!(seed.text.contains(held), "{}: {held}", case.id);
+        }
+    }
+
+    #[test]
+    fn a_labels_suffix_shapes_its_canary_and_every_other_label_stays_hex() {
+        for run in ["a", "b", "c", "run-1", "run-2"] {
+            let number = canary(run, "gateway_num");
+            assert!(
+                number
+                    .parse::<u32>()
+                    .is_ok_and(|n| (10_000..60_000).contains(&n)),
+                "{number}"
+            );
+            let date = canary(run, "cert_date");
+            let parts: Vec<u32> = date.split('-').map(|part| part.parse().unwrap()).collect();
+            assert_eq!(date.len(), 10, "{date}");
+            assert!(
+                (2027..2067).contains(&parts[0])
+                    && (1..=12).contains(&parts[1])
+                    && (1..=28).contains(&parts[2]),
+                "{date}"
+            );
+            let amount = canary(run, "budget_usd");
+            let (whole, cents) = amount.split_once('.').unwrap();
+            assert!(
+                whole.len() == 3 && cents.len() == 2,
+                "{amount} is not ddd.dd"
+            );
+            assert!(whole.parse::<u32>().is_ok() && cents.parse::<u32>().is_ok());
+        }
+        for case in &CASES[..36] {
+            for label in labels(case) {
+                let value = canary("a", label);
+                assert!(
+                    value.len() == 8 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                    "{}: {label} renders {value}",
+                    case.id
+                );
+            }
+        }
     }
 
     #[test]
