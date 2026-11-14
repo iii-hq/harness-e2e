@@ -7,9 +7,9 @@ Four ordinary scenarios use the regular Harness catalog, execution, reports, and
 | `registry_planning` | Pinned Registry and public requirements | Inspect the application and plan the feature | `workspace/output/plan.md` |
 | `registry_implementation` | Same base, requirements, reference plan, prepared environment | Implement the feature, run tests, exercise the application | `delivery/implementation.patch`, report, screenshots |
 | `registry_environment` | Same base, runtime requirements, seed and artifacts | Create Dockerfile/Compose/scripts and run the baseline application | Environment patch and reproduction report |
-| `registry_verification` | Explicitly supplied delivery, requirements, fresh environment | Test the feature through API and browser, preserving source | Verification report, check results, screenshots |
+| `registry_verification` | A fixed delivery pinned by e2e-fixture commit, requirements, fresh environment | Test the feature through API and browser, preserving source | Verification report, check results, screenshots |
 
-Only implementation receives the reference plan. Environment receives no prepared Dockerfile, Compose file, or smoke script. Verification consumes a specific implementation delivery.
+Only implementation receives the reference plan. Environment receives no prepared Dockerfile, Compose file, or smoke script. Verification checks a fixed delivery, pinned by e2e-fixture commit.
 
 ## Prerequisites
 
@@ -21,17 +21,15 @@ Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency instal
 
 ## Release Control and Console plans
 
-The `software-engineering` profile includes implementation and verification, run sequentially in one group with one repetition. Planning and environment construction remain available as standalone scenarios. Use each scenario's criteria to assess its specific task.
+The `software-engineering` profile includes implementation and verification, each in its own group. Planning and environment construction remain available as standalone scenarios. Use each scenario's criteria to assess its specific task.
 
 Release Control's `harness-software-engineering` plan selects this profile through the existing executor.
 
-Within the shared execution, implementation publishes its delivery for verification. A new repetition clears that input, and a missing delivery fails verification rather than selecting an older file. Concurrent executions cannot exchange deliveries. Verification applies the patch to a fresh pinned Registry checkout and starts a fresh environment.
+Verification does not read implementation's delivery. It fetches the pinned e2e-fixture commit, applies the delivery that commit carries to a fresh pinned Registry checkout, and starts the environment from the same commit; the final measurement starts it again from scratch. The runner holds only how many required checks that delivery fails, and passes that count to the validator at capture.
 
 In the E2E extension, create a plan with one scenario and an execution model. All four scenarios use runtime validators; planning scores the delivered `plan.md` with deterministic text checks. Use one run and zero technical retries for initial validation so failures remain visible.
 
 Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the executor workspace disk. Set `TMPDIR` there as well when the host temporary filesystem has a separate quota. The worker process must receive these variables before the run starts; setting them in the browser does not configure the worker.
-
-For standalone verification of a previously delivered implementation, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on the worker with the explicit `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. The paired profile does not use this external input. Delivery files also remain in normal captured evidence after cleanup.
 
 Use the Application builds and changes suite in the Console and add planning and environment if all four Registry cases are needed locally. Keep one repetition and run the Docker builds sequentially on a disk-constrained executor.
 
@@ -49,14 +47,7 @@ cargo run --locked -- run \
 
 Planning answers each atomic question with a deterministic check over the delivered `plan.md`: contract terms that must be stated, pinned-source paths that must be cited, an ordered implementation sequence, proposed tests that state an expected result, and the absence of excluded work. Each observation cites the plan lines it matched and is retained in `validation/plan-checks.json`. No model call is involved.
 
-To test a previously delivered implementation:
-
-```bash
-export HARNESS_E2E_REGISTRY_IMPLEMENTATION=/absolute/previous-attempt/delivery
-cargo run --locked -- run \
-  --model "$HARNESS_E2E_MODEL" --provider "$HARNESS_E2E_PROVIDER" \
-  --scenario registry_verification
-```
+Verification runs the same way, with `--scenario registry_verification`; it needs no implementation run.
 
 Select and schedule scenarios through the normal Harness flow. The Evolution profile uses the existing group execution and scoring contracts.
 

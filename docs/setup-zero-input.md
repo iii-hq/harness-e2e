@@ -54,7 +54,6 @@ Proposta: aproveitar essa mesma verificação e a preparação existente dos cen
 ### Algumas opções não resolvem o que o nome sugere
 
 - `HARNESS_E2E_RUN_DIR`, `HARNESS_E2E_RUNS_DIR`, `HARNESS_E2E_OUTPUT` e `data_dir` atendem camadas diferentes. Derivar os diretórios de uma configuração do projeto, mantendo scratch separado de evidências retidas e permitindo destino explícito de exportação na CLI.
-- `HARNESS_E2E_REGISTRY_IMPLEMENTATION` é uma entrada de experimento para verificação avulsa. No fluxo ordenado implementação → verificação, o contexto já compartilha a entrega. Substituir o caminho externo por referência explícita à entrega no plano; nunca selecionar arbitrariamente a última execução. [Fonte](../src/scenarios/registry.rs).
 
 ### Identidade deve continuar verificável
 
@@ -131,7 +130,6 @@ Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma pr
 | `PROGRESS_INTERVAL_SECONDS` | Intervalo de progresso CLI; default 15 s | Opção interna/CLI |
 | `PROVIDER` | Provider da CLI/campanha; default do formulário de execução rápida | Seleção no plano/execução |
 | `REGISTRY_API_URL` | Endpoint usado na resolução da stack | Configuração operacional do Registry |
-| `REGISTRY_IMPLEMENTATION` | Entrega externa para verificação Registry avulsa | Referência explícita à entrega no plano |
 | `REPOSITORY` | Override da identidade do E2E | Proveniência real do artefato |
 | `REVISION` | Override da revisão do E2E | Proveniência real do artefato |
 | `RUNS_DIR` | Diretório de histórico usado por comandos CLI | Configuração efetiva do projeto |

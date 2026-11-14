@@ -46,8 +46,7 @@ that the catalog still lists, and picks none without one. There is no seed:
 every execution the Console starts runs the canonical cases, so any two pair
 by scenario and repetition when compared (a `seed` an older Console sends is
 ignored). A scenario of a sequential
-group (such as `registry_implementation` then `registry_verification`) brings
-the whole group: the catalog lists the groups (`scenario_groups`), so the form
+group brings the whole group: the catalog lists the groups (`scenario_groups`), so the form
 ticks and counts the group before running, and the execution notes it. One
 execution runs at a time: a start while another runs names that execution
 (`"<label>" (<id>) is still running`), and the form offers to open it. A finished execution can be

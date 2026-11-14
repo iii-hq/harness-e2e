@@ -1,6 +1,6 @@
 # Test 4 — Verify the delivered feature in a real environment
 
-The `registry/` workspace contains the Test 2 delivery applied to the pinned starting commit. Read `inputs/requirements.md` and `inputs/environment.json`. Treat the running API, frontend, and PostgreSQL instance as the system under test.
+The `registry/` workspace contains a delivered implementation of the feature in `inputs/requirements.md`, applied to the pinned starting commit. Read `inputs/requirements.md` and `inputs/environment.json`. Treat the running API, frontend, and PostgreSQL instance as the system under test.
 
 Exercise the required flows through the real API and browser: additive, breaking, reverse, same-version, unavailable metadata, invalid/missing versions, worker scoping, shareable URL and browser history, error/stale-state behavior, expandable values, accessibility basics, local downloads, and preserved existing Registry flows. Record expected and observed behavior with reproducible steps, URLs, responses or logs, and actual 1440 × 1000 screenshots. Do not generate mock images.
 
@@ -42,7 +42,7 @@ Use `pass`, `fail`, or `blocked` for status. The `command` must exactly match th
 }
 ```
 
-Assertions must have unique IDs and contain `expected` and `observed` JSON values. Empty arrays, nulls, strings, and other JSON values are valid. Equality is exact and type-sensitive: a passing assertion has equal values, while a failing assertion has different values. Every assertion in a `pass` proof passes, while a `fail` proof contains at least one failing assertion. `checks.json`, `report.md`, screenshots, and free-form text do not count as these per-check proofs. A blocked check is not an executed check.
+Assertions must have unique IDs and contain `expected` and `observed` JSON values. Empty arrays, nulls, strings, and other JSON values are valid. Equality is exact and type-sensitive: a passing assertion has equal values, while a failing assertion has different values. Every assertion in a `pass` proof passes, while a `fail` proof contains at least one failing assertion. `checks.json`, `report.md`, screenshots, and free-form text do not count as these per-check proofs. A blocked check is not an executed check. A check counts as executed only when the status you report matches what the runner's own independent probe of that check observes; a proof you wrote does not establish that by itself. A failure reported for a check that does not fail lowers recall as well as precision.
 
 If a tool call runs a batch that produces several proof files, multiple checks may reference that same complete command. Copy its entire `command` argument verbatim and cite the separate returned artifact for each check.
 

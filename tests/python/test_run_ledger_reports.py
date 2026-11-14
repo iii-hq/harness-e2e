@@ -552,6 +552,9 @@ class StackResolutionTests(unittest.TestCase):
         fixtures = {"kanban-e2e-fixture": "c" * 40, "e2e-fixture": "d" * 40}
         kanban = {**PROFILE_SNAPSHOT, "campaigns": [{**PROFILE_SNAPSHOT["campaigns"][0], "groups": [
             {**PROFILE_SNAPSHOT["campaigns"][0]["groups"][0], "id": "case-kanban-c1-foundation"}]}]}
+        # Verification checks out its own pin (scripts/executor.sh), never the head.
+        verification = {**PROFILE_SNAPSHOT, "campaigns": [{**PROFILE_SNAPSHOT["campaigns"][0], "groups": [
+            {**PROFILE_SNAPSHOT["campaigns"][0]["groups"][0], "id": "case-registry-verification"}]}]}
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             (root / "execution.json").write_text(json.dumps({
@@ -564,11 +567,16 @@ class StackResolutionTests(unittest.TestCase):
             (root / "suite.json").write_text(json.dumps(PROFILE_SNAPSHOT))
             prepare_execution.command_contracts(args)
             unused = json.loads((root / "contracts/resolution.json").read_text())
+            (root / "suite.json").write_text(json.dumps(verification))
+            prepare_execution.command_contracts(args)
+            pinned = json.loads((root / "contracts/resolution.json").read_text())
             (root / "suite.json").write_text(json.dumps(kanban))
             prepare_execution.command_contracts(args)
             used = json.loads((root / "contracts/resolution.json").read_text())
         self.assertNotIn("fixture_revisions", unused)
         self.assertNotIn("fixture_fallbacks", unused)
+        self.assertNotIn("fixture_revisions", pinned)
+        self.assertNotIn("fixture_fallbacks", pinned)
         self.assertEqual(used["fixture_revisions"], {"kanban-e2e-fixture": "c" * 40})
         self.assertEqual(used["fixture_fallbacks"], {
             "kanban-e2e-fixture": {"ref": "main", "checked_out": "c" * 40, "error": "HTTP 503"}})
