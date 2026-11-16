@@ -93,6 +93,34 @@ class BuildStackTests(unittest.TestCase):
         with self.assertRaises(verify_stack.VerifyError):
             verify_stack.build_stack([], "", "", set(), stack="memory", versions={"ade": "1.0.0"})
 
+    def test_an_extraction_model_replaces_only_that_key_of_memory(self):
+        stack = verify_stack.build_stack([], "", "", set(), stack="memory-off", versions={"memory": "0.3.3"},
+                                         extraction_model="zai::glm-5")
+        self.assertEqual(stack["containers"]["memory"]["config_override"], {
+            "extraction_model": "zai::glm-5", "inject_rules": False, "inject_memories": False,
+        })
+        # A memory built from a commit keeps it too.
+        stack = verify_stack.build_stack(["memory"], COMMIT, "", set(), stack="memory",
+                                         extraction_model="zai::glm-5")
+        self.assertEqual(stack["containers"]["memory"]["config_override"], {"extraction_model": "zai::glm-5"})
+        self.assertEqual(stack["containers"]["memory"]["commit"], COMMIT)
+
+    def test_an_extraction_model_needs_a_stack_with_memory(self):
+        with self.assertRaises(verify_stack.VerifyError):
+            verify_stack.build_stack([], "", "0.24.3", set(), extraction_model="zai::glm-5")
+
+    def test_the_gain_arms_build_with_a_released_memory(self):
+        for name in ("memory-off", "memory-consolidated"):
+            stack = verify_stack.build_stack([], "", "", set(), stack=name, versions={"memory": "0.3.3"})
+            self.assertEqual(stack["containers"]["memory"]["version"], "0.3.3", name)
+            self.assertEqual(stack["containers"]["memory"]["config_override"]["extraction_model"],
+                             "deepseek::deepseek-flash", name)
+        consolidated = verify_stack.build_stack([], "", "", set(), stack="memory-consolidated",
+                                                versions={"memory": "0.3.3"})
+        self.assertIs(consolidated["containers"]["memory-consolidate"]["config_override"]["enabled"], False)
+        # The edge that holds memory at 0.3.3 against memory-consolidate's own graph.
+        self.assertEqual(consolidated["containers"]["memory-consolidate"]["start_after"], ["memory"])
+
     def test_each_suite_keeps_a_comment_of_its_own(self):
         self.assertEqual(verify_stack.marker("pr"), verify_stack.MARKER)
         self.assertNotIn(verify_stack.MARKER, verify_stack.marker("memory"))

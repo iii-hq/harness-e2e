@@ -20,7 +20,8 @@ use tokio::time::sleep;
 use super::cases::{bank, canary, labels, planted, render, Case, Change};
 use super::observe::observe;
 use super::score::{
-    ChangeOutcome, Extraction, PromptRecord, Retrieval, Snapshot, StoredMemory, LEARNED_RULE,
+    ChangeOutcome, Consolidation, Extraction, PromptRecord, Retrieval, Snapshot, StoredMemory,
+    LEARNED_RULE,
 };
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
@@ -32,6 +33,8 @@ use crate::wire::{
 pub mod generation_capture;
 
 const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
+/// A stack that carries memory-consolidate is the consolidated arm.
+const CONSOLIDATE: &str = "memory-consolidate::run";
 const EMBEDDER: &str = "all-MiniLM-L6-v2";
 const POLL: Duration = Duration::from_secs(2);
 const EMBEDDER_WAIT: Duration = Duration::from_secs(300);
@@ -70,6 +73,8 @@ struct Run {
     strays: Vec<String>,
     /// The bank once extraction read the teacher session.
     taught: Option<Extraction>,
+    /// What the consolidation pass did to the planted and taught bank.
+    consolidation: Option<Consolidation>,
     checkpoints: Option<Vec<super::learning_checkpoints::EvidenceCheckpoint>>,
     /// Each answered exchange's prompt prefix digest, in order, or why the
     /// status could not be read.
@@ -221,8 +226,46 @@ fn created(reply: &Value) -> Result<Saved> {
     stored(reply)
 }
 
+/// What a `memory-consolidate::run` pass on the attempt's one bank did; a
+/// pass that failed there fails setup.
+fn consolidated(reply: &Value) -> Result<Consolidation> {
+    let report = &reply["banks"][0];
+    if report.is_null() {
+        bail!("memory-consolidate::run failed on the attempt's bank: no report in {reply}");
+    }
+    if report["errors"]
+        .as_array()
+        .is_some_and(|errors| !errors.is_empty())
+    {
+        bail!(
+            "memory-consolidate::run failed on the attempt's bank: {}",
+            report["errors"]
+        );
+    }
+    Ok(Consolidation {
+        superseded: reply["superseded"].as_u64().unwrap_or_default(),
+        // Absent from a worker that predates the count, and when it is 0.
+        llm_calls: report["llm_calls"].as_u64().unwrap_or_default(),
+        notes: report["notes"].as_array().map_or(0, Vec::len) as u64,
+    })
+}
+
+/// Keeps the pass `reply` reports on the registered run, for its snapshot.
+fn keep_consolidation(run_id: &str, reply: &Value) -> Result<()> {
+    let pass = consolidated(reply)?;
+    lock_unpoisoned(runs())
+        .get_mut(run_id)
+        .context("the run was never registered")?
+        .consolidation = Some(pass);
+    Ok(())
+}
+
 /// Fails unless the preview injects `wanted` first.
 fn preview_leads(reply: &Value, wanted: &Saved) -> Result<()> {
+    // Memory with injection off ranks nothing: no ranking to hold the case to.
+    if reply["retrieval"] == "none" {
+        return Ok(());
+    }
     let first = reply["memories"][0]["memory"]["id"].as_str();
     if first != Some(wanted.id.as_str()) {
         bail!(
@@ -281,6 +324,7 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
             teacher: None,
             strays: Vec::new(),
             taught: None,
+            consolidation: None,
             checkpoints: super::learning_checkpoints::config(case).map(|_| Vec::new()),
             surface_digests: Vec::new(),
         },
@@ -359,6 +403,13 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         }
         if !case.teacher.is_empty() {
             teach(context, case, run_id, retrieval).await?;
+        }
+        if context.function_exists(CONSOLIDATE).await? {
+            let reply = context
+                .trigger_value(CONSOLIDATE, json!({"bank": bank}))
+                .await
+                .context(CONSOLIDATE)?;
+            keep_consolidation(run_id, &reply)?;
         }
     }
 
@@ -990,6 +1041,7 @@ pub fn snapshot(run_id: &str) -> Snapshot {
                 .collect(),
             changes: run.changes.clone(),
             teacher: run.taught.clone(),
+            consolidation: run.consolidation,
             bank_after: None,
             generation_messages_unavailable: true,
             generations: None,
@@ -1353,6 +1405,78 @@ mod tests {
                 "{error}"
             );
         }
+        // Injection off: memory ranks nothing, so there is no order to hold.
+        preview_leads(
+            &json!({"bank": "e2e-a", "memories": [], "retrieval": "none"}),
+            &wanted,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_consolidation_pass_is_read_from_its_one_bank_report() {
+        let clean = json!({
+            "dry_run": false, "superseded": 2, "checkpointed": true,
+            "banks": [{"bank": "e2e-a", "scanned": 22, "groups": [], "superseded": 2,
+                       "reinforced": 2, "llm_calls": 3,
+                       "notes": ["semantic tier skipped: no semantic recall"]}],
+        });
+        assert_eq!(
+            consolidated(&clean).unwrap(),
+            Consolidation {
+                superseded: 2,
+                llm_calls: 3,
+                notes: 1
+            }
+        );
+        // A worker that sends no model call count, and a pass with nothing to do.
+        let quiet = json!({
+            "dry_run": false, "superseded": 0, "checkpointed": true,
+            "banks": [{"bank": "e2e-a", "scanned": 22, "groups": [], "superseded": 0, "reinforced": 0}],
+        });
+        assert_eq!(
+            consolidated(&quiet).unwrap(),
+            Consolidation {
+                superseded: 0,
+                llm_calls: 0,
+                notes: 0
+            }
+        );
+        let failed = json!({
+            "dry_run": false, "superseded": 0, "checkpointed": false,
+            "banks": [{"bank": "e2e-a", "scanned": 0, "groups": [], "superseded": 0,
+                       "reinforced": 0, "errors": ["memory::list: timeout"]}],
+        });
+        let error = consolidated(&failed).unwrap_err().to_string();
+        assert!(
+            error.starts_with("memory-consolidate::run failed on the attempt's bank")
+                && error.contains("timeout"),
+            "{error}"
+        );
+        assert!(consolidated(&json!({"banks": []})).is_err());
+    }
+
+    /// The pass setup keeps is the one the attempt's snapshot reports.
+    #[test]
+    fn a_kept_consolidation_pass_reaches_the_snapshot() {
+        let run_id = "consolidation-reaches-snapshot";
+        let reply = json!({
+            "superseded": 1,
+            "banks": [{"bank": "e2e-a", "llm_calls": 2, "notes": ["a note"]}],
+        });
+        assert!(keep_consolidation(run_id, &reply).is_err(), "unregistered");
+        register(&CASES[0], run_id);
+        assert_eq!(snapshot(run_id).consolidation, None);
+        keep_consolidation(run_id, &reply).unwrap();
+        assert_eq!(
+            snapshot(run_id).consolidation,
+            Some(Consolidation {
+                superseded: 1,
+                llm_calls: 2,
+                notes: 1
+            })
+        );
+        lock_unpoisoned(runs()).remove(run_id);
     }
 
     #[test]

@@ -42,6 +42,10 @@ inputs:
     description: provider/model the subject runs
     required: false
     default: deepseek/deepseek-flash
+  extraction-model:
+    description: provider::model memory extracts with, instead of the stack's (the stack must declare memory)
+    required: false
+    default: ''
   comment-pr:
     description: owner/repo#N of a pull request to keep one comment on
     required: false
@@ -76,6 +80,7 @@ runs:
         SUITE: ${{ inputs.suite }}
         STACK: ${{ inputs.stack }}
         MODEL: ${{ inputs.model }}
+        EXTRACTION_MODEL: ${{ inputs.extraction-model }}
         COMMENT_PR: ${{ inputs.comment-pr }}
       # The verdict is the `status` output, not this step's exit code: the
       # caller's next steps (a Slack reply) need the outputs whatever it was.
@@ -85,4 +90,5 @@ runs:
         exec python3 "$ACTION_PATH/../../../scripts/verify_stack.py" --exit-zero \
           --pins "$PINS" --commit "$COMMIT" --versions "$VERSIONS" --iii "$III" \
           --suite "$SUITE" --stack "$STACK" --model "$MODEL" \
+          ${EXTRACTION_MODEL:+--extraction-model "$EXTRACTION_MODEL"} \
           ${COMMENT_PR:+--comment-pr "$COMMENT_PR"}
