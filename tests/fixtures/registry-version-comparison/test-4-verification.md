@@ -55,19 +55,19 @@ Required check IDs and questions:
 - `implementation.enum_order`: Does changing only schema enum-array order preserve equality?
 - `implementation.config_array_order`: Does changing configuration-array order produce a difference?
 - `implementation.missing_metadata`: Does absent metadata produce an unavailable notice?
-- `implementation.worker_lookup`: Is a version resolved only within the requested worker?
+- `implementation.worker_lookup`: Is a version resolved only within the requested worker, so that comparing orders-worker 1.0.0...9.9.9 is not satisfied by second-worker@9.9.9?
 - `implementation.reverse_kinds`: Does reversal swap addition and removal kinds?
 - `implementation.reverse_values`: Does reversal swap before and after values?
-- `implementation.reverse_impact`: Does reversal recalculate impact?
+- `implementation.reverse_impact`: Does reversal recalculate impact, so that reversing 1.0.0...2.0.0 gives the reduced orders::create input required set its prescribed impact?
 - `implementation.shared_url`: Does reopening a shared URL restore the selected pair?
 - `implementation.stale_results`: Does a failed request avoid displaying the previous result as current?
 - `implementation.invalid_version`: Does invalid SemVer return the prescribed error?
 - `implementation.missing_worker`: Does a missing worker return the prescribed error?
-- `implementation.missing_version`: Does a missing version return the prescribed error?
+- `implementation.missing_version`: Does comparing two orders-worker versions that no worker has return the prescribed error, with error.version naming the source version?
 - `implementation.history`: Does Changelog history show the seeded releases?
 - `implementation.expanded_detail`: Can a user expand the timeout change detail?
 - `implementation.keyboard_selectors`: Can the version selectors be operated using the keyboard?
-- `implementation.versions_regression`: Does the existing Versions tab retain its baseline behavior?
-- `implementation.readme_regression`: Does the existing README view retain its baseline behavior?
+- `implementation.versions_regression`: Does the existing Versions tab still list the seeded releases?
+- `implementation.readme_regression`: Does opening a pinned version with no tab named still show that version's README?
 - `implementation.api_reference_regression`: Does the existing API reference retain its baseline behavior?
 - `implementation.download_regression`: Does the existing download flow retain its baseline behavior?

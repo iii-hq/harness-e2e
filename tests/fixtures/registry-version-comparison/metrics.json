@@ -292,9 +292,9 @@
         },
         {
           "id": "implementation.worker_lookup",
-          "question": "Is a version resolved only within the requested worker?",
+          "question": "Is a version resolved only within the requested worker, so that comparing orders-worker 1.0.0...9.9.9 is not satisfied by second-worker@9.9.9?",
           "label": "Versions resolve only within the worker",
-          "expected": "orders-worker@9.9.9 remains missing even though second-worker@9.9.9 exists.",
+          "expected": "GET /w/orders-worker/compare/1.0.0...9.9.9 returns HTTP 404 with error.code version_not_found, although second-worker@9.9.9 exists.",
           "measurement": "binary",
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
@@ -325,9 +325,9 @@
         },
         {
           "id": "implementation.reverse_impact",
-          "question": "Does reversal recalculate impact?",
+          "question": "Does reversal recalculate impact, so that reversing 1.0.0...2.0.0 gives the reduced orders::create input required set its prescribed impact?",
           "label": "Reversal recalculates the impact",
-          "expected": "The reversed reduction of the create input required set is additive.",
+          "expected": "In GET /w/orders-worker/compare/2.0.0...1.0.0, the orders::create change at /request_schema/required, a reduced required set, has impact additive.",
           "measurement": "binary",
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
@@ -391,9 +391,9 @@
         },
         {
           "id": "implementation.missing_version",
-          "question": "Does a missing version return the prescribed error?",
+          "question": "Does comparing two orders-worker versions that no worker has return the prescribed error, with error.version naming the source version?",
           "label": "Missing version returns the prescribed error",
-          "expected": "The first missing version yields HTTP 404 with error.code version_not_found and its value in error.version.",
+          "expected": "Comparing orders-worker 8.8.8...7.7.7, versions no worker has, yields HTTP 404 with error.code version_not_found and error.version 8.8.8.",
           "measurement": "binary",
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
@@ -435,9 +435,9 @@
         },
         {
           "id": "implementation.versions_regression",
-          "question": "Does the existing Versions tab retain its baseline behavior?",
+          "question": "Does the existing Versions tab still list the seeded releases?",
           "label": "Versions tab still works as before",
-          "expected": "The baseline Versions flow still displays the seeded versions.",
+          "expected": "/workers/orders-worker?tab=versions still lists 0.9.0, 1.0.0, 1.1.0 and 2.0.0.",
           "measurement": "binary",
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
@@ -446,9 +446,9 @@
         },
         {
           "id": "implementation.readme_regression",
-          "question": "Does the existing README view retain its baseline behavior?",
+          "question": "Does opening a pinned version with no tab named still show that version's README?",
           "label": "README view still works as before",
-          "expected": "The baseline README view still displays the seeded worker README.",
+          "expected": "/workers/orders-worker?version=1.0.0 still opens on the README and shows the seeded orders-worker 1.0.0 README.",
           "measurement": "binary",
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
