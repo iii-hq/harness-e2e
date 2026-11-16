@@ -70,9 +70,9 @@ scenario in `aggregate.causes`:
   got past it, stays the subject's.
 - `evaluation_environment`: the evaluator could not validate the delivery for
   a reason of its own machine or tooling, such as a Docker daemon that
-  stopped answering. The Registry runner removes every other stack in the
-  run's private Docker daemon before it starts the delivery, and records what
-  it removed; a port still taken after that is the delivery's own. A check
+  stopped answering. The Registry runner starts the delivery in a fresh
+  measurement runner with its own private Docker daemon and ports, after it
+  pauses the subject's; a port taken there is the delivery's own. A check
   the delivery left unmeasurable (an alert the UI never shows, a comparison
   that never succeeds, a Compose file that does not load, a web container
   that does not restart) scores zero instead.

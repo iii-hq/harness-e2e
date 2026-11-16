@@ -88,8 +88,7 @@ class RegistryDeliveryTests(unittest.TestCase):
             "fixture_files": {}, "input_files": {},
         })
         args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="timed_out")
-        with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "fixture_action", side_effect=RuntimeError("not running")), \
-             patch.object(module, "remove_other_stacks", return_value=b""):
+        with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "fixture_action", side_effect=RuntimeError("not running")):
             # git_patch's default base is bound at definition time; use the test repo base.
             original_patch = module.git_patch
             with patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
@@ -101,53 +100,31 @@ class RegistryDeliveryTests(unittest.TestCase):
         self.assertEqual(manifest["subject_status"], "timed_out")
         self.assertTrue((run_root / "delivery/implementation.patch").stat().st_size)
 
-    def final_start(self, test):
-        """finish's fixture actions and result, after a subject left two stacks up."""
+    def test_finish_leaves_the_subject_runner_as_the_subject_left_it(self):
+        # The truth is measured in a second runner; finish only seals the subject's source.
         import argparse
-        import os
-        import subprocess
-        fake_bin = self.root / "bin"
-        fake_bin.mkdir()
-        (fake_bin / "docker").write_text(
-            '#!/bin/sh\n'
-            'if [ "$1" = ps ]; then printf "%s\\n" "a1 registry-task-x" "b2 registry-test2" "c3 "; '
-            'else shift 2; echo "$@"; fi\n')
-        (fake_bin / "docker").chmod(0o755)
-        calls = []
-
-        def container_exec(_state, command, timeout=900):
-            calls.append(command)
-            return subprocess.run(["sh", "-c", command], capture_output=True, check=True,
-                                  env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}).stdout
-
-        run_root = self.root / "run"
-        (run_root / "workspace").mkdir(parents=True)
-        (run_root / "workspace/registry").symlink_to(self.source, target_is_directory=True)
-        module.write_json(run_root / "state.json", {
-            "test": test, "container": "registry-task-x", "fixture_files": {}, "input_files": {},
-            "initial_patch_sha256": module.hashlib.sha256(b"").hexdigest(),
-        })
-        args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="finished")
+        (self.source / "existing.txt").write_text("delivered\n")
         original_patch = module.git_patch
-        with patch.object(module, "REGISTRY_SHA", self.base), \
-             patch.object(module, "container_exec", side_effect=container_exec), \
-             patch.object(module, "fixture_action", side_effect=lambda _state, action: calls.append(action) or b""), \
-             patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
-            result = module.finish(args)
-        return calls[1:], result
-
-    def test_final_start_first_removes_every_stack_but_the_fixture(self):
-        # The 1.8.50 A/B run: the agent left its own project (registry-test2)
-        # up in the private daemon and the final start found the port taken.
-        actions, result = self.final_start(2)
-        self.assertEqual(result["removed_containers"], ["b2", "c3"])
-        self.assertTrue(result["runtime_ready"])
-        self.assertEqual(actions, ["up"])
-
-    def test_verification_is_measured_on_a_fresh_stack(self):
-        actions, result = self.final_start(4)
-        self.assertTrue(result["runtime_ready"])
-        self.assertEqual(actions, ["down", "up"])
+        # Unchanged since prepare: no scope deviation, so test 4 reaches what used to restart the stack.
+        initial = module.hashlib.sha256(original_patch(self.source, self.base)).hexdigest()
+        for test in (2, 4):
+            with self.subTest(test=test):
+                run_root = self.root / f"run-{test}"
+                (run_root / "workspace").mkdir(parents=True)
+                (run_root / "workspace/registry").symlink_to(self.source, target_is_directory=True)
+                module.write_json(run_root / "state.json", {
+                    "test": test, "container": "registry-task-x", "fixture_files": {},
+                    "input_files": {}, "initial_patch_sha256": initial,
+                })
+                args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="finished")
+                untouchable = AssertionError("finish must not touch the subject runner")
+                with patch.object(module, "REGISTRY_SHA", self.base), \
+                     patch.object(module, "container_exec", side_effect=untouchable), \
+                     patch.object(module, "fixture_action", side_effect=untouchable), \
+                     patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
+                    result = module.finish(args)
+                self.assertNotIn("runtime_ready", result)
+                self.assertEqual((run_root / "delivery/manifest.json").is_file(), test == 2)
 
     def test_preparation_fetches_fresh_fixture_and_limits_inputs(self):
         fixture = self.root / "fixture"
@@ -213,6 +190,256 @@ class RegistryDeliveryTests(unittest.TestCase):
             # iii telemetry off in the runner and, through it, the fixture's services.
             self.assertIn(["-e", "III_TELEMETRY_ENABLED=false"],
                           [launch[i:i + 2] for i in range(len(launch) - 1)])
+            after = [" ".join(call) for call in calls[calls.index(launch) + 1:]]
+            expected = (["docker inspect", "apk add"]
+                        + (["docker info", "TCP-LISTEN:8080", "TCP-LISTEN:8081"] if test != 1 else [])
+                        + (["fixture.sh up", "fixture.sh check"] if test in (2, 4) else []))
+            self.assertEqual(len(after), len(expected), after)
+            for call, marker in zip(after, expected):
+                self.assertIn(marker, call)
+
+    def subject_root(self, test, name="run"):
+        """A prepared subject root whose fixture checkout is a real repository."""
+        import shutil
+        root = self.root / name
+        checkout = root / "fixture-checkout"
+        fixture = checkout / "registry-version-comparison"
+        fixture.mkdir(parents=True)
+        (fixture / "seed.sql").write_text("SELECT 1;")
+        (fixture / "fixture.sh").write_text("#!/bin/sh\n")
+        (fixture / "fixture.sh").chmod(0o755)
+        shutil.copytree(self.delivery, checkout / "registry-verification-delivery")
+        for args in (["init", "-q"], ["add", "."],
+                     ["-c", "user.email=t@example.invalid", "-c", "user.name=T", "commit", "-qm", "fixture"]):
+            module.run(["git", *args], cwd=checkout)
+        state = {"test": test, "container": "registry-task-subject",
+                 "fixture_files": module.fixture_hashes(fixture)}
+        if test == 4:
+            state["implementation"] = json.loads((self.delivery / "manifest.json").read_text())
+        module.write_json(root / "state.json", state)
+        return root
+
+    def measure(self, root, inspect="true true", up=lambda count: b""):
+        """measure's Docker calls and fixture actions; each action with existing.txt as it was."""
+        import argparse
+        calls, actions = [], []
+        real_run = module.run
+        source = root / "measurement/workspace/registry"
+
+        def fake_run(argv, **kwargs):
+            argv = [str(x) for x in argv]
+            calls.append(argv)
+            if argv[:3] == ["git", "clone", "--no-checkout"]:
+                return real_run(["git", "clone", "-q", self.source, argv[-1]])
+            if argv[:2] == ["docker", "pause"] and inspect != "true true":
+                raise RuntimeError("docker failed (1): container is not running")
+            if argv[:2] == ["docker", "inspect"]:
+                return f"{inspect}\n".encode() if "{{.State.Paused}}" in argv[3] else b"image-id\n"
+            if argv[0] == "docker":
+                if argv[-1].startswith("/fixture/fixture.sh "):
+                    action = argv[-1].split(" ", 1)[1]
+                    actions.append((action, (source / "existing.txt").read_text()))
+                    if action == "up":
+                        return up(sum(name == "up" for name, _ in actions))
+                return b""
+            return real_run(argv, **kwargs)
+
+        args = argparse.Namespace(root=root, web_port=2222, api_port=2223)
+        with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "run", fake_run):
+            try:
+                return module.measure(args), calls, actions
+            except Exception as error:
+                error.calls = calls
+                raise
+
+    def delivered(self):
+        (self.source / "existing.txt").write_text("delivered\n")
+        self.bundle()
+        self.git("checkout", "--", ".")
+
+    def test_measurement_of_the_pinned_delivery_starts_once(self):
+        self.delivered()
+        root = self.subject_root(4)
+        result, calls, actions = self.measure(root)
+        measured = root / "measurement"
+        self.assertEqual(result, {"runtime_ready": True, "subject_paused": True})
+        self.assertEqual(actions, [("up", "delivered\n")])
+        launch = next(c for c in calls if c[:3] == ["docker", "run", "-d"])
+        mounts = [launch[i + 1] for i, value in enumerate(launch) if value == "--mount"]
+        self.assertEqual(len(mounts), 2)
+        self.assertFalse(any(f"{root}/workspace," in m or "fixture-checkout" in m for m in mounts))
+        self.assertIn(["git", "clone", "--no-checkout", module.REGISTRY_URL,
+                       str(measured / "workspace/registry")], calls)
+        state = json.loads((measured / "state.json").read_text())
+        self.assertEqual((state["web_port"], state["api_port"]), (2222, 2223))
+        self.assertIs(state["subject_paused"], True)
+        self.assertNotIn("patch_application", state)
+
+        changed = self.subject_root(4, "changed")
+        subject = json.loads((changed / "state.json").read_text())
+        subject["implementation"]["patch_sha256"] = "0" * 64
+        module.write_json(changed / "state.json", subject)
+        with self.assertRaisesRegex(RuntimeError, "pinned delivery changed") as raised:
+            self.measure(changed)
+        self.assertFalse(any(c[:2] == ["docker", "run"] for c in raised.exception.calls))
+
+    def test_a_tampered_fixture_tree_does_not_reach_the_measurement(self):
+        # The subject had the working tree mounted and, as privileged root, can remount it rw.
+        self.delivered()
+        root = self.subject_root(4)
+        tree = root / "fixture-checkout/registry-version-comparison"
+        (tree / "seed.sql").write_text("SELECT 1; INSERT INTO forged VALUES (1);")
+        (tree / "fixture.sh").chmod(0o644)
+        self.assertEqual(self.measure(root)[0], {"runtime_ready": True, "subject_paused": True})
+        measured = root / "measurement/registry-version-comparison"
+        self.assertEqual((measured / "seed.sql").read_text(), "SELECT 1;")
+        self.assertTrue(module.os.access(measured / "fixture.sh", module.os.X_OK))
+
+    def test_a_subject_runner_that_cannot_be_paused_is_not_measured(self):
+        self.delivered()
+        with self.subTest("running, not paused"):
+            with self.assertRaisesRegex(RuntimeError, "could not be paused") as raised:
+                self.measure(self.subject_root(4, "running"), inspect="true false")
+            self.assertFalse(any(c[:2] == ["docker", "run"] for c in raised.exception.calls))
+        with self.subTest("exited"):
+            root = self.subject_root(4, "exited")
+            _result, calls, _actions = self.measure(root, inspect="false false")
+            state = json.loads((root / "measurement/state.json").read_text())
+            self.assertIs(state["subject_paused"], False)
+            self.assertTrue(any(c[:2] == ["docker", "run"] for c in calls))
+            named = {c[1] for c in calls if c[0] == "docker"
+                     and any("registry-task-subject" in part for part in c)}
+            self.assertEqual(named, {"pause", "inspect"})
+
+    def test_only_a_failure_after_the_patch_is_the_delivery_s(self):
+        import shutil
+        self.delivered()
+
+        def implementation(name, patch_text=None):
+            root = self.subject_root(2, name)
+            if patch_text is None:
+                shutil.copytree(self.delivery, root / "delivery")
+            elif patch_text is not False:
+                (root / "delivery").mkdir()
+                (root / "delivery/implementation.patch").write_text(patch_text)
+                module.write_json(root / "delivery/manifest.json", {
+                    "base_registry_sha": self.base,
+                    "patch_sha256": module.digest(root / "delivery/implementation.patch")})
+            return root
+
+        def applied(root):
+            return json.loads((root / "measurement/state.json").read_text())["patch_application"]
+
+        def recorded(root, **result):
+            # The delivery status carries the record into the archived evidence.
+            return {**result, "subject_paused": True, "patch_application": applied(root)}
+
+        with self.subTest("good patch"):
+            root = implementation("good")
+            result, _calls, actions = self.measure(root)
+            self.assertEqual(actions, [("up", "before\n"), ("up", "delivered\n")])
+            self.assertEqual(applied(root)["exit_code"], 0)
+            self.assertEqual(result, recorded(root, runtime_ready=True))
+            self.assertTrue((root / "final-start.log").is_file())  # top level: archived
+        with self.subTest("patch that does not apply"):
+            root = implementation("stale", "diff --git a/existing.txt b/existing.txt\n"
+                                  "--- a/existing.txt\n+++ b/existing.txt\n"
+                                  "@@ -1 +1 @@\n-not the base\n+delivered\n")
+            result, _calls, actions = self.measure(root)
+            self.assertEqual([name for name, _ in actions], ["up"])
+            self.assertNotEqual(applied(root)["exit_code"], 0)
+            self.assertIn("patch failed", applied(root)["stderr"])
+            self.assertEqual(result, recorded(root, runtime_ready=False,
+                                              runtime_error="delivered patch does not apply to the pinned base"))
+        with self.subTest("patched start fails"):
+            root = implementation("broken")
+
+            def up(count):
+                if count == 2:
+                    raise RuntimeError("app exited with code 1")
+                return b""
+            result, _calls, _actions = self.measure(root, up=up)
+            self.assertEqual(result, recorded(root, runtime_ready=False, runtime_error="app exited with code 1"))
+            self.assertEqual(applied(root)["exit_code"], 0)
+        with self.subTest("baseline start fails"):
+            def baseline(_count):
+                raise RuntimeError("pull rate limit")
+            with self.assertRaisesRegex(RuntimeError, "pull rate limit"):
+                self.measure(implementation("baseline"), up=baseline)
+        for name, patch_text in (("empty", ""), ("missing", False)):
+            with self.subTest(name):
+                root = implementation(name, patch_text)
+                result, _calls, actions = self.measure(root)
+                self.assertEqual([action for action, _ in actions], ["up"])
+                self.assertEqual(result, recorded(root, runtime_ready=True))
+                self.assertEqual(applied(root)["exit_code"], 1)
+
+    def test_cleanup_removes_the_measurement_runner_then_releases_the_subject(self):
+        import argparse
+
+        def cleaned(root, measurement_exit=0):
+            calls = []
+
+            def fake_run(argv, **_kwargs):
+                calls.append([str(x) for x in argv])
+                return b"id\n" if argv[:2] == ["docker", "ps"] else b"log\n"
+
+            def fake_subprocess(argv, **_kwargs):
+                calls.append(list(argv))
+                code = measurement_exit if argv == ["docker", "rm", "-fv", "measure"] else 0
+                if isinstance(code, Exception):
+                    raise code
+                return module.subprocess.CompletedProcess(argv, code, b"", b"rm failed" if code else b"")
+
+            with patch.object(module, "run", fake_run), \
+                 patch.object(module.subprocess, "run", side_effect=fake_subprocess):
+                return module.cleanup(argparse.Namespace(root=root)), calls
+
+        root = self.root / "both"
+        (root / "measurement").mkdir(parents=True)
+        module.write_json(root / "state.json", {"test": 4, "container": "subject"})
+        module.write_json(root / "measurement/state.json", {"test": 4, "container": "measure"})
+        result, calls = cleaned(root)
+        order = [calls.index(call) for call in (
+            ["docker", "rm", "-fv", "measure"], ["docker", "unpause", "subject"],
+            ["docker", "exec", "-i", "-w", "/workspace", "subject", "sh", "-lc", "/fixture/fixture.sh logs"],
+            ["docker", "rm", "-fv", "subject"])]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(result["cleanup_exit_code"], 0)
+        self.assertTrue((root / "measurement/compose.log").is_file())
+        self.assertTrue((root / "measurement/container.log").is_file())
+        # A measurement runner that fails to go never keeps the subject paused.
+        for failure, stderr in ((1, "rm failed"),
+                                (module.subprocess.TimeoutExpired(["docker", "rm"], 60), "timed out")):
+            with self.subTest(measurement_failure=failure):
+                result, calls = cleaned(root, measurement_exit=failure)
+                self.assertEqual(result["cleanup_exit_code"], 1)
+                self.assertIn(stderr, result["stderr"])
+                self.assertIn(["docker", "unpause", "subject"], calls)
+                self.assertIn(["docker", "rm", "-fv", "subject"], calls)
+
+        subject_only = self.root / "subject-only"
+        subject_only.mkdir()
+        module.write_json(subject_only / "state.json", {"test": 4, "container": "subject"})
+        result, calls = cleaned(subject_only)
+        self.assertEqual([c for c in calls if c[:2] == ["docker", "rm"]], [["docker", "rm", "-fv", "subject"]])
+        self.assertEqual(result["cleanup_exit_code"], 0)
+
+    def test_measure_takes_its_ports(self):
+        import contextlib
+        import io
+        argv = ["lifecycle.py", "measure", "--root", str(self.root)]
+        with patch.object(module.sys, "argv", argv + ["--web-port", "1", "--api-port", "2"]), \
+             patch.object(module, "measure", return_value={"runtime_ready": True}) as measure, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            module.main()
+        args = measure.call_args.args[0]
+        self.assertEqual((args.root, args.web_port, args.api_port), (self.root.resolve(), 1, 2))
+        self.assertEqual(json.loads(output.getvalue()), {"runtime_ready": True})
+        with patch.object(module.sys, "argv", argv), \
+             contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit):
+            module.main()
+        self.assertIn("measure requires", error.getvalue())
 
     def test_evidence_collection_rejects_symlinks_and_bounds(self):
         cases = []
