@@ -4,13 +4,16 @@ model and per class, from the `memory-gain` runs of each arm.
 
 An arm is the `memory-gain` suite run on one stack: `memory` (memory on),
 `memory-off` and `memory-consolidated`. `--runs` lists one run per model and
-arm, the arm named by its stack:
+arm, the arm named by its stack, either a CI run or a local results directory:
 
     python3 scripts/memory_gain.py --output DIR --runs '[{"model":
       "deepseek/deepseek-flash", "arm": "memory-off",
-      "run_url": "https://github.com/iii-hq/harness-e2e/actions/runs/1"}]'
+      "run_url": "https://github.com/iii-hq/harness-e2e/actions/runs/1"},
+      {"model": "anthropic/claude-haiku-5-5", "arm": "memory-off",
+      "path": "target/gain/memory-off"}]'
 
-Each run's root bundle is downloaded and its results.json files split into
+A CI run's root bundle is downloaded; a `path` is read where it is. Each
+arm's results.json files are split into
 rows of the cases that have a `class`: all of them, each class (lookup,
 synthesis) and those of the `memory-precise` module. Each run's score becomes
 the points its answer criteria awarded (its `memory_answer_points`
@@ -22,8 +25,9 @@ arms, from each run's measurements: the off arm must inject nothing, and the
 consolidated arm says what its passes did.
 
 It writes DIR/memory-gain.md and DIR/memory-gain.json, prints the markdown and
-appends it to the job summary. It exits 1 when a model has no quality figure
-for memory against memory-off, or its memory-off arm injected.
+appends it to the job summary. It exits 1 when a model's report has an error:
+an arm not measured or unreadable, no quality figure for memory against
+memory-off, or a memory-off arm that injected.
 """
 
 from __future__ import annotations
@@ -240,7 +244,7 @@ def markdown(models: dict[str, dict[str, Any]]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--runs", required=True, help="JSON list of {model, arm, run_url}")
+    parser.add_argument("--runs", required=True, help="JSON list of {model, arm, run_url or path}")
     parser.add_argument("--output", required=True, type=Path, help="where memory-gain.md and .json go")
     args = parser.parse_args(argv)
     models: dict[str, dict[str, Any]] = {}
@@ -252,9 +256,15 @@ def main(argv: list[str] | None = None) -> int:
         for index, run in enumerate(json.loads(args.runs)):
             directory = root / "runs" / str(index)
             try:
-                if not run.get("run_url"):
+                if run.get("path"):
+                    local = Path(run["path"]).expanduser()
+                    directory = local.parent if local.is_file() else local
+                    if not documents(directory):
+                        raise VerifyError(f"no results.json at {run['path']}")
+                elif not run.get("run_url"):
                     raise VerifyError("not measured: the arm started no run")
-                download(run["run_url"], directory)
+                else:
+                    download(run["run_url"], directory)
             except VerifyError as error:
                 errors.setdefault(run["model"], []).append(f"{run['arm']}: {error}")
                 continue
