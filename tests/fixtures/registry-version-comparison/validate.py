@@ -309,7 +309,9 @@ def verification_evidence(task_root, report):
         for item in actual_evidence(run_root, task_root, case.get("evidence")):
             claimed.setdefault(item["path"], set()).add(case_id)
             path = run_root / item["path"]
-            if "/execution-evidence/" not in item["path"] or path.suffix != ".json":
+            # Only the controller writes <task>/execution-evidence/; a subject
+            # can write output/execution-evidence/ itself.
+            if Path(item["path"]).parts[1:2] != ("execution-evidence",) or path.suffix != ".json":
                 continue
             try:
                 proof = json.loads(path.read_text())
@@ -409,21 +411,31 @@ def implementation_observations(task_root, assets, state, test):
     return observations
 
 
-def verification_observations(task_root, assets, state):
+def verification_observations(task_root, assets, state, planted_failures):
     run_root = task_root.parent
-    feature, _error = feature_probe(task_root, assets, state)
-    independent = checks_by_id(feature or {})
-    truth_complete = all(independent.get(case_id, {}).get("status") == "measured"
-                         and independent[case_id].get("value") in (0, 1)
-                         for case_id in PUBLIC_VERIFICATION_IDS)
-    known_failed = {case_id for case_id in PUBLIC_VERIFICATION_IDS
-                    if independent.get(case_id, {}).get("status") == "measured"
-                    and independent[case_id].get("value") == 0}
+    # The delivery is fixed, so a truth that is incomplete or does not fail the
+    # planted number of checks is the probe's: it runs once more, then the
+    # round is the evaluator's.
+    for _ in range(2):
+        feature, _error = feature_probe(task_root, assets, state)
+        independent = checks_by_id(feature or {})
+        known_failed = {case_id for case_id in PUBLIC_VERIFICATION_IDS
+                        if independent.get(case_id, {}).get("status") == "measured"
+                        and independent[case_id].get("value") == 0}
+        if not all(independent.get(case_id, {}).get("status") == "measured"
+                   and independent[case_id].get("value") in (0, 1)
+                   for case_id in PUBLIC_VERIFICATION_IDS):
+            truth_error = "independent_truth_incomplete"
+        elif len(known_failed) != planted_failures:
+            truth_error = "fixed_delivery_truth_mismatch"
+        else:
+            truth_error = None
+            break
     feature_path = task_root / "validation" / "feature.json"
     feature_evidence = relative_evidence(run_root, feature_path)
     checks_path = task_root / "workspace" / "output" / "checks.json"
     if not checks_path.is_file():
-        return empty_verification(task_root, state, run_root, truth_complete, known_failed,
+        return empty_verification(task_root, state, run_root, truth_error, known_failed,
                                   [item for item in [feature_evidence] if item])
     try:
         document = json.loads(checks_path.read_text())
@@ -432,11 +444,11 @@ def verification_observations(task_root, assets, state):
             raise ValueError("checks must be an array")
     except (json.JSONDecodeError, ValueError, AttributeError):
         invalid_evidence = [relative_evidence(run_root, checks_path), feature_evidence]
-        return empty_verification(task_root, state, run_root, truth_complete, known_failed,
+        return empty_verification(task_root, state, run_root, truth_error, known_failed,
                                   [item for item in invalid_evidence if item])
     if not reported:
         empty_evidence = [relative_evidence(run_root, checks_path), feature_evidence]
-        return empty_verification(task_root, state, run_root, truth_complete, known_failed,
+        return empty_verification(task_root, state, run_root, truth_error, known_failed,
                                   [item for item in empty_evidence if item])
     report = {case["id"]: case for case in reported if isinstance(case, dict)
               and isinstance(case.get("id"), str)}
@@ -456,7 +468,10 @@ def verification_observations(task_root, assets, state):
                 and isinstance(case.get("command"), str) and case["command"] in commands
                 and case_id in evidenced
                 and any(receipt_proves(commands[case["command"]], item)
-                        for item in evidence_by_id[case_id])}
+                        for item in evidence_by_id[case_id])
+                # A proof the subject wrote is not an observation: the runner's
+                # probe must have seen the outcome it reports.
+                and (case["status"] == "fail") == (case_id in known_failed)}
     receipt_path = task_root / "validation" / "verification-evidence.json"
     write_json(receipt_path, {"checks": [{"id": case_id,
                                           "command_receipts": commands.get(case.get("command"), []),
@@ -465,27 +480,22 @@ def verification_observations(task_root, assets, state):
     report_evidence = relative_evidence(run_root, checks_path)
     validation_evidence = relative_evidence(run_root, receipt_path)
     evidence = [item for item in (report_evidence, feature_evidence, validation_evidence) if item]
-    # A report only claims what it did not execute: an empty failure set holds
-    # for the required checks it executed and no further, so it counts as
-    # executed/required, and a report that executed nothing earns nothing. For
-    # the same reason a reported failure is found only once its check was
-    # executed.
-    executed_share = (len(executed), len(PUBLIC_VERIFICATION_IDS))
+    # A reported failure is found only once its check was executed. A false
+    # alarm costs recall in proportion, so flagging every check nets zero.
     found = known_failed & report_fail & executed
+    false_alarms = (report_fail & PUBLIC_VERIFICATION_IDS) - known_failed
+    passing = len(PUBLIC_VERIFICATION_IDS) - len(known_failed)
     observations = []
-    if not truth_complete:
-        observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
-    elif not known_failed:
-        observations.append(ratio("verification.recall", *executed_share, evidence,
-                                  "no_independently_failing_checks"))
+    if truth_error:
+        observations.append(unavailable("verification.recall", truth_error))
     else:
-        observations.append(ratio("verification.recall", len(found), len(known_failed), evidence))
+        observations.append(ratio(
+            "verification.recall",
+            max(0, len(found) * passing - len(false_alarms) * len(known_failed)),
+            len(known_failed) * passing, evidence))
     if any(independent.get(case_id, {}).get("status") != "measured"
            for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
-    elif not report_fail and not known_failed:
-        observations.append(ratio("verification.precision", *executed_share, evidence,
-                                  "no_failures_to_reproduce"))
     elif not report_fail:
         observations.append(ratio("verification.precision", 0, 0, evidence,
                                   "no_reported_failures"))
@@ -498,14 +508,13 @@ def verification_observations(task_root, assets, state):
     return observations
 
 
-def empty_verification(task_root, state, run_root, truth_complete, known_failed, evidence):
+def empty_verification(task_root, state, run_root, truth_error, known_failed, evidence):
     observations = []
-    if truth_complete:
-        observations.append(ratio("verification.recall", 0, len(known_failed), evidence)
-                            if known_failed else ratio("verification.recall", 0, 0, evidence,
-                                                      "no_subject_report", empty_value=0))
+    if truth_error:
+        observations.append(unavailable("verification.recall", truth_error))
     else:
-        observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
+        passing = len(PUBLIC_VERIFICATION_IDS) - len(known_failed)
+        observations.append(ratio("verification.recall", 0, len(known_failed) * passing, evidence))
     observations.append(ratio("verification.precision", 0, 0, evidence,
                               "no_reported_failures"))
     observations.append(ratio("verification.execution_coverage", 0,
@@ -709,13 +718,15 @@ def environment_observations(task_root, assets, state):
     return observations
 
 
-def validate(task_root, assets):
+def validate(task_root, assets, planted_failures=None):
     state = json.loads((task_root / "state.json").read_text())
     test = state["test"]
     if test == 2:
         observations = implementation_observations(task_root, assets, state, test)
     elif test == 4:
-        observations = verification_observations(task_root, assets, state)
+        if planted_failures is None:
+            raise ValueError("Test 4 requires --planted-failures")
+        observations = verification_observations(task_root, assets, state, planted_failures)
     elif test == 3:
         observations = environment_observations(task_root, assets, state)
     else:
@@ -729,8 +740,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--assets", type=Path, required=True)
+    parser.add_argument("--planted-failures", type=int)
     args = parser.parse_args()
-    print(json.dumps(validate(args.root.resolve(), args.assets.resolve())))
+    print(json.dumps(validate(args.root.resolve(), args.assets.resolve(), args.planted_failures)))
 
 
 if __name__ == "__main__":

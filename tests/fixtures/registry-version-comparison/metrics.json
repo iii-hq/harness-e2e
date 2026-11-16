@@ -633,14 +633,14 @@
       "metrics": [
         {
           "id": "verification.recall",
-          "question": "What proportion of independently failing required checks did the tester execute and report as failing, with an empty set counting only for the share of required checks executed?",
-          "label": "Tester reports the checks that really fail",
-          "expected": "Compare reported failing check IDs with the independently executed contract probes; a reported failure counts only when its check has a recorded execution. This measures check detection, not unique root causes. If no checks fail independently, score the empty set as the share of required checks the tester executed (executed/required), so claimed checks add nothing and a report that executed none scores 0.",
+          "question": "What share of the delivery's independently failing required checks did the tester execute and report as failing, net of passing checks it reported as failing?",
+          "label": "Tester finds real failures without false alarms",
+          "expected": "Compare reported failing check IDs with the runner's independent probe of the pinned delivery, which fails a fixed number of checks; a reported failure counts only when its check was executed. Each passing check reported as failing takes back as much as failing/passing found failures, so reporting every check as failing scores 0, and the score never goes below 0. This measures check detection, not unique root causes.",
           "measurement": "ratio",
           "weight": 35,
           "gate": true,
-          "numerator": "Required check IDs reported as failing with a recorded execution and independently reproduced.",
-          "denominator": "Required check IDs independently observed to fail.",
+          "numerator": "Independently failing check IDs executed and reported as failing, times the independently passing checks, minus the independently passing check IDs reported as failing, times the independently failing checks; at least 0.",
+          "denominator": "Independently failing required check IDs, times the independently passing ones.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."
@@ -648,9 +648,9 @@
         },
         {
           "id": "verification.precision",
-          "question": "What proportion of reported failing checks were executed by the tester and are independently reproduced as failing, with an empty set counting only for the share of required checks executed?",
+          "question": "What proportion of reported failing checks were executed by the tester and are independently reproduced as failing?",
           "label": "Reported failures reproduce independently",
-          "expected": "Execute the contract probes independently and match each reported failing check by ID; a reported failure without a recorded execution is not reproduced. If both the independent and reported failure sets are empty, score precision as the share of required checks executed (executed/required), 0 when none was.",
+          "expected": "Run the independent probe of the pinned delivery and match each reported failing check by ID; a reported failure without a recorded execution is not reproduced. Not applicable when the tester reports no failure.",
           "measurement": "ratio",
           "weight": 20,
           "gate": true,
@@ -663,13 +663,13 @@
         },
         {
           "id": "verification.execution_coverage",
-          "question": "What proportion of required check IDs cite a recorded execution command and evidence file?",
-          "label": "Every check cites its command and evidence",
-          "expected": "A non-blocked report entry cites the exact completed command whose trusted private-staging receipt records the final proof path, size, and SHA-256 for that check.",
+          "question": "What proportion of required check IDs cite a recorded execution command and evidence file, with the status the runner's independent probe observes?",
+          "label": "Every check executed and matches the probe",
+          "expected": "A non-blocked report entry cites the exact completed command whose trusted private-staging receipt records the final proof path, size, and SHA-256 for that check, and reports the status the runner's own probe observes for that check; a proof the tester wrote does not establish execution by itself.",
           "measurement": "ratio",
           "weight": 20,
           "gate": true,
-          "numerator": "Required check IDs with a recorded command and an existing evidence file.",
+          "numerator": "Required check IDs with a recorded command, an existing evidence file and the status the independent probe observes.",
           "denominator": "Required public check IDs, excluding controller-owned patch replay.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",

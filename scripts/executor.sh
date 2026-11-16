@@ -152,6 +152,8 @@ assemble() {
 
 # The revisions the scenarios expect of their fixture sources.
 REGISTRY_REVISION=662eb87c1bdbb395f36264d5d26bf823e2ace783
+# registry_verification's delivery: VERIFICATION_FIXTURE_SHA in src/scenarios/registry.rs.
+REGISTRY_VERIFICATION_REVISION=f1d3773318511dd31f993a8f588071f1b8ba5c21
 TRENDING_TOPICS_REVISION=3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
 PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "
 
@@ -215,6 +217,12 @@ fixtures() {
         # The bootstrap holds HEAD to main: main is the commit named.
         git -C target/kanban-fixture update-ref refs/heads/main HEAD
         ;;
+      # Its own directory: an execution that prepares every group into one
+      # target/ must not put the pinned delivery in the head's checkout.
+      case-registry-verification)
+        checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry
+        checkout iii-hq/e2e-fixture "$REGISTRY_VERIFICATION_REVISION" target/registry-verification-fixture
+        ;;
       case-registry-*)
         checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry
         checkout iii-hq/e2e-fixture "$fixture" target/registry-sources/e2e-fixture
@@ -234,6 +242,10 @@ fixtures() {
 route_fixtures() {
   local routes=()
   case "${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}" in
+    case-registry-verification)
+      routes=(target/registry-sources/registry https://github.com/iii-hq/registry.git
+        target/registry-verification-fixture https://github.com/iii-hq/e2e-fixture.git)
+      ;;
     case-registry-*)
       routes=(target/registry-sources/registry https://github.com/iii-hq/registry.git
         target/registry-sources/e2e-fixture https://github.com/iii-hq/e2e-fixture.git)

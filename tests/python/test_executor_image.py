@@ -8,6 +8,7 @@ phase does inside the image.
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -508,7 +509,7 @@ class ExecutorTests(unittest.TestCase):
         contracts.mkdir(parents=True)
         # Each group once, in order, whatever the matrix repeats.
         groups = ["case-minimal-path", "case-registry-implementation", "case-trending-topics-build",
-                  "case-kanban-board", "case-registry-implementation"]
+                  "case-kanban-board", "case-registry-verification", "case-registry-implementation"]
         # The fixture repositories' heads, as preparation resolved them once
         # for every group.
         kanban, fixture = "c" * 40, "d" * 40
@@ -541,6 +542,8 @@ class ExecutorTests(unittest.TestCase):
         header = "http.https://github.com/.extraheader"
         registry = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
         trending = "3ee24f7ace3c014db35423f14939ad3f6ce0c3d2"
+        verification = re.search(r"^REGISTRY_VERIFICATION_REVISION=([0-9a-f]{40})$",
+                                 (ROOT / "scripts/executor.sh").read_text(), re.M)[1]
         self.assertEqual(self.log.read_text().splitlines(), [
             "git init -q target/kanban-fixture|",
             f"git -C target/kanban-fixture fetch -q https://github.com/iii-hq/kanban-e2e-fixture.git {kanban}|",
@@ -553,6 +556,11 @@ class ExecutorTests(unittest.TestCase):
             "git init -q target/registry-sources/e2e-fixture|" + header,
             f"git -C target/registry-sources/e2e-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {fixture}|{header}",
             "git -C target/registry-sources/e2e-fixture checkout -q --detach FETCH_HEAD|" + header,
+            # Verification reads the same Registry, and the pinned delivery, never the head.
+            "git -C target/registry-sources/registry rev-parse HEAD|",
+            "git init -q target/registry-verification-fixture|" + header,
+            f"git -C target/registry-verification-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {verification}|{header}",
+            "git -C target/registry-verification-fixture checkout -q --detach FETCH_HEAD|" + header,
             "git init -q target/trending-topics-fixture|" + header,
             f"git -C target/trending-topics-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {trending}|{header}",
             "git -C target/trending-topics-fixture checkout -q --detach FETCH_HEAD|" + header,
@@ -627,6 +635,13 @@ class ExecutorTests(unittest.TestCase):
                 "GIT_CONFIG_COUNT=2",
                 f"GIT_CONFIG_KEY_0=url.file://{self.root}/target/registry-sources/registry.insteadOf",
                 f"GIT_CONFIG_KEY_1=url.file://{self.root}/target/registry-sources/e2e-fixture.insteadOf",
+                "GIT_CONFIG_VALUE_0=https://github.com/iii-hq/registry.git",
+                "GIT_CONFIG_VALUE_1=https://github.com/iii-hq/e2e-fixture.git",
+            ]),
+            ("case-registry-verification", [
+                "GIT_CONFIG_COUNT=2",
+                f"GIT_CONFIG_KEY_0=url.file://{self.root}/target/registry-sources/registry.insteadOf",
+                f"GIT_CONFIG_KEY_1=url.file://{self.root}/target/registry-verification-fixture.insteadOf",
                 "GIT_CONFIG_VALUE_0=https://github.com/iii-hq/registry.git",
                 "GIT_CONFIG_VALUE_1=https://github.com/iii-hq/e2e-fixture.git",
             ]),

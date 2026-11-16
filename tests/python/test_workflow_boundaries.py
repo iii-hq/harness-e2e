@@ -815,5 +815,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("routes=(target/trending-topics-fixture git@github.com:iii-hq/e2e-fixture.git)", executor)
         self.assertNotIn("token@github.com", executor)
 
+    def test_registry_verification_group_fetches_only_the_pinned_fixture(self):
+        executor = (ROOT / "scripts/executor.sh").read_text()
+        runner = (ROOT / "src/scenarios/registry.rs").read_text()
+        pin = re.search(r'^const VERIFICATION_FIXTURE_SHA: &str = "([0-9a-f]{40})";$', runner, re.M)[1]
+        self.assertEqual(re.findall(r"^REGISTRY_VERIFICATION_REVISION=(\S*)$", executor, re.M), [pin])
+
 if __name__ == "__main__":
     unittest.main()

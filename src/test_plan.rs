@@ -400,6 +400,11 @@ impl MasterPlan {
                         == ScenarioExecutionKind::HarnessTurn,
                     "sequential suite groups require ordinary harness turns"
                 );
+                // scripts/executor.sh picks its pinned checkout by group id.
+                ensure!(
+                    id != "registry_verification",
+                    "registry_verification runs in a group of its own, never in a sequential group"
+                );
             }
         }
         Ok(selected)
@@ -835,7 +840,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(snapshot.scenario_ids, expected);
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 13);
+        assert_eq!(groups.len(), 14);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")
@@ -873,14 +878,13 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("alertmanager_route_match")));
-        let delivery = groups
-            .iter()
-            .find(|g| g["id"] == "case-registry-implementation")
-            .unwrap();
-        assert_eq!(
-            delivery["scenarios"],
-            json!(["registry_implementation", "registry_verification"])
-        );
+        for (group_id, scenario_id) in [
+            ("case-registry-implementation", "registry_implementation"),
+            ("case-registry-verification", "registry_verification"),
+        ] {
+            let group = groups.iter().find(|group| group["id"] == group_id).unwrap();
+            assert_eq!(group["scenarios"], json!([scenario_id]));
+        }
         assert_eq!(snapshot.profile.repetitions, 3);
         assert_eq!(snapshot.profile.technical_retries, 0);
     }
@@ -985,7 +989,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:8b0afb3bb687b771df3a5d2df21ac069d4ed11d866c8b29261f394bbf386da49"
+            "sha256:e36c1551b72a0649ed6cd3835a07e545e41b9dd6ae2f6f7486d6c809ef945d54"
         );
     }
 
@@ -1399,8 +1403,9 @@ mod tests {
         ),
         (
             ScenarioId::RegistryVerification,
-            "capture replays the report against the delivery in Docker; the empty, the \
-             claim-only, the one-check-executed and the all-passing report are scored in CI",
+            "capture replays the report against the pinned delivery in Docker; the empty, \
+             the claim-only, the all-failing, the forged-proof and the exact report against \
+             a synthetic planted truth are scored in CI",
             &["tests/python/test_registry_validation.py"],
         ),
         (
@@ -1644,31 +1649,34 @@ mod tests {
         assert!(holes.is_empty(), "{holes:#?}");
     }
 
+    /// Verification checks a pinned delivery, so it no longer shares a
+    /// container with the implementation it used to read.
     #[test]
-    fn software_engineering_orders_registry_delivery_and_verification_in_one_group() {
+    fn software_engineering_runs_registry_verification_in_its_own_group() {
         let plan = embedded().unwrap();
         let snapshot = plan.materialize("software-engineering").unwrap();
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 13);
-        let build = groups
-            .iter()
-            .find(|g| g["id"] == "case-trending-topics-build")
-            .unwrap();
-        assert_eq!(build["scenarios"], json!(["trending_topics_build"]));
-        let delivery = groups
-            .iter()
-            .find(|g| g["id"] == "case-registry-implementation")
-            .unwrap();
-        assert_eq!(
-            delivery["scenarios"],
-            json!(["registry_implementation", "registry_verification"])
-        );
+        assert_eq!(groups.len(), 14);
+        for (group_id, scenario_id) in [
+            ("case-registry-implementation", "registry_implementation"),
+            ("case-registry-verification", "registry_verification"),
+        ] {
+            let group = groups.iter().find(|group| group["id"] == group_id).unwrap();
+            assert_eq!(group["scenarios"], json!([scenario_id]));
+        }
         assert_eq!(snapshot.cases.len(), 14);
         assert_eq!(snapshot.budget["planned_runs"], 42);
 
+        // A suite from an older Console still pairs the two. The executor
+        // picks verification's pinned checkout by group id, so it is refused.
         let mut profile = snapshot.profile;
-        profile.scenario_groups[0].push("registry_verification".into());
-        assert!(plan.materialize_scope(profile, None).is_err());
+        profile.scenario_groups.push(vec![
+            "registry_implementation".into(),
+            "registry_verification".into(),
+        ]);
+        assert!(plan.materialize_scope(profile.clone(), None).is_err());
+        let error = plan.materialize_suite(profile).unwrap_err().to_string();
+        assert!(error.contains("registry_verification"), "{error}");
     }
 
     /// Cases whose fixture scripts/run_in_image.sh mounts by group id, and a

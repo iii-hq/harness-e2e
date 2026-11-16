@@ -2852,7 +2852,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_suite_made_of_tests_completes_groups_and_warns_what_it_left_out() {
+    async fn a_suite_made_of_tests_warns_what_it_left_out() {
         let root = tempfile::tempdir().unwrap();
         let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
         let suite = manager
@@ -2872,19 +2872,14 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(suite.label, "Picked");
         assert_eq!(suite.source, "local");
-        // Canonical order, each once, the group whole and in its order.
+        // Canonical order, each once.
         assert_eq!(
             suite.scenarios,
-            vec![
-                "minimal_path",
-                "registry_implementation",
-                "registry_verification"
-            ]
+            vec!["minimal_path", "registry_verification"]
         );
         assert_eq!((suite.repetitions, suite.technical_retries), (3, 1));
-        assert_eq!(suite.warnings.len(), 2, "{:?}", suite.warnings);
+        assert_eq!(suite.warnings.len(), 1, "{:?}", suite.warnings);
         assert!(suite.warnings[0].contains("'retired_scenario'"));
-        assert!(suite.warnings[1].contains("the whole group was added"));
         // The warnings travel with the answer only; the list has none.
         let listed = manager.suites().await.unwrap();
         let stored = listed.iter().find(|entry| entry.id == suite.id).unwrap();
@@ -3007,19 +3002,6 @@ pub(crate) mod tests {
             master.suites.len() + 2
         );
 
-        // A scenario of a sequential group brings the group.
-        let grouped = manager
-            .update_suite(SuiteUpdateRequest {
-                suite_id: again.id.clone(),
-                scenarios: Some(vec!["registry_verification".into()]),
-                ..SuiteUpdateRequest::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            grouped.scenarios,
-            vec!["registry_implementation", "registry_verification"]
-        );
         // What a suite may not hold is refused and changes nothing.
         let error = manager
             .update_suite(SuiteUpdateRequest {
@@ -4618,11 +4600,11 @@ esac"#,
     async fn native_coordination_covers_every_suite_of_the_master_plan() {
         for (suite, expected_slots, expected_submissions) in [
             ("regression", 231, 231),
-            ("software-engineering", 42, 39),
+            ("software-engineering", 42, 42),
             ("linkly", 1, 1),
             ("pr", 4, 4),
             ("after-release", 5, 5),
-            ("software-engineering-x3", 42, 39),
+            ("software-engineering-x3", 42, 42),
             ("null-canary", 15, 15),
         ] {
             let root = tempfile::tempdir().unwrap();
@@ -4658,7 +4640,7 @@ esac"#,
         }
     }
     #[tokio::test]
-    async fn grouped_registry_cases_share_one_child_without_duplicate_measurements() {
+    async fn each_registry_case_runs_in_its_own_child() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
@@ -4678,20 +4660,8 @@ esac"#,
         let execution = terminal(&manager, &id).await;
 
         assert_eq!(execution.slots.len(), 4);
-        assert_eq!(runner.submitted.load(Ordering::SeqCst), 3);
-        assert_eq!(result_paths(&execution, root.path()).len(), 3);
-        let grouped = execution
-            .slots
-            .iter()
-            .filter(|slot| slot.group_id == "case-registry-implementation")
-            .collect::<Vec<_>>();
-        assert_eq!(grouped.len(), 2);
-        assert_eq!(grouped[0].execution_id, grouped[1].execution_id);
-        assert_eq!(
-            grouped[0].request["scenarios"],
-            json!(["registry_implementation", "registry_verification"])
-        );
-        assert!(grouped[0].request["seed"].is_null());
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 4);
+        assert_eq!(result_paths(&execution, root.path()).len(), 4);
 
         let native_summaries = crate::dashboard::read_model::DashboardReadModel::load(root.path())
             .unwrap()
@@ -4701,7 +4671,7 @@ esac"#,
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 3);
+        assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 4);
         assert_eq!(detail["reports"].as_array().unwrap().len(), 4);
         assert_eq!(detail["scenario_metrics"].as_array().unwrap().len(), 4);
         assert_eq!(detail["totals"]["wall_time_seconds"], json!(0.4));
@@ -4960,13 +4930,53 @@ esac"#,
         }
     }
 
+    /// A sequential group of the master plan, which holds none today, and
+    /// never one with registry_verification.
+    fn grouped_plan() -> test_plan::MasterPlan {
+        let mut plan = test_plan::embedded().unwrap();
+        plan.suites
+            .iter_mut()
+            .find(|suite| suite.id == "software-engineering")
+            .unwrap()
+            .scenario_groups
+            .push(vec![
+                "registry_implementation".into(),
+                "alertmanager_route_match".into(),
+            ]);
+        plan
+    }
+
+    #[test]
+    fn a_scenario_of_a_sequential_group_brings_the_whole_group() {
+        let groups = sequential_groups(&grouped_plan());
+        let picked = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        let (whole, notes) = whole_groups(
+            &picked(&["minimal_path", "alertmanager_route_match"]),
+            &groups,
+        );
+        assert_eq!(
+            whole,
+            [
+                "minimal_path",
+                "registry_implementation",
+                "alertmanager_route_match"
+            ]
+        );
+        assert_eq!(
+            notes,
+            ["registry_implementation then alertmanager_route_match run only together, in this order; the whole group was added."]
+        );
+        let complete = picked(&["registry_implementation", "alertmanager_route_match"]);
+        assert_eq!(whole_groups(&complete, &groups), (complete, Vec::new()));
+    }
+
     #[test]
     fn parameters_keep_the_sequential_groups_of_the_master_plan() {
         let mut parameters = ExecutionParameters {
             suite: None,
             scenarios: vec![
                 "registry_implementation".into(),
-                "registry_verification".into(),
+                "alertmanager_route_match".into(),
                 "minimal_path".into(),
             ],
             runs: 2,
@@ -4978,7 +4988,7 @@ esac"#,
             stack: None,
         };
         let slots = parameter_slots(
-            &test_plan::embedded().unwrap(),
+            &grouped_plan(),
             &mut parameters,
             "plan-grouped",
             None,
@@ -5027,50 +5037,6 @@ esac"#,
                 running.id
             )
         );
-    }
-
-    #[tokio::test]
-    async fn a_scenario_of_a_sequential_group_brings_the_whole_group() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner.clone());
-        let parameters = ExecutionParameters {
-            suite: None,
-            scenarios: vec!["registry_verification".into(), "minimal_path".into()],
-            runs: 1,
-            technical_retries: 0,
-            model: "model".into(),
-            provider: "provider".into(),
-            agent: None,
-            r#where: Where::Harness,
-            stack: None,
-        };
-        let started = manager.start_execution(parameters, "").await.unwrap();
-        assert_eq!(
-            started.parameters.as_ref().unwrap().scenarios,
-            vec![
-                "minimal_path",
-                "registry_implementation",
-                "registry_verification"
-            ]
-        );
-        assert_eq!(
-            started.warnings,
-            vec![
-                "registry_implementation then registry_verification run only together, in this order; the whole group was added."
-            ]
-        );
-        let grouped = started
-            .slots
-            .iter()
-            .filter(|slot| slot.scenario_id.starts_with("registry_"))
-            .map(|slot| slot.execution_id.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(grouped.len(), 1, "one session for the group");
-        let execution = terminal(&manager, &started.id).await;
-        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
-        // The note stays next to the stack warnings.
-        assert_eq!(execution.warnings[0], started.warnings[0]);
     }
 
     #[tokio::test]
@@ -5282,59 +5248,6 @@ esac"#,
             assert!(runner.record(&attempt.execution_id).await.is_none());
             assert!(!root.path().join(&attempt.execution_id).exists());
         }
-    }
-
-    #[tokio::test]
-    async fn a_scenario_of_a_sequential_group_runs_again_with_its_group() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner.clone());
-        let started = manager
-            .start_execution(
-                parameters(&[
-                    "registry_implementation",
-                    "registry_verification",
-                    "minimal_path",
-                ]),
-                "",
-            )
-            .await
-            .unwrap();
-        let before = terminal(&manager, &started.id).await;
-        let group = before
-            .slots
-            .iter()
-            .find(|slot| slot.scenario_id == "registry_verification")
-            .unwrap()
-            .execution_id
-            .clone();
-        manager
-            .rerun_scenario(&before.id, "registry_verification")
-            .await
-            .unwrap();
-        let after = terminal(&manager, &before.id).await;
-        assert_eq!(runner.submitted.load(Ordering::SeqCst), 3);
-        let grouped = after
-            .slots
-            .iter()
-            .filter(|slot| slot.scenario_id.starts_with("registry_"))
-            .collect::<Vec<_>>();
-        assert_eq!(grouped.len(), 2);
-        assert_eq!(grouped[0].execution_id, grouped[1].execution_id);
-        assert_ne!(grouped[0].execution_id, group);
-        assert!(grouped
-            .iter()
-            .all(|slot| slot.previous_attempts[0].execution_id == group && slot.observed == 1));
-        let other = after
-            .slots
-            .iter()
-            .find(|slot| slot.scenario_id == "minimal_path")
-            .unwrap();
-        assert!(other.previous_attempts.is_empty());
-        assert!(after.warnings.contains(
-            &"registry_implementation then registry_verification run only together, in this order; running one again runs the whole group."
-                .to_string()
-        ));
     }
 
     #[tokio::test]

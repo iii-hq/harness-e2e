@@ -101,9 +101,8 @@ class RegistryDeliveryTests(unittest.TestCase):
         self.assertEqual(manifest["subject_status"], "timed_out")
         self.assertTrue((run_root / "delivery/implementation.patch").stat().st_size)
 
-    def test_final_start_first_removes_every_stack_but_the_fixture(self):
-        # The 1.8.50 A/B run: the agent left its own project (registry-test2)
-        # up in the private daemon and the final start found the port taken.
+    def final_start(self, test):
+        """finish's fixture actions and result, after a subject left two stacks up."""
         import argparse
         import os
         import subprocess
@@ -125,7 +124,7 @@ class RegistryDeliveryTests(unittest.TestCase):
         (run_root / "workspace").mkdir(parents=True)
         (run_root / "workspace/registry").symlink_to(self.source, target_is_directory=True)
         module.write_json(run_root / "state.json", {
-            "test": 2, "container": "registry-task-x", "fixture_files": {}, "input_files": {},
+            "test": test, "container": "registry-task-x", "fixture_files": {}, "input_files": {},
             "initial_patch_sha256": module.hashlib.sha256(b"").hexdigest(),
         })
         args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="finished")
@@ -135,9 +134,20 @@ class RegistryDeliveryTests(unittest.TestCase):
              patch.object(module, "fixture_action", side_effect=lambda _state, action: calls.append(action) or b""), \
              patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
             result = module.finish(args)
+        return calls[1:], result
+
+    def test_final_start_first_removes_every_stack_but_the_fixture(self):
+        # The 1.8.50 A/B run: the agent left its own project (registry-test2)
+        # up in the private daemon and the final start found the port taken.
+        actions, result = self.final_start(2)
         self.assertEqual(result["removed_containers"], ["b2", "c3"])
         self.assertTrue(result["runtime_ready"])
-        self.assertEqual(calls[1:], ["up"])
+        self.assertEqual(actions, ["up"])
+
+    def test_verification_is_measured_on_a_fresh_stack(self):
+        actions, result = self.final_start(4)
+        self.assertTrue(result["runtime_ready"])
+        self.assertEqual(actions, ["down", "up"])
 
     def test_preparation_fetches_fresh_fixture_and_limits_inputs(self):
         fixture = self.root / "fixture"
@@ -146,6 +156,10 @@ class RegistryDeliveryTests(unittest.TestCase):
         (fixture / "artifacts/a.txt").write_text("artifact")
         (fixture / "seed.sql").write_text("SELECT 1;")
         (fixture / "Dockerfile").write_text("environment solution")
+        (self.source / "existing.txt").write_text("delivered\n")
+        self.bundle()
+        self.git("checkout", "--", ".")
+        revision = "f" * 40
         for test in (1, 2, 3, 4):
             root = self.root / f"test-{test}"
             calls = []
@@ -157,23 +171,36 @@ class RegistryDeliveryTests(unittest.TestCase):
                     import shutil
                     shutil.copytree(fixture, Path(argv[-1]) / "registry-version-comparison")
                     return b""
+                if argv[:2] == ["git", "fetch"]:
+                    import shutil
+                    shutil.copytree(fixture, Path(kwargs["cwd"]) / "registry-version-comparison")
+                    shutil.copytree(self.delivery, Path(kwargs["cwd"]) / "registry-verification-delivery")
+                    return b""
+                if argv[:2] == ["git", "checkout"] and argv[-1] == "FETCH_HEAD":
+                    return b""
                 if argv[:3] == ["git", "clone", "--no-checkout"]:
                     return real_run(["git", "clone", "-q", self.source, argv[-1]])
                 if argv[0] == "docker":
                     return b"image-id\n"
                 return real_run(argv, **kwargs)
 
-            self.bundle()
             import argparse
             args = argparse.Namespace(root=root, test=test, web_port=45000 + test * 2,
                                       api_port=45001 + test * 2, assets=ASSETS,
-                                      implementation=self.delivery)
+                                      fixture_revision=revision)
             with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "run", fake_run), patch.object(module, "git_patch", return_value=b""):
                 module.prepare(args)
             inputs = root / "workspace/inputs"
             self.assertEqual((inputs / "reference-plan.md").exists(), test == 2)
             self.assertFalse((inputs / "Dockerfile").exists())
-            self.assertEqual(["git", "clone", "--depth", "1", module.FIXTURE_URL, str(root / "fixture-checkout")] in calls, test != 1)
+            self.assertEqual(["git", "clone", "--depth", "1", module.FIXTURE_URL, str(root / "fixture-checkout")] in calls, test in (2, 3))
+            # Verification checks a fixed delivery: the pinned commit, never the head.
+            self.assertEqual(["git", "fetch", "--quiet", "--depth=1", module.FIXTURE_URL, revision] in calls, test == 4)
+            if test == 4:
+                state = json.loads((root / "state.json").read_text())
+                self.assertEqual(state["implementation"],
+                                 json.loads((self.delivery / "manifest.json").read_text()))
+                self.assertEqual((root / "workspace/registry/existing.txt").read_text(), "delivered\n")
             self.assertEqual((inputs / "seed.sql").exists(), test != 1)
             if test == 1:
                 environment = json.loads((inputs / "environment.json").read_text())

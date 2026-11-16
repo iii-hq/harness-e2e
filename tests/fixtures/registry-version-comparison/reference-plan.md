@@ -11,7 +11,7 @@ Status: draft v1 for human review. Input artifact for **Test 2 — Implementatio
 - The executor must record the starting SHA, this plan's hash, the environment/fixture identity, and the final patch. Do not resolve `main` or `latest` to select the starting code.
 - Environment fixture: the latest default-branch content of `iii-hq/e2e-fixture`, directory `registry-version-comparison/`, fetched at the start of each execution. Do not pin a fixture commit or reuse a stale checkout; keep the fetched copy unchanged during that execution. Its Dockerfile and Compose file pin base images by digest; iii 0.22.1 is verified by archive checksum. Built image identities are recorded with execution evidence.
 - [Fixture setup and smoke check](https://github.com/iii-hq/e2e-fixture): API, PostgreSQL/pgvector, Next.js, public seed, local artifacts, and baseline browser screenshots are implemented. Record checksums of the copied fixture files as evidence; no fixture commit is required.
-- Provide this plan only to Test 2. Test 1 receives requirements without this plan or documents that reveal the solution. Test 3 prepares the environment; Test 4 tests the patch from Test 2 without modifying it.
+- Provide this plan only to Test 2. Test 1 receives requirements without this plan or documents that reveal the solution. Test 3 prepares the environment; Test 4 tests a fixed delivery of its own without modifying it, never the patch from Test 2.
 - Subjects deliver artifacts, command results, and screenshots without scoring themselves. Independent assessment uses the [atomic metrics and scoring rules](scoring.md); automated visual assessment remains outside this scope.
 
 ## 2. Product deliverable
@@ -218,7 +218,7 @@ git diff --check
 
 The API suite has global database setup; E2E tests need the API running, a local `DATABASE_URL`, and consistent `TEST_API_URL`, `E2E_APP_PORT`, and, when necessary, `E2E_APP_URL`. Do not treat these commands as independent of the fixture. Install dependencies from the lockfile using pnpm 10.19.0 and Node >=22, as specified by the starting commit's `package.json`; pin the actual versions in the fixture image.
 
-## 8. Evidence and handoff to Test 4
+## 8. Evidence
 
 The executor applies the patch to a clean copy of the same SHA, uses the provided environment, and loads the same data. Do not reuse undelivered files, processes, or the database from the AI session.
 
@@ -233,8 +233,8 @@ Capture through the browser, without automated visual assessment:
 
 Use a fixed 1440 × 1000 viewport, wait for content to load, and record the URL, caption, and code/patch/fixture identities with each capture. If the application does not start or a control is missing, record the capture as unavailable with its reason and logs; do not fabricate images or substitute a mockup. Executor-controlled capture is separate from tests and screenshots produced by the AI during development.
 
-Test 4 receives the resulting implementation, requirements, and access to the isolated instance with a real API/database. It tests the flows and produces an expected/observed report with evidence, without fixing the code. It does not receive a test-generation suite as a separate scenario. The environment built in Test 3 can be reproduced separately; its failure must not replace the prepared environment used to test the feature.
+The implementation validator scores this patch. Test 4 never receives it: it checks a separate fixed delivery against the requirements in an isolated instance with a real API/database, and produces an expected/observed report with evidence, without fixing the code. It does not receive a test-generation suite as a separate scenario. The environment built in Test 3 can be reproduced separately; its failure must not replace the prepared environment used to test the feature.
 
 ## 9. Artifact readiness boundary
 
-This plan remains a draft for review. The fixture provides reproducible startup, public seed data, local artifact verification, and baseline browser capture. Clean database replay and 25 existing API integration tests passed during fixture preparation. The comparison feature has not been implemented. The [task runner](README.md) now supplies the public statement, four evidence-only native tasks, isolated environments, patch transfer to Test 4, and feature capture/gallery artifacts. Live model execution and validation of a delivered comparison implementation remain to be performed; the fixture must first be available on its default branch. Baseline screenshots do not demonstrate a completed Changelog feature.
+This plan remains a draft for review. The fixture provides reproducible startup, public seed data, local artifact verification, and baseline browser capture. Clean database replay and 25 existing API integration tests passed during fixture preparation. The comparison feature has not been implemented. The [task runner](README.md) now supplies the public statement, four evidence-only native tasks, isolated environments, a fixed delivery for Test 4, and feature capture/gallery artifacts. Live model execution and validation of a delivered comparison implementation remain to be performed; the fixture must first be available on its default branch. Baseline screenshots do not demonstrate a completed Changelog feature.

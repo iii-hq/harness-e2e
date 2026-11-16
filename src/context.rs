@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,13 +36,6 @@ pub struct E2eContext {
     bindings: Mutex<Vec<ObserverHandle>>,
     entry_events: Arc<EntryEvents>,
     entry_binding: Mutex<Option<ObserverHandle>>,
-    execution_outputs: Mutex<HashMap<&'static str, Option<ExecutionOutput>>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ExecutionOutput {
-    pub attempt_id: String,
-    pub directory: PathBuf,
 }
 
 pub struct RuntimeVersions {
@@ -67,7 +59,6 @@ impl E2eContext {
             bindings: Mutex::new(Vec::new()),
             entry_events: Arc::default(),
             entry_binding: Mutex::new(None),
-            execution_outputs: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -104,7 +95,6 @@ impl E2eContext {
             bindings: Mutex::new(Vec::new()),
             entry_events: Arc::default(),
             entry_binding: Mutex::new(None),
-            execution_outputs: Mutex::new(HashMap::new()),
         };
         context.wait_until_ready().await?;
         context.register_observation_sink();
@@ -657,59 +647,6 @@ impl E2eContext {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-
-    pub(crate) fn initialize_execution_outputs(
-        &self,
-        producers: impl IntoIterator<Item = &'static str>,
-    ) {
-        *self.execution_outputs.lock().unwrap() = producers
-            .into_iter()
-            .map(|producer| (producer, None))
-            .collect();
-    }
-
-    pub(crate) fn reset_execution_outputs(&self) {
-        self.execution_outputs
-            .lock()
-            .unwrap()
-            .values_mut()
-            .for_each(|output| *output = None);
-    }
-
-    pub(crate) fn begin_execution_output_attempt(&self, producer: &'static str) {
-        if let Some(output) = self.execution_outputs.lock().unwrap().get_mut(producer) {
-            *output = None;
-        }
-    }
-
-    pub(crate) fn publish_execution_output(
-        &self,
-        producer: &'static str,
-        attempt_id: &str,
-        directory: &Path,
-    ) -> bool {
-        let outputs = &mut *self.execution_outputs.lock().unwrap();
-        let Some(output) = outputs.get_mut(producer) else {
-            return false;
-        };
-        *output = Some(ExecutionOutput {
-            attempt_id: attempt_id.into(),
-            directory: directory.into(),
-        });
-        true
-    }
-
-    pub(crate) fn execution_output(
-        &self,
-        producer: &'static str,
-    ) -> Result<Option<ExecutionOutput>> {
-        let outputs = self.execution_outputs.lock().unwrap();
-        match outputs.get(producer) {
-            None => Ok(None),
-            Some(Some(output)) => Ok(Some(output.clone())),
-            Some(None) => bail!("execution produced no output for {producer}"),
-        }
-    }
 }
 
 pub(crate) fn inspection_routing(
@@ -974,21 +911,6 @@ impl EntryEvents {
 mod tests {
     use super::*;
 
-    fn test_context() -> E2eContext {
-        E2eContext::from_client(IIIClient::new("ws://127.0.0.1:1"))
-    }
-
-    fn delivery(root: &Path, subject_status: &str) -> PathBuf {
-        std::fs::create_dir_all(root).unwrap();
-        std::fs::write(root.join("implementation.patch"), "").unwrap();
-        std::fs::write(
-            root.join("manifest.json"),
-            format!(r#"{{"subject_status":"{subject_status}"}}"#),
-        )
-        .unwrap();
-        root.into()
-    }
-
     #[test]
     fn entry_events_count_only_repeat_deliveries_while_counting() {
         let events = EntryEvents::default();
@@ -1004,49 +926,6 @@ mod tests {
         assert_eq!(events.duplicates(), Some(2));
         events.stop();
         assert_eq!(events.duplicates(), None);
-    }
-
-    #[test]
-    fn execution_outputs_are_scoped_and_reset_between_repetitions() {
-        let temp = tempfile::tempdir().unwrap();
-        let first = test_context();
-        let second = test_context();
-        first.initialize_execution_outputs(["producer"]);
-        second.initialize_execution_outputs(["producer"]);
-        let path = delivery(&temp.path().join("delivery"), "finished");
-
-        assert!(first.publish_execution_output("producer", "attempt-1", &path));
-        assert_eq!(
-            first
-                .execution_output("producer")
-                .unwrap()
-                .unwrap()
-                .attempt_id,
-            "attempt-1"
-        );
-        assert!(second.execution_output("producer").is_err());
-
-        first.reset_execution_outputs();
-        assert!(first.execution_output("producer").is_err());
-        assert_eq!(first.execution_output("standalone").unwrap(), None);
-    }
-
-    #[test]
-    fn a_retry_replaces_delivery_without_requiring_subject_completion() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = test_context();
-        context.initialize_execution_outputs(["producer"]);
-        let first = delivery(&temp.path().join("first"), "finished");
-        assert!(context.publish_execution_output("producer", "attempt-1", &first));
-
-        context.begin_execution_output_attempt("producer");
-        assert!(context.execution_output("producer").is_err());
-
-        let incomplete = delivery(&temp.path().join("incomplete"), "incomplete");
-        assert!(context.publish_execution_output("producer", "attempt-2", &incomplete));
-        let output = context.execution_output("producer").unwrap().unwrap();
-        assert_eq!(output.attempt_id, "attempt-2");
-        assert_eq!(output.directory, incomplete);
     }
 
     #[test]
