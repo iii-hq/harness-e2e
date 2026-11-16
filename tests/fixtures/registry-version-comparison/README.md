@@ -27,6 +27,16 @@ Release Control's `harness-software-engineering` plan selects this profile throu
 
 Verification does not read implementation's delivery. It fetches the pinned e2e-fixture commit, applies the delivery that commit carries to a fresh pinned Registry checkout, and starts the environment from the same commit; the final measurement starts it again from scratch. The runner holds only how many required checks that delivery fails, and passes that count to the validator at capture.
 
+Which checks the delivery fails becomes public after a run, through the tester's transcript and the published scores in this repository's artifacts. So the delivery is rotated: a new delivery with a different set of failing checks, without naming them anywhere public.
+1. Build it on the recorded clean delivery. Each defect must fail only its own check under the current questions, and must not make a neighbouring question fail for a careful tester.
+2. Prove it locally in Docker, with no model:
+   - the clean build fails nothing;
+   - each defect alone fails exactly its check;
+   - the combined build fails exactly the planted checks on three separate prepares and 30 probe repeats;
+   - the delivery's own tests stay green.
+3. Commit `registry-verification-delivery/implementation.patch` and `manifest.json` to e2e-fixture's `registry-verification-delivery` branch. Push it as a fast-forward: older releases still fetch the previous commit by SHA.
+4. Set `VERIFICATION_FIXTURE_SHA` (`src/scenarios/registry.rs`) and `REGISTRY_VERIFICATION_REVISION` (`scripts/executor.sh`) to that commit, and `PLANTED_FAILURES` to its count. Re-pin `registry_verification`'s behavior digest. Its earlier runs then show as Redefined.
+
 In the E2E extension, create a plan with one scenario and an execution model. All four scenarios use runtime validators; planning scores the delivered `plan.md` with deterministic text checks. Use one run and zero technical retries for initial validation so failures remain visible.
 
 Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the executor workspace disk. Set `TMPDIR` there as well when the host temporary filesystem has a separate quota. The worker process must receive these variables before the run starts; setting them in the browser does not configure the worker.
