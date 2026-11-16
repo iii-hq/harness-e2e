@@ -934,9 +934,46 @@ this way:
 - A local stack with `memory-consolidate` installed also consolidates each
   attempt's bank in the other memory suites.
 
-The workers repository runs the three arms for two models on every memory
-release and on demand, and keeps the report as an artifact. It is advisory:
-the gate a person reads before turning on new memory defaults.
+The workers repository runs the three arms for `deepseek/deepseek-flash` on
+every memory release, and for the models a dispatch names, and keeps the
+report as an artifact. It is advisory: the gate a person reads before turning
+on new memory defaults.
+
+To measure another model on your own machine and key, run each arm on a stack
+like the local `memory` stack above, one stack at a time, each in its own
+directory:
+
+- `memory`: that stack as it is.
+- `memory-off`: memory's `config_override` also sets `inject_rules: false` and
+  `inject_memories: false`.
+- `memory-consolidated`: a `memory-consolidate` container beside memory,
+  configured as in `stacks/memory-consolidated.yaml`.
+
+For an Anthropic model add `provider-anthropic: {worker:
+package://provider-anthropic, version: latest, start_after: [llm-router,
+state]}` and export `ANTHROPIC_API_KEY` before `iii compose --up`. With an
+arm's stack up, run the suite's cases into that arm's directory, then stop the
+stack before the next arm:
+
+```bash
+ids=$(python3 -c 'import json; m = {x["id"]: x["scenarios"] for x in json.load(open("config/test-plan.json"))["modules"]}; print(" ".join(f"--scenario {s}" for k in ("memory", "memory-learning", "memory-precise") for s in m[k]))')
+III_NAMESPACE=memory-e2e III_TELEMETRY_ENABLED=false \
+cargo run --locked --bin harness-e2e -- run \
+  --url ws://127.0.0.1:49334 --provider anthropic --model claude-haiku-5-5 \
+  --runs 3 --technical-retries 1 --output target/gain/memory-off $ids
+```
+
+A record with a `path` instead of a `run_url` reads that directory, or the
+directory of that `results.json`:
+
+```bash
+cargo build --locked --bin harness-e2e
+HARNESS_E2E_BIN=target/debug/harness-e2e python3 scripts/memory_gain.py \
+  --output target/gain/report --runs '[
+  {"model": "anthropic/claude-haiku-5-5", "arm": "memory", "path": "target/gain/memory"},
+  {"model": "anthropic/claude-haiku-5-5", "arm": "memory-off", "path": "target/gain/memory-off"},
+  {"model": "anthropic/claude-haiku-5-5", "arm": "memory-consolidated", "path": "target/gain/memory-consolidated"}]'
+```
 
 ### Context capacity
 

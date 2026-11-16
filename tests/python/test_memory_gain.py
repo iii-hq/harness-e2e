@@ -163,6 +163,24 @@ class MemoryGainTest(unittest.TestCase):
         self.assertEqual(report[MODEL]["consolidation"]["consolidated"], 6)
         self.assertIn("2 memory-consolidated runs never consolidated", text)
 
+    def test_a_local_arm_is_read_where_it_is(self):
+        local_model = "anthropic/claude-haiku-5-5"
+        with tempfile.TemporaryDirectory() as local:
+            records = []
+            for arm, scenarios in arms().items():
+                write_arm(Path(local, arm), scenarios)
+                records.append({"model": local_model, "arm": arm, "path": str(Path(local, arm))})
+            # A results.json names its directory.
+            records[0]["path"] = str(Path(local, records[0]["arm"], "campaign", "results.json"))
+            records.append({"model": "other/model", "arm": "memory", "path": str(Path(local, "missing"))})
+            code, report, text = self.run_main(arms(), self.fake_compare, records)
+        self.assertEqual(report[local_model]["errors"], [])
+        self.assertEqual(report[local_model]["consolidation"], report[MODEL]["consolidation"])
+        self.assertEqual(report[local_model]["off_injected_tokens"], 0)
+        self.assertIn(f"## {local_model}", text)
+        self.assertEqual(report["other/model"]["errors"][0], f"memory: no results.json at {Path(local, 'missing')}")
+        self.assertEqual(code, 1)
+
     def test_a_model_whose_arms_started_no_run_is_reported_and_fails(self):
         unmeasured = [{"model": "other/model", "arm": arm, "run_url": ""} for arm in ("memory", "memory-off")]
         code, report, text = self.run_main(arms(), self.fake_compare, unmeasured)
