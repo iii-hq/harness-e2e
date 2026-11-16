@@ -651,6 +651,14 @@
         }
       }
     },
+    "Class": {
+      "description": "Memory cases only: whether the answer returns a stored value as it was stored, or builds on stored facts or rules.",
+      "type": "string",
+      "enum": [
+        "lookup",
+        "synthesis"
+      ]
+    },
     "CompletionState": {
       "type": "string",
       "enum": [
@@ -1206,6 +1214,17 @@
         "case_id": {
           "default": "",
           "type": "string"
+        },
+        "class": {
+          "description": "A memory case that scores an answer; none for every other test.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Class"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "deferral_reason": {
           "type": [
@@ -3136,6 +3155,12 @@
         "memory_user_other_person",
         "memory_current_and_history",
         "memory_incremental_long_recall",
+        "memory_precise_amount",
+        "memory_precise_date",
+        "memory_precise_port",
+        "memory_precise_env_var",
+        "memory_precise_command",
+        "memory_precise_long_message",
         "spawn_depth_cap",
         "repeated_failure_breaker",
         "truncated_call_guard",

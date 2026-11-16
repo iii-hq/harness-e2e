@@ -1,0 +1,42 @@
+# The memory-off arm of the `memory-gain` suite: stacks/memory.yaml with
+# memory's injection turned off. Memory holds the same bank and still extracts,
+# but gives the session no section, no rules and no memories, so a case scores
+# what the subject does without memory. Keep the other containers in step with
+# memory.yaml.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The worker under test, as on the memory stack, with both injections off.
+  memory:
+    worker: package://memory
+    version: latest
+    config_override:
+      extraction_model: deepseek::deepseek-flash
+      inject_rules: false
+      inject_memories: false
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

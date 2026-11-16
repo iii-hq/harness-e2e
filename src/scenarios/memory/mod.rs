@@ -24,6 +24,7 @@ pub mod incremental_cases;
 pub mod learning_checkpoints;
 pub mod observe;
 pub mod ownership_cases;
+pub mod precise_cases;
 pub mod runtime;
 pub mod score;
 pub mod strict;

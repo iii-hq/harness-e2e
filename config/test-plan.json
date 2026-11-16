@@ -181,6 +181,18 @@
       ]
     },
     {
+      "id": "memory-precise",
+      "label": "Memory precise values",
+      "scenarios": [
+        "memory_precise_amount",
+        "memory_precise_date",
+        "memory_precise_port",
+        "memory_precise_env_var",
+        "memory_precise_command",
+        "memory_precise_long_message"
+      ]
+    },
+    {
       "id": "m11",
       "label": "Harness mechanisms",
       "scenarios": [
@@ -657,6 +669,25 @@
       "repetitions": 3,
       "technical_retries": 1,
       "lane": "local-memory-strict"
+    },
+    {
+      "id": "memory-gain",
+      "label": "Memory gain",
+      "purpose": "Run once per stack (memory, memory-off, memory-consolidated) and per model, on memory releases and on demand: how much better does a task go with memory than without it, and with a consolidated bank? Every case of Memory quality and Memory learning, and the six precise cases, which plant an exact amount, date, port, environment variable and command, and teach a port in the middle of a message of about 15,000 characters; they run only here. Each case is the same on every stack, so scripts/memory_gain.py pairs the arms with `harness-e2e compare` and reports the gain per class (lookup or synthesis). The memory-off arm fails its injection gates by design, so read the scores, not the verdict of a single arm.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": [
+        "memory",
+        "memory-learning",
+        "memory-precise"
+      ],
+      "scenarios": [],
+      "repetitions": 3,
+      "technical_retries": 1,
+      "lane": "local-memory-gain"
     },
     {
       "id": "memory-smoke",

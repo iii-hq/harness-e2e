@@ -451,6 +451,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Context pressure with signed thinking (weekly) | `context-thinking` | `context_pressure` on a Claude 5.5 model, on the `context-thinking` stack: compaction with thinking that the API rejects when its prefix changed. |
 | Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
 | Memory strict delivery | `memory-strict` | Opt-in, in no schedule: whether memory delivers exactly the facts each question needs, as the final model request recorded them, seven cases three times each, on the `memory-strict` stack. Needs unreleased Harness, memory and context-manager builds; advisory for one cycle. |
+| Memory gain | `memory-gain` | How much better the memory cases go with memory than without it: the cases of Memory quality and Memory learning and six precise cases, three times each, once per stack (`memory`, `memory-off`, `memory-consolidated`) and per model, on memory releases and on demand. `scripts/memory_gain.py` reports the gain per class. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -811,8 +812,8 @@ the capture events do not exist, so every run reports `strict capture
 unavailable` with the error that stopped the capture from binding, as an
 infrastructure error. The cases are advisory for one cycle, like every memory
 case; after one live pass against released workers they move into `memory`
-and `memory-learning`. The registry holds 36 memory cases: the 29 above and
-these seven.
+and `memory-learning`. The registry holds 42 memory cases: the 29 above, these
+seven and the six precise cases below.
 
 Run it on the `memory` stack, the default stack plus the `memory` worker.
 Memory ranks recalls with the local MiniLM embedder where iii-directory has
@@ -872,6 +873,69 @@ cargo run --locked --bin harness-e2e -- report target/e2e
 A CI or Docker run takes its suite from the stack's runner: until a
 `harness-e2e` release carries `memory`, give the dispatch an inline stack that
 pins `harness-e2e` with `commit:`.
+
+### Memory gain
+
+The `memory-gain` suite measures how much better a task goes with memory than
+without it. It holds the 29 cases of `memory` and `memory-learning` and the six
+cases of the `memory-precise` module, three rounds and one technical retry each
+(35 cases, 105 runs), and runs once per stack and per model. The cases are the
+same on every stack, so a case on two stacks is one test to
+`harness-e2e compare`, which pairs on (`scenario_id`, `behavior_sha256`):
+
+| Stack | What it changes |
+| --- | --- |
+| `memory` | Nothing: memory on, as the `memory` suite runs it. |
+| `memory-off` | Memory with `inject_rules` and `inject_memories` off. It holds the same bank and still extracts, but gives the session no section, no rules and no memories. |
+| `memory-consolidated` | The `memory` stack plus `memory-consolidate`, with no scheduled pass. Where `memory-consolidate::run` is registered, setup runs it on the attempt's bank once the case planted and taught it, so the session reads a consolidated bank. `memory-consolidate` starts after `memory`, which holds memory at the version the stack declares against the one its graph would bring. |
+
+A memory case that scores an answer has a `class` in its results: `lookup`
+when the answer returns a stored value as it was stored, `synthesis` when it
+builds on stored facts or rules (a preference, a rule to fit, a fact about the
+user). Baselines and cases that score no answer have none. No selection reads
+it.
+
+The precise cases plant one exact value among the distractors and ask for it:
+an amount (`memory_precise_amount`), a date (`memory_precise_date`), a port
+(`memory_precise_port`), an environment variable (`memory_precise_env_var`) and
+a command (`memory_precise_command`). The answer must hold the value whole,
+as its seed states it: the variable with its prefix, the command with its
+flags. A canary whose label ends in `_usd`, `_date` or `_num` renders as an
+amount, a date or a five-digit number instead of eight hex characters.
+`memory_precise_long_message` teaches a port in the middle of one user message
+of about 15,000 characters. They run only in `memory-gain`.
+
+`scripts/memory_gain.py` reads one run per model and stack, splits each arm's
+results into four rows of the cases that have a class (all of them, `lookup`,
+`synthesis` and the precise cases), scores each run on the points its answer
+criteria awarded (its `memory_answer_points` measurement) and runs
+`harness-e2e compare --json` on memory-off against memory and on memory
+against memory-consolidated. Every figure and verdict is the runner's. Read it
+this way:
+
+- The gain is a difference in answer points: what memory injected scores
+  nothing, so an arm gains only where its answers got better. The memory-off
+  arm still fails its injection gates, so its runs rarely complete; read the
+  gain, not the completion.
+- `memory_precise_long_message` scores the same on every arm until memory
+  reads a user line past 12,000 characters: memory keeps the first and last
+  6,000, and the port sits between. The rows leave it out; its own results
+  say when that changes.
+- Memory costs tokens, so the verdict often reads `cannot tell (trade_off)`:
+  quality rose and so did the cost.
+- On a lexical-only stack, as on CI, the consolidation pass has nothing to
+  merge, so the consolidated row is expected to read no difference. The
+  report's last lines say what each arm did: the tokens the memory-off arm
+  injected, which must be 0 (the report fails otherwise), and in how many of
+  the compared runs consolidation ran, what it superseded, how many model calls
+  it made and how many notes it left. A compared run that did not consolidate
+  is listed as an error.
+- A local stack with `memory-consolidate` installed also consolidates each
+  attempt's bank in the other memory suites.
+
+The workers repository runs the three arms for two models on every memory
+release and on demand, and keeps the report as an artifact. It is advisory:
+the gate a person reads before turning on new memory defaults.
 
 ### Context capacity
 
@@ -1356,6 +1420,15 @@ every pull request that changes memory, and on every memory release with
 `versions`. The token needs
 `actions: read` and `write` on this repository. Runs from these pipelines do
 not reach Release Control's ledger, which accepts only its own bot's dispatches.
+
+`model` picks the subject's provider/model, and `extraction-model` the
+`provider::model` memory extracts with in place of the stack's (only on a
+stack that declares memory). The second action,
+[`.github/actions/memory-gain`](.github/actions/memory-gain/action.yml), takes
+the `run_url` of each `memory-gain` run as `runs` (a JSON list of `model`,
+`arm` (the stack) and `run_url`), runs `scripts/memory_gain.py` with the latest
+released runner and returns the directory of `memory-gain.md` and
+`memory-gain.json` as `report`. Its token needs `actions: read`.
 
 ### Executor image
 
