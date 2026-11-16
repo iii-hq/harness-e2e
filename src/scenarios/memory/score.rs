@@ -821,7 +821,7 @@ fn judge(check: Check, case: &Case, evidence: &Evidence, audit: &Audit) -> (bool
                 };
                 wanted = wanted.replace(&format!("{{{label}}}"), canary);
             }
-            if answer(evidence, exchange).contains(&wanted) {
+            if holds_whole(answer(evidence, exchange), &wanted) {
                 (true, format!("the answer carries {wanted:?}"))
             } else {
                 (false, format!("the answer lacks {wanted:?}"))
@@ -1333,6 +1333,19 @@ fn answer(evidence: &Evidence, index: usize) -> &str {
         .exchanges
         .get(index)
         .map_or("", |exchange| exchange.answer.as_str())
+}
+
+/// Whether `text` holds `value` whole: a match counts only when no word
+/// character extends its first or last one, so `15m` is not in `15ms` and
+/// `54321` is not in `543210`. Prose and Markdown around it are fine.
+fn holds_whole(text: &str, value: &str) -> bool {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(value).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + value.len()..].chars().next();
+        !(value.starts_with(word) && before.is_some_and(word))
+            && !(value.ends_with(word) && after.is_some_and(word))
+    })
 }
 
 /// `Check::AnswerLabelled` over `(label, canary, value)` triples.
@@ -2291,8 +2304,28 @@ mod tests {
             judged(&format!("indexctl restart --shard {shard}"), true),
             (Some(40), Some(0), points(0.0))
         );
+        // A longer drain is another command.
+        assert_eq!(
+            judged(&format!("{command}s"), true),
+            (Some(40), Some(0), points(0.0))
+        );
         assert_eq!(judged(&command, false), (Some(0), Some(60), points(60.0)));
         assert_eq!(judged("no idea", false), (Some(0), Some(0), points(0.0)));
+    }
+
+    #[test]
+    fn a_whole_value_is_not_part_of_a_longer_one() {
+        assert!(holds_whole("It listens on 54321.", "54321"));
+        assert!(holds_whole("`54321`", "54321"));
+        assert!(holds_whole("not 543210 but 54321", "54321"));
+        assert!(!holds_whole("It listens on 543210.", "54321"));
+        assert!(!holds_whole("It listens on 154321.", "54321"));
+        assert!(!holds_whole(
+            "set LEDGER_SHARD_123456",
+            "LEDGER_SHARD_12345"
+        ));
+        assert!(holds_whole("--drain 15m.", "--drain 15m"));
+        assert!(!holds_whole("--drain 15ms", "--drain 15m"));
     }
 
     #[test]

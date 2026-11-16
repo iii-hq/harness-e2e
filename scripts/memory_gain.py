@@ -252,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
         for index, run in enumerate(json.loads(args.runs)):
             directory = root / "runs" / str(index)
             try:
+                if not run.get("run_url"):
+                    raise VerifyError("not measured: the arm started no run")
                 download(run["run_url"], directory)
             except VerifyError as error:
                 errors.setdefault(run["model"], []).append(f"{run['arm']}: {error}")
@@ -263,8 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             on_vs_off = report["rows"]["all"]["on_vs_off"]
             if not (on_vs_off and on_vs_off.get("quality")):
                 report["errors"].append("no quality figure for memory against memory-off")
-                failed = True
-            if report.get("off_injected_tokens"):
+            if report["errors"] or report.get("off_injected_tokens"):
                 failed = True
             models[model] = report
     text = markdown(models)

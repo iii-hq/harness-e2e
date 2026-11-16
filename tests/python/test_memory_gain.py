@@ -66,10 +66,11 @@ def arms(off_tokens=0, consolidated=True):
 
 
 class MemoryGainTest(unittest.TestCase):
-    def run_main(self, built, compare=None):
-        """main() on runs whose downloads are the built arms; its exit code and report."""
+    def run_main(self, built, compare=None, unmeasured=()):
+        """main() on runs whose downloads are the built arms, plus `unmeasured`
+        records; its exit code and report."""
         runs = [{"model": MODEL, "arm": arm, "run_url": f"https://github.com/iii-hq/harness-e2e/actions/runs/{i}"}
-                for i, arm in enumerate(built)]
+                for i, arm in enumerate(built)] + list(unmeasured)
 
         def download(run_url, directory):
             write_arm(directory, built[runs[int(run_url.rsplit("/", 1)[1])]["arm"]])
@@ -156,10 +157,19 @@ class MemoryGainTest(unittest.TestCase):
         # A run whose setup failed has no measurements and is not counted.
         unconsolidated["runs"][2]["scenario_measurements"] = []
         built["memory-consolidated"][1] = unconsolidated
-        _, report, text = self.run_main(built, self.fake_compare)
+        code, report, text = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 1)
         self.assertEqual(report[MODEL]["consolidation"]["runs"], 8)
         self.assertEqual(report[MODEL]["consolidation"]["consolidated"], 6)
         self.assertIn("2 memory-consolidated runs never consolidated", text)
+
+    def test_a_model_whose_arms_started_no_run_is_reported_and_fails(self):
+        unmeasured = [{"model": "other/model", "arm": arm, "run_url": ""} for arm in ("memory", "memory-off")]
+        code, report, text = self.run_main(arms(), self.fake_compare, unmeasured)
+        self.assertEqual(code, 1)
+        self.assertEqual(report[MODEL]["errors"], [])
+        self.assertIn("memory-off: not measured: the arm started no run", report["other/model"]["errors"])
+        self.assertIn("## other/model", text)
 
     def test_a_consolidated_arm_whose_runs_never_consolidated_says_so(self):
         built = arms()

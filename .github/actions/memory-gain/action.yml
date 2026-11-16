@@ -10,7 +10,7 @@ inputs:
     description: Token that can read runs and artifacts of iii-hq/harness-e2e (actions read)
     required: true
   runs:
-    description: JSON list of {model, arm, run_url}, one per model and stack; `arm` is the stack's name
+    description: JSON list of {model, arm, run_url}, one per model and stack; `arm` is the stack's name; an empty run_url reports that arm as not measured
     required: true
 
 outputs:
