@@ -342,9 +342,9 @@ private fixture using a read-only GitHub App token without persisting credential
 then routes the controller fetch to that local checkout.
 
 The Application builds and changes suite also selects the same build case as an
-independent group, with one repetition and no technical retries. It contains
-14 cases and 14 planned runs across 13 groups, preserving the ordered Registry
-implementation/verification pair. The fixture and evaluation contract are shared
+independent group, three independent times and no technical retries. It contains
+14 cases and 42 planned runs across 14 groups a round; Registry implementation
+and verification run in groups of their own. The fixture and evaluation contract are shared
 with Evolution; no new application benchmark or model qualification is implied.
 
 This qualification is a local model run, not a comparative benchmark or a Release
