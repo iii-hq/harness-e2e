@@ -951,7 +951,10 @@ directory:
 
 For an Anthropic model add `provider-anthropic: {worker:
 package://provider-anthropic, version: latest, start_after: [llm-router,
-state]}` and export `ANTHROPIC_API_KEY` before `iii compose --up`. With an
+state]}` and export `ANTHROPIC_API_KEY` before `iii compose --up`. Keep
+`provider-deepseek` and `DEEPSEEK_API_KEY` too: whatever the subject, the
+learning cases' teacher turns, memory's extraction and the consolidation judge
+run on `deepseek-flash`. With an
 arm's stack up, run the suite's cases into that arm's directory, then stop the
 stack before the next arm:
 
