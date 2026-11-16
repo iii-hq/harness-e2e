@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -76,6 +77,17 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         }
         self.assertEqual(probed, known)
         self.assertIn("feature.json", source)
+
+    def test_the_tester_is_asked_each_check_s_metric_question(self):
+        # The tester sees only the prompt's questions, so they must be the ones
+        # the metrics state, for every check the probe grades it on.
+        prompt = (SCRIPT.parent / "test-4-verification.md").read_text()
+        asked = dict(re.findall(r"^- `(implementation\.\w+)`: (.+)$", prompt, re.M))
+        catalog = json.loads(METRICS.read_text())
+        questions = {metric["id"]: metric["question"] for test in catalog["tests"]
+                     if test["id"] == 2 for metric in test["metrics"]}
+        self.assertEqual(len(asked), 23)
+        self.assertEqual(asked, {check: questions[check] for check in asked})
 
     def test_probe_has_bounded_runtime_and_factual_output(self):
         source = SCRIPT.read_text()
