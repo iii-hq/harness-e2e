@@ -21,7 +21,7 @@ Validators retain raw results, command receipts, evidence sizes, and SHA-256 val
 
 Measured points are `round(weight × value)`, using the regular integer criterion format. Raw ratios remain available in the evidence. Each scenario is scored independently through the normal Harness reports.
 
-A product failure earns zero for the check it fails. Delivered source that cannot be started, or a verification task that changed the Registry source, earns zero on every metric. A validator or infrastructure failure, such as an unreachable Docker daemon, makes evaluation unavailable; partial observations are still retained. Explicitly not-applicable ratios remain unassessed while other criteria are scored. No weight is redistributed.
+A product failure earns zero for the check it fails. An implementation delivery that cannot be started, or a verification task that changed the Registry source, earns zero on every metric. Verification's pinned delivery is proven to start, so when it does not restart the evaluation is unavailable. A validator or infrastructure failure, such as an unreachable Docker daemon, makes evaluation unavailable; partial observations are still retained. Explicitly not-applicable ratios remain unassessed while other criteria are scored. No weight is redistributed.
 
 Screenshots let users inspect actual results. Their appearance is not scored.
 
@@ -34,4 +34,4 @@ A metric marked `"gate": true` in `metrics.json` names the scenario's primary fl
 - **Environment:** `environment.build` and `environment.api_readiness`.
 - **Verification:** full recall, full precision, full execution coverage, full evidence coverage, and source preservation. Missing a known failure, claiming a false failure, omitting a required check or attributable artifact, or changing source leaves the task incomplete.
 
-Delivered source that cannot be started scores zero on every metric, gates included, so it is never completed.
+An implementation delivery that cannot be started scores zero on every metric, gates included, so it is never completed.

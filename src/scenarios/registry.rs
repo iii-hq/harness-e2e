@@ -768,7 +768,12 @@ async fn capture<const N: u8>(
 /// first, so a port that is still taken is the delivery's own. Only a Docker
 /// daemon that stopped answering is the evaluating machine's: the metrics stay
 /// unavailable and the run is an evaluation-environment failure, not a zero.
+/// registry_verification's delivery is pinned and proven to start, so there
+/// only a Registry source change is the subject's.
 fn undeliverable_observations(test: u8, delivery: &Value) -> Option<Value> {
+    if test == 4 && delivery.get("scope_deviation").is_none() {
+        return None;
+    }
     let error = delivery["runtime_error"]
         .as_str()
         .unwrap_or_default()
@@ -980,31 +985,47 @@ mod tests {
         }
     }
     #[test]
+    fn a_fixed_delivery_that_does_not_restart_is_the_evaluator_s() {
+        // registry_verification's delivery is pinned and proven to start: only
+        // Registry source the tester changed makes a failed start the tester's.
+        for error in [
+            "Command '['docker', 'exec', '-i', '-w', '/workspace', 'registry-task-1', 'sh', '-lc', '/fixture/fixture.sh down']' timed out after 1800 seconds",
+            "app exited with code 1",
+            "docker failed (1): Error response from daemon: driver failed programming external connectivity on endpoint registry-task-api-1: Bind for 127.0.0.1:34859 failed: port is already allocated",
+        ] {
+            let delivery = json!({"runtime_ready": false, "runtime_error": error});
+            assert!(undeliverable_observations(4, &delivery).is_none(), "{error}");
+        }
+        let changed = json!({"runtime_ready": false,
+            "scope_deviation": "Registry source changed in a planning or verification task"});
+        let awards = awards(4, &undeliverable_observations(4, &changed).unwrap()).unwrap();
+        assert!(awards.iter().all(|award| award.awarded == Some(0)));
+    }
+    #[test]
     fn a_delivery_that_does_not_start_scores_zero_unless_docker_is_gone() {
-        for n in [2, 4] {
-            for delivery in [
-                json!({"runtime_ready": false, "runtime_error": "app exited with code 1"}),
-                json!({"runtime_ready": false, "scope_deviation": "Registry source changed"}),
-            ] {
-                let validation = undeliverable_observations(n, &delivery).unwrap();
-                let awards = awards(n, &validation).unwrap();
-                assert_eq!(awards.len(), metrics(n).len());
-                assert!(awards.iter().all(|award| award.awarded == Some(0)));
-            }
-            let daemon = json!({"runtime_ready": false,
-                "runtime_error": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"});
-            assert!(undeliverable_observations(n, &daemon).is_none());
-            // The 1.8.50 arm of the Harness A/B: the agent's own stack
-            // (`registry-test2`) held the port. The final start now removes it;
-            // a port still taken after that is the delivery's, as is an app
-            // that binds its own port twice.
-            for error in [
-                "docker failed (1): Error response from daemon: driver failed programming external connectivity on endpoint registry-task-api-1: Bind for 127.0.0.1:34859 failed: port is already allocated",
-                "api-1  | Error: listen EADDRINUSE: address already in use 0.0.0.0:3001",
-            ] {
-                let delivery = json!({"runtime_ready": false, "runtime_error": error});
-                assert!(undeliverable_observations(n, &delivery).is_some(), "{error}");
-            }
+        let n = 2;
+        for delivery in [
+            json!({"runtime_ready": false, "runtime_error": "app exited with code 1"}),
+            json!({"runtime_ready": false, "scope_deviation": "Registry source changed"}),
+        ] {
+            let validation = undeliverable_observations(n, &delivery).unwrap();
+            let awards = awards(n, &validation).unwrap();
+            assert_eq!(awards.len(), metrics(n).len());
+            assert!(awards.iter().all(|award| award.awarded == Some(0)));
+        }
+        let daemon = json!({"runtime_ready": false,
+            "runtime_error": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"});
+        assert!(undeliverable_observations(n, &daemon).is_none());
+        // The 1.8.50 arm of the Harness A/B: the agent's own stack
+        // (`registry-test2`) held the port. The final start now removes it;
+        // a port still taken after that is the delivery's, as is an app
+        // that binds its own port twice.
+        for error in [
+            "docker failed (1): Error response from daemon: driver failed programming external connectivity on endpoint registry-task-api-1: Bind for 127.0.0.1:34859 failed: port is already allocated",
+            "api-1  | Error: listen EADDRINUSE: address already in use 0.0.0.0:3001",
+        ] {
+            let delivery = json!({"runtime_ready": false, "runtime_error": error});
+            assert!(undeliverable_observations(n, &delivery).is_some(), "{error}");
         }
     }
     #[test]
