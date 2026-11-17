@@ -918,10 +918,6 @@ this way:
   nothing, so an arm gains only where its answers got better. The memory-off
   arm still fails its injection gates, so its runs rarely complete; read the
   gain, not the completion.
-- `memory_precise_long_message` scores the same on every arm until memory
-  reads a user line past 12,000 characters: memory keeps the first and last
-  6,000, and the port sits between. The rows leave it out; its own results
-  say when that changes.
 - Memory costs tokens, so the verdict often reads `cannot tell (trade_off)`:
   quality rose and so did the cost.
 - On a lexical-only stack, as on CI, the consolidation pass has nothing to

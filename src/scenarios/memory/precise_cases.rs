@@ -142,9 +142,9 @@ macro_rules! day_notes {
 }
 
 /// The user's notes over two weeks, one message of about 15,000 characters: a
-/// cache bucket at its start, a webhook port in its middle. Memory cuts a user
-/// line past 12,000 characters to its first and last 6,000, and the port sits
-/// in that cut.
+/// cache bucket at its start, a webhook port in its middle. Before memory read
+/// a user line whole to 80,000 characters, it cut one past 12,000 to its first
+/// and last 6,000, and the port sat in that cut.
 const PRECISE_NOTES: &str = concat!(
     "Some notes for later about this project, mostly a long account of the last two weeks. One \
     thing at the start does hold for good: the build cache bucket is cache-{notes_head} and \
