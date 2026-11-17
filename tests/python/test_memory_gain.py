@@ -42,9 +42,10 @@ def write_arm(directory, scenarios):
 
 
 def arms(off_tokens=0, consolidated=True):
-    """The scenarios of each arm: memory raises the lookup answers from 20 to
-    80. The synthesis case answers the same on both arms, and only memory's
-    run scores its rule injection."""
+    """The scenarios of each arm: memory raises two lookup answers from 20 to
+    80, and the long message answers nothing on either arm. The synthesis case
+    answers the same on both arms, and only memory's run scores its rule
+    injection."""
     def build(prefix, lookup, rule, measurements=()):
         return [
             scenario("memory_value_project", "lookup", lookup, prefix, measurements),
@@ -121,9 +122,10 @@ class MemoryGainTest(unittest.TestCase):
         rows = memory_gain.rows()
         self.assertTrue(rows["precise"]({"scenario_id": "memory_precise_port", "class": "lookup"}))
         self.assertFalse(rows["precise"]({"scenario_id": "memory_value_project", "class": "lookup"}))
-        # The probe of memory's long-line cut, and a case without a class, are in no row.
+        long_message = {"scenario_id": "memory_precise_long_message", "class": "lookup"}
+        self.assertEqual([name for name, row in rows.items() if row(long_message)], ["all", "lookup", "precise"])
+        # A case without a class is in no row.
         for row in rows.values():
-            self.assertFalse(row({"scenario_id": "memory_precise_long_message", "class": "lookup"}))
             self.assertFalse(row({"scenario_id": "memory_small_talk"}))
 
     def test_a_model_without_its_memory_off_arm_has_no_gain(self):
@@ -144,10 +146,10 @@ class MemoryGainTest(unittest.TestCase):
     def test_the_consolidation_line_counts_the_compared_runs_that_consolidated(self):
         code, report, text = self.run_main(arms(), self.fake_compare)
         self.assertEqual(code, 0)
-        # The three compared cases, three runs each: no small talk, no probe.
-        self.assertEqual(report[MODEL]["consolidation"], {"runs": 9, "consolidated": 9, "superseded": 9,
-                                                          "llm_calls": 0, "notes": 9})
-        self.assertIn("consolidation ran in 9 of 9 runs, superseded 9 memories, 0 model calls, 9 notes", text)
+        # The four compared cases, three runs each: no small talk.
+        self.assertEqual(report[MODEL]["consolidation"], {"runs": 12, "consolidated": 12, "superseded": 12,
+                                                          "llm_calls": 0, "notes": 12})
+        self.assertIn("consolidation ran in 12 of 12 runs, superseded 12 memories, 0 model calls, 12 notes", text)
         self.assertIn("the memory-off arm injected nothing", text)
         self.assertEqual(report[MODEL]["errors"], [])
 
@@ -159,8 +161,8 @@ class MemoryGainTest(unittest.TestCase):
         built["memory-consolidated"][1] = unconsolidated
         code, report, text = self.run_main(built, self.fake_compare)
         self.assertEqual(code, 1)
-        self.assertEqual(report[MODEL]["consolidation"]["runs"], 8)
-        self.assertEqual(report[MODEL]["consolidation"]["consolidated"], 6)
+        self.assertEqual(report[MODEL]["consolidation"]["runs"], 11)
+        self.assertEqual(report[MODEL]["consolidation"]["consolidated"], 9)
         self.assertIn("2 memory-consolidated runs never consolidated", text)
 
     def test_a_local_arm_is_read_where_it_is(self):
@@ -200,9 +202,9 @@ class MemoryGainTest(unittest.TestCase):
         code, report, text = self.run_main(arms())
         self.assertEqual(code, 0, text)
         lookup = report[MODEL]["rows"]["lookup"]["on_vs_off"]
-        self.assertEqual(lookup["quality"]["delta"], 60.0)
-        # The long-message probe is left out.
-        self.assertEqual(lookup["quality"]["tests"], 2)
+        # The long message gains nothing and counts: (60 + 60 + 0) / 3.
+        self.assertEqual(lookup["quality"]["delta"], 40.0)
+        self.assertEqual(lookup["quality"]["tests"], 3)
         with tempfile.TemporaryDirectory() as directory:
             sides = []
             for arm in ("memory-off", "memory"):
@@ -212,7 +214,7 @@ class MemoryGainTest(unittest.TestCase):
                 sides.append(Path(directory, arm, "lookup"))
             self.assertEqual(lookup["quality"], memory_gain.compare(*sides)["quality"])
         # No class, no row: small talk is in none.
-        self.assertEqual(report[MODEL]["rows"]["all"]["on_vs_off"]["quality"]["tests"], 3)
+        self.assertEqual(report[MODEL]["rows"]["all"]["on_vs_off"]["quality"]["tests"], 4)
         # The same answers on both arms gain nothing, though memory's runs
         # also scored the rule injection (60 against 30).
         self.assertEqual(report[MODEL]["rows"]["synthesis"]["on_vs_off"]["quality"]["delta"], 0.0)

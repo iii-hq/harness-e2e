@@ -3018,9 +3018,9 @@ mod tests {
         assert!(planted_memories(case_named("memory_value_project_baseline"), "a").is_empty());
     }
 
-    /// The long precise message lands where memory cuts a user line past
-    /// 12,000 characters today: the control fact in the first 6,000 it
-    /// keeps, the port wholly in the cut, more than 6,000 from either end.
+    /// Before memory read a user line whole to 80,000 characters, it kept the
+    /// first and last 6,000 of one past 12,000: the control fact sits in that
+    /// kept head, the port wholly in that cut, more than 6,000 from either end.
     #[test]
     fn the_precise_long_message_puts_its_port_where_memory_cuts_a_long_line() {
         let case = case_named("memory_precise_long_message");

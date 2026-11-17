@@ -51,10 +51,6 @@ INJECTED = ("memory_injected_tokens", "memory_rules_tokens", "memory_reminder_to
 PASS = {"superseded": "memory_consolidation_superseded", "llm_calls": "memory_consolidation_llm_calls",
         "notes": "memory_consolidation_notes"}
 ANSWER = "memory_answer_points"
-# shortcut: memory cuts a user line past 12,000 characters to its first and
-# last 6,000, so this case scores the same on every arm; give it back to the
-# rows once memory reads the whole line.
-PROBES = {"memory_precise_long_message"}
 
 
 def precise() -> set[str]:
@@ -67,7 +63,7 @@ def rows() -> dict[str, Callable[[dict[str, Any]], bool]]:
     cases = precise()
 
     def scored(scenario: dict[str, Any]) -> bool:
-        return scenario.get("class") in ("lookup", "synthesis") and scenario.get("scenario_id") not in PROBES
+        return scenario.get("class") in ("lookup", "synthesis")
 
     return {
         "all": scored,
@@ -198,8 +194,7 @@ def markdown(models: dict[str, dict[str, Any]]) -> str:
              "A run scores the points its answer criteria awarded, nothing for what memory injected. "
              "Gain is memory's score minus memory-off's, in points, from `harness-e2e compare`. "
              "Consolidated is memory-consolidated's score minus memory's. The rows hold the cases "
-             f"with a class, without {', '.join(sorted(PROBES))}: it scores the same on every arm "
-             "until memory reads a user line past 12,000 characters.", ""]
+             "with a class.", ""]
     for model, report in models.items():
         lines += [f"## {model}", "",
                   "| Row | Tests | Off | On | Gain | Quality | Cost change | Verdict "
