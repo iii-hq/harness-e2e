@@ -58,7 +58,7 @@ const PROMPTS: [&str; 4] = [
 
 /// The e2e-fixture commit that carries registry_verification's delivery and
 /// the environment it was proven in. `scripts/executor.sh` names it too.
-const VERIFICATION_FIXTURE_SHA: &str = "f1d3773318511dd31f993a8f588071f1b8ba5c21";
+const VERIFICATION_FIXTURE_SHA: &str = "9cce81250baea1bd99a9f5554c63d9a873b05be0";
 /// How many of the 23 checks that delivery fails: a count, never which ones.
 const PLANTED_FAILURES: u8 = 4;
 /// What setup writes beside the lifecycle: never the validator or its probe,
