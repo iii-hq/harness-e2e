@@ -559,7 +559,9 @@ class ExecutorTests(unittest.TestCase):
             # Verification reads the same Registry, and the pinned delivery, never the head.
             "git -C target/registry-sources/registry rev-parse HEAD|",
             "git init -q target/registry-verification-fixture|" + header,
-            f"git -C target/registry-verification-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {verification}|{header}",
+            # With its history: a released runner still pinning an earlier
+            # delivery fetches it from this checkout.
+            f"git -C target/registry-verification-fixture fetch -q https://github.com/iii-hq/e2e-fixture.git {verification}|{header}",
             "git -C target/registry-verification-fixture checkout -q --detach FETCH_HEAD|" + header,
             "git init -q target/trending-topics-fixture|" + header,
             f"git -C target/trending-topics-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {trending}|{header}",
