@@ -221,7 +221,9 @@ fixtures() {
       # target/ must not put the pinned delivery in the head's checkout.
       case-registry-verification)
         checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry
-        checkout iii-hq/e2e-fixture "$REGISTRY_VERIFICATION_REVISION" target/registry-verification-fixture
+        # With its history: every rotation fast-forwards the delivery branch,
+        # so a released runner still pinning an earlier delivery finds it here.
+        checkout iii-hq/e2e-fixture "$REGISTRY_VERIFICATION_REVISION" target/registry-verification-fixture full
         ;;
       case-registry-*)
         checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry
