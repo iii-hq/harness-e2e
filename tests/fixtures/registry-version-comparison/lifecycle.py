@@ -165,15 +165,6 @@ def fixture_action(state, action):
     return container_exec(state, f"/fixture/fixture.sh {action}", timeout=1800)
 
 
-def remove_other_stacks(state):
-    # Only the fixture's project may run when the delivery is measured: a stack
-    # the subject started and left up in the private daemon would hold its ports.
-    return container_exec(
-        state,
-        "docker ps -a --format '{{.ID}} {{.Label \"com.docker.compose.project\"}}'"
-        f" | awk '$2 != \"{state['container']}\" {{print $1}}' | xargs -r docker rm -fv")
-
-
 def prepare(args):
     root = args.root
     root.mkdir(parents=True, exist_ok=False)
@@ -240,23 +231,32 @@ def prepare(args):
     write_json(inputs / "environment.json", environment)
     prompt = (args.assets / f"test-{args.test}-{TASKS[args.test]}.md").read_text()
     (root / "prompt.md").write_text(prompt)
+    start_runner(root, state, workspace, fixture if args.test != 1 else None)
+    if args.test in (2, 4):
+        (root / "baseline-check.log").write_bytes(fixture_action(state, "check /workspace/output/baseline"))
+    return state
+
+
+def start_runner(root, state, workspace, fixture):
+    """Start a private runner on workspace and, for tests 2 and 4, the fixture's stack."""
+    test, web_port, api_port = state["test"], state["web_port"], state["api_port"]
     run(["docker", "pull", RUNNER_IMAGE])
     argv = ["docker", "run", "-d", "--name", state["container"],
             "--mount", f"type=bind,src={workspace},dst=/workspace",
             "-e", "DOCKER_TLS_CERTDIR=", "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
-            "-e", f"WEB_PORT={args.web_port}", "-e", f"API_PORT={args.api_port}",
+            "-e", f"WEB_PORT={web_port}", "-e", f"API_PORT={api_port}",
             "-e", "REGISTRY_SOURCE=/workspace/registry", "-e", "FIXTURE_DIR=/fixture",
             "-e", f"COMPOSE_PROJECT_NAME={state['container']}",
             # iii telemetry off for the runner's own processes, which a
             # container does not inherit from here. The fixture's compose does
             # not pass it on: its app image sets it (e2e-fixture's Dockerfile).
             "-e", "III_TELEMETRY_ENABLED=false"]
-    if args.test != 1:
-        argv += ["--privileged", "-p", f"127.0.0.1:{args.web_port}:8080",
-                 "-p", f"127.0.0.1:{args.api_port}:8081"]
-    if args.test in (2, 4):
+    if test != 1:
+        argv += ["--privileged", "-p", f"127.0.0.1:{web_port}:8080",
+                 "-p", f"127.0.0.1:{api_port}:8081"]
+    if test in (2, 4):
         argv += ["--mount", f"type=bind,src={fixture},dst=/fixture,readonly"]
-    if args.test == 1:
+    if test == 1:
         argv += ["--entrypoint", "sh", RUNNER_IMAGE, "-c", "sleep infinity"]
     else:
         # Listen only on the private Unix socket; no unauthenticated TCP daemon.
@@ -265,16 +265,82 @@ def prepare(args):
     state["runner_image_id"] = run(["docker", "inspect", "--format", "{{.Image}}", state["container"]]).decode().strip()
     write_json(root / "state.json", state)
     container_exec(state, "apk add --no-cache git bash curl coreutils socat python3 && git config --global --add safe.directory /workspace/registry")
-    if args.test != 1:
+    if test != 1:
         container_exec(state, "for i in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1", timeout=90)
-    if args.test != 1:
-        for exposed, target in ((8080, args.web_port), (8081, args.api_port)):
+    if test != 1:
+        for exposed, target in ((8080, web_port), (8081, api_port)):
             run(["docker", "exec", "-d", state["container"], "socat",
                  f"TCP-LISTEN:{exposed},fork,reuseaddr", f"TCP:127.0.0.1:{target}"])
-    if args.test in (2, 4):
+    if test in (2, 4):
         (root / "baseline-start.log").write_bytes(fixture_action(state, "up"))
-        (root / "baseline-check.log").write_bytes(fixture_action(state, "check /workspace/output/baseline"))
-    return state
+
+
+def pause(container):
+    """What the subject left running shares the Docker bridge with the measurement runner's ports."""
+    try:
+        run(["docker", "pause", container], timeout=60)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        pass  # a runner that already exited cannot be paused and needs no pause
+    running, paused = run(["docker", "inspect", "--format", "{{.State.Running}} {{.State.Paused}}",
+                           container], timeout=60).decode().split()
+    if running == "true" and paused != "true":
+        raise RuntimeError("subject runner is still running and could not be paused")
+    return paused == "true"
+
+
+def measure(args):
+    """Start the runner the truth is measured in: one the subject never had a shell in."""
+    root = args.root
+    subject = json.loads((root / "state.json").read_text())
+    test = subject["test"]
+    measured = root / "measurement"
+    measured.mkdir()  # exclusive: a directory already there is not ours
+    workspace = measured / "workspace"
+    (workspace / "output").mkdir(parents=True)
+    state = {"test": test, "container": "registry-measure-" + uuid.uuid4().hex,
+             "web_port": args.web_port, "api_port": args.api_port,
+             "base_registry_sha": REGISTRY_SHA, "runner_image": RUNNER_IMAGE,
+             "fixture_files": subject["fixture_files"]}
+    write_json(measured / "state.json", state)  # before any container exists, so cleanup finds it
+    state["subject_paused"] = pause(subject["container"])
+    # From git objects: the subject had the working tree mounted and, as privileged root, can remount it rw.
+    checkout = root / "fixture-checkout"
+    run(["tar", "-x", "-C", measured],
+        data=run(["git", "archive", "HEAD", "registry-version-comparison"], cwd=checkout))
+    fixture = measured / "registry-version-comparison"
+    if fixture_hashes(fixture) != subject["fixture_files"]:
+        raise RuntimeError("measurement fixture differs from the one prepare recorded")
+    source = workspace / "registry"
+    run(["git", "clone", "--no-checkout", REGISTRY_URL, source])
+    run(["git", "checkout", "--detach", REGISTRY_SHA], cwd=source)
+    if test == 4 and apply_delivery(source, checkout / "registry-verification-delivery") != subject["implementation"]:
+        raise RuntimeError("pinned delivery changed since prepare")
+    start_runner(measured, state, workspace, fixture)  # a failure up to here is the evaluator's
+    result = {"runtime_ready": True}
+    if test == 2:
+        patch = root / "delivery" / "implementation.patch"
+        applied = {"exit_code": 1, "stdout": "", "stderr": "no patch was delivered"}
+        if patch.is_file() and patch.stat().st_size:
+            check = subprocess.run(["git", "apply", "--check", str(patch)], cwd=source,
+                                   capture_output=True, timeout=120)
+            applied = {"exit_code": check.returncode, "stdout": check.stdout.decode(errors="replace"),
+                       "stderr": check.stderr.decode(errors="replace")}
+            if check.returncode:
+                # No git output here: its path names are the subject's, and the runner reads this text.
+                result = {"runtime_ready": False,
+                          "runtime_error": "delivered patch does not apply to the pinned base"}
+            else:
+                apply_delivery(source, root / "delivery")  # proven to apply: a failure here is the evaluator's
+                try:
+                    # The attempt root's top level is archived; the measurement directory's is not.
+                    (root / "final-start.log").write_bytes(fixture_action(state, "up"))
+                except (RuntimeError, subprocess.TimeoutExpired) as error:  # only this start is the delivery's
+                    result = {"runtime_ready": False, "runtime_error": str(error)}
+        # Also in the result, which joins the archived delivery status; never in runtime_error.
+        state["patch_application"] = result["patch_application"] = applied
+        write_json(measured / "state.json", state)
+    result["subject_paused"] = state["subject_paused"]
+    return result
 
 
 def execute(args):
@@ -344,26 +410,12 @@ def finish(args):
             shutil.copyfile(report, delivery / "implementation-report.md")
     if state["test"] in (1, 4) and result["source_changed"]:
         result["scope_deviation"] = "Registry source changed in a planning or verification task"
-    if state["test"] in (2, 4):
-        result["runtime_ready"] = False
-    if state["test"] in (2, 4) and "scope_deviation" not in result:
-        try:
-            # Visible in the delivery: what the subject left running.
-            result["removed_containers"] = remove_other_stacks(state).decode().split()
-            if state["test"] == 4:
-                # The truth is the fixed delivery's: no row the tester inserted.
-                fixture_action(state, "down")
-            # Rebuild before the controller captures the host-mapped application.
-            (root / "final-start.log").write_bytes(fixture_action(state, "up"))
-            result["runtime_ready"] = True
-        except (RuntimeError, subprocess.TimeoutExpired) as error:
-            result["runtime_error"] = str(error)
     write_json(root / "delivery-status.json", result)
     return result
 
 
-def cleanup(args):
-    state_path = args.root / "state.json"
+def remove_runner(root):
+    state_path = root / "state.json"
     if not state_path.exists():
         return {"cleanup": "nothing_created"}
     state = json.loads(state_path.read_text())
@@ -371,21 +423,37 @@ def cleanup(args):
         return {"cleanup": "nothing_created"}
     if state["test"] in (2, 4):
         try:
-            (args.root / "compose.log").write_bytes(fixture_action(state, "logs"))
-            (args.root / "runtime-images.json").write_bytes(container_exec(
+            (root / "compose.log").write_bytes(fixture_action(state, "logs"))
+            (root / "runtime-images.json").write_bytes(container_exec(
                 state, "docker compose -f /fixture/compose.yaml images --format json"))
         except (RuntimeError, subprocess.TimeoutExpired) as error:
-            (args.root / "runtime-log-error.txt").write_text(str(error))
+            (root / "runtime-log-error.txt").write_text(str(error))
     log = subprocess.run(["docker", "logs", state["container"]], capture_output=True, timeout=30)
-    (args.root / "container.log").write_bytes(log.stdout + log.stderr)
+    (root / "container.log").write_bytes(log.stdout + log.stderr)
     # Removing the outer daemon deletes all nested app containers and its anonymous data volume.
     result = subprocess.run(["docker", "rm", "-fv", state["container"]], capture_output=True, timeout=60)
     return {"cleanup_exit_code": result.returncode, "stderr": result.stderr.decode(errors="replace")}
 
 
+def cleanup(args):
+    try:
+        measured = remove_runner(args.root / "measurement")
+    except (RuntimeError, subprocess.TimeoutExpired) as error:  # still release the subject below
+        measured = {"cleanup_exit_code": 1, "stderr": str(error)}
+    state_path = args.root / "state.json"
+    if state_path.exists():
+        try:
+            # measure paused the subject runner; its fixture logs need it running.
+            run(["docker", "unpause", json.loads(state_path.read_text())["container"]], timeout=60)
+        except (RuntimeError, subprocess.TimeoutExpired):
+            pass  # never paused, or already gone
+    subject = remove_runner(args.root)
+    return measured if measured.get("cleanup_exit_code") else subject
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "exec", "finish", "cleanup"])
+    parser.add_argument("action", choices=["prepare", "exec", "finish", "measure", "cleanup"])
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--assets", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--test", type=int, choices=TASKS)
@@ -402,9 +470,12 @@ def main():
             parser.error("prepare requires --test, --web-port and --api-port")
         if args.test == 4 and args.fixture_revision is None:
             parser.error("Test 4 requires --fixture-revision")
+    if args.action == "measure" and (args.web_port is None or args.api_port is None):
+        parser.error("measure requires --web-port and --api-port")
     if args.action == "exec" and (not args.command or not 0 < args.timeout_ms <= 120000):
         parser.error("exec requires --command and 0 < --timeout-ms <= 120000")
-    action = {"prepare": prepare, "exec": execute, "finish": finish, "cleanup": cleanup}[args.action]
+    action = {"prepare": prepare, "exec": execute, "finish": finish, "measure": measure,
+              "cleanup": cleanup}[args.action]
     print(json.dumps(action(args)))
 
 

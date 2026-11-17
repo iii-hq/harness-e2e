@@ -121,7 +121,7 @@ class ValidationTests(unittest.TestCase):
         with patch.object(module, "feature_probe",
                           return_value=(self.feature(failed=failed, unavailable=unavailable), None)):
             return {item["id"]: item for item in module.verification_observations(
-                task, ASSETS, state, len(failed))}
+                task, ASSETS, state, len(failed), {"container": "measure"})}
 
     def fault_config(self, receipts=True, probe_id=None):
         probe_id = probe_id or str(uuid.uuid4())
@@ -138,7 +138,7 @@ class ValidationTests(unittest.TestCase):
     def run_feature_probe(self, feature, config=None, status=None, run_error=None,
                           copy_error=False, restart_error=False, clear_error=False):
         task = self.root / "test-2"
-        source = task / "workspace/output/validator/feature.json"
+        source = task / "measurement/workspace/output/validator/feature.json"
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(json.dumps(feature))
         commands = []
@@ -195,6 +195,39 @@ class ValidationTests(unittest.TestCase):
                 self.assertEqual(error, expected)
                 self.assertEqual([command.rsplit(" ", 1)[-1] for command in commands[-2:]],
                                  ["status", "clear"])
+
+    def test_the_probe_reads_only_the_measurement_runner(self):
+        # The subject runner could rewrite its own output/validator/ while the probe ran.
+        config, status = self.fault_config()
+        forged = self.feature()
+        true = self.feature(failed={"implementation.function_removal"})
+        task = self.root / "test-2"
+        for path, feature in (("workspace", forged), ("measurement/workspace", true)):
+            target = task / path / "output/validator/feature.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(feature))
+        states = []
+
+        def execute(state, command, timeout=120):
+            states.append(state)
+            if command.endswith(" configure"):
+                return {"exit_code": 0, "stdout": json.dumps(config), "stderr": ""}
+            if command.endswith(" status"):
+                return {"exit_code": 0, "stdout": json.dumps(status), "stderr": ""}
+            return {"exit_code": 0, "stdout": "", "stderr": ""}
+
+        measurement = {"container": "measure"}
+        completed = module.subprocess.CompletedProcess([], 0, b"probe output", b"")
+        with patch.object(module, "controller_command", side_effect=execute), \
+             patch.object(module.subprocess, "run", return_value=completed) as probe:
+            found, error = module.feature_probe(task, ASSETS, measurement)
+        self.assertIsNone(error)
+        self.assertTrue(states and all(state is measurement for state in states))
+        self.assertEqual(probe.call_args.args[0][:4], ["docker", "exec", "-i", "measure"])
+        failed = {key for key, item in module.checks_by_id(found).items() if item.get("value") == 0}
+        self.assertEqual(failed, {"implementation.function_removal"})
+        saved = module.checks_by_id(json.loads((task / "validation/feature.json").read_text()))
+        self.assertEqual(saved["implementation.function_removal"]["value"], 0)
 
     def test_feature_probe_requires_correlated_receipts(self):
         config, missing = self.fault_config(receipts=False)
@@ -542,7 +575,7 @@ class ValidationTests(unittest.TestCase):
                 with patch.object(module, "feature_probe",
                                   return_value=(self.feature(failed={check_id}), None)):
                     found = {item["id"]: item for item in module.verification_observations(
-                        task, ASSETS, state, 2)}
+                        task, ASSETS, state, 2, {"container": "measure"})}
                 recall = found["verification.recall"]
                 self.assertEqual((recall["status"], recall.get("reason")),
                                  ("unavailable", "fixed_delivery_truth_mismatch"))
@@ -555,7 +588,7 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(name):
                 with patch.object(module, "feature_probe", side_effect=answers) as probe:
                     found = {item["id"]: item for item in module.verification_observations(
-                        task, ASSETS, state, 2)}
+                        task, ASSETS, state, 2, {"container": "measure"})}
                 self.assertEqual(found["verification.recall"]["status"], "measured")
                 self.assertEqual(probe.call_count, len(answers))
 
@@ -592,6 +625,31 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "planted"):
             module.validate(task, ASSETS)
 
+    def test_validate_probes_the_measurement_state_and_scores_the_subject_s_source(self):
+        for test in (2, 3, 4):
+            task = self.root / f"validate-{test}"
+            (task / "measurement").mkdir(parents=True)
+            (task / "workspace/output").mkdir(parents=True)
+            (task / "source.patch").write_bytes(b"")
+            subject = {"test": test, "container": "subject",
+                       "initial_patch_sha256": module.hashlib.sha256(b"").hexdigest()}
+            (task / "state.json").write_text(json.dumps(subject))
+            (task / "measurement/state.json").write_text(json.dumps({"test": test, "container": "measure"}))
+            with self.subTest(test=test), \
+                 patch.object(module, "feature_probe", return_value=(self.feature(failed=PLANTED), None)) as probe, \
+                 patch.object(module, "environment_observations", return_value=[]) as environment:
+                found = {item["id"]: item for item in module.validate(task, ASSETS, len(PLANTED))["observations"]}
+                if test == 3:
+                    self.assertEqual(environment.call_args.args[2], subject)
+                    continue
+                self.assertEqual({call.args[2]["container"] for call in probe.call_args_list}, {"measure"})
+                if test == 4:
+                    # The subject's starting patch, which the measurement state does not carry.
+                    self.assertEqual(found["verification.source_preservation"]["status"], "measured")
+                (task / "measurement/state.json").unlink()
+                with self.assertRaises(FileNotFoundError):
+                    module.validate(task, ASSETS, len(PLANTED))
+
     def test_blocked_independent_probe_keeps_truth_unavailable(self):
         task, state = self.verification_task()
         blocked = {"implementation.function_removal"}
@@ -611,30 +669,31 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(found["implementation.same_version"]["value"], 1)
         self.assertEqual(found["implementation.function_removal"]["value"], 0)
 
-    def test_patch_checkout_failure_is_not_scored_as_a_bad_patch(self):
+    def test_patch_application_is_the_fresh_clone_s_replay(self):
         task = self.root / "test-2"
-        (task / "workspace" / "output").mkdir(parents=True)
-        (task / "validation").mkdir()
+        (task / "validation").mkdir(parents=True)
         (task / "source.patch").write_text("patch")
         (task / "validation" / "feature.json").write_text("{}")
-        state = {"container": "unused"}
-        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
-            with patch.object(module, "controller_command", return_value={"exit_code": 128, "stdout": "", "stderr": "dubious ownership"}) as execute:
-                found = {item["id"]: item for item in module.implementation_observations(task, ASSETS, state, 2)}
-            self.assertEqual(found["implementation.patch_application"], {
-                "id": "implementation.patch_application", "status": "unavailable",
-                "reason": "patch_replay_checkout_failed",
-            })
-            self.assertEqual(execute.call_count, 1)
-            self.assertIn("safe.directory /workspace/registry/.git", execute.call_args.args[1])
-
-            with patch.object(module, "controller_command", side_effect=[
-                {"exit_code": 0, "stdout": "", "stderr": ""},
-                {"exit_code": 1, "stdout": "", "stderr": "patch does not apply"},
-            ]):
-                found = {item["id"]: item for item in module.implementation_observations(task, ASSETS, state, 2)}
-            self.assertEqual(found["implementation.patch_application"]["status"], "measured")
-            self.assertEqual(found["implementation.patch_application"]["value"], 0)
+        metric = "implementation.patch_application"
+        for name, applied, expected in (
+            ("applies", {"exit_code": 0, "stdout": "", "stderr": ""}, 1),
+            ("does not apply", {"exit_code": 1, "stdout": "", "stderr": "patch does not apply"}, 0),
+            # No Docker on this path: the text is git's, about the subject's paths.
+            ("names a container", {"exit_code": 1, "stdout": "", "stderr": "error: no such container"}, 0),
+        ):
+            with self.subTest(name), \
+                 patch.object(module, "feature_probe", return_value=(self.feature(), None)), \
+                 patch.object(module, "controller_command", side_effect=AssertionError("no runner")):
+                found = {item["id"]: item for item in module.implementation_observations(
+                    task, ASSETS, {"container": "measure", "patch_application": applied}, 2)}
+                self.assertEqual((found[metric]["status"], found[metric]["value"]), ("measured", expected))
+                self.assertEqual({item for item in found[metric]["evidence"]},
+                                 {"test-2/source.patch", "test-2/validation/commands/patch-application.json"})
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)), \
+             patch.object(module, "controller_command", side_effect=AssertionError("no runner")):
+            found = {item["id"]: item for item in module.implementation_observations(
+                task, ASSETS, {"container": "measure"}, 2)}
+        self.assertEqual(found[metric], {"id": metric, "status": "unavailable", "reason": "patch_missing"})
 
     def test_environment_uses_restart_and_exact_project_cleanup(self):
         task = self.root / "test-3"

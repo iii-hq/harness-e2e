@@ -13,7 +13,7 @@ Only implementation receives the reference plan. Environment receives no prepare
 
 ## Prerequisites
 
-Use a Linux amd64 executor with Python 3, Git, Docker Engine, outbound dependency access, and a running Harness/iii stack. Implementation, environment, and verification use private privileged Docker-in-Docker containers. Each has its own daemon and data volume. Use a dedicated executor for these containers.
+Use a Linux amd64 executor with Python 3, Git, Docker Engine, outbound dependency access, and a running Harness/iii stack. Implementation, environment, and verification use private privileged Docker-in-Docker containers. Each has its own daemon and data volume. Implementation and verification use two per run: the subject's runner and, at capture, a measurement runner. Use a dedicated executor for these containers.
 
 Planning needs only the pinned source and requirements. The other three scenarios clone the newest default branch of `iii-hq/e2e-fixture`. There is no fixture commit option or branch fallback. Its `registry-version-comparison` directory supplies the prepared environment and public seed assets.
 
@@ -25,7 +25,7 @@ The `software-engineering` profile includes implementation and verification, eac
 
 Release Control's `harness-software-engineering` plan selects this profile through the existing executor.
 
-Verification does not read implementation's delivery. It fetches the pinned e2e-fixture commit, applies the delivery that commit carries to a fresh pinned Registry checkout, and starts the environment from the same commit; the final measurement starts it again from scratch. The runner holds only how many required checks that delivery fails, and passes that count to the validator at capture.
+Verification does not read implementation's delivery. It fetches the pinned e2e-fixture commit, applies the delivery that commit carries to a fresh pinned Registry checkout, and starts the environment from the same commit. The final measurement runs in a second runner the tester never had a shell in: the tester's runner is paused, and the delivery is applied again to a fresh pinned clone and started from the fixture as committed. The runner holds only how many required checks that delivery fails, and passes that count to the validator at capture.
 
 Which checks the delivery fails becomes public after a run, through the tester's transcript and the published scores in this repository's artifacts. So the delivery is rotated: a new delivery with a different set of failing checks, without naming them anywhere public.
 1. Build it on the recorded clean delivery. Each defect must fail only its own check under the current questions, and must not make a neighbouring question fail for a careful tester.
@@ -67,11 +67,11 @@ Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `
 
 The regular Harness report contains each scenario's criterion scores and captured evidence. Its JSON deliverable embeds evidence files (text or base64 for images), so archived results do not depend on the executor workspace. The existing capture size limit applies; omitted files are listed explicitly. [Validation details](scoring.md) explain how observations become scores.
 
-The attempt workspace retains source patches, preparation and command logs, `validation/observations.json`, and `workspace/output/` reports. Implementation and verification also retain `screenshots/captures.json` and the JPEG captures made through the `browser` worker; the Console shows them with the run's evidence. Each attempt uses a fresh private browser session. Missing or unexpected UI is recorded with its observed state and does not change objective scoring. Environment screenshots are produced by the subject.
+The attempt workspace retains source patches, preparation and command logs, `validation/observations.json`, and `workspace/output/` reports. Implementation and verification also retain `screenshots/captures.json` and the JPEG captures made through the `browser` worker; the Console shows them with the run's evidence. The captures and the probe's output come from the measurement runner, and its `measurement/workspace/output/` is retained too. Each attempt uses a fresh private browser session. Missing or unexpected UI is recorded with its observed state and does not change objective scoring. Environment screenshots are produced by the subject.
 
-The browser worker needs a usable Chromium executable on its host. Configure its `executable` setting when automatic discovery cannot find Chrome. The existing per-attempt loopback port mapping exposes the private application to this worker; browser sessions are stopped before application cleanup.
+The browser worker needs a usable Chromium executable on its host. Configure its `executable` setting when automatic discovery cannot find Chrome. The measurement runner's own loopback port mapping exposes the private application to this worker; browser sessions are stopped before application cleanup.
 
-Cleanup removes the attempt's private runtime and daemon volume, preserving files. After an interrupted controller, run the materialized lifecycle helper against that attempt:
+Cleanup removes the attempt's private runtimes, the measurement runner first and then the subject's, and their daemon volumes, preserving files. After an interrupted controller, run the materialized lifecycle helper against that attempt:
 
 ```bash
 python3 /absolute/attempt-assets/lifecycle.py cleanup --root /absolute/attempt

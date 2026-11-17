@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Trusted, evidence-only validator for one completed Registry task.
 
-All product commands are sent through the attempt's private DIND runner.  This
-script never invokes a product command directly on the controller host and it
-never infers a pass from a subject report alone.
+All product commands are sent through a private DIND runner: for
+implementation and verification, the measurement runner the subject never had
+a shell in; for environment, the subject's.  This script never invokes a
+product command directly on the controller host and it never infers a pass
+from a subject report alone.
 """
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import shlex
-import shutil
 import subprocess
 import uuid
 
@@ -218,7 +219,8 @@ def feature_probe(task_root, assets, state):
             if copied.get("exit_code") != 0:
                 error = "feature_probe_copy_failed"
             else:
-                source = task_root / "workspace" / "output" / "validator" / "feature.json"
+                # The measurement runner's workspace: the subject never had a shell there.
+                source = task_root / "measurement" / "workspace" / "output" / "validator" / "feature.json"
                 if not source.is_file():
                     error = "feature_probe_output_missing"
                 else:
@@ -372,28 +374,16 @@ def implementation_observations(task_root, assets, state, test):
     observations = []
     for metric in metric_ids:
         if metric == "implementation.patch_application":
-            patch = task_root / "source.patch"
-            if not patch.is_file():
+            # measure replayed the delivered patch on a fresh host-side clone of the
+            # pinned base. No Docker is on that path, so any failure is the patch's.
+            applied = state.get("patch_application")
+            if applied is None:
                 observations.append(unavailable(metric, "patch_missing"))
                 continue
-            # A fresh detached base is made inside the DIND workspace.  The
-            # temporary index/object paths avoid changing the subject checkout.
-            shutil.copyfile(patch, task_root / "workspace" / "output" / "validator.patch")
-            checkout = controller_command(state,
-                "set -eu; rm -rf -- /tmp/registry-patch-validation; "
-                "git config --global --add safe.directory /workspace/registry/.git; "
-                "git clone --quiet --no-checkout "
-                "/workspace/registry /tmp/registry-patch-validation; "
-                f"git -C /tmp/registry-patch-validation checkout --quiet --detach {REGISTRY_SHA}", 120)
-            evidence = [relative_evidence(run_root, patch),
-                        save_command(task_root, "patch-checkout", checkout)]
-            if checkout.get("exit_code") != 0:
-                observations.append(unavailable(metric, "patch_replay_checkout_failed"))
-                continue
-            result = controller_command(state,
-                "git -C /tmp/registry-patch-validation apply --check /workspace/output/validator.patch", 120)
-            evidence.append(save_command(task_root, "patch-application", result))
-            observations.append(command_binary(metric, result, [item for item in evidence if item]))
+            evidence = [relative_evidence(run_root, task_root / "source.patch"),
+                        save_command(task_root, "patch-application", applied)]
+            observations.append(binary(metric, applied.get("exit_code") == 0,
+                                       [item for item in evidence if item]))
             continue
         if error:
             observations.append(unavailable(metric, error))
@@ -411,13 +401,13 @@ def implementation_observations(task_root, assets, state, test):
     return observations
 
 
-def verification_observations(task_root, assets, state, planted_failures):
+def verification_observations(task_root, assets, state, planted_failures, measurement):
     run_root = task_root.parent
     # The delivery is fixed, so a truth that is incomplete or does not fail the
     # planted number of checks is the probe's: it runs once more, then the
     # round is the evaluator's.
     for _ in range(2):
-        feature, _error = feature_probe(task_root, assets, state)
+        feature, _error = feature_probe(task_root, assets, measurement)
         independent = checks_by_id(feature or {})
         known_failed = {case_id for case_id in PUBLIC_VERIFICATION_IDS
                         if independent.get(case_id, {}).get("status") == "measured"
@@ -721,12 +711,15 @@ def environment_observations(task_root, assets, state):
 def validate(task_root, assets, planted_failures=None):
     state = json.loads((task_root / "state.json").read_text())
     test = state["test"]
+    if test == 4 and planted_failures is None:
+        raise ValueError("Test 4 requires --planted-failures")
+    if test in (2, 4):
+        # The truth is read from the runner the subject never had a shell in.
+        measurement = json.loads((task_root / "measurement" / "state.json").read_text())
     if test == 2:
-        observations = implementation_observations(task_root, assets, state, test)
+        observations = implementation_observations(task_root, assets, measurement, test)
     elif test == 4:
-        if planted_failures is None:
-            raise ValueError("Test 4 requires --planted-failures")
-        observations = verification_observations(task_root, assets, state, planted_failures)
+        observations = verification_observations(task_root, assets, state, planted_failures, measurement)
     elif test == 3:
         observations = environment_observations(task_root, assets, state)
     else:

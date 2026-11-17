@@ -379,6 +379,40 @@ fn lifecycle(test: u8, run_id: &str, action: &str) -> Command {
         .arg(assets(test, run_id));
     command
 }
+/// Two distinct free loopback ports, released for the runner that publishes them.
+fn free_port_pair() -> Result<(String, String)> {
+    let web = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let api = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok((
+        web.local_addr()?.port().to_string(),
+        api.local_addr()?.port().to_string(),
+    ))
+}
+/// Starts the runner the truth is measured in, on ports of its own: one the
+/// subject never had a shell in, after the subject's runner is paused.
+async fn measure<const N: u8>(run_id: &str) -> Result<Value> {
+    let (web_port, api_port) = free_port_pair()?;
+    checked(lifecycle(N, run_id, "measure").args([
+        "--web-port",
+        &web_port,
+        "--api-port",
+        &api_port,
+    ]))
+    .await
+}
+/// Joins what the measurement runner observed to the delivery's status. A
+/// runner the evaluator could not prepare is an error, never a zero.
+fn measured_delivery(delivery: &mut Value, measured: Result<Value>) -> Result<()> {
+    let measured = measured.context("measurement runner could not be prepared")?;
+    let fields = measured
+        .as_object()
+        .context("measurement status is not an object")?;
+    delivery
+        .as_object_mut()
+        .context("delivery status is not an object")?
+        .extend(fields.clone());
+    Ok(())
+}
 async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
     let directory = assets(N, run_id);
     std::fs::create_dir_all(&directory)?;
@@ -394,10 +428,7 @@ async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
             PROMPTS[index],
         )?;
     }
-    let web = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let api = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let web_port = web.local_addr()?.port().to_string();
-    let api_port = api.local_addr()?.port().to_string();
+    let (web_port, api_port) = free_port_pair()?;
     let mut prepare = lifecycle(N, run_id, "prepare");
     prepare.args([
         "--test",
@@ -410,7 +441,6 @@ async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
     if N == 4 {
         prepare.args(["--fixture-revision", VERIFICATION_FIXTURE_SHA]);
     }
-    drop((web, api));
     checked(&mut prepare).await?;
     let task_root = root(N, run_id);
     let function = context.client().register_function(
@@ -480,6 +510,7 @@ fn evidence_files(directory: &std::path::Path) -> Result<Value> {
             "screenshots",
             "delivery",
             "workspace/output",
+            "measurement/workspace/output",
         ],
     )
 }
@@ -627,9 +658,15 @@ async fn capture_browser_session(
     Ok(captures)
 }
 
+/// Browser captures show the measurement runner, never the subject's.
+fn capture_target(directory: &std::path::Path) -> Result<String> {
+    let state: Value =
+        serde_json::from_slice(&std::fs::read(directory.join("measurement/state.json"))?)?;
+    Ok(format!("http://127.0.0.1:{}", state["web_port"]))
+}
 async fn capture_browser_evidence(context: &E2eContext, directory: &std::path::Path) -> Result<()> {
     let state: Value = serde_json::from_slice(&std::fs::read(directory.join("state.json"))?)?;
-    let app_url = format!("http://127.0.0.1:{}", state["web_port"]);
+    let app_url = capture_target(directory)?;
     let screenshots = directory.join("screenshots");
     std::fs::create_dir_all(&screenshots)?;
     let identity = json!({
@@ -718,8 +755,15 @@ async fn capture<const N: u8>(
             "incomplete"
         },
     ]);
-    let delivery = checked(&mut finish).await?;
-    if matches!(N, 2 | 4) && delivery["runtime_ready"] == true {
+    let mut delivery = checked(&mut finish).await?;
+    // Not `?`: a measurement the evaluator could not prepare leaves no
+    // observations, never the zero a missing `runtime_ready` would score.
+    let measured = if matches!(N, 2 | 4) && delivery.get("scope_deviation").is_none() {
+        measured_delivery(&mut delivery, measure::<N>(run_id).await)
+    } else {
+        Ok(())
+    };
+    if measured.is_ok() && matches!(N, 2 | 4) && delivery["runtime_ready"] == true {
         if let Err(error) = capture_browser_evidence(context, &directory).await {
             std::fs::write(
                 directory.join("browser-capture-error.txt"),
@@ -727,12 +771,10 @@ async fn capture<const N: u8>(
             )?;
         }
     }
-    let result = if N == 1 {
+    let result = if let Some(result) = unvalidated(N, measured, &delivery) {
+        result
+    } else if N == 1 {
         check_plan(run_id)
-    } else if matches!(N, 2 | 4) && delivery["runtime_ready"] != true {
-        undeliverable_observations(N, &delivery).ok_or_else(|| {
-            anyhow::anyhow!("Delivered source could not be started for validation: {delivery}")
-        })
     } else {
         for (name, data) in CAPTURE_ASSETS {
             std::fs::write(assets(N, run_id).join(name), data)?;
@@ -761,13 +803,28 @@ async fn capture<const N: u8>(
         invariants:vec![], provenance:vec![ProvenanceEvidence {kind:"filesystem_path".into(),source_id:directory.display().to_string(),relation:"validated_before_cleanup".into()}],
     }])
 }
+/// What capture records instead of running the validator: the error of a
+/// measurement the evaluator could not prepare, checked before a missing
+/// `runtime_ready` can score zero, or the verdict on a delivery that did not start.
+fn unvalidated(test: u8, measured: Result<()>, delivery: &Value) -> Option<Result<Value>> {
+    if let Err(error) = measured {
+        return Some(Err(error));
+    }
+    (matches!(test, 2 | 4) && delivery["runtime_ready"] != true).then(|| {
+        undeliverable_observations(test, delivery).ok_or_else(|| {
+            anyhow::anyhow!("Delivered source could not be started for validation: {delivery}")
+        })
+    })
+}
 /// A delivery the validator cannot start because of what the subject did —
 /// source that does not come up, or Registry source changed in a verification
-/// task — is a product failure and scores zero on every metric. The final
-/// start removes every stack the subject left in the run's private daemon
-/// first, so a port that is still taken is the delivery's own. Only a Docker
-/// daemon that stopped answering is the evaluating machine's: the metrics stay
-/// unavailable and the run is an evaluation-environment failure, not a zero.
+/// task — is a product failure and scores zero on every metric. The delivery
+/// starts in a fresh measurement runner with its own daemon and ports, so a
+/// port taken there is the delivery's own, and so is a patch that does not
+/// replay on a fresh clone of the pinned base. Only a Docker daemon that
+/// stopped answering is the evaluating machine's: the metrics stay unavailable
+/// and the run is an evaluation-environment failure, not a zero. A measurement
+/// runner the evaluator could not prepare never reaches here.
 /// registry_verification's delivery is pinned and proven to start, so there
 /// only a Registry source change is the subject's.
 fn undeliverable_observations(test: u8, delivery: &Value) -> Option<Value> {
@@ -810,7 +867,6 @@ const EVALUATOR_UNAVAILABLE: &[&str] = &[
     "validator_port_allocation_unavailable",
     "no_attributable_evidence",
     "patch_missing",
-    "patch_replay_checkout_failed",
     "delivery_or_final_patch_missing",
     "feature_probe_not_supplied",
     "feature_probe_timeout",
@@ -1017,9 +1073,9 @@ mod tests {
             "runtime_error": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"});
         assert!(undeliverable_observations(n, &daemon).is_none());
         // The 1.8.50 arm of the Harness A/B: the agent's own stack
-        // (`registry-test2`) held the port. The final start now removes it;
-        // a port still taken after that is the delivery's, as is an app
-        // that binds its own port twice.
+        // (`registry-test2`) held the port. The delivery now starts in a fresh
+        // measurement runner with its own daemon and ports, so a port taken
+        // there is the delivery's, as is an app that binds its own port twice.
         for error in [
             "docker failed (1): Error response from daemon: driver failed programming external connectivity on endpoint registry-task-api-1: Bind for 127.0.0.1:34859 failed: port is already allocated",
             "api-1  | Error: listen EADDRINUSE: address already in use 0.0.0.0:3001",
@@ -1027,6 +1083,46 @@ mod tests {
             let delivery = json!({"runtime_ready": false, "runtime_error": error});
             assert!(undeliverable_observations(n, &delivery).is_some(), "{error}");
         }
+    }
+    #[test]
+    fn browser_captures_show_the_measurement_runner() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("state.json"), r#"{"web_port":1111}"#).unwrap();
+        assert!(capture_target(temp.path()).is_err());
+        std::fs::create_dir_all(temp.path().join("measurement")).unwrap();
+        std::fs::write(
+            temp.path().join("measurement/state.json"),
+            r#"{"web_port":2222}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            capture_target(temp.path()).unwrap(),
+            "http://127.0.0.1:2222"
+        );
+    }
+    #[test]
+    fn a_measurement_the_evaluator_could_not_prepare_is_never_a_zero() {
+        let mut delivery = json!({"test": 2, "source_changed": true});
+        let measured = measured_delivery(
+            &mut delivery,
+            Err(anyhow::anyhow!(
+                "subject runner is still running and could not be paused"
+            )),
+        );
+        // The delivery has no `runtime_ready`, which alone would score zero.
+        let error = unvalidated(2, measured, &delivery).unwrap().unwrap_err();
+        assert!(format!("{error:#}").contains("measurement runner could not be prepared"));
+        measured_delivery(
+            &mut delivery,
+            Ok(json!({"runtime_ready": false, "runtime_error": "app exited with code 1"})),
+        )
+        .unwrap();
+        assert_eq!(delivery["runtime_error"], "app exited with code 1");
+        let validation = unvalidated(2, Ok(()), &delivery).unwrap().unwrap();
+        let awards = awards(2, &validation).unwrap();
+        assert!(awards.iter().all(|award| award.awarded == Some(0)));
+        assert!(unvalidated(2, Ok(()), &json!({"runtime_ready": true})).is_none());
+        assert!(unvalidated(1, Ok(()), &json!({})).is_none());
     }
     #[test]
     fn missing_unavailable_and_invalid_ratios_never_receive_points() {
@@ -1209,6 +1305,14 @@ mod tests {
         std::fs::write(task.join("delivery/implementation.patch"), "patch").unwrap();
         std::fs::write(task.join("delivery/manifest.json"), "{}").unwrap();
         std::fs::write(task.join("fixture-checkout/not-evidence"), "exclude").unwrap();
+        std::fs::create_dir_all(task.join("measurement/workspace/output/validator")).unwrap();
+        std::fs::create_dir_all(task.join("measurement/workspace/registry")).unwrap();
+        std::fs::write(
+            task.join("measurement/workspace/output/validator/feature.json"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::write(task.join("measurement/workspace/registry/x"), "exclude").unwrap();
         let captured = evidence_files(&task).unwrap();
         std::fs::remove_dir_all(task).unwrap();
         assert_eq!(
@@ -1227,7 +1331,12 @@ mod tests {
             captured["files"]["attempt/delivery/manifest.json"]["content"],
             "{}"
         );
-        assert_eq!(captured["files"].as_object().unwrap().len(), 4);
+        assert_eq!(
+            captured["files"]["attempt/measurement/workspace/output/validator/feature.json"]
+                ["content"],
+            "{}"
+        );
+        assert_eq!(captured["files"].as_object().unwrap().len(), 5);
     }
 
     #[test]

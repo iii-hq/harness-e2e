@@ -7,7 +7,7 @@ Each metric answers one question. Change its description or weight directly in `
 ## Who validates
 
 - **Planning:** deterministic checks over the submitted `plan.md` answer each planning question with a binary result and the cited plan lines. Contract questions look for the stated terms, location questions for pinned-source paths, sequence and test questions for document structure, and scope for excluded work that is not ruled out. The checks prove that the plan states the contract, not that the stated plan would work.
-- **Implementation:** independent HTTP, browser, database, and patch-replay checks validate the delivered feature. The subject's report does not award points.
+- **Implementation:** independent HTTP, browser, database, and patch-replay checks validate the delivered feature. The delivered patch is replayed on a fresh host-side clone of the pinned base, and the checks run on that replay, in a measurement runner the subject never had a shell in. The subject's report does not award points.
 - **Environment:** the validator invokes the submitted environment commands in its private Docker daemon and checks the resulting database, API, frontend, artifacts, isolation, restart, and cleanup behavior.
 - **Verification:** the tester checks a fixed delivery, pinned by commit, that fails a known number of required checks. Independent contract probes establish which ones; a probe that does not see that number runs once more, then sets the run aside. The validator compares the tester's structured report with those observations and checks source preservation.
 
@@ -30,7 +30,7 @@ Screenshots let users inspect actual results. Their appearance is not scored.
 A metric marked `"gate": true` in `metrics.json` names the scenario's primary flow. The scenario is completed only when every gate earns its full points; the score is still the sum of all metrics.
 
 - **Planning:** `planning.plan_delivered` — `plan.md` exists at `/workspace/output/plan.md`, is UTF-8 text, and has a Markdown heading followed by content. The other planning metrics measure plan content only, so this gate was added. Its 5 points come from merging `planning.required_order` and `planning.enum_order` into `planning.schema_sets`, which the requirements state as one rule; the set still has 20 metrics of 5 points.
-- **Implementation:** `implementation.same_version` and `implementation.function_removal`: the comparison works. A patch that replays cleanly on the pinned base is delivery format and only moves the score.
+- **Implementation:** `implementation.same_version` and `implementation.function_removal`: the comparison works. Because every check runs on the replay, a patch that does not replay on the fresh clone of the pinned base scores zero on every check, not only on `implementation.patch_application`. A subject that committed its work is measured normally: the patch carries the commits, and the fresh clone's HEAD stays at the pinned base.
 - **Environment:** `environment.build` and `environment.api_readiness`.
 - **Verification:** full recall, full precision, full execution coverage, full evidence coverage, and source preservation. Missing a known failure, claiming a false failure, omitting a required check or attributable artifact, or changing source leaves the task incomplete.
 
