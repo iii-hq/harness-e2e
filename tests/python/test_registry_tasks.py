@@ -2,7 +2,10 @@
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +32,9 @@ class RegistryDeliveryTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "Initial content")
         self.base = self.git("rev-parse", "HEAD").decode().strip()
+        # The controller's copy, as prepare takes it before the subject starts.
+        self.git_dir = self.root / "registry.git"
+        shutil.copytree(self.source / ".git", self.git_dir)
         self.delivery = self.root / "delivery"
         self.delivery.mkdir()
 
@@ -37,7 +43,7 @@ class RegistryDeliveryTests(unittest.TestCase):
 
     def bundle(self):
         artifact = self.delivery / "implementation.patch"
-        artifact.write_bytes(module.git_patch(self.source, self.base))
+        artifact.write_bytes(module.git_patch(self.source, self.git_dir, self.base))
         module.write_json(self.delivery / "manifest.json", {
             "base_registry_sha": self.base, "patch_sha256": module.digest(artifact),
         })
@@ -79,52 +85,189 @@ class RegistryDeliveryTests(unittest.TestCase):
         self.assertEqual((self.source / "unrelated.txt").read_text(), "preserve")
 
     def test_failed_empty_delivery_is_blocked_but_partial_work_is_labelled(self):
-        import argparse
-        run_root = self.root / "run"
-        (run_root / "workspace").mkdir(parents=True)
-        (run_root / "workspace/registry").symlink_to(self.source, target_is_directory=True)
-        module.write_json(run_root / "state.json", {
-            "test": 2, "initial_patch_sha256": module.hashlib.sha256(b"").hexdigest(),
-            "fixture_files": {}, "input_files": {},
-        })
-        args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="timed_out")
-        with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "fixture_action", side_effect=RuntimeError("not running")):
-            # git_patch's default base is bound at definition time; use the test repo base.
-            original_patch = module.git_patch
-            with patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
-                module.finish(args)
-                self.assertFalse((run_root / "delivery").exists())
-                (self.source / "existing.txt").write_text("partial implementation")
-                module.finish(args)
+        run_root = self.attempt("run", 2)
+        with patch.object(module, "fixture_action", side_effect=RuntimeError("not running")):
+            self.finish(run_root, "timed_out")
+            self.assertFalse((run_root / "delivery").exists())
+            (run_root / "workspace/registry/existing.txt").write_text("partial implementation")
+            self.finish(run_root, "timed_out")
         manifest = json.loads((run_root / "delivery/manifest.json").read_text())
         self.assertEqual(manifest["subject_status"], "timed_out")
         self.assertTrue((run_root / "delivery/implementation.patch").stat().st_size)
 
     def test_finish_leaves_the_subject_runner_as_the_subject_left_it(self):
         # The truth is measured in a second runner; finish only seals the subject's source.
-        import argparse
         (self.source / "existing.txt").write_text("delivered\n")
-        original_patch = module.git_patch
-        # Unchanged since prepare: no scope deviation, so test 4 reaches what used to restart the stack.
-        initial = module.hashlib.sha256(original_patch(self.source, self.base)).hexdigest()
         for test in (2, 4):
             with self.subTest(test=test):
-                run_root = self.root / f"run-{test}"
-                (run_root / "workspace").mkdir(parents=True)
-                (run_root / "workspace/registry").symlink_to(self.source, target_is_directory=True)
-                module.write_json(run_root / "state.json", {
-                    "test": test, "container": "registry-task-x", "fixture_files": {},
-                    "input_files": {}, "initial_patch_sha256": initial,
-                })
-                args = argparse.Namespace(root=run_root, assets=ASSETS, subject_status="finished")
+                # Unchanged since prepare: no scope deviation, so test 4 reaches what used to restart the stack.
+                run_root = self.attempt(f"run-{test}", test)
                 untouchable = AssertionError("finish must not touch the subject runner")
-                with patch.object(module, "REGISTRY_SHA", self.base), \
-                     patch.object(module, "container_exec", side_effect=untouchable), \
-                     patch.object(module, "fixture_action", side_effect=untouchable), \
-                     patch.object(module, "git_patch", side_effect=lambda source: original_patch(source, self.base)):
-                    result = module.finish(args)
+                with patch.object(module, "container_exec", side_effect=untouchable), \
+                     patch.object(module, "fixture_action", side_effect=untouchable):
+                    result = self.finish(run_root)
                 self.assertNotIn("runtime_ready", result)
                 self.assertEqual((run_root / "delivery/manifest.json").is_file(), test == 2)
+
+    def attempt(self, name, test):
+        """An attempt root as prepare leaves it: the subject's tree and the controller's git directory."""
+        root = self.root / name
+        source = root / "workspace/registry"
+        shutil.copytree(self.source, source, symlinks=True)
+        shutil.copytree(self.git_dir, root / "registry.git")
+        initial = module.git_patch(source, root / "registry.git", self.base)
+        module.write_json(root / "state.json", {
+            "test": test, "container": "registry-task-x", "fixture_files": {}, "input_files": {},
+            "initial_patch_sha256": hashlib.sha256(initial).hexdigest(),
+        })
+        return root
+
+    def plant(self, source):
+        """What a root subject can write: git config, hooks and attributes that each run a command."""
+        marker = self.root / "marker"
+        git_dir = source / ".git"
+
+        def command(name):
+            return f"echo {name} >> '{marker}'"
+
+        for path, name in ((git_dir / "planted-hooks/post-index-change", "hook"),
+                           (git_dir / "fsmonitor", "fsmonitor")):
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(f"#!/bin/sh\n{command(name)}\n")
+            path.chmod(0o755)
+        # git config -f quotes the values: a hand-written value is cut at ";".
+        for file, key, value in ((git_dir / "config", "filter.x.clean", command("clean") + "; cat"),
+                                 (git_dir / "config", "filter.p.process", command("process") + "; cat"),
+                                 (git_dir / "config", "diff.d.command", command("diff") + "; true"),
+                                 (git_dir / "config", "core.fsmonitor", git_dir / "fsmonitor"),
+                                 (git_dir / "config", "core.hooksPath", git_dir / "planted-hooks"),
+                                 (git_dir / "config", "include.path", git_dir / "included"),
+                                 (git_dir / "included", "filter.inc.clean", command("include") + "; cat")):
+            module.run(["git", "config", "-f", file, key, value])
+        (source / ".gitattributes").write_text(
+            "* filter=x diff=d\n*.bin filter=p\n*.md filter=inc\n*.txt filter=controller\n")
+        return marker
+
+    def finish(self, root, subject_status="finished"):
+        """finish against a fake subject runner: every host git call falls between its pause and unpause."""
+        import argparse
+        calls = []
+        real_run = module.run
+
+        def fake_run(argv, **kwargs):
+            argv = [str(x) for x in argv]
+            calls.append(argv)
+            if argv[0] == "docker":
+                return b"true true\n" if argv[1] == "inspect" else b""
+            return real_run(argv, **kwargs)
+
+        try:
+            with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "run", fake_run):
+                return module.finish(argparse.Namespace(root=root, assets=ASSETS, subject_status=subject_status))
+        finally:
+            docker = [i for i, argv in enumerate(calls) if argv[0] == "docker"]
+            self.assertEqual([(calls[i][1], calls[i][-1]) for i in docker],
+                             [("pause", "registry-task-x"), ("inspect", "registry-task-x"),
+                              ("unpause", "registry-task-x")])
+            self.assertTrue(all(docker[1] < i < docker[2] for i, argv in enumerate(calls) if argv[0] == "git"))
+
+    def test_git_the_subject_configured_runs_nothing_on_the_controller(self):
+        root = self.attempt("run", 2)
+        source = root / "workspace/registry"
+        marker = self.plant(source)
+        (source / "existing.txt").write_text("after\n")
+        (source / "deleted.txt").unlink()
+        (source / "new.bin").write_bytes(bytes(range(256)))
+        (source / "new.md").write_text("notes\n")
+        # A driver in the controller's global or system config (git-lfs, say) must not shape the patch either.
+        controller = self.root / "controller.gitconfig"
+        module.run(["git", "config", "-f", controller, "filter.controller.clean",
+                    f"echo controller >> '{marker}'; cat"])
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(controller), "GIT_CONFIG_SYSTEM": str(controller)}):
+            for args in (["add", "-A"], ["status"], ["diff", "--cached", "HEAD"]):
+                subprocess.run(["git", *args], cwd=source, capture_output=True, timeout=60)
+            ran = set(marker.read_text().split())
+            self.assertLessEqual({"clean", "process", "include", "hook", "fsmonitor", "diff", "controller"},
+                                 ran, "plain git in this tree runs what was planted")
+            marker.unlink()
+            self.finish(root)
+        self.assertFalse(marker.exists())
+        delivered = (root / "source.patch").read_bytes()
+        self.assertEqual((root / "delivery/implementation.patch").read_bytes(), delivered)
+        self.assertEqual((root / "source-status.txt").read_bytes(),
+                         b" D deleted.txt\n M existing.txt\n?? .gitattributes\n?? new.bin\n?? new.md\n")
+        replay = self.root / "replay"
+        module.run(["git", "clone", "-q", self.source, replay])
+        module.run(["git", "apply", root / "source.patch"], cwd=replay)
+        self.assertEqual((replay / "existing.txt").read_text(), "after\n")
+        self.assertEqual((replay / "new.bin").read_bytes(), bytes(range(256)))
+        self.assertEqual((replay / "new.md").read_text(), "notes\n")
+        self.assertEqual((replay / ".gitattributes").read_bytes(), (source / ".gitattributes").read_bytes())
+        self.assertFalse((replay / "deleted.txt").exists())
+
+    def test_a_repository_nested_in_the_subject_tree_runs_nothing_on_the_controller(self):
+        root = self.attempt("run", 2)
+        nested = root / "workspace/registry/nested"
+        nested.mkdir()
+        marker = self.root / "marker"
+
+        def git(*args):
+            return module.run(["git", *args], cwd=nested)
+
+        git("init", "-q")
+        (nested / "tracked.txt").write_text("committed\n")
+        git("add", ".")
+        git("-c", "user.email=t@example.invalid", "-c", "user.name=T", "commit", "-qm", "nested")
+        (nested / "tracked.txt").write_text("different\n")  # same size: status must hash it, through the filter
+        fsmonitor = nested / ".git/fsmonitor"
+        fsmonitor.write_text(f"#!/bin/sh\necho nested-fsmonitor >> '{marker}'\n")
+        fsmonitor.chmod(0o755)
+        git("config", "filter.n.clean", f"echo nested-clean >> '{marker}'; cat")
+        git("config", "core.fsmonitor", fsmonitor)
+        (nested / ".git/info/attributes").write_text("* filter=n\n")
+        subprocess.run(["git", "status"], cwd=nested, capture_output=True, timeout=60)
+        self.assertLessEqual({"nested-clean", "nested-fsmonitor"}, set(marker.read_text().split()))
+        marker.unlink()
+        self.finish(root)
+        self.assertFalse(marker.exists())
+        self.assertIn(b"?? nested/\n", (root / "source-status.txt").read_bytes())
+
+    def test_a_base_that_tracks_a_submodule_is_refused(self):
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{self.base},vendored")
+        self.git("commit", "-qm", "Track a submodule")
+        git_dir = self.root / "submodule.git"
+        shutil.copytree(self.source / ".git", git_dir)
+        with self.assertRaisesRegex(ValueError, "submodule"):
+            module.git_patch(self.source, git_dir, self.git("rev-parse", "HEAD").decode().strip())
+
+    def test_the_subject_s_git_directory_is_never_opened(self):
+        for swap in ("gitfile", "symlink", "removed"):
+            with self.subTest(swap=swap):
+                root = self.attempt(swap, 2)
+                source = root / "workspace/registry"
+                marker = self.plant(source)
+                (source / "existing.txt").write_text("after\n")
+                before = module.git_patch(source, root / "registry.git", self.base)
+                hostile = root / "hostile.git"
+                (source / ".git").rename(hostile)
+                if swap == "gitfile":
+                    (source / ".git").write_text(f"gitdir: {hostile}\n")
+                elif swap == "symlink":
+                    (source / ".git").symlink_to(hostile, target_is_directory=True)
+                self.assertEqual(module.git_patch(source, root / "registry.git", self.base), before)
+                self.assertFalse(marker.exists())
+
+    def test_a_registry_tree_replaced_by_a_symlink_is_not_read(self):
+        root = self.attempt("run", 2)
+        outside = self.root / "controller-files"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("controller secret\n")
+        shutil.rmtree(root / "workspace/registry")
+        (root / "workspace/registry").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "real directory"):
+            self.finish(root)
+        self.assertFalse((root / "source.patch").exists())
+        self.assertFalse((root / "delivery").exists())
 
     def test_preparation_fetches_fresh_fixture_and_limits_inputs(self):
         fixture = self.root / "fixture"
@@ -168,6 +311,7 @@ class RegistryDeliveryTests(unittest.TestCase):
             with patch.object(module, "REGISTRY_SHA", self.base), patch.object(module, "run", fake_run), patch.object(module, "git_patch", return_value=b""):
                 module.prepare(args)
             inputs = root / "workspace/inputs"
+            self.assertTrue((root / "registry.git/HEAD").is_file())
             self.assertEqual((inputs / "reference-plan.md").exists(), test == 2)
             self.assertFalse((inputs / "Dockerfile").exists())
             self.assertEqual(["git", "clone", "--depth", "1", module.FIXTURE_URL, str(root / "fixture-checkout")] in calls, test in (2, 3))

@@ -2,6 +2,7 @@
 """Fixture lifecycle for the four Registry scenarios."""
 import argparse
 import base64
+import contextlib
 import hashlib
 import inspect
 import json
@@ -126,18 +127,39 @@ MAX_EVIDENCE_TOTAL_BYTES={MAX_EVIDENCE_TOTAL_BYTES}
 print(json.dumps(artifact_manifest(Path(sys.argv[1]), max_files={max_files}, max_entries={max_entries}, max_file_bytes={max_file_bytes}, max_total_bytes={max_total_bytes}, include_data=True)))"""
 
 
-def git_patch(source, base=REGISTRY_SHA):
-    # A temporary index includes new and committed files without altering the subject's index.
+@contextlib.contextmanager
+def controller_git(source, git_dir, base):
+    """Yield git for the subject's tree: the controller's git directory, a throwaway index at base.
+
+    The subject owns everything under source, .git included. Git never opens that .git here, so its
+    config, hooks, index and objects are not read, and a filter or diff driver its .gitattributes
+    names runs no command (Git's built-in attributes still shape the output)."""
+    if not stat.S_ISDIR(os.lstat(source).st_mode):
+        raise ValueError("Registry source must be a real directory")
+    git_dir = Path(git_dir).resolve()
     with tempfile.TemporaryDirectory() as temp:
         objects = Path(temp) / "objects"
         objects.mkdir()
-        env = {**os.environ, "GIT_INDEX_FILE": str(Path(temp) / "index"),
-               "GIT_OBJECT_DIRECTORY": str(objects),
-               "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(source.resolve() / ".git/objects")}
-        run(["git", "read-tree", "HEAD"], cwd=source, env=env)
-        run(["git", "add", "-A", "--", "."], cwd=source, env=env)
-        return run(["git", "diff", "--cached", "--binary", "--full-index", base, "--"],
-                   cwd=source, env=env)
+        env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_INDEX_FILE": str(Path(temp) / "index"), "GIT_OBJECT_DIRECTORY": str(objects),
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_dir / "objects")}
+
+        def git(*args):
+            return run(["git", f"--git-dir={git_dir}", f"--work-tree={source}",
+                        "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", *args], env=env)
+
+        git("read-tree", base)
+        # shortcut: a base that tracks a submodule is refused, because a gitlink in the index makes add and status run a child git inside the subject's nested repository, upgrade when the pinned base gains one
+        if any(line.startswith(b"160000 ") for line in git("ls-files", "--stage").splitlines()):
+            raise ValueError("Registry base tracks a submodule")
+        yield git
+
+
+def git_patch(source, git_dir, base):
+    # The work tree against base, new files included. The subject's index and commits are not read.
+    with controller_git(source, git_dir, base) as git:
+        git("add", "-A")
+        return git("diff", "--cached", "--binary", "--full-index", base, "--")
 
 
 def apply_delivery(source, delivery):
@@ -194,6 +216,8 @@ def prepare(args):
     write_json(root / "state.json", state)
     run(["git", "clone", "--no-checkout", REGISTRY_URL, workspace / "registry"])
     run(["git", "checkout", "--detach", REGISTRY_SHA], cwd=workspace / "registry")
+    # The controller's git directory for finish, copied before the subject starts; never a local clone, which hard-links objects.
+    shutil.copytree(workspace / "registry" / ".git", root / "registry.git")
     if args.test == 4:
         state["implementation"] = apply_delivery(
             workspace / "registry", root / "fixture-checkout" / "registry-verification-delivery")
@@ -205,7 +229,8 @@ def prepare(args):
         shutil.copyfile(fixture / "seed.sql", inputs / "seed.sql")
         shutil.copytree(fixture / "artifacts", inputs / "artifacts")
     state["input_files"] = fixture_hashes(inputs)
-    state["initial_patch_sha256"] = hashlib.sha256(git_patch(workspace / "registry")).hexdigest()
+    state["initial_patch_sha256"] = hashlib.sha256(
+        git_patch(workspace / "registry", root / "registry.git", REGISTRY_SHA)).hexdigest()
     write_json(root / "state.json", state)
     environment = {
         "test": args.test, "registry_sha": REGISTRY_SHA,
@@ -317,6 +342,7 @@ def measure(args):
         raise RuntimeError("pinned delivery changed since prepare")
     start_runner(measured, state, workspace, fixture)  # a failure up to here is the evaluator's
     result = {"runtime_ready": True}
+    # Host git below runs in the fresh clone before anything the subject delivered has run in this runner.
     if test == 2:
         patch = root / "delivery" / "implementation.patch"
         applied = {"exit_code": 1, "stdout": "", "stderr": "no patch was delivered"}
@@ -393,10 +419,19 @@ def finish(args):
     root = args.root
     state = json.loads((root / "state.json").read_text())
     source = root / "workspace" / "registry"
-    patch = git_patch(source)
-    result = {"test": state["test"], "source_changed": hashlib.sha256(patch).hexdigest() != state["initial_patch_sha256"]}
-    (root / "source.patch").write_bytes(patch)
-    (root / "source-status.txt").write_bytes(run(["git", "status", "--short"], cwd=source))
+    git_dir = root / "registry.git"
+    # A process the subject left running could swap a directory in the tree for a symlink between git's lstat and open.
+    paused = pause(state["container"])
+    try:
+        patch = git_patch(source, git_dir, REGISTRY_SHA)
+        result = {"test": state["test"], "source_changed": hashlib.sha256(patch).hexdigest() != state["initial_patch_sha256"]}
+        (root / "source.patch").write_bytes(patch)
+        # A fresh index: one that went through add -A can hold a gitlink for a nested repository.
+        with controller_git(source, git_dir, REGISTRY_SHA) as git:
+            (root / "source-status.txt").write_bytes(git("status", "--short"))
+    finally:
+        if paused:
+            run(["docker", "unpause", state["container"]], timeout=60)  # validate.py execs into it
     if state["test"] == 2 and (patch or args.subject_status == "finished"):
         delivery = root / "delivery"
         delivery.mkdir(exist_ok=True)
