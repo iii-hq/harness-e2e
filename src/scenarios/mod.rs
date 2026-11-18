@@ -41,6 +41,7 @@ pub mod git_regression_forensics;
 pub mod harness_contract_probe;
 pub mod incident_response;
 pub mod insert_record;
+pub mod judge_quality;
 pub mod kanban;
 pub mod linkly;
 pub mod long_transcript_tail;
@@ -716,6 +717,10 @@ scenarios! {
     MemoryPreciseEnvVar = "memory_precise_env_var" => memory::Memory(39),
     MemoryPreciseCommand = "memory_precise_command" => memory::Memory(40),
     MemoryPreciseLongMessage = "memory_precise_long_message" => memory::Memory(41),
+    JudgeQualityJevbenchEasy = "judge_quality_jevbench_easy" => judge_quality::JudgeQuality(0),
+    JudgeQualityJevbenchOriginal = "judge_quality_jevbench_original" => judge_quality::JudgeQuality(1),
+    JudgeQualityJevbenchHard = "judge_quality_jevbench_hard" => judge_quality::JudgeQuality(2),
+    JudgeQualityTypedDecisions = "judge_quality_typed_decisions" => judge_quality::JudgeQuality(3),
     SpawnDepthCap = "spawn_depth_cap" => spawn_depth_cap::SpawnDepthCap,
     RepeatedFailureBreaker = "repeated_failure_breaker" => call_guards::RepeatedFailureBreaker,
     TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
@@ -1104,7 +1109,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 121);
+        assert_eq!(ids.len(), 125);
     }
 
     #[test]

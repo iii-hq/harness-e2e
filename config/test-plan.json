@@ -220,7 +220,11 @@
     "registry_environment",
     "registry_verification",
     "linkly_tutorial",
-    "onboarding_tour"
+    "onboarding_tour",
+    "judge_quality_jevbench_easy",
+    "judge_quality_jevbench_original",
+    "judge_quality_jevbench_hard",
+    "judge_quality_typed_decisions"
   ],
   "requirements": {
     "shell_coder_sandbox": [
@@ -295,6 +299,18 @@
     ],
     "router_fault_contract": [
       "A disposable stack: it registers two e2e-*-<run> providers with the llm-router that no call can remove"
+    ],
+    "judge_quality_jevbench_easy": [
+      "One local judge provider worker (judge-laya, judge-semif, judge-decider or judge-clef) with its model in the Hugging Face cache"
+    ],
+    "judge_quality_jevbench_original": [
+      "One local judge provider worker (judge-laya, judge-semif, judge-decider or judge-clef) with its model in the Hugging Face cache"
+    ],
+    "judge_quality_jevbench_hard": [
+      "One local judge provider worker (judge-laya, judge-semif, judge-decider or judge-clef) with its model in the Hugging Face cache"
+    ],
+    "judge_quality_typed_decisions": [
+      "One local judge provider worker (judge-laya, judge-semif, judge-decider or judge-clef) with its model in the Hugging Face cache"
     ]
   },
   "suites": [
