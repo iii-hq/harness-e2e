@@ -18,15 +18,17 @@ Each directory carries its `LICENSE` and a `NOTICE` with the source and what was
 
 ## Reading the numbers
 
-- typed-decisions gold is the argmax of a teacher's distribution. The teacher confirms its own label on 1,188 of the 2,000 decisions (`agree`), and always answering the commonest label per workflow and question scores 0.5225. Read `accuracy_agreed` and `majority_accuracy` next to `accuracy`, and never pool this slice with JevBench. laya's typed-decisions checkpoint was trained on this dataset's train split.
-- decider's training generators were written from the family names JevBench publishes, so JevBench favours decider. Its easy tier is near the ceiling for every published system; the hard tier separates them.
+- typed-decisions gold is the argmax of a teacher's distribution. The teacher confirms its own label on 1,188 of the 2,000 decisions (`agree`), and always answering the commonest label per workflow and question scores 0.5225. Its `accuracy` is agreement with these upstream labels, some of which contradict each other or the question's rubric, not correctness; the rows stay as published. Read `accuracy_agreed` and `majority_accuracy` next to `accuracy`, and never pool this slice with JevBench. laya's typed-decisions checkpoint was trained on this dataset's train split.
+- decider's training generators were written from the family names JevBench publishes, so JevBench favours decider. Most published systems score 100% on its easy tier at this revision, though not all (Mixedbread's reranker scores 44.4%); the hard tier separates the rest.
 
 ## Re-vendoring
 
-A changed file is a new definition: put its sha256 in its `Slice` (`sha256` and `accuracy_description`) and the revision next to it. For typed-decisions, download the parquet at the new revision (any generic User-Agent, no token), update `PARQUET_SHA256` in `convert.py` and run:
+A changed file is a new definition: put its sha256 in its `Slice` (`sha256` and `accuracy_description`) and the revision next to it. For typed-decisions, download the parquet at the new revision (any generic User-Agent, no token), update `PARQUET_SHA256` in `convert.py` and run, from `typed-decisions/`:
 
 ```bash
-uv run --with pyarrow python3 -I convert.py <test-00000-of-00001.parquet> test.jsonl
+uv run --with pyarrow python3 -I convert.py test-00000-of-00001.parquet test.jsonl
 ```
 
 It checks the row and question counts, that every gold label answers its question and that every JSON object has sorted keys, and prints the output's sha256.
+
+Then run `cargo test --lib judge_quality` and update every pinned figure that moved: the per-slice case and question-kind counts (`the_slices_hold_the_counted_cases_and_decisions`), the 1,188 agreements and the 0.5225 majority baseline (`cases.rs`, `score.rs`), the 36 original groups, and the same figures in this file, the top-level README and the notes in `scripts/judge_quality.py`.

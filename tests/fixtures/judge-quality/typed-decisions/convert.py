@@ -1,7 +1,7 @@
 """Convert the typed-decisions test parquet into the test.jsonl harness-e2e embeds.
 
 Run once, by hand, never in CI:
-    uv run --with pyarrow python3 -I convert.py <test-00000-of-00001.parquet> test.jsonl
+    uv run --with pyarrow python3 -I convert.py test-00000-of-00001.parquet test.jsonl
 
 One compact JSON line per case: {id, workflow, state (object), questions,
 gold: {qid: label}, agree: {qid: bool}}. A choice gold is its label, a noul
@@ -9,9 +9,10 @@ gold a bool and a score gold an integer level. `agree` is the dataset's
 label_agreement.argmax_agree. Teacher probabilities and factors are dropped.
 """
 
+import argparse
 import hashlib
+import io
 import json
-import sys
 
 import pyarrow.parquet as pq
 
@@ -45,7 +46,7 @@ def gold_of(question, label):
 def main(source, target):
     data = open(source, "rb").read()
     assert hashlib.sha256(data).hexdigest() == PARQUET_SHA256, "unexpected parquet"
-    rows = pq.read_table(source).to_pylist()
+    rows = pq.read_table(io.BytesIO(data)).to_pylist()
     assert len(rows) == 400, len(rows)
     lines, decisions = [], 0
     for row in rows:
@@ -70,4 +71,8 @@ def main(source, target):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("source", help="the test parquet")
+    parser.add_argument("target", help="the test.jsonl to write")
+    args = parser.parse_args()
+    main(args.source, args.target)
