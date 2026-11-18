@@ -1644,7 +1644,18 @@ Partial GitHub reruns reuse the contract artifact produced by `prepare`, kept
 for 90 days. The finalizer matches group artifacts to the completed jobs'
 execution times and keeps successful groups from earlier attempts. A rerun
 that produces no artifact stays missing evidence; an older artifact does not
-replace it.
+replace it. Rerunning only the finalizer job uses each group's bundle from the
+attempt it last ran in.
+
+The finalizer (`scripts/group_artifacts.py`) lists the run's jobs and
+artifacts, then fetches the group bundles one at a time. It waits out GitHub's
+rate limits and transient failures: a rate-limited 403, a 408, a 429, a 5xx, a
+dropped connection, or a body that does not match its digest. It waits what
+`retry-after` or `x-ratelimit-reset` names, and a full minute for a rate limit
+that names no wait. A listing or bundle it cannot fetch fails the finalizer:
+it aggregates nothing and uploads a root bundle that holds only an
+`execution-summary.json` saying what it could not fetch and why, and a
+`failure.json` the console shows that cause from.
 
 `scripts/report_execution.py` posts observations to Release Control's run
 ledger over OIDC: `materialized` before anything runs, one `shard` per

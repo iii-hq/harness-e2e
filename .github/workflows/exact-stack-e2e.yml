@@ -478,89 +478,21 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/download_artifact.sh '${{ needs.prepare.outputs.contract_artifact_id }}' target/harness-e2e-contract '${{ needs.prepare.outputs.contract_artifact_digest }}'
 
-      - name: Select group observation artifacts
+      # One bundle at a time, waiting out GitHub's rate limits. A bundle that
+      # cannot be fetched fails the job here: nothing is aggregated without it,
+      # and the summary uploaded below says why.
+      - name: Fetch the group observation artifacts
         id: group_artifacts
-        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           CONTRACT_ATTEMPT: ${{ needs.prepare.outputs.contract_attempt }}
-        run: |
-          set -euo pipefail
-          rm -rf target/downloaded-groups
-          mkdir -p target
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-            >target/group-jobs.json
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            >target/group-artifacts.json
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          from collections import Counter
-          from datetime import datetime
-          from pathlib import Path
-
-          jobs = [job for page in json.loads(Path("target/group-jobs.json").read_text()) for job in page["jobs"]]
-          artifacts = [artifact for page in json.loads(Path("target/group-artifacts.json").read_text()) for artifact in page["artifacts"]]
-          first_attempt = int(os.environ["CONTRACT_ATTEMPT"])
-          current_attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
-          names = Counter(job["name"] for job in jobs)
-          selected = {}
-          for job in jobs:
-              if job["status"] != "completed" or names[job["name"]] != 1 or " · " not in job["name"]:
-                  continue
-              campaign, group = job["name"].split(" · ", 1)
-              prefix = f"e2e-observation-{os.environ['EXECUTION_KEY']}-{campaign}-{group}-gh-"
-              try:
-                  started = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
-                  completed = datetime.fromisoformat(job["completed_at"].replace("Z", "+00:00"))
-              except (AttributeError, TypeError, ValueError):
-                  continue
-              if started.tzinfo is None or completed.tzinfo is None or started > completed:
-                  continue
-              matches = []
-              for artifact in artifacts:
-                  match = re.fullmatch(re.escape(prefix) + r"([1-9][0-9]*)", artifact["name"])
-                  if not match or artifact["expired"] or not first_attempt <= int(match[1]) <= current_attempt:
-                      continue
-                  try:
-                      created = datetime.fromisoformat(artifact["created_at"].replace("Z", "+00:00"))
-                  except (AttributeError, TypeError, ValueError):
-                      continue
-                  # Partial reruns copy successful jobs with new IDs/attempts
-                  # but retain their execution times. Never substitute older
-                  # evidence for a rerun that failed to upload an artifact.
-                  if created.tzinfo is not None and started <= created <= completed:
-                      matches.append({"id": artifact["id"], "name": artifact["name"], "run_attempt": int(match[1])})
-              if len(matches) == 1:
-                  selected[job["name"]] = matches[0]
-          Path("target/selected-group-artifacts.json").write_text(json.dumps(selected, indent=2) + "\n")
-          download_path = "target/downloaded-groups"
-          if len(selected) == 1:
-              # download-artifact flattens a singleton, even with merge-multiple:false.
-              download_path += "/" + next(iter(selected.values()))["name"]
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write("artifact_ids=" + ",".join(str(item["id"]) for item in selected.values()) + "\n")
-              output.write(f"download_path={download_path}\n")
-          PY
-
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        id: group_download
-        if: steps.group_artifacts.outcome == 'success' && steps.group_artifacts.outputs.artifact_ids != ''
-        continue-on-error: true
-        with:
-          artifact-ids: ${{ steps.group_artifacts.outputs.artifact_ids }}
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-          path: ${{ steps.group_artifacts.outputs.download_path }}
-          merge-multiple: false
+        run: python3 scripts/group_artifacts.py
 
       # In the executor image: each campaign's groups laid out from the
-      # bundles selected above (a group without one reads as never observed),
-      # then aggregated by the runner the stack ran, as the suite was
-      # materialized by it: one release scores what it executed.
+      # bundles fetched above (a group no bundle was selected for reads as
+      # never observed; a selected bundle that is not there fails the
+      # restore), then aggregated by the runner the stack ran, as the suite
+      # was materialized by it: one release scores what it executed.
       - name: Aggregate with exact Harness scoring implementation
         id: aggregate
         continue-on-error: true
@@ -605,7 +537,14 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          for root in target/harness-e2e-campaign/*/; do
+          shopt -s nullglob
+          roots=(target/harness-e2e-campaign/*/)
+          # Nothing aggregated: the summary that says why is all there is to
+          # upload, with the failure.json the console reads that cause from.
+          [[ ${#roots[@]} -gt 0 || -f target/harness-e2e-campaign/execution-summary.json ]]
+          (( ${#roots[@]} )) || jq '{phase: (.phase // "finalize"), outcome: "infra_failed", error: (.unavailable // "nothing was aggregated")}' \
+            target/harness-e2e-campaign/execution-summary.json >target/harness-e2e-campaign/failure.json
+          for root in "${roots[@]}"; do
             python3 scripts/exact_stack_campaign.py package \
               --root "$root" \
               --contract "$root/stack-lock.json" \
