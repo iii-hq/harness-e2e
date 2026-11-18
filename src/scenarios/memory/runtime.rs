@@ -37,6 +37,11 @@ const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
 const CONSOLIDATE: &str = "memory-consolidate::run";
 const EMBEDDER: &str = "all-MiniLM-L6-v2";
 const POLL: Duration = Duration::from_secs(2);
+/// How long a stack that declares memory-consolidate may take to register
+/// its pass: the runner's grace for a control plane still registering.
+const CONSOLIDATE_WAIT: Duration = Duration::from_secs(90);
+/// One pass on a planted bank: a few judge calls and the assist call.
+const CONSOLIDATE_CALL: Duration = Duration::from_secs(300);
 const EMBEDDER_WAIT: Duration = Duration::from_secs(300);
 const VECTOR_WAIT: Duration = Duration::from_secs(180);
 /// How long lexical-only must hold before it is believed.
@@ -247,7 +252,55 @@ fn consolidated(reply: &Value) -> Result<Consolidation> {
         // Absent from a worker that predates the count, and when it is 0.
         llm_calls: report["llm_calls"].as_u64().unwrap_or_default(),
         notes: report["notes"].as_array().map_or(0, Vec::len) as u64,
+        // Absent when the semantic tier applied nothing.
+        semantic: report["semantic"].as_array().map_or(0, Vec::len) as u64,
     })
+}
+
+/// Whether a `compose::status` reply lists a memory-consolidate container.
+fn declares_consolidate(status: &Value) -> bool {
+    status["containers"].as_array().is_some_and(|containers| {
+        containers
+            .iter()
+            .any(|container| container["container"] == "memory-consolidate")
+    })
+}
+
+/// Whether the stack is the consolidated arm. A stack whose compose declares
+/// memory-consolidate waits for `memory-consolidate::run` to register, so a
+/// pass that registers late is not taken for an arm without one.
+// shortcut: a worker compose already reports failed still waits 90 s, read
+// its state here if that ever costs a run.
+async fn consolidates(context: &E2eContext) -> Result<bool> {
+    if context.function_exists(CONSOLIDATE).await? {
+        return Ok(true);
+    }
+    // A stack without compose declares nothing: the pass is there or not.
+    if !context.function_exists("compose::status").await? {
+        return Ok(false);
+    }
+    // A status the runner cannot read declares nothing, as before this wait:
+    // an arm that then never consolidates fails the gain report instead.
+    let declared = context
+        .trigger_value("compose::status", json!({}))
+        .await
+        .is_ok_and(|status| declares_consolidate(&status));
+    if !declared {
+        return Ok(false);
+    }
+    let deadline = Instant::now() + CONSOLIDATE_WAIT;
+    loop {
+        sleep(POLL).await;
+        if context.function_exists(CONSOLIDATE).await? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "the stack declares memory-consolidate, but {CONSOLIDATE} did not register in {} s",
+                CONSOLIDATE_WAIT.as_secs()
+            );
+        }
+    }
 }
 
 /// Keeps the pass `reply` reports on the registered run, for its snapshot.
@@ -361,6 +414,7 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         .context("memory::bank::create")?;
 
     if !case.baseline {
+        let consolidating = consolidates(context).await?;
         // Rules first: memory freezes the system-prompt section at a session's first step.
         for rule in case.rules {
             context
@@ -404,9 +458,9 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         if !case.teacher.is_empty() {
             teach(context, case, run_id, retrieval).await?;
         }
-        if context.function_exists(CONSOLIDATE).await? {
+        if consolidating {
             let reply = context
-                .trigger_value(CONSOLIDATE, json!({"bank": bank}))
+                .trigger_value_with_timeout(CONSOLIDATE, json!({"bank": bank}), CONSOLIDATE_CALL)
                 .await
                 .context(CONSOLIDATE)?;
             keep_consolidation(run_id, &reply)?;
@@ -1288,7 +1342,7 @@ mod tests {
     fn the_doctor_picks_minilm_lexical_or_refuses_another_embedder() {
         const MINILM: &str =
             "router::embed answered (model sentence-transformers/all-MiniLM-L6-v2@c9745ed1d9f2)";
-        // Memory on a Linux stack, whose iii-directory has no MiniLM.
+        // Memory on a stack where router::embed finds no embedder.
         const LEXICAL: &str =
             "router::embed returned no vector; recall runs lexical-only (BM25 + entities)";
         let doctor = |router: bool, ok: bool, detail: &str| {
@@ -1419,14 +1473,16 @@ mod tests {
             "dry_run": false, "superseded": 2, "checkpointed": true,
             "banks": [{"bank": "e2e-a", "scanned": 22, "groups": [], "superseded": 2,
                        "reinforced": 2, "llm_calls": 3,
-                       "notes": ["semantic tier skipped: no semantic recall"]}],
+                       "notes": ["semantic tier skipped: no semantic recall"],
+                       "semantic": [{"action": "supersede", "reason": "the bucket changed"}]}],
         });
         assert_eq!(
             consolidated(&clean).unwrap(),
             Consolidation {
                 superseded: 2,
                 llm_calls: 3,
-                notes: 1
+                notes: 1,
+                semantic: 1
             }
         );
         // A worker that sends no model call count, and a pass with nothing to do.
@@ -1439,7 +1495,8 @@ mod tests {
             Consolidation {
                 superseded: 0,
                 llm_calls: 0,
-                notes: 0
+                notes: 0,
+                semantic: 0
             }
         );
         let failed = json!({
@@ -1454,6 +1511,27 @@ mod tests {
             "{error}"
         );
         assert!(consolidated(&json!({"banks": []})).is_err());
+    }
+
+    /// Only a stack whose compose lists memory-consolidate waits for its pass.
+    #[test]
+    fn a_compose_status_declares_consolidate_by_its_container() {
+        let status = |containers: Value| json!({"daemon": "compose", "containers": containers});
+        assert!(declares_consolidate(&status(json!([
+            {"container": "memory", "state": "ready"},
+            {"container": "memory-consolidate", "state": "starting"},
+        ]))));
+        assert!(!declares_consolidate(&status(json!([
+            {"container": "memory", "state": "ready"},
+        ]))));
+        // A reply this reader does not know declares nothing.
+        assert!(!declares_consolidate(
+            &json!({"containers": "memory-consolidate"})
+        ));
+        assert!(!declares_consolidate(&status(
+            json!([{"name": "memory-consolidate"}])
+        )));
+        assert!(!declares_consolidate(&json!(null)));
     }
 
     /// The pass setup keeps is the one the attempt's snapshot reports.
@@ -1473,7 +1551,8 @@ mod tests {
             Some(Consolidation {
                 superseded: 1,
                 llm_calls: 2,
-                notes: 1
+                notes: 1,
+                semantic: 0
             })
         );
         lock_unpoisoned(runs()).remove(run_id);

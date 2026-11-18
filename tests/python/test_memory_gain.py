@@ -16,6 +16,7 @@ memory_gain = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(memory_gain)
 
 MODEL = "deepseek/deepseek-flash"
+STALE, REWORDED = "memory_consolidation_stale_fact", "memory_consolidation_reworded_fact"
 
 
 def scenario(scenario_id, klass, scores, prefix, measurements=(), answers=None):
@@ -33,6 +34,13 @@ def scenario(scenario_id, klass, scores, prefix, measurements=(), answers=None):
     return entry
 
 
+def measure(entry, index, key, value):
+    """Run `index` of a scenario entry with measurement `key` set to `value`."""
+    run = entry["runs"][index]
+    run["scenario_measurements"] = [m for m in run["scenario_measurements"] if m["id"] != key] + [
+        {"id": key, "value": value, "unit": "count", "origin": "observed"}]
+
+
 def write_arm(directory, scenarios):
     """An arm as a run's root bundle lays it out: a group's results and the
     root's, which repeats them."""
@@ -42,10 +50,11 @@ def write_arm(directory, scenarios):
 
 
 def arms(off_tokens=0, consolidated=True):
-    """The scenarios of each arm: memory raises two lookup answers from 20 to
-    80, and the long message answers nothing on either arm. The synthesis case
-    answers the same on both arms, and only memory's run scores its rule
-    injection."""
+    """The scenarios of each arm: memory raises four lookup answers from 20 to
+    80, the two consolidation cases among them, and the long message answers
+    nothing on either arm. The synthesis case answers the same on both arms,
+    and only memory's run scores its rule injection. Every consolidated run
+    superseded one memory, by the semantic judge."""
     def build(prefix, lookup, rule, measurements=()):
         return [
             scenario("memory_value_project", "lookup", lookup, prefix, measurements),
@@ -54,6 +63,8 @@ def arms(off_tokens=0, consolidated=True):
             scenario("memory_precise_port", "lookup", lookup, prefix, measurements),
             scenario("memory_precise_long_message", "lookup", [30, 30, 30], prefix, measurements,
                      answers=[0, 0, 0]),
+            scenario(STALE, "lookup", lookup, prefix, measurements),
+            scenario(REWORDED, "lookup", lookup, prefix, measurements),
         ]
     built = {
         "memory-off": build("off", [20, 20, 20], [30, 30, 30], [("memory_injected_tokens", off_tokens)]),
@@ -62,7 +73,7 @@ def arms(off_tokens=0, consolidated=True):
     if consolidated:
         built["memory-consolidated"] = build("cons", [80, 80, 80], [60, 60, 60], [
             ("memory_consolidation_superseded", 1), ("memory_consolidation_llm_calls", 0),
-            ("memory_consolidation_notes", 1)])
+            ("memory_consolidation_notes", 1), ("memory_consolidation_semantic", 1)])
     return built
 
 
@@ -101,7 +112,8 @@ class MemoryGainTest(unittest.TestCase):
             self.assertTrue(memory_gain.split(arm, lambda s: s.get("class") == "lookup", out / "lookup"))
             kept = json.loads((out / "lookup/campaign/case-a/results.json").read_text())
             self.assertEqual([s["scenario_id"] for s in kept["scenarios"]],
-                             ["memory_value_project", "memory_precise_port", "memory_precise_long_message"])
+                             ["memory_value_project", "memory_precise_port", "memory_precise_long_message",
+                              STALE, REWORDED])
             self.assertEqual(kept["schema"], "results")
             self.assertFalse(memory_gain.split(arm, lambda s: s.get("class") == "nothing", out / "none"))
             self.assertFalse((out / "none").exists())
@@ -117,13 +129,16 @@ class MemoryGainTest(unittest.TestCase):
             kept = json.loads((out / "campaign/results.json").read_text())
             self.assertEqual([run["score"] for run in kept["scenarios"][0]["runs"]], [30, 30, 30])
 
-    def test_the_rows_hold_the_classed_cases_and_the_precise_row_reads_the_plan(self):
-        self.assertEqual(len(memory_gain.precise()), 6)
+    def test_the_rows_hold_the_classed_cases_and_the_module_rows_read_the_plan(self):
+        self.assertEqual(len(memory_gain.module("memory-precise")), 6)
+        self.assertEqual(memory_gain.module("memory-consolidation"), [STALE, REWORDED])
         rows = memory_gain.rows()
         self.assertTrue(rows["precise"]({"scenario_id": "memory_precise_port", "class": "lookup"}))
         self.assertFalse(rows["precise"]({"scenario_id": "memory_value_project", "class": "lookup"}))
         long_message = {"scenario_id": "memory_precise_long_message", "class": "lookup"}
         self.assertEqual([name for name, row in rows.items() if row(long_message)], ["all", "lookup", "precise"])
+        stale = {"scenario_id": STALE, "class": "lookup"}
+        self.assertEqual([name for name, row in rows.items() if row(stale)], ["all", "lookup", "consolidation"])
         # A case without a class is in no row.
         for row in rows.values():
             self.assertFalse(row({"scenario_id": "memory_small_talk"}))
@@ -140,18 +155,28 @@ class MemoryGainTest(unittest.TestCase):
         code, report, text = self.run_main(arms(off_tokens=7), self.fake_compare)
         self.assertEqual(code, 1)
         # The root bundle repeats each run: counted once.
-        self.assertEqual(report[MODEL]["off_injected_tokens"], 7 * 15)
-        self.assertIn("the memory-off arm injected 105 tokens: injection was not off", text)
+        self.assertEqual(report[MODEL]["off_injected_tokens"], 7 * 21)
+        self.assertIn("the memory-off arm injected 147 tokens: injection was not off", text)
 
     def test_the_consolidation_line_counts_the_compared_runs_that_consolidated(self):
         code, report, text = self.run_main(arms(), self.fake_compare)
         self.assertEqual(code, 0)
-        # The four compared cases, three runs each: no small talk.
-        self.assertEqual(report[MODEL]["consolidation"], {"runs": 12, "consolidated": 12, "superseded": 12,
-                                                          "llm_calls": 0, "notes": 12})
-        self.assertIn("consolidation ran in 12 of 12 runs, superseded 12 memories, 0 model calls, 12 notes", text)
+        # The six compared cases, three runs each: no small talk.
+        self.assertEqual(report[MODEL]["consolidation"], {"runs": 18, "consolidated": 18, "superseded": 18,
+                                                          "llm_calls": 0, "notes": 18})
+        self.assertIn("consolidation ran in 18 of 18 runs, superseded 18 memories, 0 model calls, 18 notes", text)
         self.assertIn("the memory-off arm injected nothing", text)
         self.assertEqual(report[MODEL]["errors"], [])
+        # The consolidation cases have a row and a line each.
+        self.assertIsNotNone(report[MODEL]["rows"]["consolidation"]["consolidated_vs_on"])
+        self.assertIn("| consolidation |", text)
+        self.assertEqual(report[MODEL]["consolidation_cases"][STALE],
+                         [{"superseded": 1, "semantic": 1, "notes": 1}] * 3)
+        self.assertIn(f"- {REWORDED}, per consolidated run: superseded 1, 1, 1; semantic 1, 1, 1; notes 1, 1, 1",
+                      text)
+        # No run recorded its setup's ranking: no line.
+        self.assertEqual(report[MODEL]["minilm"], {})
+        self.assertNotIn("set up on MiniLM", text)
 
     def test_a_compared_run_that_never_consolidated_is_an_error(self):
         built = arms()
@@ -161,8 +186,8 @@ class MemoryGainTest(unittest.TestCase):
         built["memory-consolidated"][1] = unconsolidated
         code, report, text = self.run_main(built, self.fake_compare)
         self.assertEqual(code, 1)
-        self.assertEqual(report[MODEL]["consolidation"]["runs"], 11)
-        self.assertEqual(report[MODEL]["consolidation"]["consolidated"], 9)
+        self.assertEqual(report[MODEL]["consolidation"]["runs"], 17)
+        self.assertEqual(report[MODEL]["consolidation"]["consolidated"], 15)
         self.assertIn("2 memory-consolidated runs never consolidated", text)
 
     def test_a_local_arm_is_read_where_it_is(self):
@@ -191,20 +216,72 @@ class MemoryGainTest(unittest.TestCase):
         self.assertIn("memory-off: not measured: the arm started no run", report["other/model"]["errors"])
         self.assertIn("## other/model", text)
 
-    def test_a_consolidated_arm_whose_runs_never_consolidated_says_so(self):
+    def test_a_consolidated_arm_whose_runs_never_consolidated_fails(self):
         built = arms()
         built["memory-consolidated"] = arms()["memory"]
-        _, _, text = self.run_main(built, self.fake_compare)
+        code, report, text = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 1)
         self.assertIn("no run consolidated: this arm is a second memory-on arm", text)
+        self.assertIn("18 memory-consolidated runs never consolidated: memory-consolidated against memory "
+                      "mixes them in", report[MODEL]["errors"])
+        self.assertIn(f"{STALE}: no memory-consolidated run consolidated", report[MODEL]["errors"])
+        self.assertIn(f"- {REWORDED}: no consolidated run", text)
+
+    def test_a_consolidation_case_missing_from_the_consolidated_arm_fails(self):
+        built = arms()
+        built["memory-consolidated"] = [s for s in built["memory-consolidated"] if s["scenario_id"] != REWORDED]
+        code, report, _ = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 1)
+        self.assertEqual(report[MODEL]["errors"], [f"{REWORDED}: no memory-consolidated run consolidated"])
+
+    def test_a_consolidation_case_pass_that_superseded_nothing_fails(self):
+        built = arms()
+        stale = next(s for s in built["memory-consolidated"] if s["scenario_id"] == STALE)
+        measure(stale, 1, "memory_consolidation_superseded", 0)
+        code, report, text = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 1)
+        self.assertEqual(report[MODEL]["errors"], [f"{STALE}: 1 of 3 consolidated runs superseded nothing"])
+        self.assertIn(f"- {STALE}, per consolidated run: superseded 1, 0, 1; semantic 1, 1, 1", text)
+
+    def test_a_consolidation_case_pass_with_no_semantic_action_fails(self):
+        built = arms()
+        reworded = next(s for s in built["memory-consolidated"] if s["scenario_id"] == REWORDED)
+        for index in (0, 2):
+            measure(reworded, index, "memory_consolidation_semantic", 0)
+        # A pass from a runner that predates the count took none either.
+        stale = next(s for s in built["memory-consolidated"] if s["scenario_id"] == STALE)
+        stale["runs"][0]["scenario_measurements"] = [
+            m for m in stale["runs"][0]["scenario_measurements"] if m["id"] != "memory_consolidation_semantic"]
+        code, report, _ = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 1)
+        self.assertEqual(report[MODEL]["errors"], [f"{STALE}: 1 of 3 consolidated runs took no semantic action",
+                                                   f"{REWORDED}: 2 of 3 consolidated runs took no semantic action"])
+
+    def test_the_minilm_line_counts_each_arms_setups_and_fails_nothing(self):
+        built = arms()
+        for arm, scenarios in built.items():
+            for entry in scenarios:
+                for index in range(3):
+                    measure(entry, index, "memory_setup_retrieval_minilm", 1)
+        # Two consolidated runs set up lexical; small talk has no class, so its run is not counted.
+        measure(built["memory-consolidated"][0], 0, "memory_setup_retrieval_minilm", 0)
+        measure(built["memory-consolidated"][3], 2, "memory_setup_retrieval_minilm", 0)
+        measure(built["memory"][2], 0, "memory_setup_retrieval_minilm", 0)
+        code, report, text = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(report[MODEL]["errors"], [])
+        self.assertEqual(report[MODEL]["minilm"]["memory-consolidated"], {"runs": 18, "minilm": 16})
+        self.assertIn("- set up on MiniLM: 18 of 18 memory-off runs, 18 of 18 memory runs, "
+                      "16 of 18 memory-consolidated runs", text)
 
     @unittest.skipUnless(os.environ.get("HARNESS_E2E_BIN") or shutil.which("harness-e2e"), "needs the runner")
     def test_the_lookup_gain_is_the_runners_delta(self):
         code, report, text = self.run_main(arms())
         self.assertEqual(code, 0, text)
         lookup = report[MODEL]["rows"]["lookup"]["on_vs_off"]
-        # The long message gains nothing and counts: (60 + 60 + 0) / 3.
-        self.assertEqual(lookup["quality"]["delta"], 40.0)
-        self.assertEqual(lookup["quality"]["tests"], 3)
+        # The long message gains nothing and counts: (4 * 60 + 0) / 5.
+        self.assertEqual(lookup["quality"]["delta"], 48.0)
+        self.assertEqual(lookup["quality"]["tests"], 5)
         with tempfile.TemporaryDirectory() as directory:
             sides = []
             for arm in ("memory-off", "memory"):
@@ -214,7 +291,7 @@ class MemoryGainTest(unittest.TestCase):
                 sides.append(Path(directory, arm, "lookup"))
             self.assertEqual(lookup["quality"], memory_gain.compare(*sides)["quality"])
         # No class, no row: small talk is in none.
-        self.assertEqual(report[MODEL]["rows"]["all"]["on_vs_off"]["quality"]["tests"], 4)
+        self.assertEqual(report[MODEL]["rows"]["all"]["on_vs_off"]["quality"]["tests"], 6)
         # The same answers on both arms gain nothing, though memory's runs
         # also scored the rule injection (60 against 30).
         self.assertEqual(report[MODEL]["rows"]["synthesis"]["on_vs_off"]["quality"]["delta"], 0.0)

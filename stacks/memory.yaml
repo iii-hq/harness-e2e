@@ -8,8 +8,9 @@
 #
 # Embeddings: iii-directory's local MiniLM (provider::minilm::embed) is
 # router::embed's fallback when no registered provider has an embed key. The
-# published Linux builds carry no MiniLM, so there memory ranks lexical-only
-# (BM25 and entities). Each mode is stable on its own; the two rank
+# Harness graph brings iii-directory, whose Linux build carries MiniLM, so
+# memory ranks with MiniLM vectors next to BM25 and entities. Where no
+# embedder answers, it ranks lexical-only (BM25 and entities); the two rank
 # differently. An OPENAI_API_KEY reaching llm-router moves memory to
 # text-embedding-3-small; the suite's setup refuses it and records which mode
 # ran.
