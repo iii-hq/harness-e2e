@@ -33,7 +33,8 @@ appends it to the job summary. It exits 1 when a model's report has an error:
 an arm not measured or unreadable, no quality figure for memory against
 memory-off, a memory-off arm that injected, a compared memory-consolidated run
 that did not consolidate, or a consolidation case with no consolidated run or
-with a pass that superseded nothing or took no semantic action.
+with a run set up on MiniLM whose pass superseded nothing or took no semantic
+action (one set up lexical is said, not failed).
 """
 
 from __future__ import annotations
@@ -169,7 +170,7 @@ def measured(arm: Path, keep: Callable[[dict[str, Any]], bool] = lambda scenario
 
 def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
     """One model's rows and arm checks."""
-    report: dict[str, Any] = {"rows": {}, "errors": []}
+    report: dict[str, Any] = {"rows": {}, "errors": [], "notices": []}
     for row, keep in rows().items():
         sides = {arm: work / row / arm for arm in arms}
         present = {arm for arm in arms if split(arms[arm], keep, sides[arm])}
@@ -198,15 +199,23 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
                                     "memory-consolidated against memory mixes them in")
         report["consolidation_cases"] = {}
         for case in module(CONSOLIDATION):
-            done = [{key: run.get(found, 0) for key, found in CASE_PASS.items()}
-                    for run in measured(arms[CONSOLIDATED], lambda scenario: scenario.get("scenario_id") == case)
-                    if PASS["superseded"] in run]
+            consolidated = [run for run in measured(arms[CONSOLIDATED],
+                                                    lambda scenario: scenario.get("scenario_id") == case)
+                            if PASS["superseded"] in run]
+            done = [{key: run.get(found, 0) for key, found in CASE_PASS.items()} for run in consolidated]
             report["consolidation_cases"][case] = done
             if not done:
                 report["errors"].append(f"{case}: no memory-consolidated run consolidated")
             for key, what in (("superseded", "superseded nothing"), ("semantic", "took no semantic action")):
-                if short := sum(1 for run in done if run[key] < 1):
-                    report["errors"].append(f"{case}: {short} of {len(done)} consolidated runs {what}")
+                short = [run for run, did in zip(consolidated, done) if did[key] < 1]
+                # A run that set up lexical (MiniLM still loading) gives the judge
+                # no vectors: said, not failed. One with no setup ranking counts.
+                lexical = sum(1 for run in short if run.get(MINILM) == 0)
+                if len(short) > lexical:
+                    report["errors"].append(f"{case}: {len(short) - lexical} of {len(done)} consolidated runs {what}")
+                if lexical:
+                    report["notices"].append(f"{case}: {lexical} of {len(done)} consolidated runs {what} "
+                                             "but set up lexical, so not an error")
     # Information only: a run that set up lexical still ran its case.
     report["minilm"] = {}
     for arm, path in arms.items():
@@ -275,6 +284,7 @@ def markdown(models: dict[str, dict[str, Any]]) -> str:
         if modes := report.get("minilm"):
             lines.append("- set up on MiniLM: " + ", ".join(
                 f"{mode['minilm']} of {mode['runs']} {arm} runs" for arm, mode in modes.items()))
+        lines += [f"- {notice}" for notice in report.get("notices") or []]
         lines += [f"- {error}" for error in report["errors"]]
         lines.append("")
     return "\n".join(lines)

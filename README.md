@@ -963,8 +963,10 @@ figure and verdict is the runner's. Read it this way:
   arm set up on MiniLM: information only, never an error.
 - The report fails when a compared memory-consolidated run did not
   consolidate, including when none did. It also fails when a consolidation
-  case has no consolidated run, or a run whose pass superseded nothing or took
-  no semantic action.
+  case has no consolidated run, or a run set up on MiniLM whose pass superseded
+  nothing or took no semantic action. A run that set up lexical, while MiniLM
+  was still loading, gives the semantic judge no vectors: the report says so
+  on a line of its own and does not fail for it.
 - A local stack with `memory-consolidate` installed also consolidates each
   attempt's bank in the other memory suites.
 

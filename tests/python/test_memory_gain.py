@@ -258,6 +258,25 @@ class MemoryGainTest(unittest.TestCase):
         self.assertEqual(report[MODEL]["errors"], [f"{STALE}: 1 of 3 consolidated runs took no semantic action",
                                                    f"{REWORDED}: 2 of 3 consolidated runs took no semantic action"])
 
+    def test_a_consolidation_case_run_that_set_up_lexical_is_said_not_failed(self):
+        built = arms()
+        reworded = next(s for s in built["memory-consolidated"] if s["scenario_id"] == REWORDED)
+        # MiniLM was still loading at run 0's setup: the judge had no vectors.
+        measure(reworded, 0, "memory_consolidation_semantic", 0)
+        measure(reworded, 0, "memory_setup_retrieval_minilm", 0)
+        # Run 2 set up on MiniLM and still took no semantic action.
+        measure(reworded, 2, "memory_consolidation_semantic", 0)
+        measure(reworded, 2, "memory_setup_retrieval_minilm", 1)
+        code, report, text = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 1)
+        self.assertEqual(report[MODEL]["errors"], [f"{REWORDED}: 1 of 3 consolidated runs took no semantic action"])
+        self.assertIn(f"- {REWORDED}: 1 of 3 consolidated runs took no semantic action but set up lexical, "
+                      "so not an error", text)
+        # The lexical run alone fails nothing.
+        measure(reworded, 2, "memory_consolidation_semantic", 1)
+        code, report, _ = self.run_main(built, self.fake_compare)
+        self.assertEqual((code, report[MODEL]["errors"]), (0, []))
+
     def test_the_minilm_line_counts_each_arms_setups_and_fails_nothing(self):
         built = arms()
         for arm, scenarios in built.items():
