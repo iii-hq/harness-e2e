@@ -41,6 +41,7 @@ pub mod git_regression_forensics;
 pub mod harness_contract_probe;
 pub mod incident_response;
 pub mod insert_record;
+pub mod judge_quality;
 pub mod kanban;
 pub mod linkly;
 pub mod long_transcript_tail;
@@ -609,8 +610,9 @@ macro_rules! scenarios {
             }
         }
     };
-    (@count) => { 0usize };
-    (@count $head:ident $($tail:ident)*) => { 1usize + scenarios!(@count $($tail)*) };
+    // A slice length, not recursion: one rule per variant hits the macro recursion limit.
+    (@count $($variant:ident)*) => { <[()]>::len(&[$(scenarios!(@unit $variant)),*]) };
+    (@unit $variant:ident) => { () };
 }
 
 scenarios! {
@@ -718,6 +720,10 @@ scenarios! {
     MemoryPreciseLongMessage = "memory_precise_long_message" => memory::Memory(41),
     MemoryConsolidationStaleFact = "memory_consolidation_stale_fact" => memory::Memory(42),
     MemoryConsolidationRewordedFact = "memory_consolidation_reworded_fact" => memory::Memory(43),
+    JudgeQualityJevbenchEasy = "judge_quality_jevbench_easy" => judge_quality::JudgeQuality(0),
+    JudgeQualityJevbenchOriginal = "judge_quality_jevbench_original" => judge_quality::JudgeQuality(1),
+    JudgeQualityJevbenchHard = "judge_quality_jevbench_hard" => judge_quality::JudgeQuality(2),
+    JudgeQualityTypedDecisions = "judge_quality_typed_decisions" => judge_quality::JudgeQuality(3),
     SpawnDepthCap = "spawn_depth_cap" => spawn_depth_cap::SpawnDepthCap,
     RepeatedFailureBreaker = "repeated_failure_breaker" => call_guards::RepeatedFailureBreaker,
     TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
@@ -1106,7 +1112,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 123);
+        assert_eq!(ids.len(), 127);
     }
 
     #[test]

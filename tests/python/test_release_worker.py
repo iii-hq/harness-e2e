@@ -166,6 +166,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(listed, [f"{name}@{version}" for name, version in declared.items()])
         self.assertNotRegex("\n".join(steps.values()), r"worker=[\w-]+@\d")
 
+    def test_the_binary_archive_carries_the_licences_of_the_datasets_it_embeds(self):
+        import yaml
+
+        workflow = yaml.safe_load((self.ROOT / ".github/workflows/release.yml").read_text())
+        steps = {step.get("name"): step for step in workflow["jobs"]["binaries"]["steps"]}
+        self.assertEqual(steps["Build and attach binary"]["with"]["include"], "dataset-licenses")
+        stage = steps["Stage embedded dataset licences"]["run"]
+        for dataset in ("jevbench", "typed-decisions"):
+            self.assertIn(dataset, stage)
+            for name in ("LICENSE", "NOTICE"):
+                self.assertTrue((self.ROOT / "tests/fixtures/judge-quality" / dataset / name).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {"id": "m1", "state": "A ticket.", "questions": {
+      "c1": {"type": "choice", "instructions": "Pick one.", "criteria": {"a": "A", "b": "B", "c": "C", "d": "D"}},
+      "n1": {"type": "noul", "instructions": "Is it true?"}},
+     "gold": {"c1": "b", "n1": true}},
+    {"id": "c2", "state": "A ticket.", "questions": {
+      "q": {"type": "choice", "instructions": "Pick one.", "criteria": {"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"}}},
+     "gold": {"q": "c"}},
+    {"id": "n2", "state": "A ticket.", "questions": {"q": {"type": "noul", "instructions": "Is it true?"}}, "gold": {"q": false}},
+    {"id": "n3", "state": "A ticket.", "questions": {"q": {"type": "noul", "instructions": "Is it true?"}}, "gold": {"q": false}},
+    {"id": "n4", "state": "A ticket.", "questions": {"q": {"type": "noul", "instructions": "Is it true?"}}, "gold": {"q": true}},
+    {"id": "s1", "state": "A ticket.", "questions": {
+      "q": {"type": "score", "instructions": "Rate it.", "criteria": ["none", "low", "high", "full"]}},
+     "gold": {"q": 2}},
+    {"id": "s2", "state": "A ticket.", "questions": {
+      "q": {"type": "score", "instructions": "Rate it.", "criteria": ["none", "low", "high", "full"]}},
+     "gold": {"q": 0}},
+    {"id": "e1", "state": "A ticket.", "questions": {
+      "q": {"type": "choice", "instructions": "Pick one.", "criteria": {"a": "A", "b": "B", "c": "C"}}},
+     "gold": {"q": "a"}},
+    {"id": "i1", "state": "A ticket.", "questions": {"q": {"type": "noul", "instructions": "Is it true?"}}, "gold": {"q": true}}
+  ],
+  "replies": {
+    "m1": {"status": "ok", "model": "m", "results": {"m1": {"answers": {
+      "c1": {"type": "choice", "choice": "b", "probabilities": {"a": 0.08, "b": 0.72, "c": 0.10, "d": 0.10}, "confidence": 0.6267},
+      "n1": {"type": "noul", "noul": 0.9}},
+      "usage": {"input_tokens": 40, "output_tokens": 0}}}, "stats": {}},
+    "c2": {"status": "ok", "model": "m", "results": {"c2": {"answers": {
+      "q": {"type": "choice", "choice": "a", "probabilities": {"a": 0.52, "b": 0.10, "c": 0.18, "d": 0.10, "e": 0.10}, "confidence": 0.4}}}}, "stats": {}},
+    "n2": {"status": "ok", "model": "m", "results": {"n2": {"answers": {"q": {"type": "noul", "noul": 0.6}}}}, "stats": {}},
+    "n3": {"status": "ok", "model": "m", "results": {"n3": {"answers": {"q": {"type": "noul", "noul": 0.1}}}}, "stats": {}},
+    "n4": {"status": "ok", "model": "m", "results": {"n4": {"answers": {"q": {"type": "noul", "noul": 0.7}}}}, "stats": {}},
+    "s1": {"status": "ok", "model": "m", "results": {"s1": {"answers": {
+      "q": {"type": "score", "score": 1.6, "probabilities": {"0": 0.1, "1": 0.3, "2": 0.5, "3": 0.1}, "confidence": 0.5, "legend": {}}},
+      "usage": {"input_tokens": 90}}}, "stats": {}},
+    "s2": {"status": "ok", "model": "m", "results": {"s2": {"answers": {
+      "q": {"type": "score", "score": 1.2, "probabilities": {"0": 0.2, "1": 0.5, "2": 0.2, "3": 0.1}, "confidence": 0.5, "legend": {}}}}}, "stats": {}},
+    "e1": {"status": "error", "code": "payload_too_large", "stats": {}},
+    "i1": {"status": "ok", "model": "m", "results": {"i1": {"answers": {
+      "q": {"type": "choice", "choice": "true", "probabilities": {"true": 1.0}, "confidence": 1.0}}}}, "stats": {}}
+  },
+  "expected": {
+    "measurements": {
+      "cases": 9, "decisions": 10, "answered": 8, "accuracy": 0.5,
+      "choice_n": 3, "choice_top1": 0.3333333333333333, "choice_nll": 1.021651, "choice_ece": 0.4,
+      "noul_n": 5, "noul_accuracy": 0.6, "noul_accuracy_at_0_8": 0.4, "noul_brier": 0.1175, "noul_auroc": 1.0,
+      "score_n": 2, "score_accuracy": 0.5, "score_mae": 0.8,
+      "input_tokens_max": 90, "case_ms_p50": 500, "case_ms_p95": 900
+    },
+    "awards": {"answered": 0, "accuracy": 45},
+    "errors": {"payload_too_large": 1, "invalid_response": 1}
+  }
+}

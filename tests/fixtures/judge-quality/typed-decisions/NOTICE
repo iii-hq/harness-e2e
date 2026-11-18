@@ -1,0 +1,11 @@
+Typed Decisions, test split
+Source: https://huggingface.co/datasets/LocalLLaMA/typed-decisions at revision
+e6aa632c4db73b59c7713bb21066ad1a8e1bfce6, file all/test-00000-of-00001.parquet
+(sha256 4f294f218ea1da27f3efef936359389c62ea4d3973a41457732990f1d31b647c).
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+Modified: test.jsonl is that parquet converted by convert.py. Each case keeps its
+id, workflow, state and questions; gold keeps only the teacher's label per
+question, and agree keeps label_agreement.argmax_agree. The teacher
+probabilities, confidences, factors and the other label_agreement fields were
+dropped, and the JSON strings were parsed into objects.

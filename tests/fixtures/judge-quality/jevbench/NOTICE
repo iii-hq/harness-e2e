@@ -1,0 +1,10 @@
+JevBench public decisions
+Source: https://github.com/fstandhartinger/jevbench at commit 609a664e
+Files: datasets/public/easy.jsonl, original.jsonl and hard.jsonl, copied byte for
+byte as easy.jsonl, original.jsonl and hard.jsonl.
+Copyright (c) 2026 Florian Standhartinger and contributors.
+
+The repository's THIRD-PARTY.md puts the 72 decisions of original.jsonl under its
+MIT licence (LICENSE, copied from the same commit). The easy and hard decisions
+are MIT through each item's own provenance.license field, which reads "MIT" on
+all 159 of them.
