@@ -452,7 +452,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Context pressure with signed thinking (weekly) | `context-thinking` | `context_pressure` on a Claude 5.5 model, on the `context-thinking` stack: compaction with thinking that the API rejects when its prefix changed. |
 | Memory learning | `memory-learning` | What memory learns from a chat with the user and gives a later session, and that it learns nothing from a non-user (test or automation) session, seven cases three times each, on the `memory` stack. |
 | Memory strict delivery | `memory-strict` | Opt-in, in no schedule: whether memory delivers exactly the facts each question needs, as the final model request recorded them, seven cases three times each, on the `memory-strict` stack. Needs unreleased Harness, memory and context-manager builds; advisory for one cycle. |
-| Memory gain | `memory-gain` | How much better the memory cases go with memory than without it: the cases of Memory quality and Memory learning and six precise cases, three times each, once per stack (`memory`, `memory-off`, `memory-consolidated`) and per model, on memory releases and on demand. `scripts/memory_gain.py` reports the gain per class. |
+| Memory gain | `memory-gain` | How much better the memory cases go with memory than without it: the cases of Memory quality and Memory learning, six precise cases and two consolidation cases, three times each, once per stack (`memory`, `memory-off`, `memory-consolidated`) and per model, on memory releases and on demand. `scripts/memory_gain.py` reports the gain per class. |
 | Essential checks before merge | `pr` | Four essential checks of a candidate stack before merging a change. |
 | Published stack checks | `after-release` | Five essential checks of the published stack. |
 
@@ -689,9 +689,8 @@ exists:
   left reaches the turn that asks whom to page, beside the escalation
   contact. The note shares no word with the question and has no word memory
   reads as a change; only the entity it shares with the on-call line links
-  the two. It is built for lexical-only retrieval, as on the Linux builds CI
-  and the local recipe below use: with MiniLM, the note's meaning could rank
-  it on its own.
+  the two. It was built for lexical-only retrieval. CI and the local recipe
+  below rank with MiniLM, where the note's meaning could rank it on its own.
   The other API's on-call engineer left out is scored, since recall ranks it
   and the link never reaches it.
 
@@ -814,14 +813,16 @@ the capture events do not exist, so every run reports `strict capture
 unavailable` with the error that stopped the capture from binding, as an
 infrastructure error. The cases are advisory for one cycle, like every memory
 case; after one live pass against released workers they move into `memory`
-and `memory-learning`. The registry holds 42 memory cases: the 29 above, these
-seven and the six precise cases below.
+and `memory-learning`. The registry holds 44 memory cases: the 29 above, these
+seven, and the six precise and two consolidation cases below.
 
 Run it on the `memory` stack, the default stack plus the `memory` worker.
-Memory ranks recalls with the local MiniLM embedder where iii-directory has
-one, and lexical-only (BM25 and entities) where it has none, as on the Linux
-builds CI and the local recipe below use. Each run records which mode ran
-(`retrieval` in its evidence). Lexical-only counts once the doctor has said so
+Memory ranks recalls with iii-directory's local MiniLM embedder. The Harness
+graph brings iii-directory on CI, and the local recipe below lists it. Where
+no embedder answers, memory ranks lexical-only (BM25 and entities). Each run
+records which mode ran (`retrieval` in its evidence, and the
+`memory_setup_retrieval_minilm` measurement: 1 for MiniLM, 0 for
+lexical-only). Lexical-only counts once the doctor has said so
 for 15 seconds, so a stack still loading MiniLM is not taken for one without
 it. Setup fails when memory embeds with any other model. To run a case on your own stack, from a checkout:
 
@@ -856,7 +857,7 @@ containers:
   fp:                {worker: package://fp,                version: latest}
   provider-deepseek: {worker: package://provider-deepseek, version: latest, start_after: [llm-router, state]}
 YAML
-# Strip OpenAI so router::embed falls back to MiniLM or to none, as on CI:
+# Strip OpenAI so router::embed falls back to MiniLM, as on CI:
 # with an OPENAI_API_KEY in llm-router's environment memory embeds with
 # text-embedding-3-small, whose vectors the cases are not calibrated for.
 env -u III_URL -u OPENAI_API_KEY III_COMPOSE_STATE_DIR="$D/.compose-state" iii compose --up
@@ -879,9 +880,10 @@ pins `harness-e2e` with `commit:`.
 ### Memory gain
 
 The `memory-gain` suite measures how much better a task goes with memory than
-without it. It holds the 29 cases of `memory` and `memory-learning` and the six
-cases of the `memory-precise` module, three rounds and one technical retry each
-(35 cases, 105 runs), and runs once per stack and per model. The cases are the
+without it. It holds the two cases of the `memory-consolidation` module, the 29
+cases of `memory` and `memory-learning` and the six cases of the
+`memory-precise` module, three rounds and one technical retry each (37 cases,
+111 runs), and runs once per stack and per model. The cases are the
 same on every stack, so a case on two stacks is one test to
 `harness-e2e compare`, which pairs on (`scenario_id`, `behavior_sha256`):
 
@@ -889,7 +891,7 @@ same on every stack, so a case on two stacks is one test to
 | --- | --- |
 | `memory` | Nothing: memory on, as the `memory` suite runs it. |
 | `memory-off` | Memory with `inject_rules` and `inject_memories` off. It holds the same bank and still extracts, but gives the session no section, no rules and no memories. |
-| `memory-consolidated` | The `memory` stack plus `memory-consolidate`, with no scheduled pass. Where `memory-consolidate::run` is registered, setup runs it on the attempt's bank once the case planted and taught it, so the session reads a consolidated bank. `memory-consolidate` starts after `memory`, which holds memory at the version the stack declares against the one its graph would bring. |
+| `memory-consolidated` | The `memory` stack plus `memory-consolidate`, with no scheduled pass. Where `memory-consolidate::run` is registered, setup runs it on the attempt's bank once the case planted and taught it, so the session reads a consolidated bank. A stack whose `compose::status` lists `memory-consolidate` waits up to 90 seconds for the function to register; past that, setup fails as an infrastructure error. `memory-consolidate` starts after `memory`, which holds memory at the version the stack declares against the one its graph would bring. |
 
 A memory case that scores an answer has a `class` in its results: `lookup`
 when the answer returns a stored value as it was stored, `synthesis` when it
@@ -907,13 +909,37 @@ amount, a date or a five-digit number instead of eight hex characters.
 `memory_precise_long_message` teaches a port in the middle of one user message
 of about 15,000 characters. They run only in `memory-gain`.
 
+The consolidation cases plant a bank only a consolidated one answers well.
+Memory's own injection hides a line that restates another, and drops an older
+line when the newer one holds a change word ("now", "instead", "moved"). These
+cases get past both:
+
+- `memory_consolidation_stale_fact`: a stale export bucket, then a line that
+  names the new bucket with no change word. Memory tells both buckets. The
+  consolidation judge supersedes the stale line.
+- `memory_consolidation_reworded_fact`: one restart step under nine labels
+  ("Runbook:", "Reminder:" and so on), and a nightly job to pause first.
+  Memory tells all nine restart lines and leaves the job out. Consolidation
+  merges the repeats, so the job is told.
+
+Each case also plants a twin: its first seed again without the final period.
+Memory saves both. Consolidation's deterministic tier merges them with no
+model call, so every pass supersedes at least one memory. They run only in
+`memory-gain`, and first, so a run cut at its deadline still holds their
+first round.
+
+The subject's deny list does not name `memory-consolidate::*`. The subject and
+the teacher send an empty allow-list, which Harness reads as deny-everything,
+so neither can call it. Naming it would change every memory case's digest and
+split its trend history once.
+
 `scripts/memory_gain.py` reads one run per model and stack, splits each arm's
-results into four rows of the cases that have a class (all of them, `lookup`,
-`synthesis` and the precise cases), scores each run on the points its answer
-criteria awarded (its `memory_answer_points` measurement) and runs
-`harness-e2e compare --json` on memory-off against memory and on memory
-against memory-consolidated. Every figure and verdict is the runner's. Read it
-this way:
+results into five rows of the cases that have a class (all of them, `lookup`,
+`synthesis`, the precise cases and the consolidation cases), scores each run
+on the points its answer criteria awarded (its `memory_answer_points`
+measurement) and runs `harness-e2e compare --json` on memory-off against
+memory and on memory against memory-consolidated. Every figure and verdict is
+the runner's. Read it this way:
 
 - The gain is a difference in answer points: what memory injected scores
   nothing, so an arm gains only where its answers got better. The memory-off
@@ -921,13 +947,23 @@ this way:
   gain, not the completion.
 - Memory costs tokens, so the verdict often reads `cannot tell (trade_off)`:
   quality rose and so did the cost.
-- On a lexical-only stack, as on CI, the consolidation pass has nothing to
-  merge, so the consolidated row is expected to read no difference. The
-  report's last lines say what each arm did: the tokens the memory-off arm
+- CI ranks with MiniLM on every arm, so the semantic tier runs. Outside the
+  consolidation cases no case plants a duplicate that memory's own injection
+  fails to hide, so the other rows are expected to read no difference between
+  memory and memory-consolidated.
+- The `consolidation` row holds two cases, three runs each, so it often reads
+  `cannot tell`. Read it by its delta and by the per-case lines below it.
+- The report's last lines say what each arm did: the tokens the memory-off arm
   injected, which must be 0 (the report fails otherwise), and in how many of
   the compared runs consolidation ran, what it superseded, how many model calls
-  it made and how many notes it left. A compared run that did not consolidate
-  is listed as an error.
+  it made and how many notes it left. Then one line per consolidation case
+  lists, per consolidated run, what the pass superseded, how many of those the
+  semantic judge decided, and its notes. Last, how many compared runs of each
+  arm set up on MiniLM: information only, never an error.
+- The report fails when a compared memory-consolidated run did not
+  consolidate, including when none did. It also fails when a consolidation
+  case has no consolidated run, or a run whose pass superseded nothing or took
+  no semantic action.
 - A local stack with `memory-consolidate` installed also consolidates each
   attempt's bank in the other memory suites.
 
@@ -956,7 +992,7 @@ arm's stack up, run the suite's cases into that arm's directory, then stop the
 stack before the next arm:
 
 ```bash
-ids=$(python3 -c 'import json; m = {x["id"]: x["scenarios"] for x in json.load(open("config/test-plan.json"))["modules"]}; print(" ".join(f"--scenario {s}" for k in ("memory", "memory-learning", "memory-precise") for s in m[k]))')
+ids=$(python3 -c 'import json; m = {x["id"]: x["scenarios"] for x in json.load(open("config/test-plan.json"))["modules"]}; print(" ".join(f"--scenario {s}" for k in ("memory-consolidation", "memory", "memory-learning", "memory-precise") for s in m[k]))')
 III_NAMESPACE=memory-e2e III_TELEMETRY_ENABLED=false \
 cargo run --locked --bin harness-e2e -- run \
   --url ws://127.0.0.1:49334 --provider anthropic --model claude-haiku-5-5 \

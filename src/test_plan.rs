@@ -213,6 +213,8 @@ const IMPACT_EXCLUDED: &[ScenarioId] = &[
     ScenarioId::MemoryPreciseEnvVar,
     ScenarioId::MemoryPreciseCommand,
     ScenarioId::MemoryPreciseLongMessage,
+    ScenarioId::MemoryConsolidationStaleFact,
+    ScenarioId::MemoryConsolidationRewordedFact,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -783,7 +785,7 @@ mod tests {
             ("memory", 22, 66),
             ("memory-learning", 7, 21),
             ("memory-strict", 7, 21),
-            ("memory-gain", 35, 105),
+            ("memory-gain", 37, 111),
             ("approvals", 1, 1),
             ("memory-smoke", 3, 3),
             ("harness-weekly", 1, 1),
@@ -989,7 +991,7 @@ mod tests {
     fn the_plan_digest_is_pinned() {
         assert_eq!(
             embedded().unwrap().digest().unwrap(),
-            "sha256:dd757a9addfdaf149746f1db8418c242d28ce3fca2805cb106847254b34929a7"
+            "sha256:c6028a6686cee1f38556c38707fe47e09899055b1a28ad702f011571315ae843"
         );
     }
 
@@ -1157,8 +1159,14 @@ mod tests {
     /// case never shares a stack with its baseline. The learning cases run in
     /// a suite of their own, after the deterministic ones; their baselines
     /// stay in `memory`. The strict delivery cases run only in the opt-in
-    /// `memory-strict`, the precise cases only in `memory-gain`, which runs
-    /// the two scheduled suites' cases beside them.
+    /// `memory-strict`, the precise and consolidation cases only in
+    /// `memory-gain`, which runs the two scheduled suites' cases beside them.
+    /// The consolidation cases come first: the executor's matrix lists each
+    /// round's groups in suite order, so a run cut at its deadline holds their
+    /// first round.
+    /// shortcut: rounds 2 and 3 of these cases sit at matrix slots 38-39 and
+    /// 75-76, raise the deadline or interleave rounds if a cut report shows
+    /// fewer than 3 runs per case.
     #[test]
     fn memory_runs_each_case_alone_three_times_with_one_retry() {
         use crate::scenarios::memory::IDS;
@@ -1184,14 +1192,29 @@ mod tests {
         let (scheduled, opt_in) = every_case.split_at(29);
         assert_eq!(scheduled, &IDS[..29]);
         assert_eq!(opt_in, &IDS[29..36]);
+        let gain = plan.materialize("memory-gain").unwrap();
         assert_eq!(
-            plan.materialize("memory-gain").unwrap().scenario_ids,
-            IDS[..29]
+            gain.scenario_ids,
+            IDS[42..]
                 .iter()
-                .chain(&IDS[36..])
+                .chain(&IDS[..29])
+                .chain(&IDS[36..42])
                 .copied()
                 .collect::<Vec<_>>()
         );
+        for campaign in &gain.campaigns {
+            let first: Vec<&str> = campaign["groups"].as_array().unwrap()[..2]
+                .iter()
+                .map(|group| group["scenarios"][0].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                first,
+                [
+                    "memory_consolidation_stale_fact",
+                    "memory_consolidation_reworded_fact"
+                ]
+            );
+        }
         // Exactly the cases whose outcome rests on memory's extraction.
         use crate::scenarios::memory::{
             cases::{audits_bank_after, CASES},
@@ -1487,6 +1510,12 @@ mod tests {
         (ScenarioId::MemoryPreciseEnvVar, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryPreciseCommand, MEMORY_LIVE, &[]),
         (ScenarioId::MemoryPreciseLongMessage, MEMORY_LIVE, &[]),
+        (ScenarioId::MemoryConsolidationStaleFact, MEMORY_LIVE, &[]),
+        (
+            ScenarioId::MemoryConsolidationRewordedFact,
+            MEMORY_LIVE,
+            &[],
+        ),
         (ScenarioId::HarnessContractProbe, HARNESS_LIVE, &[]),
         (ScenarioId::DispatchPipeline, HARNESS_LIVE, &[]),
         (ScenarioId::BindingContractProbe, HARNESS_LIVE, &[]),

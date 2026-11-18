@@ -140,6 +140,8 @@ pub struct Consolidation {
     pub superseded: u64,
     pub llm_calls: u64,
     pub notes: u64,
+    /// The semantic tier's applied decisions, part of `superseded`.
+    pub semantic: u64,
 }
 
 /// What `capture` reads of an attempt.
@@ -455,6 +457,7 @@ fn assemble(
             count("memory_consolidation_superseded", pass.superseded),
             count("memory_consolidation_llm_calls", pass.llm_calls),
             count("memory_consolidation_notes", pass.notes),
+            count("memory_consolidation_semantic", pass.semantic),
         ]);
     }
     evidence
@@ -612,6 +615,13 @@ fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
         .any(|(_, change)| matches!(change, Change::RuleSet { .. } | Change::DeleteBank));
     if moves_rules {
         measured.push(count("memory_rules_updates", observed.rules_updates.len()));
+    }
+    // How setup found memory ranking: the report tells the arms' modes apart.
+    if let Some(retrieval) = evidence.retrieval {
+        measured.push(count(
+            "memory_setup_retrieval_minilm",
+            usize::from(retrieval == Retrieval::Minilm),
+        ));
     }
     // The answer's points alone, apart from what memory delivered: what a
     // comparison with an arm whose memory injects nothing reads.
@@ -2237,7 +2247,7 @@ mod tests {
     /// A consolidated arm says what its pass did; every other arm's runs
     /// keep the measurements they had.
     #[test]
-    fn a_consolidation_pass_adds_its_three_counts() {
+    fn a_consolidation_pass_adds_its_four_counts() {
         let case = case_named("memory_precise_port");
         let ids = |consolidation: Option<Consolidation>| {
             let mut seen = observed(&["a"], Vec::new());
@@ -2258,12 +2268,14 @@ mod tests {
             ids(Some(Consolidation {
                 superseded: 1,
                 llm_calls: 2,
-                notes: 3
+                notes: 3,
+                semantic: 4
             })),
             [
                 count("memory_consolidation_superseded", 1.0),
                 count("memory_consolidation_llm_calls", 2.0),
                 count("memory_consolidation_notes", 3.0),
+                count("memory_consolidation_semantic", 4.0),
             ]
         );
     }
@@ -2329,7 +2341,7 @@ mod tests {
     }
 
     #[test]
-    fn measurements_are_eight_and_counted_in_tokens() {
+    fn measurements_are_nine_and_counted_in_tokens() {
         let case = case_named("memory_relevant_recall");
         let mut first = block(0, vec![line(case, 0), line(case, 1)]);
         first.memory_bytes = 9;
@@ -2357,6 +2369,7 @@ mod tests {
                 "memory_turns_without_hook",
                 "memory_rules_tokens",
                 "memory_reminder_tokens",
+                "memory_setup_retrieval_minilm",
                 "memory_answer_points",
             ]
         );
@@ -2375,6 +2388,29 @@ mod tests {
         assert_eq!(measured("memory_reminder_tokens"), (3.0, "tokens"));
         // Neither answer carries a canary.
         assert_eq!(measured("memory_answer_points"), (0.0, "points"));
+        // The fixture set up lexical-only.
+        assert_eq!(measured("memory_setup_retrieval_minilm"), (0.0, "count"));
+    }
+
+    /// Setup's ranking mode is a 1 or 0 on every run that recorded one.
+    #[test]
+    fn the_setup_retrieval_is_one_with_minilm_and_absent_when_unknown() {
+        let case = case_named("memory_relevant_recall");
+        let minilm = |retrieval: Option<Retrieval>| {
+            let mut seen = observed(&["a"], Vec::new());
+            let snapshot = Snapshot {
+                retrieval,
+                ..recorded(case, &mut seen, PROMPT, Some("ok"))
+            };
+            assemble(case, RUN, seen, snapshot, None)
+                .measurements
+                .into_iter()
+                .find(|m| m.id == "memory_setup_retrieval_minilm")
+                .map(|m| m.value)
+        };
+        assert_eq!(minilm(Some(Retrieval::Minilm)), Some(1.0));
+        assert_eq!(minilm(Some(Retrieval::Lexical)), Some(0.0));
+        assert_eq!(minilm(None), None);
     }
 
     #[test]

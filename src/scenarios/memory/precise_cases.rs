@@ -28,7 +28,7 @@ const fn exact(value: &'static str) -> [Criterion; 2] {
 }
 
 /// One seed among the distractors, one question, nothing else.
-const PLANTED: Case = Case {
+pub(super) const PLANTED: Case = Case {
     id: "",
     title: "",
     summary: "",

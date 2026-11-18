@@ -1,11 +1,14 @@
 # The consolidated arm of the `memory-gain` suite: stacks/memory.yaml plus
 # memory-consolidate. It runs no scheduled pass: the runner calls
 # `memory-consolidate::run` on each attempt's bank once the case planted and
-# taught it, so the session reads a consolidated bank. On a lexical-only stack
-# the semantic tier stops with a note. memory-consolidate depends on memory, so
-# it starts after memory: that edge holds memory at the version this stack
-# declares (the one a dispatch measures) instead of the one memory-consolidate's
-# graph would bring. Keep the other containers in step with memory.yaml.
+# taught it, so the session reads a consolidated bank; setup waits up to 90 s
+# for the function on a stack that declares this container. Memory ranks with
+# MiniLM here as on the memory stack, so the semantic tier runs; on a
+# lexical-only stack it stops with a note. memory-consolidate depends on
+# memory, so it starts after memory: that edge holds memory at the version
+# this stack declares (the one a dispatch measures) instead of the one
+# memory-consolidate's graph would bring. Keep the other containers in step
+# with memory.yaml.
 
 iii: latest
 

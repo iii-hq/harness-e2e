@@ -15,19 +15,23 @@ arm, the arm named by its stack, either a CI run or a local results directory:
 A CI run's root bundle is downloaded; a `path` is read where it is. Each
 arm's results.json files are split into
 rows of the cases that have a `class`: all of them, each class (lookup,
-synthesis) and those of the `memory-precise` module. Each run's score becomes
+synthesis), those of the `memory-precise` module and those of the
+`memory-consolidation` module. Each run's score becomes
 the points its answer criteria awarded (its `memory_answer_points`
 measurement), so the memory-off arm loses nothing for the injection it never
 makes. `harness-e2e compare --json` (HARNESS_E2E_BIN, or on PATH) then
 compares memory-off with memory, and memory with memory-consolidated, row by
 row: every figure and verdict is the runner's. The only sums here check the
-arms, from each run's measurements: the off arm must inject nothing, and the
-consolidated arm says what its passes did.
+arms, from each run's measurements: the off arm must inject nothing, the
+consolidated arm says what its passes did, each consolidation case lists what
+every pass did to its bank, and each arm says how many runs set up on MiniLM.
 
 It writes DIR/memory-gain.md and DIR/memory-gain.json, prints the markdown and
 appends it to the job summary. It exits 1 when a model's report has an error:
 an arm not measured or unreadable, no quality figure for memory against
-memory-off, or a memory-off arm that injected.
+memory-off, a memory-off arm that injected, a compared memory-consolidated run
+that did not consolidate, or a consolidation case with no consolidated run or
+with a pass that superseded nothing or took no semantic action.
 """
 
 from __future__ import annotations
@@ -50,17 +54,22 @@ PLAN = Path(__file__).resolve().parent.parent / "config" / "test-plan.json"
 INJECTED = ("memory_injected_tokens", "memory_rules_tokens", "memory_reminder_tokens")
 PASS = {"superseded": "memory_consolidation_superseded", "llm_calls": "memory_consolidation_llm_calls",
         "notes": "memory_consolidation_notes"}
+# What each pass on a consolidation case's bank did.
+CASE_PASS = {"superseded": "memory_consolidation_superseded", "semantic": "memory_consolidation_semantic",
+             "notes": "memory_consolidation_notes"}
 ANSWER = "memory_answer_points"
+MINILM = "memory_setup_retrieval_minilm"
+CONSOLIDATION = "memory-consolidation"
 
 
-def precise() -> set[str]:
-    """The cases of the `memory-precise` module."""
+def module(name: str) -> list[str]:
+    """The cases of the plan's module `name`, in its order."""
     modules = json.loads(PLAN.read_text())["modules"]
-    return set(next(module["scenarios"] for module in modules if module["id"] == "memory-precise"))
+    return next(module["scenarios"] for module in modules if module["id"] == name)
 
 
 def rows() -> dict[str, Callable[[dict[str, Any]], bool]]:
-    cases = precise()
+    precise, consolidation = module("memory-precise"), module(CONSOLIDATION)
 
     def scored(scenario: dict[str, Any]) -> bool:
         return scenario.get("class") in ("lookup", "synthesis")
@@ -69,7 +78,8 @@ def rows() -> dict[str, Callable[[dict[str, Any]], bool]]:
         "all": scored,
         "lookup": lambda scenario: scored(scenario) and scenario["class"] == "lookup",
         "synthesis": lambda scenario: scored(scenario) and scenario["class"] == "synthesis",
-        "precise": lambda scenario: scored(scenario) and scenario.get("scenario_id") in cases,
+        "precise": lambda scenario: scored(scenario) and scenario.get("scenario_id") in precise,
+        "consolidation": lambda scenario: scored(scenario) and scenario.get("scenario_id") in consolidation,
     }
 
 
@@ -174,9 +184,26 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
         passes = [run for run in runs if PASS["superseded"] in run]
         report["consolidation"] = {"runs": len(runs), "consolidated": len(passes),
                                    **{key: sum(run.get(found, 0) for run in passes) for key, found in PASS.items()}}
-        if passes and len(passes) < len(runs):
+        if len(passes) < len(runs):
             report["errors"].append(f"{len(runs) - len(passes)} memory-consolidated runs never consolidated: "
                                     "memory-consolidated against memory mixes them in")
+        report["consolidation_cases"] = {}
+        for case in module(CONSOLIDATION):
+            done = [{key: run.get(found, 0) for key, found in CASE_PASS.items()}
+                    for run in measured(arms[CONSOLIDATED], lambda scenario: scenario.get("scenario_id") == case)
+                    if PASS["superseded"] in run]
+            report["consolidation_cases"][case] = done
+            if not done:
+                report["errors"].append(f"{case}: no memory-consolidated run consolidated")
+            for key, what in (("superseded", "superseded nothing"), ("semantic", "took no semantic action")):
+                if short := sum(1 for run in done if run[key] < 1):
+                    report["errors"].append(f"{case}: {short} of {len(done)} consolidated runs {what}")
+    # Information only: a run that set up lexical still ran its case.
+    report["minilm"] = {}
+    for arm, path in arms.items():
+        modes = [run[MINILM] for run in measured(path, rows()["all"]) if MINILM in run]
+        if modes:
+            report["minilm"][arm] = {"runs": len(modes), "minilm": sum(1 for mode in modes if mode)}
     return report
 
 
@@ -232,6 +259,13 @@ def markdown(models: dict[str, dict[str, Any]]) -> str:
                          f"{passes['superseded']:g} memories, {passes['llm_calls']:g} model calls, "
                          f"{passes['notes']:g} notes" if passes["consolidated"]
                          else "- no run consolidated: this arm is a second memory-on arm")
+        for case, done in (report.get("consolidation_cases") or {}).items():
+            per_run = "; ".join(f"{key} " + ", ".join(f"{run[key]:g}" for run in done) for key in CASE_PASS)
+            lines.append(f"- {case}, per consolidated run: {per_run}" if done
+                         else f"- {case}: no consolidated run")
+        if modes := report.get("minilm"):
+            lines.append("- set up on MiniLM: " + ", ".join(
+                f"{mode['minilm']} of {mode['runs']} {arm} runs" for arm, mode in modes.items()))
         lines += [f"- {error}" for error in report["errors"]]
         lines.append("")
     return "\n".join(lines)
