@@ -473,7 +473,7 @@ const DO_NOT_KEEP_TEACHER: &[&str] = &[
 const DO_NOT_KEEP_PROMPT: &str =
     "Suggest one dinner for me tonight that suits my diagnosed condition. Reply with the dish only.";
 
-pub const CASES: [Case; 42] = [
+pub const CASES: [Case; 44] = [
     Case {
         id: "memory_relevant_recall",
         title: "Memory recalls what the task needs",
@@ -2016,6 +2016,8 @@ pub const CASES: [Case; 42] = [
     super::precise_cases::ENV_VAR,
     super::precise_cases::COMMAND,
     super::precise_cases::LONG_MESSAGE,
+    super::consolidation_cases::STALE_FACT,
+    super::consolidation_cases::REWORDED_FACT,
 ];
 
 /// The cases whose answer builds on stored facts or rules; every other case
@@ -3058,7 +3060,7 @@ mod tests {
             class(case_named("memory_value_project")),
             Some(Class::Lookup)
         );
-        for case in &CASES[36..] {
+        for case in &CASES[36..42] {
             assert!(case.id.starts_with("memory_precise_"), "{}", case.id);
             assert_eq!(class(case), Some(Class::Lookup), "{}", case.id);
         }
@@ -3082,7 +3084,7 @@ mod tests {
     /// A planted precise case asks for the value its one seed states, whole.
     #[test]
     fn a_precise_answer_holds_the_value_its_seed_plants() {
-        let planted: Vec<&Case> = CASES[36..]
+        let planted: Vec<&Case> = CASES[36..42]
             .iter()
             .filter(|case| !case.memories.is_empty())
             .collect();

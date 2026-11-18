@@ -123,23 +123,34 @@ class SlotSelectionTests(unittest.TestCase):
             self.assertEqual(reported(selected, "software-engineering-r03", "case-timer-wake", ["timer_wake"]),
                              [("software-engineering-r03/case-timer-wake", "timer_wake", "7", 2)])
 
+    def contracts(self, suite, root):
+        (root / "suite.json").write_text(json.dumps(suite))
+        (root / "execution.json").write_text(json.dumps({
+            "model": "deepseek/deepseek-v4-flash", "cli": {"version": "0.24.2"}, "template": None}))
+        (root / "stack.yaml").write_text("containers: {}\n")
+        prepare_execution.command_contracts(
+            SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e"))
+        return json.loads((root / "contracts/resolution.json").read_text())
+
     def test_the_contracts_and_the_matrix_hold_only_what_runs(self):
         selected, _ = prepare_execution.select_slots(SUITE, SLOTS)
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            (root / "suite.json").write_text(json.dumps(selected))
-            (root / "execution.json").write_text(json.dumps({
-                "model": "deepseek/deepseek-v4-flash", "cli": {"version": "0.24.2"}, "template": None}))
-            (root / "stack.yaml").write_text("containers: {}\n")
-            prepare_execution.command_contracts(
-                SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e"))
-            resolution = json.loads((root / "contracts/resolution.json").read_text())
+            resolution = self.contracts(selected, root)
             self.assertEqual(resolution["campaign_ids"], ["software-engineering-r01", "software-engineering-r03"])
             self.assertEqual([(entry["campaign_id"], entry["group_id"]) for entry in resolution["matrix"]["include"]],
                              [("software-engineering-r01", "case-registry-implementation"),
                               ("software-engineering-r03", "case-timer-wake")])
             self.assertEqual(sorted(path.name for path in (root / "contracts").iterdir()),
                              ["resolution.json", "software-engineering-r01.json", "software-engineering-r03.json"])
+
+    def test_the_matrix_lists_each_round_in_turn_and_its_groups_in_suite_order(self):
+        # memory-gain relies on this order to start its first module's groups in the first matrix slots.
+        with tempfile.TemporaryDirectory() as directory:
+            resolution = self.contracts(SUITE, pathlib.Path(directory))
+            self.assertEqual([(entry["campaign_id"], entry["group_id"]) for entry in resolution["matrix"]["include"]],
+                             [(f"software-engineering-r0{n}", g) for n in (1, 2, 3)
+                              for g in ("case-timer-wake", "case-registry-implementation")])
 
     def test_the_slots_step_cuts_the_suite_and_leaves_it_whole_without_slots(self):
         with tempfile.TemporaryDirectory() as directory:

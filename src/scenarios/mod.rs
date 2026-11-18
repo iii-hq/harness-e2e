@@ -716,6 +716,8 @@ scenarios! {
     MemoryPreciseEnvVar = "memory_precise_env_var" => memory::Memory(39),
     MemoryPreciseCommand = "memory_precise_command" => memory::Memory(40),
     MemoryPreciseLongMessage = "memory_precise_long_message" => memory::Memory(41),
+    MemoryConsolidationStaleFact = "memory_consolidation_stale_fact" => memory::Memory(42),
+    MemoryConsolidationRewordedFact = "memory_consolidation_reworded_fact" => memory::Memory(43),
     SpawnDepthCap = "spawn_depth_cap" => spawn_depth_cap::SpawnDepthCap,
     RepeatedFailureBreaker = "repeated_failure_breaker" => call_guards::RepeatedFailureBreaker,
     TruncatedCallGuard = "truncated_call_guard" => call_guards::TruncatedCallGuard,
@@ -1104,7 +1106,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 121);
+        assert_eq!(ids.len(), 123);
     }
 
     #[test]
@@ -1527,7 +1529,7 @@ memory_rule_fit sha256:7a1773ee7a8228dfc1cb2226563aeb553e3990d1578b8a8a69cb4f891
             ScenarioId::MemoryCurrentAndHistory,
             ScenarioId::MemoryIncrementalLongRecall,
         ];
-        assert_eq!(memory::IDS.len(), 42);
+        assert_eq!(memory::IDS.len(), 44);
         assert_eq!(memory::IDS[22], "memory_learn_then_recall");
         assert_eq!(memory::IDS[28], "memory_keeps_without_a_rule");
         for case in &CASES {

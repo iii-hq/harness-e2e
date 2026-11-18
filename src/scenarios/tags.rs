@@ -309,7 +309,9 @@ impl ScenarioId {
                 | Self::MemoryPrecisePort
                 | Self::MemoryPreciseEnvVar
                 | Self::MemoryPreciseCommand
-                | Self::MemoryPreciseLongMessage => (&[W::Memory], A::Memory, &[]),
+                | Self::MemoryPreciseLongMessage
+                | Self::MemoryConsolidationStaleFact
+                | Self::MemoryConsolidationRewordedFact => (&[W::Memory], A::Memory, &[]),
                 Self::SpawnDepthCap => (&[W::State], A::Coordination, &[]),
                 // The call guards and their fixtures are the Harness's own;
                 // the fixtures are the runner's, not a worker's.

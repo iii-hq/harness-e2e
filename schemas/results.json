@@ -3161,6 +3161,8 @@
         "memory_precise_env_var",
         "memory_precise_command",
         "memory_precise_long_message",
+        "memory_consolidation_stale_fact",
+        "memory_consolidation_reworded_fact",
         "spawn_depth_cap",
         "repeated_failure_breaker",
         "truncated_call_guard",

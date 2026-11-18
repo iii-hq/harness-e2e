@@ -2,8 +2,11 @@ name: Report the memory gain
 description: >-
   Reads the `memory-gain` runs of each model on the memory, memory-off and
   memory-consolidated stacks, compares the arms with the latest released
-  runner's `harness-e2e compare` and reports the gain per class. It fails only
-  when a model has no gain to report or its memory-off arm injected.
+  runner's `harness-e2e compare` and reports the gain per class. It fails when
+  a model has no gain to report, its memory-off arm injected, a compared
+  memory-consolidated run did not consolidate, or a consolidation case has no
+  consolidated run or a pass that superseded nothing or took no semantic
+  action.
 
 inputs:
   token:
