@@ -151,12 +151,23 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: harness-e2e-${{ matrix.target }}-${{ needs.validate.outputs.commit_sha }}
+      # The binary embeds the judge-quality datasets, so their licences ship with it.
+      - name: Stage embedded dataset licences
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dataset in jevbench typed-decisions; do
+            mkdir -p "dataset-licenses/$dataset"
+            cp "tests/fixtures/judge-quality/$dataset/LICENSE" "tests/fixtures/judge-quality/$dataset/NOTICE" \
+              "dataset-licenses/$dataset/"
+          done
       - name: Build and attach binary
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1
         env:
           SKIP_CONSOLE_UI_BUILD: '1'
         with:
           bin: harness-e2e
+          include: dataset-licenses
           target: ${{ matrix.target }}
           ref: refs/tags/${{ needs.validate.outputs.tag }}
           tar: unix
