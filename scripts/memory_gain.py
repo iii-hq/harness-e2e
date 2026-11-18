@@ -16,7 +16,9 @@ A CI run's root bundle is downloaded; a `path` is read where it is. Each
 arm's results.json files are split into
 rows of the cases that have a `class`: all of them, each class (lookup,
 synthesis), those of the `memory-precise` module and those of the
-`memory-consolidation` module. Each run's score becomes
+`memory-consolidation` module. The consolidation cases count in their own row
+only: built so that only a consolidated bank answers well, they would lift
+every row they sit in. Each run's score becomes
 the points its answer criteria awarded (its `memory_answer_points`
 measurement), so the memory-off arm loses nothing for the injection it never
 makes. `harness-e2e compare --json` (HARNESS_E2E_BIN, or on PATH) then
@@ -31,7 +33,8 @@ appends it to the job summary. It exits 1 when a model's report has an error:
 an arm not measured or unreadable, no quality figure for memory against
 memory-off, a memory-off arm that injected, a compared memory-consolidated run
 that did not consolidate, or a consolidation case with no consolidated run or
-with a pass that superseded nothing or took no semantic action.
+with a run set up on MiniLM whose pass superseded nothing or took no semantic
+action (one set up lexical is said, not failed).
 """
 
 from __future__ import annotations
@@ -68,17 +71,24 @@ def module(name: str) -> list[str]:
     return next(module["scenarios"] for module in modules if module["id"] == name)
 
 
+def scored(scenario: dict[str, Any]) -> bool:
+    """A case with a class: every row reads from these, and every arm check counts them."""
+    return scenario.get("class") in ("lookup", "synthesis")
+
+
 def rows() -> dict[str, Callable[[dict[str, Any]], bool]]:
     precise, consolidation = module("memory-precise"), module(CONSOLIDATION)
 
-    def scored(scenario: dict[str, Any]) -> bool:
-        return scenario.get("class") in ("lookup", "synthesis")
+    # The consolidation cases are built so that only a consolidated bank answers
+    # well: in any other row they would carry its consolidated column.
+    def general(scenario: dict[str, Any]) -> bool:
+        return scored(scenario) and scenario.get("scenario_id") not in consolidation
 
     return {
-        "all": scored,
-        "lookup": lambda scenario: scored(scenario) and scenario["class"] == "lookup",
-        "synthesis": lambda scenario: scored(scenario) and scenario["class"] == "synthesis",
-        "precise": lambda scenario: scored(scenario) and scenario.get("scenario_id") in precise,
+        "all": general,
+        "lookup": lambda scenario: general(scenario) and scenario["class"] == "lookup",
+        "synthesis": lambda scenario: general(scenario) and scenario["class"] == "synthesis",
+        "precise": lambda scenario: general(scenario) and scenario.get("scenario_id") in precise,
         "consolidation": lambda scenario: scored(scenario) and scenario.get("scenario_id") in consolidation,
     }
 
@@ -160,7 +170,7 @@ def measured(arm: Path, keep: Callable[[dict[str, Any]], bool] = lambda scenario
 
 def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
     """One model's rows and arm checks."""
-    report: dict[str, Any] = {"rows": {}, "errors": []}
+    report: dict[str, Any] = {"rows": {}, "errors": [], "notices": []}
     for row, keep in rows().items():
         sides = {arm: work / row / arm for arm in arms}
         present = {arm for arm in arms if split(arms[arm], keep, sides[arm])}
@@ -180,7 +190,7 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
     if CONSOLIDATED in arms:
         # The runs the rows compare whose setup finished: a run without
         # measurements never reached the consolidation step.
-        runs = [run for run in measured(arms[CONSOLIDATED], rows()["all"]) if run]
+        runs = [run for run in measured(arms[CONSOLIDATED], scored) if run]
         passes = [run for run in runs if PASS["superseded"] in run]
         report["consolidation"] = {"runs": len(runs), "consolidated": len(passes),
                                    **{key: sum(run.get(found, 0) for run in passes) for key, found in PASS.items()}}
@@ -189,19 +199,27 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
                                     "memory-consolidated against memory mixes them in")
         report["consolidation_cases"] = {}
         for case in module(CONSOLIDATION):
-            done = [{key: run.get(found, 0) for key, found in CASE_PASS.items()}
-                    for run in measured(arms[CONSOLIDATED], lambda scenario: scenario.get("scenario_id") == case)
-                    if PASS["superseded"] in run]
+            consolidated = [run for run in measured(arms[CONSOLIDATED],
+                                                    lambda scenario: scenario.get("scenario_id") == case)
+                            if PASS["superseded"] in run]
+            done = [{key: run.get(found, 0) for key, found in CASE_PASS.items()} for run in consolidated]
             report["consolidation_cases"][case] = done
             if not done:
                 report["errors"].append(f"{case}: no memory-consolidated run consolidated")
             for key, what in (("superseded", "superseded nothing"), ("semantic", "took no semantic action")):
-                if short := sum(1 for run in done if run[key] < 1):
-                    report["errors"].append(f"{case}: {short} of {len(done)} consolidated runs {what}")
+                short = [run for run, did in zip(consolidated, done) if did[key] < 1]
+                # A run that set up lexical (MiniLM still loading) gives the judge
+                # no vectors: said, not failed. One with no setup ranking counts.
+                lexical = sum(1 for run in short if run.get(MINILM) == 0)
+                if len(short) > lexical:
+                    report["errors"].append(f"{case}: {len(short) - lexical} of {len(done)} consolidated runs {what}")
+                if lexical:
+                    report["notices"].append(f"{case}: {lexical} of {len(done)} consolidated runs {what} "
+                                             "but set up lexical, so not an error")
     # Information only: a run that set up lexical still ran its case.
     report["minilm"] = {}
     for arm, path in arms.items():
-        modes = [run[MINILM] for run in measured(path, rows()["all"]) if MINILM in run]
+        modes = [run[MINILM] for run in measured(path, scored) if MINILM in run]
         if modes:
             report["minilm"][arm] = {"runs": len(modes), "minilm": sum(1 for mode in modes if mode)}
     return report
@@ -266,6 +284,7 @@ def markdown(models: dict[str, dict[str, Any]]) -> str:
         if modes := report.get("minilm"):
             lines.append("- set up on MiniLM: " + ", ".join(
                 f"{mode['minilm']} of {mode['runs']} {arm} runs" for arm, mode in modes.items()))
+        lines += [f"- {notice}" for notice in report.get("notices") or []]
         lines += [f"- {error}" for error in report["errors"]]
         lines.append("")
     return "\n".join(lines)
