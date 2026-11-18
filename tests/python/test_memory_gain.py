@@ -137,8 +137,9 @@ class MemoryGainTest(unittest.TestCase):
         self.assertFalse(rows["precise"]({"scenario_id": "memory_value_project", "class": "lookup"}))
         long_message = {"scenario_id": "memory_precise_long_message", "class": "lookup"}
         self.assertEqual([name for name, row in rows.items() if row(long_message)], ["all", "lookup", "precise"])
+        # A consolidation case counts in its own row only.
         stale = {"scenario_id": STALE, "class": "lookup"}
-        self.assertEqual([name for name, row in rows.items() if row(stale)], ["all", "lookup", "consolidation"])
+        self.assertEqual([name for name, row in rows.items() if row(stale)], ["consolidation"])
         # A case without a class is in no row.
         for row in rows.values():
             self.assertFalse(row({"scenario_id": "memory_small_talk"}))
@@ -279,9 +280,10 @@ class MemoryGainTest(unittest.TestCase):
         code, report, text = self.run_main(arms())
         self.assertEqual(code, 0, text)
         lookup = report[MODEL]["rows"]["lookup"]["on_vs_off"]
-        # The long message gains nothing and counts: (4 * 60 + 0) / 5.
-        self.assertEqual(lookup["quality"]["delta"], 48.0)
-        self.assertEqual(lookup["quality"]["tests"], 5)
+        # The long message gains nothing and counts; the consolidation cases
+        # are in their own row: (60 + 60 + 0) / 3.
+        self.assertEqual(lookup["quality"]["delta"], 40.0)
+        self.assertEqual(lookup["quality"]["tests"], 3)
         with tempfile.TemporaryDirectory() as directory:
             sides = []
             for arm in ("memory-off", "memory"):
@@ -291,10 +293,26 @@ class MemoryGainTest(unittest.TestCase):
                 sides.append(Path(directory, arm, "lookup"))
             self.assertEqual(lookup["quality"], memory_gain.compare(*sides)["quality"])
         # No class, no row: small talk is in none.
-        self.assertEqual(report[MODEL]["rows"]["all"]["on_vs_off"]["quality"]["tests"], 6)
+        self.assertEqual(report[MODEL]["rows"]["all"]["on_vs_off"]["quality"]["tests"], 4)
         # The same answers on both arms gain nothing, though memory's runs
         # also scored the rule injection (60 against 30).
         self.assertEqual(report[MODEL]["rows"]["synthesis"]["on_vs_off"]["quality"]["delta"], 0.0)
+
+    @unittest.skipUnless(os.environ.get("HARNESS_E2E_BIN") or shutil.which("harness-e2e"), "needs the runner")
+    def test_the_consolidation_cases_lift_only_their_own_row(self):
+        built = arms()
+        # Only a consolidated bank answers the consolidation cases well.
+        for entry in built["memory-consolidated"]:
+            if entry["scenario_id"] in (STALE, REWORDED):
+                for index in range(3):
+                    measure(entry, index, "memory_answer_points", 100)
+        code, report, text = self.run_main(built)
+        self.assertEqual(code, 0, text)
+        rows = report[MODEL]["rows"]
+        for name in ("all", "lookup"):
+            self.assertEqual(rows[name]["consolidated_vs_on"]["quality"]["delta"], 0.0, name)
+        self.assertEqual(rows["consolidation"]["consolidated_vs_on"]["quality"]["delta"], 20.0)
+        self.assertEqual(rows["consolidation"]["consolidated_vs_on"]["quality"]["tests"], 2)
 
 
 if __name__ == "__main__":

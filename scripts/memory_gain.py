@@ -16,7 +16,9 @@ A CI run's root bundle is downloaded; a `path` is read where it is. Each
 arm's results.json files are split into
 rows of the cases that have a `class`: all of them, each class (lookup,
 synthesis), those of the `memory-precise` module and those of the
-`memory-consolidation` module. Each run's score becomes
+`memory-consolidation` module. The consolidation cases count in their own row
+only: built so that only a consolidated bank answers well, they would lift
+every row they sit in. Each run's score becomes
 the points its answer criteria awarded (its `memory_answer_points`
 measurement), so the memory-off arm loses nothing for the injection it never
 makes. `harness-e2e compare --json` (HARNESS_E2E_BIN, or on PATH) then
@@ -68,17 +70,24 @@ def module(name: str) -> list[str]:
     return next(module["scenarios"] for module in modules if module["id"] == name)
 
 
+def scored(scenario: dict[str, Any]) -> bool:
+    """A case with a class: every row reads from these, and every arm check counts them."""
+    return scenario.get("class") in ("lookup", "synthesis")
+
+
 def rows() -> dict[str, Callable[[dict[str, Any]], bool]]:
     precise, consolidation = module("memory-precise"), module(CONSOLIDATION)
 
-    def scored(scenario: dict[str, Any]) -> bool:
-        return scenario.get("class") in ("lookup", "synthesis")
+    # The consolidation cases are built so that only a consolidated bank answers
+    # well: in any other row they would carry its consolidated column.
+    def general(scenario: dict[str, Any]) -> bool:
+        return scored(scenario) and scenario.get("scenario_id") not in consolidation
 
     return {
-        "all": scored,
-        "lookup": lambda scenario: scored(scenario) and scenario["class"] == "lookup",
-        "synthesis": lambda scenario: scored(scenario) and scenario["class"] == "synthesis",
-        "precise": lambda scenario: scored(scenario) and scenario.get("scenario_id") in precise,
+        "all": general,
+        "lookup": lambda scenario: general(scenario) and scenario["class"] == "lookup",
+        "synthesis": lambda scenario: general(scenario) and scenario["class"] == "synthesis",
+        "precise": lambda scenario: general(scenario) and scenario.get("scenario_id") in precise,
         "consolidation": lambda scenario: scored(scenario) and scenario.get("scenario_id") in consolidation,
     }
 
@@ -180,7 +189,7 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
     if CONSOLIDATED in arms:
         # The runs the rows compare whose setup finished: a run without
         # measurements never reached the consolidation step.
-        runs = [run for run in measured(arms[CONSOLIDATED], rows()["all"]) if run]
+        runs = [run for run in measured(arms[CONSOLIDATED], scored) if run]
         passes = [run for run in runs if PASS["superseded"] in run]
         report["consolidation"] = {"runs": len(runs), "consolidated": len(passes),
                                    **{key: sum(run.get(found, 0) for run in passes) for key, found in PASS.items()}}
@@ -201,7 +210,7 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
     # Information only: a run that set up lexical still ran its case.
     report["minilm"] = {}
     for arm, path in arms.items():
-        modes = [run[MINILM] for run in measured(path, rows()["all"]) if MINILM in run]
+        modes = [run[MINILM] for run in measured(path, scored) if MINILM in run]
         if modes:
             report["minilm"][arm] = {"runs": len(modes), "minilm": sum(1 for mode in modes if mode)}
     return report

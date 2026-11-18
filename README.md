@@ -933,12 +933,14 @@ so neither can call it. Naming it would change every memory case's digest and
 split its trend history once.
 
 `scripts/memory_gain.py` reads one run per model and stack, splits each arm's
-results into five rows of the cases that have a class (all of them, `lookup`,
-`synthesis`, the precise cases and the consolidation cases), scores each run
-on the points its answer criteria awarded (its `memory_answer_points`
-measurement) and runs `harness-e2e compare --json` on memory-off against
-memory and on memory against memory-consolidated. Every figure and verdict is
-the runner's. Read it this way:
+results into five rows of the cases that have a class (`all`, `lookup`,
+`synthesis`, the precise cases and the consolidation cases). The consolidation
+cases count in their own row only: built so that only a consolidated bank
+answers well, they would lift the memory-consolidated column of every row they
+sat in. It scores each run on the points its answer criteria awarded (its
+`memory_answer_points` measurement) and runs `harness-e2e compare --json` on
+memory-off against memory and on memory against memory-consolidated. Every
+figure and verdict is the runner's. Read it this way:
 
 - The gain is a difference in answer points: what memory injected scores
   nothing, so an arm gains only where its answers got better. The memory-off
