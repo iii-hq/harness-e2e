@@ -2,6 +2,7 @@ import json
 import os
 import re
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -79,78 +80,64 @@ class WorkflowBoundaryTests(unittest.TestCase):
             self.assertEqual(download["env"].get("GITHUB_TOKEN"), "${{ github.token }}")
             self.assertIn(" target/harness-e2e-contract ", download["run"])
 
-    def test_rerun_artifacts_belong_to_the_jobs_actual_execution(self):
-        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())
-        steps = workflow["jobs"]["finalize"]["steps"]
-        selection = next((step for step in steps if step.get("id") == "group_artifacts"), None)
-        self.assertIsNotNone(selection, "reruns must select evidence from each job's actual execution")
-        download = next(step for step in steps if step.get("id") == "group_download")
-        self.assertEqual(download["with"].get("artifact-ids"), "${{ steps.group_artifacts.outputs.artifact_ids }}")
-        self.assertEqual(download["with"].get("path"), "${{ steps.group_artifacts.outputs.download_path }}")
-        self.assertEqual(download["with"].get("github-token"), "${{ github.token }}")
-        self.assertEqual(download["with"].get("run-id"), "${{ github.run_id }}")
+    def test_the_finalizer_stops_when_group_artifacts_cannot_be_fetched(self):
+        """Which bundle each group gets, and how it is fetched, is
+        tests/python/test_group_artifacts.py; here, that a fetch that fails
+        fails the job before anything is aggregated, and that what is still
+        reported and uploaded is the summary that says why."""
+        steps = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())["jobs"]["finalize"]["steps"]
+        self.assertFalse([step for step in steps if step.get("uses", "").startswith("actions/download-artifact@")])
+        ids = [step.get("id") for step in steps]
+        fetch = steps[ids.index("group_artifacts")]
+        self.assertEqual(fetch["run"], "python3 scripts/group_artifacts.py")
+        self.assertEqual(fetch["env"], {"GITHUB_TOKEN": "${{ github.token }}",
+                                        "CONTRACT_ATTEMPT": "${{ needs.prepare.outputs.contract_attempt }}"})
+        self.assertNotIn("continue-on-error", fetch)
+        # The aggregate runs only after a fetch that succeeded; what follows
+        # it runs whatever happened.
+        aggregate = steps[ids.index("aggregate")]
+        self.assertLess(ids.index("group_artifacts"), ids.index("aggregate"))
+        self.assertNotIn("if", aggregate)
+        package = steps[ids.index("root_package")]
+        report = next(step for step in steps if step.get("name") == "Report the campaign summary")
+        for step in (report, package, steps[ids.index("root_upload")]):
+            self.assertTrue(step["if"].startswith("always()"), step.get("name"))
 
-        def job(group, start, end, conclusion="success"):
-            return {"name": f"smoke-r01 · {group}", "run_attempt": 3, "status": "completed",
-                    "started_at": f"2026-09-21T{start}Z", "completed_at": f"2026-09-21T{end}Z",
-                    "conclusion": conclusion}
+        def run_package(root):
+            return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", package["run"]],
+                                  cwd=root, capture_output=True, text=True)
 
-        def artifact(group, attempt, identifier, created, expired=False):
-            return {"id": identifier, "name": f"e2e-observation-execution-1-smoke-r01-{group}-gh-{attempt}",
-                    "created_at": f"2026-09-21T{created}Z", "expired": expired}
-
-        old_job = job("case-old", "05:00:00", "05:01:00")
-        new_job = job("case-new", "11:00:00", "11:01:00", "failure")
-        old = artifact("case-old", 1, 10, "05:00:50")
-        stale = artifact("case-new", 1, 11, "05:00:50")
-        diagnostic = artifact("case-new", 3, 30, "11:00:50")
-        cases = [
-            ("copied_success_and_new_failure", [old_job, new_job], [old, stale, diagnostic], 1, "10,30"),
-            ("missing_new_artifact", [new_job], [stale], 1, ""),
-            ("expired_new_artifact", [new_job], [stale, dict(diagnostic, expired=True)], 1, ""),
-            ("different_contract", [old_job], [old], 2, ""),
-            ("ambiguous_artifacts", [new_job], [diagnostic, dict(diagnostic, id=31)], 1, ""),
-            ("ambiguous_jobs", [new_job, new_job], [diagnostic], 1, ""),
-            ("malformed_job", [dict(new_job, completed_at=None)], [diagnostic], 1, ""),
-            ("single_artifact", [old_job], [old, stale], 1, "10"),
-            ("single_new_failure", [new_job], [diagnostic], 1, "30"),
-            ("future_attempt", [new_job], [artifact("case-new", 4, 40, "11:00:50")], 1, ""),
-        ]
-        for name, jobs, artifacts, contract_attempt, expected_ids in cases:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                root = pathlib.Path(directory)
-                (root / "bin").mkdir()
-                (root / "jobs.json").write_text(json.dumps([{"jobs": jobs}]))
-                (root / "artifacts.json").write_text(json.dumps([{"artifacts": artifacts}]))
-                gh = root / "bin/gh"
-                gh.write_text('#!/bin/sh\ncase "$*" in\n'
-                              '  *"/attempts/3/jobs?per_page=100"*) cat "$FIXTURE_DIR/jobs.json" ;;\n'
-                              '  *"/artifacts?per_page=100"*) cat "$FIXTURE_DIR/artifacts.json" ;;\n'
-                              '  *) exit 2 ;;\nesac\n')
-                gh.chmod(0o755)
-                output = root / "github-output"
-                result = subprocess.run(["bash", "-c", selection["run"]], cwd=root, env={
-                    **os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
-                    "FIXTURE_DIR": str(root), "GITHUB_OUTPUT": str(output),
-                    "GITHUB_REPOSITORY": "iii-hq/harness-e2e", "GITHUB_RUN_ID": "77",
-                    "GITHUB_RUN_ATTEMPT": "3", "CONTRACT_ATTEMPT": str(contract_attempt),
-                    "EXECUTION_KEY": "execution-1",
-                }, capture_output=True, text=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "scripts").mkdir()
+            (root / "scripts/exact_stack_campaign.py").write_text(
+                "import pathlib\npathlib.Path('called').write_text('package')\n")
+            campaigns = root / "target/harness-e2e-campaign"
+            campaigns.mkdir(parents=True)
+            # No campaign and no summary: nothing that says why, so packaging
+            # fails into its diagnostic.
+            self.assertNotEqual(run_package(root).returncode, 0)
+            # Nothing aggregated, and the summary says why: that is the bundle,
+            # with the failure.json the console shows that cause from.
+            fetch_failed = {"campaigns": [], "outcome": "infra_failed", "phase": "workflow_artifact_download",
+                            "unavailable": "the group artifacts could not be fetched: x; nothing was aggregated"}
+            for summary, failure in (
+                    (fetch_failed, {"phase": "workflow_artifact_download", "outcome": "infra_failed",
+                                    "error": fetch_failed["unavailable"]}),
+                    ({"campaigns": [], "unavailable": "the finalizer produced no summary"},
+                     {"phase": "finalize", "outcome": "infra_failed", "error": "the finalizer produced no summary"})):
+                (campaigns / "execution-summary.json").write_text(json.dumps(summary))
+                result = run_package(root)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                self.assertEqual(values["artifact_ids"], expected_ids)
-                selected = json.loads((root / "target/selected-group-artifacts.json").read_text())
-                self.assertEqual(
-                    ",".join(str(item["id"]) for item in selected.values()), expected_ids,
-                )
-                if name == "single_artifact":
-                    # download-artifact v7 flattens a singleton even with merge-multiple:false.
-                    self.assertEqual(values["download_path"], "target/downloaded-groups/" + old["name"])
-                    self.assertEqual(selected["smoke-r01 · case-old"]["run_attempt"], 1)
-                elif name == "single_new_failure":
-                    self.assertEqual(values["download_path"], "target/downloaded-groups/" + diagnostic["name"])
-                else:
-                    self.assertEqual(values["download_path"], "target/downloaded-groups")
+                self.assertFalse((root / "called").exists())
+                self.assertEqual(json.loads((campaigns / "failure.json").read_text()), failure)
+            # Something aggregated: packaged, and no failure.json.
+            (campaigns / "failure.json").unlink()
+            (campaigns / "smoke-r01").mkdir()
+            result = run_package(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / "called").exists())
+            self.assertFalse((campaigns / "failure.json").exists())
 
     def test_external_actions_are_pinned_to_immutable_commits(self):
         action_ref = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
@@ -626,9 +613,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
 
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         finalizer = workflow.split("\n  finalize:", 1)[1]
-        # The executor image lays the selected groups out, then aggregates.
+        # The executor image lays the fetched groups out, then aggregates.
         self.assertLess(
-            finalizer.index("steps.group_artifacts.outputs.download_path"),
+            finalizer.index("scripts/group_artifacts.py"),
             finalizer.index("scripts/run_in_image.sh finalize"),
         )
         self.assertNotIn("Restore deterministic group paths", finalizer)
@@ -699,6 +686,31 @@ class WorkflowBoundaryTests(unittest.TestCase):
             self.assertFalse(
                 (campaign_root / "regression-r01/campaign-summary.json").exists()
             )
+
+    def test_restore_refuses_a_selected_bundle_that_was_not_downloaded(self):
+        """A bundle selected but not there was lost on the way: restoring
+        lays nothing out, rather than reading its group as never observed."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            contracts = root / "target/harness-e2e-contract/contracts"
+            contracts.mkdir(parents=True)
+            (contracts / "smoke-r01.json").write_text('{"campaign":"smoke-r01"}')
+            (root / "scripts").mkdir()
+            shutil.copy(ROOT / "scripts/executor.sh", root / "scripts")
+            (root / "scripts/exact_stack_campaign.py").write_text("print('case-a\\ncase-b')\n")
+            present = root / "target/downloaded-groups/e2e-observation-execution-1-smoke-r01-case-a-gh-1"
+            present.mkdir(parents=True)
+            (present / "results.json").write_text("{}")
+            lost = "e2e-observation-execution-1-smoke-r01-case-b-gh-1"
+            (root / "target/selected-group-artifacts.json").write_text(json.dumps({
+                "smoke-r01 · case-a": {"name": present.name}, "smoke-r01 · case-b": {"name": lost}}))
+
+            result = subprocess.run(["bash", "scripts/executor.sh", "finalize", "restore"],
+                                    cwd=root, capture_output=True, text=True)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(lost, result.stderr)
+            self.assertEqual(list((root / "target/harness-e2e-campaign").glob("*/")), [])
 
     def test_exact_stack_is_the_only_release_control_executor(self):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}

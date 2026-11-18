@@ -50,7 +50,9 @@
 #                  target/harness-e2e-campaign/ from the group bundles
 #                  target/selected-group-artifacts.json names in
 #                  ${HARNESS_E2E_GROUP_ARTIFACTS:-target/downloaded-groups};
-#                  a group without one reads as never observed.
+#                  a group no bundle was selected for reads as never
+#                  observed; a selected bundle that is not there fails the
+#                  restore.
 #       aggregate  aggregate every campaign there with the stack's runner
 #                  into its execution-summary.json.
 #       Without an argument, both.
@@ -366,6 +368,13 @@ restore() {
   local bundles=${HARNESS_E2E_GROUP_ARTIFACTS:-target/downloaded-groups}
   local selected=target/selected-group-artifacts.json contract campaign root group name destination
   rm -rf target/harness-e2e-campaign
+  # A selected bundle that is not there was lost on the way here: nothing is
+  # laid out, so no campaign is aggregated without it.
+  if [[ -f "$selected" ]]; then
+    while IFS= read -r name; do
+      [[ -d "$bundles/$name" ]] || { echo "selected group artifact $name is not in $bundles" >&2; exit 1; }
+    done < <(jq -r '.[].name' "$selected")
+  fi
   while IFS= read -r contract; do
     campaign=$(basename "$contract" .json)
     root=target/harness-e2e-campaign/$campaign
