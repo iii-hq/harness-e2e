@@ -108,7 +108,8 @@ A report written before causes keeps the earlier rule, where every subject
 error left the mean, and every reader says so.
 
 Every score and every audit flag is deterministic. No scenario calls a second
-model to judge the first.
+model to judge the first: in the judge-quality group the judge providers are the
+subject, and their answers are scored against the datasets' gold labels.
 
 ## Completion
 
@@ -973,6 +974,176 @@ HARNESS_E2E_BIN=target/debug/harness-e2e python3 scripts/memory_gain.py \
   {"model": "anthropic/claude-haiku-5-5", "arm": "memory-off", "path": "target/gain/memory-off"},
   {"model": "anthropic/claude-haiku-5-5", "arm": "memory-consolidated", "path": "target/gain/memory-consolidated"}]'
 ```
+
+### Judge quality
+
+The `judge_quality_*` scenarios measure a local judge provider (`judge-laya`,
+`judge-semif`, `judge-decider` or `judge-clef`) against the gold labels of two
+public datasets. The provider is the subject: the turn is a formality (`Reply
+with exactly: OK`, no functions), and `capture` calls
+`judge-<provider>::evaluate` directly, one dataset case per request with
+`timeout_ms` 300000. The ids are listed under `diagnostics` in the plan, with no
+suite and no stack file: run them with `--scenario` on a local stack.
+
+| Id | Slice | Cases / decisions |
+| --- | --- | --- |
+| `judge_quality_jevbench_easy` | JevBench easy | 48 / 48 |
+| `judge_quality_jevbench_original` | JevBench original | 72 / 72 |
+| `judge_quality_jevbench_hard` | JevBench hard | 111 / 111 |
+| `judge_quality_typed_decisions` | typed-decisions test | 400 / 2,000 |
+
+The datasets are vendored in `tests/fixtures/judge-quality/` with their licences
+(JevBench at `fstandhartinger/jevbench@609a664e`, MIT; typed-decisions at
+`LocalLLaMA/typed-decisions@e6aa632c`, Apache-2.0). Each slice's `accuracy`
+criterion names the dataset, its revision and the file's sha256, so a
+re-vendored file is a new definition.
+
+The id names the slice, never the provider: the arm is the stack. `setup`
+requires exactly one `judge-<provider>` worker in the run's namespace and loads
+its model with one tiny evaluation (up to 600 s). The evidence
+(`judge_quality_evaluation`) records the provider, its worker version, its
+stored configuration (`configuration::get` of `<namespace>-judge-<provider>`),
+its model cards, one record per case (`model`, `input_tokens`, wall time `ms`,
+error code) and one per decision (`correct`, `p_gold`, `p_top`, the answer's
+`probabilities`, and the case's `model`, `input_tokens` and `ms`).
+
+Two criteria: `answered` (gate, 10 points) needs every decision back as a valid
+answer of its question's type; `accuracy` gives `round(90 x accuracy)`. An
+unanswered decision counts wrong in every accuracy and is left out of the
+calibration figures. The measurements are `cases`, `decisions`, `answered`,
+`accuracy`; `majority_accuracy`, `agreed_n` and `accuracy_agreed`
+(typed-decisions only); `choice_n`, `choice_top1`, `choice_nll`, `choice_ece`;
+`score_n`, `score_accuracy`, `score_mae`; `noul_n`, `noul_accuracy`,
+`noul_accuracy_at_0_8` (the Harness acts on a judge answer only at 0.8),
+`noul_brier`, `noul_auroc`; `input_tokens_max`, `case_ms_p50`, `case_ms_p95`.
+
+Read the numbers with their bias:
+
+- typed-decisions gold is a teacher's argmax that the teacher itself confirms on
+  1,188 of 2,000 decisions (59.4%), and always answering the commonest label per
+  workflow and question scores 0.5225. Read `accuracy_agreed` and
+  `majority_accuracy`, and never pool it with JevBench. laya's typed-decisions
+  checkpoint was trained on its train split.
+- decider's training generators were written from the family names JevBench
+  publishes, so JevBench favours decider. Every published system scores 1.000 on
+  the easy tier; the hard tier separates them.
+- Both datasets are English.
+
+#### Running an arm
+
+One arm is one provider build with one configuration, in its own directory. The
+engine's configuration store lives in that directory and a worker keeps what it
+finds stored, so never reuse a directory for another arm.
+
+```bash
+P=laya; ARM=laya                        # P: laya | semif | decider | clef
+D=~/iii-judge-quality/$ARM && mkdir -p "$D" && cd "$D"
+cat > worker-compose.yaml <<YAML
+namespace: judge-quality
+startup_timeout: 600s
+stop_timeout: 30s
+engine:
+  url: ws://127.0.0.1:49434            # own port, away from a live stack's 49134
+containers:
+  queue:             {worker: package://queue,             version: latest}
+  state:             {worker: package://state,             version: latest}
+  session-manager:   {worker: package://session-manager,   version: latest}
+  llm-router:        {worker: package://llm-router,        version: latest, start_after: [state]}
+  context-manager:   {worker: package://context-manager,   version: latest, start_after: [llm-router]}
+  iii-directory:     {worker: package://iii-directory,     version: latest}
+  cron:              {worker: package://cron,              version: latest}
+  ide:               {worker: package://ide,               version: latest}
+  harness:
+    worker: package://harness
+    version: latest
+    start_after: [state, queue, session-manager, llm-router, context-manager, iii-directory, cron, ide]
+  judge-$P:          {worker: package://judge-$P,          version: latest}
+  fp:                {worker: package://fp,                version: latest}
+  provider-deepseek: {worker: package://provider-deepseek, version: latest, start_after: [llm-router, state]}
+YAML
+env -u III_URL III_COMPOSE_STATE_DIR="$D/.compose-state" iii compose --up
+```
+
+The stack has no judge hub, so the provider loads its model on the first call.
+Load it (and, on a cold cache, download it) by repeating this until it answers
+`"status": "ok"`:
+
+```bash
+III_URL=ws://127.0.0.1:49434 iii trigger judge-$P::models::list --namespace judge-quality --json '{"timeout_ms":300000}'
+```
+
+From the harness-e2e checkout:
+
+```bash
+ids="--scenario judge_quality_jevbench_easy --scenario judge_quality_jevbench_original \
+     --scenario judge_quality_jevbench_hard --scenario judge_quality_typed_decisions"
+III_NAMESPACE=judge-quality III_TELEMETRY_ENABLED=false \
+cargo run --locked --bin harness-e2e -- run \
+  --url ws://127.0.0.1:49434 --provider deepseek --model deepseek-flash \
+  --technical-retries 1 --output target/judge-quality/$ARM $ids
+```
+
+Stop the stack before the next arm:
+`III_URL=ws://127.0.0.1:49434 iii trigger compose::stop --namespace judge-quality --json '{}'`.
+`compose::stop` stops its whole daemon, so always pass this stack's URL.
+
+An arm's configuration on a released worker goes in `config_override` on the
+`judge-$P` container. For laya's typed-decisions checkpoint that is
+`config_override: {auto_task_detection: true, preload: [laya-typed-decisions]}`:
+routing only reaches a preloaded checkpoint.
+
+**Before against after (a worker update).** The released package and `main` can
+carry the same version, so build both arms the same way: a release build of a
+`main` worktree against a release build of the branch worktree, each in its own
+`target/`. Leave `judge-$P` out of the Compose file and start the binary in the
+stack's namespace:
+
+```bash
+III_NAMESPACE=judge-quality III_CONFIG_NAME=judge-quality-judge-laya III_WORKER_NAME=judge-laya \
+III_URL=ws://127.0.0.1:49434 ./target/release/judge-laya
+```
+
+To change that arm's configuration, read the entry with
+`iii trigger configuration::get --namespace default --json '{"id":"judge-quality-judge-laya"}'`,
+write the whole edited value back with `configuration::set`
+(`{"id": …, "value": {…}}`) and restart the worker. Confirm every candidate arm
+by something its evidence shows that the version cannot: the `config`
+snapshot, the checkpoint mix, or a card's `release_date`.
+
+#### Reading the arms
+
+`scripts/judge_quality.py` reads each arm's results directory, takes each
+slice's last run and its evidence artifact, and refuses arms whose
+`behavior_sha256` or decision ids differ for a slice.
+
+```bash
+python3 scripts/judge_quality.py --output target/judge-quality/report --baseline laya-main --runs '[
+  {"arm": "laya-main",       "path": "target/judge-quality/laya-main"},
+  {"arm": "laya-main-again", "path": "target/judge-quality/laya-main-again"},
+  {"arm": "laya-branch",     "path": "target/judge-quality/laya-branch"}]'
+```
+
+It writes `judge-quality.md` and `.json`: per arm the provider, version,
+configuration and card release dates; per slice one column per arm, accuracy
+cells as `0.676 [0.584, 0.756] n=111` (a Wilson 95% interval, with `n` capped at
+the slice's cases, since five typed-decisions questions share one state), the
+checkpoint mix, and a row pooling the three JevBench tiers.
+
+With `--baseline`, decisions are paired on id: `b` counts baseline right and arm
+wrong, `c` the reverse. On pooled JevBench the exact two-sided sign test gives
+one verdict per arm: `worse` (p < 0.05, b > c), `better` (p < 0.05, c > b), else
+`cannot tell`. typed-decisions gets no test. Run the baseline arm twice: its
+`b + c` against itself is the noise floor for every other arm.
+
+`--paired A B` prints, per slice, the flips between two arms with their sign
+test and the largest `|Δp_gold|` among decisions that did not flip, overall and
+on the decisions whose routed `model` or `input_tokens` differ between the
+arms, and the wrong count on noul decisions whose gold is "no". `input_tokens`
+differs between a long-state arm and its truncating baseline exactly on the
+cases the baseline truncated.
+
+The script exits 1 when an arm lacks a slice (`not measured`), on a refusal, or
+when an arm is `worse` than the baseline.
 
 ### Context capacity
 
