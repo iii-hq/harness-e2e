@@ -50,6 +50,15 @@ pub struct Decision {
     pub p_top: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gold_yes: Option<bool>,
+    /// The `noul` the provider returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noul: Option<f64>,
+    /// The `choice` label the provider returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<String>,
+    /// The case's group (JevBench paraphrases of one scenario share one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abs_error: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,21 +133,30 @@ struct Checked {
     correct: bool,
     p_gold: f64,
     p_top: f64,
+    noul: Option<f64>,
+    choice: Option<String>,
     abs_error: Option<f64>,
     probabilities: Option<BTreeMap<String, f64>>,
 }
 
-fn distribution(answer: &Map<String, Value>) -> Option<BTreeMap<String, f64>> {
+/// The answer's probabilities, when every key is an outcome of the question
+/// and they sum to 1 within the tolerance.
+fn distribution(
+    answer: &Map<String, Value>,
+    outcome: impl Fn(&str) -> bool,
+) -> Option<BTreeMap<String, f64>> {
     let probabilities: BTreeMap<String, f64> = answer
         .get("probabilities")?
         .as_object()?
         .iter()
         .map(|(key, value)| Some((key.clone(), value.as_f64()?)))
         .collect::<Option<_>>()?;
-    let valid = probabilities
-        .values()
-        .all(|p| p.is_finite() && (0.0..=1.0).contains(p))
-        && (probabilities.values().sum::<f64>() - 1.0).abs() <= SUM_TOLERANCE;
+    let valid = probabilities.keys().all(|key| outcome(key))
+        && probabilities
+            .values()
+            .all(|p| p.is_finite() && (0.0..=1.0).contains(p))
+        && (1.0 - SUM_TOLERANCE..=1.0 + SUM_TOLERANCE)
+            .contains(&probabilities.values().sum::<f64>());
     valid.then_some(probabilities)
 }
 
@@ -162,25 +180,39 @@ fn check(question: &Value, gold: &Gold, answer: &Value) -> Option<Checked> {
                 correct: (noul >= 0.5) == *yes,
                 p_gold,
                 p_top: noul.max(1.0 - noul),
+                noul: Some(noul),
+                choice: None,
                 abs_error: None,
                 probabilities: None,
             })
         }
         Gold::Choice(label) => {
-            let choice = answer.get("choice")?.as_str()?;
-            let probabilities = distribution(answer)?;
+            let criteria = question["criteria"].as_object()?;
+            let choice = answer
+                .get("choice")?
+                .as_str()
+                .filter(|choice| criteria.contains_key(*choice))?;
+            let probabilities = distribution(answer, |key| criteria.contains_key(key))?;
             Some(Checked {
                 correct: choice == label,
                 p_gold: *probabilities.get(label)?,
                 p_top: top(&probabilities),
+                noul: None,
+                choice: Some(choice.to_string()),
                 abs_error: None,
                 probabilities: Some(probabilities),
             })
         }
         Gold::Score(level) => {
-            let score = answer.get("score")?.as_f64().filter(|s| s.is_finite())?;
-            let probabilities = distribution(answer)?;
             let levels = question["criteria"].as_array()?.len();
+            let score = answer
+                .get("score")?
+                .as_f64()
+                .filter(|score| (0.0..=levels.saturating_sub(1) as f64).contains(score))?;
+            let probabilities = distribution(answer, |key| {
+                key.parse::<usize>()
+                    .is_ok_and(|level| level < levels && level.to_string() == key)
+            })?;
             // The first level on a tie.
             let argmax = (0..levels)
                 .filter_map(|index| Some((index, *probabilities.get(&index.to_string())?)))
@@ -193,6 +225,8 @@ fn check(question: &Value, gold: &Gold, answer: &Value) -> Option<Checked> {
                 correct: argmax == *level,
                 p_gold: *probabilities.get(&level.to_string())?,
                 p_top: top(&probabilities),
+                noul: None,
+                choice: None,
                 abs_error: Some((score - *level as f64).abs()),
                 probabilities: Some(probabilities),
             })
@@ -229,6 +263,9 @@ pub fn decide(case: &Case, reply: &Value, ms: f64) -> (CaseRecord, Vec<Decision>
                     Gold::Noul(yes) => Some(*yes),
                     _ => None,
                 },
+                noul: checked.as_ref().and_then(|checked| checked.noul),
+                choice: checked.as_ref().and_then(|checked| checked.choice.clone()),
+                group: case.group.clone(),
                 abs_error: checked.as_ref().and_then(|checked| checked.abs_error),
                 probabilities: checked.and_then(|checked| checked.probabilities),
                 model: model.clone(),
@@ -291,16 +328,9 @@ fn expected_calibration_error(decisions: &[&Decision]) -> f64 {
         / decisions.len() as f64
 }
 
-/// Mann-Whitney over the `noul` value, ties counted half.
+/// Mann-Whitney over the returned `noul`, ties counted half.
 fn auroc(decisions: &[&Decision]) -> Option<f64> {
-    let noul = |decision: &&Decision| {
-        let p = decision.p_gold.unwrap_or_default();
-        if decision.gold_yes == Some(true) {
-            p
-        } else {
-            1.0 - p
-        }
-    };
+    let noul = |decision: &&Decision| decision.noul.unwrap_or_default();
     let (yes, no): (Vec<&Decision>, Vec<&Decision>) = decisions
         .iter()
         .partition(|decision| decision.gold_yes == Some(true));
@@ -751,6 +781,74 @@ pub(super) mod tests {
             .measurements
             .iter()
             .all(|m| !m.id.starts_with("score_")));
+    }
+
+    /// Whether `answer` to `question` (gold `gold`) is answered.
+    fn answers(question: Value, gold: Value, answer: Value) -> Option<Decision> {
+        let case = &cases::parse(
+            &json!({"id": "x", "state": "s", "questions": {"q": question}, "gold": {"q": gold}})
+                .to_string(),
+        )
+        .unwrap()[0];
+        let reply =
+            json!({"status": "ok", "model": "m", "results": {"x": {"answers": {"q": answer}}}});
+        let (_, mut decisions) = decide(case, &reply, 1.0);
+        let decision = decisions.remove(0);
+        decision.answered.then_some(decision)
+    }
+
+    #[test]
+    fn an_answer_holds_only_the_question_s_outcomes() {
+        let choice = json!({"type": "choice", "criteria": {"A": "a", "B": "b"}});
+        let pick = |label: &str, probabilities: Value| {
+            answers(
+                choice.clone(),
+                json!("A"),
+                json!({"type": "choice", "choice": label, "probabilities": probabilities}),
+            )
+        };
+        let kept = pick("B", json!({"A": 0.4, "B": 0.6})).unwrap();
+        assert!(!kept.correct);
+        assert_eq!(kept.choice.as_deref(), Some("B"));
+        assert!(pick("C", json!({"A": 0.6, "B": 0.4})).is_none());
+        assert!(pick("A", json!({"A": 0.6, "B": 0.2, "C": 0.2})).is_none());
+        // The tolerance is inclusive at both ends.
+        assert!(pick("A", json!({"A": 0.49, "B": 0.49})).is_some());
+        assert!(pick("A", json!({"A": 0.51, "B": 0.51})).is_some());
+        assert!(pick("A", json!({"A": 0.48, "B": 0.49})).is_none());
+        assert!(pick("A", json!({"A": 0.52, "B": 0.51})).is_none());
+
+        let score = json!({"type": "score", "criteria": ["low", "mid", "high", "top"]});
+        let rate = |value: f64, probabilities: Value| {
+            answers(
+                score.clone(),
+                json!(0),
+                json!({"type": "score", "score": value, "probabilities": probabilities}),
+            )
+        };
+        let fractional = rate(1.6, json!({"0": 0.1, "1": 0.2, "2": 0.6, "3": 0.1})).unwrap();
+        assert!((fractional.abs_error.unwrap() - 1.6).abs() < 1e-12);
+        assert!(rate(3.0, json!({"0": 1.0})).is_some());
+        assert!(rate(1e308, json!({"0": 1.0})).is_none());
+        assert!(rate(-0.5, json!({"0": 1.0})).is_none());
+        assert!(rate(0.0, json!({"0": 0.1, "1": 0.1, "4": 0.8})).is_none());
+        assert!(rate(0.0, json!({"00": 1.0})).is_none());
+    }
+
+    #[test]
+    fn auroc_ranks_the_returned_noul() {
+        let decisions: Vec<Decision> = [(true, 0.2), (false, 0.2)]
+            .iter()
+            .map(|(yes, noul)| {
+                answers(
+                    json!({"type": "noul"}),
+                    json!(yes),
+                    json!({"type": "noul", "noul": noul}),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(auroc(&decisions.iter().collect::<Vec<_>>()), Some(0.5));
     }
 
     #[test]

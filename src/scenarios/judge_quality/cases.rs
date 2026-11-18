@@ -99,6 +99,8 @@ pub enum Gold {
 pub struct Case {
     pub id: String,
     pub workflow: Option<String>,
+    /// JevBench's scenario group: the paraphrases of one scenario share it.
+    pub group: Option<String>,
     pub state: Value,
     pub questions: BTreeMap<String, Value>,
     pub gold: BTreeMap<String, Gold>,
@@ -112,6 +114,8 @@ struct Row {
     id: String,
     #[serde(default)]
     workflow: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
     state: Value,
     #[serde(default)]
     question: Option<Value>,
@@ -166,6 +170,7 @@ fn case(row: Row) -> Result<Case> {
     Ok(Case {
         id: row.id,
         workflow: row.workflow,
+        group: row.group,
         state: row.state,
         questions,
         gold,
@@ -277,6 +282,16 @@ mod tests {
             .filter(|agreed| **agreed)
             .count();
         assert_eq!(agreed, 1_188);
+    }
+
+    #[test]
+    fn the_original_paraphrases_share_a_group() {
+        let cases = load(&SLICES[1]).unwrap();
+        let groups: HashSet<&str> = cases
+            .iter()
+            .map(|case| case.group.as_deref().unwrap())
+            .collect();
+        assert_eq!(groups.len(), 36);
     }
 
     #[test]

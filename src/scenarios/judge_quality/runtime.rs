@@ -26,9 +26,9 @@ fn namespace(context: &E2eContext) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
-/// The stack's one judge provider and its worker's version. A Compose
-/// worker and a hand-started one under the same name count as two.
-pub async fn provider(context: &E2eContext) -> Result<(&'static str, String)> {
+/// The stack's one judge provider, its worker's version and connection id.
+/// A Compose worker and a hand-started one under the same name count as two.
+pub async fn provider(context: &E2eContext) -> Result<(&'static str, String, String)> {
     let listed = context
         .trigger_value("engine::workers::list", json!({}))
         .await
@@ -37,8 +37,8 @@ pub async fn provider(context: &E2eContext) -> Result<(&'static str, String)> {
 }
 
 /// The one judge worker in `namespace` among `engine::workers::list`'s reply.
-fn pick(listed: &Value, namespace: &str) -> Result<(&'static str, String)> {
-    let found: Vec<(&'static str, String)> = listed["workers"]
+fn pick(listed: &Value, namespace: &str) -> Result<(&'static str, String, String)> {
+    let found: Vec<(&'static str, String, String)> = listed["workers"]
         .as_array()
         .into_iter()
         .flatten()
@@ -49,7 +49,8 @@ fn pick(listed: &Value, namespace: &str) -> Result<(&'static str, String)> {
                 .iter()
                 .find(|provider| name == format!("judge-{provider}"))?;
             let version = worker["version"].as_str().unwrap_or_default().to_string();
-            Some((*provider, version))
+            let id = worker["id"].as_str().unwrap_or_default().to_string();
+            Some((*provider, version, id))
         })
         .collect();
     match found.as_slice() {
@@ -61,7 +62,7 @@ fn pick(listed: &Value, namespace: &str) -> Result<(&'static str, String)> {
             } else {
                 found
                     .iter()
-                    .map(|(provider, _)| format!("judge-{provider}"))
+                    .map(|(provider, ..)| format!("judge-{provider}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             }
@@ -70,21 +71,30 @@ fn pick(listed: &Value, namespace: &str) -> Result<(&'static str, String)> {
 }
 
 /// Loads the provider's model with one tiny evaluation: `deadline` means the
-/// load goes on, any other error is final.
+/// load goes on, any other error is final. Every call's `timeout_ms` fits in
+/// what is left of `WARMUP_WAIT`.
 pub async fn warm_up(context: &E2eContext, provider: &str) -> Result<()> {
     let function = format!("judge-{provider}::evaluate");
-    let payload = json!({
-        "timeout_ms": CASE_TIMEOUT_MS,
+    let case_timeout = Duration::from_millis(CASE_TIMEOUT_MS);
+    let mut payload = json!({
         "evaluations": [{
             "id": "warm-up",
             "state": "The sky is blue.",
             "questions": {"q": {"type": "noul", "instructions": "The text names a colour."}},
         }],
     });
-    let started = Instant::now();
+    let deadline = Instant::now() + WARMUP_WAIT;
     loop {
+        let budget = deadline
+            .saturating_duration_since(Instant::now())
+            .min(case_timeout);
+        payload["timeout_ms"] = json!(budget.as_millis() as u64);
         let reply = context
-            .trigger_value_with_timeout(&function, payload.clone(), CALL_TIMEOUT)
+            .trigger_value_with_timeout(
+                &function,
+                payload.clone(),
+                budget + (CALL_TIMEOUT - case_timeout),
+            )
             .await
             .with_context(|| format!("warm up {function}"))?;
         if reply["status"] == "ok" {
@@ -93,7 +103,7 @@ pub async fn warm_up(context: &E2eContext, provider: &str) -> Result<()> {
         if reply["code"] != "deadline" {
             bail!("{function} cannot evaluate: {reply}");
         }
-        if started.elapsed() >= WARMUP_WAIT {
+        if Instant::now() + WARMUP_RETRY >= deadline {
             bail!(
                 "{function} did not load its model within {} s: warm the Hugging Face cache first",
                 WARMUP_WAIT.as_secs()
@@ -106,7 +116,7 @@ pub async fn warm_up(context: &E2eContext, provider: &str) -> Result<()> {
 /// Every case of `slice`, one request each, with the provider's stored
 /// configuration and model cards.
 pub async fn measure(context: &E2eContext, slice: &Slice) -> Result<Evidence> {
-    let (provider, version) = provider(context).await?;
+    let (provider, version, worker_id) = provider(context).await?;
     let worker = format!("judge-{provider}");
     let config_id = format!("{}-{worker}", namespace(context));
     let config = context
@@ -118,6 +128,7 @@ pub async fn measure(context: &E2eContext, slice: &Slice) -> Result<Evidence> {
             )
         })?
         .get("value")
+        .filter(|value| !value.is_null())
         .cloned()
         .with_context(|| format!("configuration {config_id} has no value"))?;
     let listed = context
@@ -130,7 +141,9 @@ pub async fn measure(context: &E2eContext, slice: &Slice) -> Result<Evidence> {
         .with_context(|| format!("list {worker}'s models"))?;
     let cards = listed
         .get("models")
-        .filter(|models| listed["status"] == "ok" && models.is_array())
+        .filter(|models| {
+            listed["status"] == "ok" && models.as_array().is_some_and(|cards| !cards.is_empty())
+        })
         .cloned()
         .with_context(|| format!("{worker}::models::list returned no model cards: {listed}"))?;
     let function = format!("{worker}::evaluate");
@@ -152,6 +165,14 @@ pub async fn measure(context: &E2eContext, slice: &Slice) -> Result<Evidence> {
         records.push(record);
         decisions.extend(decided);
     }
+    // The evidence names one build: a worker that reconnected mid-slice may be another.
+    let (_, version_after, worker_id_after) = self::provider(context).await?;
+    if (&version_after, &worker_id_after) != (&version, &worker_id) {
+        bail!(
+            "{worker} changed during the slice (version {version} -> {version_after}, worker id \
+{worker_id} -> {worker_id_after}): rerun the arm on a stable worker"
+        );
+    }
     Ok(Evidence {
         provider: provider.to_string(),
         version,
@@ -167,7 +188,7 @@ mod tests {
 
     fn workers(listed: &[(&str, &str)]) -> Value {
         json!({"workers": listed.iter().map(|(name, namespace)| {
-            json!({"name": name, "namespace": namespace, "version": "0.3.2"})
+            json!({"name": name, "namespace": namespace, "version": "0.3.2", "id": "w1"})
         }).collect::<Vec<_>>()})
     }
 
@@ -179,7 +200,10 @@ mod tests {
             ("harness", "arm"),
             ("judge-layax", "arm"),
         ]);
-        assert_eq!(pick(&listed, "arm").unwrap(), ("laya", "0.3.2".to_string()));
+        assert_eq!(
+            pick(&listed, "arm").unwrap(),
+            ("laya", "0.3.2".to_string(), "w1".to_string())
+        );
     }
 
     #[test]

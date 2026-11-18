@@ -103,7 +103,7 @@ impl Scenario for JudgeQuality {
     }
 
     async fn setup(&self, context: &E2eContext, _run_id: &str) -> Result<()> {
-        let (provider, _) = runtime::provider(context).await?;
+        let (provider, ..) = runtime::provider(context).await?;
         runtime::warm_up(context, provider).await
     }
 
