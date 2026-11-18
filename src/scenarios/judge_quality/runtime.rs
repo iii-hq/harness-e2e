@@ -29,16 +29,20 @@ fn namespace(context: &E2eContext) -> String {
 /// The stack's one judge provider and its worker's version. A Compose
 /// worker and a hand-started one under the same name count as two.
 pub async fn provider(context: &E2eContext) -> Result<(&'static str, String)> {
-    let namespace = namespace(context);
     let listed = context
         .trigger_value("engine::workers::list", json!({}))
         .await
         .context("list the stack's workers")?;
+    pick(&listed, &namespace(context))
+}
+
+/// The one judge worker in `namespace` among `engine::workers::list`'s reply.
+fn pick(listed: &Value, namespace: &str) -> Result<(&'static str, String)> {
     let found: Vec<(&'static str, String)> = listed["workers"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|worker| worker["namespace"] == namespace.as_str())
+        .filter(|worker| worker["namespace"] == namespace)
         .filter_map(|worker| {
             let name = worker["name"].as_str()?;
             let provider = PROVIDERS
@@ -115,18 +119,20 @@ pub async fn measure(context: &E2eContext, slice: &Slice) -> Result<Evidence> {
         })?
         .get("value")
         .cloned()
-        .unwrap_or(Value::Null);
-    let cards = context
+        .with_context(|| format!("configuration {config_id} has no value"))?;
+    let listed = context
         .trigger_value_with_timeout(
             &format!("{worker}::models::list"),
             json!({"timeout_ms": CASE_TIMEOUT_MS}),
             CALL_TIMEOUT,
         )
         .await
-        .with_context(|| format!("list {worker}'s models"))?
+        .with_context(|| format!("list {worker}'s models"))?;
+    let cards = listed
         .get("models")
+        .filter(|models| listed["status"] == "ok" && models.is_array())
         .cloned()
-        .unwrap_or(Value::Null);
+        .with_context(|| format!("{worker}::models::list returned no model cards: {listed}"))?;
     let function = format!("{worker}::evaluate");
     let cases = cases::load(slice)?;
     let mut records = Vec::with_capacity(cases.len());
@@ -153,4 +159,45 @@ pub async fn measure(context: &E2eContext, slice: &Slice) -> Result<Evidence> {
         cards,
         ..Evidence::new(slice, &cases, records, decisions)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workers(listed: &[(&str, &str)]) -> Value {
+        json!({"workers": listed.iter().map(|(name, namespace)| {
+            json!({"name": name, "namespace": namespace, "version": "0.3.2"})
+        }).collect::<Vec<_>>()})
+    }
+
+    #[test]
+    fn pick_takes_the_one_judge_worker_in_the_namespace() {
+        let listed = workers(&[
+            ("judge-laya", "arm"),
+            ("judge-semif", "other"),
+            ("harness", "arm"),
+            ("judge-layax", "arm"),
+        ]);
+        assert_eq!(pick(&listed, "arm").unwrap(), ("laya", "0.3.2".to_string()));
+    }
+
+    #[test]
+    fn pick_refuses_none_or_more_than_one() {
+        for (listed, found) in [
+            (workers(&[]), "found: none"),
+            (workers(&[("judge-laya", "other")]), "found: none"),
+            (
+                workers(&[("judge-laya", "arm"), ("judge-laya", "arm")]),
+                "found: judge-laya, judge-laya",
+            ),
+            (
+                workers(&[("judge-laya", "arm"), ("judge-clef", "arm")]),
+                "found: judge-laya, judge-clef",
+            ),
+        ] {
+            let error = pick(&listed, "arm").unwrap_err().to_string();
+            assert!(error.contains(found), "{error}");
+        }
+    }
 }
