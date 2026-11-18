@@ -1004,11 +1004,14 @@ its model with one tiny evaluation (up to 600 s). The evidence
 (`judge_quality_evaluation`) records the provider, its worker version, its
 stored configuration (`configuration::get` of `<namespace>-judge-<provider>`),
 its model cards, one record per case (`model`, `input_tokens`, wall time `ms`,
-error code) and one per decision (`correct`, `p_gold`, `p_top`, the answer's
-`probabilities`, and the case's `model`, `input_tokens` and `ms`).
+error code) and one per decision (`correct`, `p_gold`, `p_top`, the returned
+`noul` or `choice`, the answer's `probabilities`, the case's JevBench `group`,
+and the case's `model`, `input_tokens` and `ms`). A slice fails when the
+worker's version or connection id changes while its cases run.
 
 Two criteria: `answered` (gate, 10 points) needs every decision back as a valid
-answer of its question's type; `accuracy` gives `round(90 x accuracy)`. An
+answer of its question's type (a choice and probability keys among the
+question's outcomes, a score within its levels); `accuracy` gives `round(90 x accuracy)`. An
 unanswered decision counts wrong in every accuracy and is left out of the
 calibration figures. The measurements are `cases`, `decisions`, `answered`,
 `accuracy`; `majority_accuracy`, `agreed_n` and `accuracy_agreed`
@@ -1021,12 +1024,15 @@ Read the numbers with their bias:
 
 - typed-decisions gold is a teacher's argmax that the teacher itself confirms on
   1,188 of 2,000 decisions (59.4%), and always answering the commonest label per
-  workflow and question scores 0.5225. Read `accuracy_agreed` and
-  `majority_accuracy`, and never pool it with JevBench. laya's typed-decisions
-  checkpoint was trained on its train split.
+  workflow and question scores 0.5225. Its `accuracy` is agreement with these
+  upstream labels, some of which contradict each other or the question's rubric,
+  not correctness. Read `accuracy_agreed` and `majority_accuracy`, and never pool
+  it with JevBench. laya's typed-decisions checkpoint was trained on its train
+  split.
 - decider's training generators were written from the family names JevBench
-  publishes, so JevBench favours decider. Every published system scores 1.000 on
-  the easy tier; the hard tier separates them.
+  publishes, so JevBench favours decider. Most published systems score 100% on
+  the easy tier at this revision, though not all (Mixedbread's reranker scores
+  44.4%); the hard tier separates the rest.
 - Both datasets are English.
 
 #### Running an arm
@@ -1104,17 +1110,21 @@ III_URL=ws://127.0.0.1:49434 ./target/release/judge-laya
 ```
 
 To change that arm's configuration, read the entry with
-`iii trigger configuration::get --namespace default --json '{"id":"judge-quality-judge-laya"}'`,
-write the whole edited value back with `configuration::set`
-(`{"id": …, "value": {…}}`) and restart the worker. Confirm every candidate arm
+`III_URL=ws://127.0.0.1:49434 iii trigger configuration::get --namespace default --json '{"id":"judge-quality-judge-laya"}'`,
+write the whole edited value back with
+`III_URL=ws://127.0.0.1:49434 iii trigger configuration::set --namespace default --json '{"id": …, "value": {…}}'`
+and restart the worker. Both calls need this stack's URL, as the worker does. Confirm every candidate arm
 by something its evidence shows that the version cannot: the `config`
 snapshot, the checkpoint mix, or a card's `release_date`.
 
 #### Reading the arms
 
-`scripts/judge_quality.py` reads each arm's results directory, takes each
-slice's last run and its evidence artifact, and refuses arms whose
-`behavior_sha256` or decision ids differ for a slice.
+`scripts/judge_quality.py` reads each arm's results directory and takes each
+slice's last run from the latest `results.json` (by `execution.started_at`)
+that has it; when that run left no evidence artifact the slice is `not
+measured`. It refuses arms whose `behavior_sha256` or decision ids differ for a
+slice, and an arm whose slices name different provider versions or
+configurations.
 
 ```bash
 python3 scripts/judge_quality.py --output target/judge-quality/report --baseline laya-main --runs '[
@@ -1123,26 +1133,34 @@ python3 scripts/judge_quality.py --output target/judge-quality/report --baseline
   {"arm": "laya-branch",     "path": "target/judge-quality/laya-branch"}]'
 ```
 
-It writes `judge-quality.md` and `.json`: per arm the provider, version,
-configuration and card release dates; per slice one column per arm, accuracy
-cells as `0.676 [0.584, 0.756] n=111` (a Wilson 95% interval, with `n` capped at
-the slice's cases, since five typed-decisions questions share one state), the
-checkpoint mix, and a row pooling the three JevBench tiers.
+Decisions come in groups: a typed-decisions case's five questions share one
+state, and JevBench original pairs two paraphrases of one scenario (its
+`group`); every other case is its own group. It writes `judge-quality.md` and
+`.json`: per arm the provider, version, configuration and card release dates;
+per slice one column per arm, accuracy cells as `0.676 [0.584, 0.756] n=111` (a
+Wilson 95% interval) when every decision is its own group, else as `0.500
+n=2000 in 400 groups` with no interval, the checkpoint mix, and a row pooling
+the three JevBench tiers.
 
 With `--baseline`, decisions are paired on id: `b` counts baseline right and arm
-wrong, `c` the reverse. On pooled JevBench the exact two-sided sign test gives
-one verdict per arm: `worse` (p < 0.05, b > c), `better` (p < 0.05, c > b), else
-`cannot tell`. typed-decisions gets no test. Run the baseline arm twice: its
+wrong, `c` the reverse. The sign test runs on groups: a group counts for the
+baseline when it wins more of the group's decisions, for the arm on the
+reverse, and drops on a tie. On pooled JevBench that exact two-sided test gives
+one verdict per arm: `worse` (p < 0.05, more groups for the baseline),
+`better` (p < 0.05, more for the arm), else `cannot tell`. typed-decisions
+gets no verdict. Run the baseline arm twice: its
 `b + c` against itself is the noise floor for every other arm.
 
-`--paired A B` prints, per slice, the flips between two arms with their sign
-test, `changed` (decisions whose answer moved, flips included, answered against
-unanswered too), the largest `|Δp_gold|` among decisions that did not flip, and
-the wrong counts on noul decisions whose gold is "no". Each comes overall, on
-the decisions whose routed `model` differs, and on those whose `input_tokens`
-are equal or differ between the arms; the equal subset is the control. `input_tokens`
-differs between a long-state arm and its truncating baseline exactly on the
-cases the baseline truncated.
+`--paired A B` prints, per slice, the flips between two arms with the group
+sign test, `changed` (decisions whose answer moved, flips included, answered
+against unanswered too), the largest `|Δp_gold|` among decisions that did not
+flip, and the wrong counts on noul decisions whose gold is "no". Each comes
+overall, on the decisions whose routed `model` differs, and on those whose
+reported `input_tokens` are equal or differ between the arms (a decision
+without a count on either side is in neither); the equal subset is the
+control. These subsets compare token counts only: a count that differs says
+the arms fed their models different input, which may be truncation or a
+different tokenizer, never which text reached the model.
 
 The script exits 1 when an arm lacks a slice (`not measured`), on a refusal, or
 when an arm is `worse` than the baseline.

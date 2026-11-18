@@ -9,20 +9,26 @@ An arm is one provider build with one configuration, run on its own stack
       [--paired A B] --runs '[{"arm": "laya-main", "path": "target/judge-quality/laya-main"},
                                {"arm": "laya-branch", "path": "target/judge-quality/laya-branch"}]'
 
-Each arm's results.json files give each slice's last run, its behavior_sha256
-and its `judge_quality_evaluation` artifact, which holds the measurements and
-one record per decision. Arms whose digests or decision ids differ for a slice
-are refused. One table per slice, one column per arm; accuracy cells carry a
-Wilson 95% interval with n capped at the slice's cases (five typed-decisions
-questions share one state).
+Each slice's run comes from the arm's latest results.json (by
+execution.started_at) that has it: its behavior_sha256 and its
+`judge_quality_evaluation` artifact, which holds the measurements and one
+record per decision. A latest run without the artifact reads `not measured`.
+Arms whose digests or decision ids differ for a slice are refused, and so is an
+arm whose slices name different provider builds or configurations.
+
+Decisions cluster in groups: a typed-decisions case's five questions share one
+state, and JevBench original pairs two paraphrases of one scenario. One table
+per slice, one column per arm; an accuracy cell carries a Wilson 95% interval
+only when every decision is its own group, else its n and group count.
 
 --baseline: per slice, b (baseline right, arm wrong) and c (the reverse); on
-the pooled JevBench tiers, the exact two-sided sign test and a verdict per arm
-(worse, better, cannot tell). --paired A B: per slice, the flips between A and
-B with their sign test, the decisions whose answer changed, the largest
-|delta p_gold| among decisions that did not flip, and the wrong counts on noul
-decisions whose gold is "no"; overall, on the decisions whose routed model
-differs, and on those whose input_tokens are equal or differ.
+the pooled JevBench tiers, a verdict per arm (worse, better, cannot tell) from
+the exact two-sided sign test on groups: a group counts for the arm that wins
+more of its decisions, ties drop. --paired A B: per slice, the flips between A
+and B with that group sign test, the decisions whose answer changed, the
+largest |delta p_gold| among decisions that did not flip, and the wrong counts
+on noul decisions whose gold is "no"; overall, on the decisions whose routed
+model differs, and on those where both arms report input_tokens, equal or not.
 
 Writes DIR/judge-quality.md and .json and prints the markdown. Exits 1 when an
 arm lacks a slice, on a refusal, or when an arm is worse than the baseline.
@@ -34,6 +40,7 @@ import argparse
 import json
 import math
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,9 +56,10 @@ ROWS = ["cases", "decisions", "answered", "accuracy", "majority_accuracy", "agre
         "choice_n", "choice_top1", "choice_nll", "choice_ece", "score_n", "score_accuracy", "score_mae",
         "noul_n", "noul_accuracy", "noul_accuracy_at_0_8", "noul_brier", "noul_auroc", "input_tokens_max",
         "case_ms_p50", "case_ms_p95"]
-# Each accuracy row and the count it is a share of.
-SHARE_OF = {"accuracy": "decisions", "accuracy_agreed": "agreed_n", "choice_top1": "choice_n",
-            "score_accuracy": "score_n", "noul_accuracy": "noul_n", "noul_accuracy_at_0_8": "noul_n"}
+# Each accuracy row and the decisions it is a share of.
+SHARE_OF = {"accuracy": lambda d: True, "accuracy_agreed": lambda d: d.get("agreed") is True,
+            "choice_top1": lambda d: d["kind"] == "choice", "score_accuracy": lambda d: d["kind"] == "score",
+            "noul_accuracy": lambda d: d["kind"] == "noul", "noul_accuracy_at_0_8": lambda d: d["kind"] == "noul"}
 NOTES = [
     "typed-decisions gold is a teacher's argmax that the teacher itself confirms on 59.4% of decisions: "
     "read accuracy_agreed and majority_accuracy, never pool it with JevBench. laya's typed-decisions "
@@ -76,19 +84,28 @@ def sign_test(b: int, c: int) -> float:
 
 
 def load_arm(path: Path) -> dict[str, dict[str, Any]]:
-    """Each slice's last run in the arm: {sha, evidence}."""
-    slices: dict[str, dict[str, Any]] = {}
+    """Each slice's last run in the arm's latest results.json that has it:
+    {sha, evidence}. A slice whose last run left no artifact is left out."""
+    dated = []
     for results, document in documents(path):
+        try:
+            started = datetime.fromisoformat(document["execution"]["started_at"].replace("Z", "+00:00"))
+        except (KeyError, TypeError, AttributeError, ValueError):
+            raise ValueError(f"{results} has no execution.started_at to order the arm's runs by") from None
+        dated.append((started, results, document))
+    latest: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for _, results, document in sorted(dated, key=lambda entry: entry[0]):
         for scenario in document.get("scenarios") or []:
-            if scenario.get("scenario_id") not in SLICES or not scenario.get("runs"):
-                continue
-            artifact = next((deliverable.get("artifact") or {} for deliverable in scenario["runs"][-1].get(
-                "deliverables") or [] if deliverable.get("id") == ARTIFACT), {})
-            found = [place / artifact["path"] for place in (results.parent, path) if artifact.get("path")]
-            found = [place for place in found if place.is_file()]
-            if found:
-                slices[scenario["scenario_id"]] = {"sha": scenario.get("behavior_sha256"),
-                                                   "evidence": json.loads(found[0].read_text())}
+            if scenario.get("scenario_id") in SLICES and scenario.get("runs"):
+                latest[scenario["scenario_id"]] = (results, scenario)
+    slices: dict[str, dict[str, Any]] = {}
+    for slice_id, (results, scenario) in latest.items():
+        artifact = next((deliverable.get("artifact") or {} for deliverable in scenario["runs"][-1].get(
+            "deliverables") or [] if deliverable.get("id") == ARTIFACT), {})
+        found = [place / artifact["path"] for place in (results.parent, path) if artifact.get("path")]
+        found = [place for place in found if place.is_file()]
+        if found:
+            slices[slice_id] = {"sha": scenario.get("behavior_sha256"), "evidence": json.loads(found[0].read_text())}
     return slices
 
 
@@ -96,29 +113,42 @@ def decisions(evidence: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {decision["id"]: decision for decision in evidence["decisions"]}
 
 
+def group(decision: dict[str, Any]) -> str:
+    """The decision's group: its JevBench scenario group, else its case."""
+    return decision.get("group") or decision["id"].rsplit("/", 1)[0]
+
+
 def answer(decision: dict[str, Any]) -> Any:
-    """What the arm answered: None when unanswered, the noul side, else the
-    most likely label."""
+    """What the arm answered: None when unanswered, the noul side, the returned
+    choice label, else the most likely label."""
     if not decision.get("answered"):
         return None
     if decision.get("gold_yes") is not None:
         return decision["gold_yes"] == decision["correct"]
-    # shortcut: a choice's returned label is not kept on the decision, so its argmax stands in; store the
-    # label if a provider ever answers off its own argmax.
+    if decision.get("choice") is not None:
+        return decision["choice"]
     probabilities = decision.get("probabilities") or {}
     return max(probabilities, key=probabilities.get, default=None)
 
 
 def pair(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]], ids: list[str]) -> dict[str, Any]:
     """Flips from arm a to arm b over `ids`: b counts a right and b wrong;
-    `changed` also counts answers that moved without changing correctness."""
+    `changed` also counts answers that moved without changing correctness.
+    The sign test runs on groups: groups_b counts the groups where a wins more
+    decisions than b, groups_c the reverse."""
     worse = sum(1 for i in ids if a[i]["correct"] and not b[i]["correct"])
     better = sum(1 for i in ids if b[i]["correct"] and not a[i]["correct"])
+    net: dict[str, int] = {}
+    for i in ids:
+        net[group(a[i])] = net.get(group(a[i]), 0) + int(a[i]["correct"]) - int(b[i]["correct"])
+    groups_b = sum(1 for value in net.values() if value > 0)
+    groups_c = sum(1 for value in net.values() if value < 0)
     changed = sum(1 for i in ids if a[i]["correct"] != b[i]["correct"] or answer(a[i]) != answer(b[i]))
     deltas = [abs(a[i]["p_gold"] - b[i]["p_gold"]) for i in ids if a[i]["correct"] == b[i]["correct"]
               and a[i].get("p_gold") is not None and b[i].get("p_gold") is not None]
     no = [i for i in ids if a[i].get("gold_yes") is False]
-    return {"n": len(ids), "b": worse, "c": better, "p": sign_test(worse, better), "changed": changed,
+    return {"n": len(ids), "b": worse, "c": better, "groups": len(net), "groups_b": groups_b,
+            "groups_c": groups_c, "p": sign_test(groups_b, groups_c), "changed": changed,
             "max_delta_p_gold": max(deltas, default=None),
             "noul_gold_no_wrong": [sum(1 for i in no if not arm[i]["correct"]) for arm in (a, b)]}
 
@@ -128,29 +158,40 @@ PAIRED_SUBSETS = ["all", "model_differs", "input_tokens_equal", "input_tokens_di
 
 def paired(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> dict[str, Any]:
     ids = sorted(a)
-    same_tokens = {i: a[i].get("input_tokens") == b[i].get("input_tokens") for i in ids}
+    # A decision without a count on either side has no known token relation: it stays in `all` only.
+    tokens = {i: (a[i].get("input_tokens"), b[i].get("input_tokens")) for i in ids}
+    known = [i for i in ids if None not in tokens[i]]
     return {
         "all": pair(a, b, ids),
         "model_differs": pair(a, b, [i for i in ids if a[i].get("model") != b[i].get("model")]),
-        "input_tokens_equal": pair(a, b, [i for i in ids if same_tokens[i]]),
-        "input_tokens_differ": pair(a, b, [i for i in ids if not same_tokens[i]]),
+        "input_tokens_equal": pair(a, b, [i for i in known if tokens[i][0] == tokens[i][1]]),
+        "input_tokens_differ": pair(a, b, [i for i in known if tokens[i][0] != tokens[i][1]]),
     }
 
 
-def cell(measurements: dict[str, float], row: str, cases: int) -> str:
+def share(value: float, n: int, groups: int) -> str:
+    """A ratio over n decisions: with a Wilson 95% interval when every decision
+    is its own group, else with its group count and no interval."""
+    if groups < n:
+        return f"{value:.3f} n={n} in {groups} groups"
+    low, high = wilson(value, n)
+    return f"{value:.3f} [{low:.3f}, {high:.3f}] n={n}"
+
+
+def cell(measurements: dict[str, float], row: str, evidence: dict[str, Any]) -> str:
     if row not in measurements:
         return ""
     value = measurements[row]
-    if row in SHARE_OF and measurements.get(SHARE_OF[row]):
-        n = int(min(measurements[SHARE_OF[row]], cases))
-        low, high = wilson(value, n)
-        return f"{value:.3f} [{low:.3f}, {high:.3f}] n={n}"
+    subset = [decision for decision in evidence["decisions"] if SHARE_OF[row](decision)] if row in SHARE_OF else []
+    if subset:
+        return share(value, len(subset), len({group(decision) for decision in subset}))
     return f"{value:.0f}" if float(value).is_integer() else f"{value:.3f}"
 
 
 def pair_text(result: dict[str, Any]) -> str:
     delta = result["max_delta_p_gold"]
-    return (f"n={result['n']} b={result['b']} c={result['c']} p={result['p']:.4f} changed={result['changed']} "
+    return (f"n={result['n']} b={result['b']} c={result['c']} groups={result['groups']} "
+            f"groups b={result['groups_b']} c={result['groups_c']} p={result['p']:.4f} changed={result['changed']} "
             f"max|dp_gold|={'-' if delta is None else f'{delta:.2e}'} "
             f"noul gold-no wrong={'/'.join(map(str, result['noul_gold_no_wrong']))}")
 
@@ -164,6 +205,13 @@ def report(arms: dict[str, dict[str, dict[str, Any]]], baseline: str | None,
         out["arms"][arm]["release_dates"] = {card.get("name"): card.get("release_date")
                                              for card in evidence.get("cards") or []}
         out["errors"] += [f"{arm}: {slice_id} not measured" for slice_id in SLICES if slice_id not in slices]
+        builds = {slice_id: (entry["evidence"].get("provider"), entry["evidence"].get("version"),
+                             json.dumps(entry["evidence"].get("config"), sort_keys=True))
+                  for slice_id, entry in slices.items()}
+        if len(set(builds.values())) > 1:
+            named = "; ".join(f"{slice_id}: {provider} {version} {config}"
+                              for slice_id, (provider, version, config) in builds.items())
+            out["errors"].append(f"refused: {arm} ran its slices on different builds or configurations ({named})")
     for slice_id in SLICES:
         present = {arm: slices[slice_id] for arm, slices in arms.items() if slice_id in slices}
         if len({entry["sha"] for entry in present.values()}) > 1:
@@ -176,7 +224,8 @@ def report(arms: dict[str, dict[str, dict[str, Any]]], baseline: str | None,
     for arm in arms:
         if all(slice_id in out["slices"] and arm in out["slices"][slice_id] for slice_id in JEVBENCH):
             pooled = [d for s in JEVBENCH for d in out["slices"][s][arm]["evidence"]["decisions"]]
-            out["arms"][arm]["pooled_accuracy"] = (sum(d["correct"] for d in pooled), len(pooled))
+            out["arms"][arm]["pooled_accuracy"] = (sum(d["correct"] for d in pooled), len(pooled),
+                                                   len({group(d) for d in pooled}))
     if baseline:
         for arm in (arm for arm in arms if arm != baseline):
             result, pooled_a, pooled_b = {}, {}, {}
@@ -191,7 +240,7 @@ def report(arms: dict[str, dict[str, dict[str, Any]]], baseline: str | None,
                 pooled = result[POOLED] = pair(pooled_a, pooled_b, sorted(pooled_a))
                 verdict = "cannot tell"
                 if pooled["p"] < 0.05:
-                    verdict = "worse" if pooled["b"] > pooled["c"] else "better"
+                    verdict = "worse" if pooled["groups_b"] > pooled["groups_c"] else "better"
                 pooled["verdict"] = verdict
                 if verdict == "worse":
                     out["errors"].append(f"{arm} is worse than {baseline} on pooled JevBench")
@@ -222,7 +271,7 @@ def markdown(out: dict[str, Any], arms: list[str], baseline: str | None, paired_
                     continue
                 evidence = present[arm]["evidence"]
                 measured = {m["id"]: m["value"] for m in evidence["measurements"]}
-                values.append(cell(measured, row, int(measured.get("cases", 0))))
+                values.append(cell(measured, row, evidence))
             if any(values):
                 lines.append(f"| {row} | " + " | ".join(values) + " |")
         mixes = []
@@ -235,16 +284,16 @@ def markdown(out: dict[str, Any], arms: list[str], baseline: str | None, paired_
     lines += ["", f"## {POOLED}", "", "| Arm | Accuracy |", "|---|---|"]
     for arm in arms:
         if "pooled_accuracy" in out["arms"][arm]:
-            correct, n = out["arms"][arm]["pooled_accuracy"]
-            low, high = wilson(correct / n, n)
-            lines.append(f"| {arm} | {correct / n:.3f} [{low:.3f}, {high:.3f}] n={n} |")
+            correct, n, groups = out["arms"][arm]["pooled_accuracy"]
+            lines.append(f"| {arm} | {share(correct / n, n, groups)} |")
     if baseline:
         lines += ["", f"## Against {baseline}", "", "b: baseline right, arm wrong. c: the reverse.", ""]
         for arm, result in out["baseline"].items():
             for slice_id, numbers in result.items():
                 verdict = f" **{numbers['verdict']}**" if "verdict" in numbers else ""
                 lines.append(f"- {arm}, {slice_id}: b={numbers['b']} c={numbers['c']}"
-                             + (f" p={numbers['p']:.4f}{verdict}" if slice_id == POOLED else ""))
+                             + (f" groups b={numbers['groups_b']} c={numbers['groups_c']} p={numbers['p']:.4f}{verdict}"
+                                if slice_id == POOLED else ""))
     if paired_arms:
         lines += ["", f"## Paired: {paired_arms[0]} against {paired_arms[1]}", "",
                   f"b: {paired_arms[0]} right, {paired_arms[1]} wrong. c: the reverse.", ""]
@@ -266,7 +315,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--paired", nargs=2, metavar=("A", "B"), help="two arms to pair in detail")
     args = parser.parse_args(argv)
     runs = json.loads(args.runs)
-    arms = {run["arm"]: load_arm(Path(run["path"]).expanduser()) for run in runs}
+    if not runs:
+        parser.error("--runs lists no arm")
+    try:
+        arms = {run["arm"]: load_arm(Path(run["path"]).expanduser()) for run in runs}
+    except ValueError as error:
+        parser.error(f"refused: {error}")
     for name in [args.baseline, *(args.paired or [])]:
         if name and name not in arms:
             parser.error(f"{name} is not an arm of --runs")
