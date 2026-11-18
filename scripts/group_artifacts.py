@@ -142,7 +142,15 @@ def listing(path: str, key: str) -> list[dict]:
     items: list[dict] = []
     page = 1
     while True:
-        batch = json.loads(get(api(f"{path}?per_page={PAGE}&page={page}"), f"the {key} listing, page {page}"))[key]
+        what = f"the {key} listing, page {page}"
+        body = get(api(f"{path}?per_page={PAGE}&page={page}"), what)
+        # Not asked again: a 200 is definitive, and a truncated body already fails in get() as IncompleteRead.
+        try:
+            batch = json.loads(body)[key]
+            if not isinstance(batch, list):
+                raise TypeError
+        except (ValueError, KeyError, TypeError):
+            raise FetchError(f"{what} answered no {key} list") from None
         items += batch
         if len(batch) < PAGE:
             return items

@@ -283,6 +283,30 @@ class FetchTests(unittest.TestCase):
         self.assertIn("the jobs listing, page 1", summary["unavailable"])
         self.assertFalse((root / "target/selected-group-artifacts.json").exists())
 
+    def test_a_listing_page_that_is_not_a_listing_fails_the_finalizer(self):
+        # A 200 is definitive: it is not asked again, and its body stays out of every message.
+        cases = {
+            "not JSON": ("/jobs?", b"<html>leaked-body</html>", "the jobs listing, page 1"),
+            "no key": ("/jobs?", b'{"leaked-body": []}', "the jobs listing, page 1"),
+            "not an object": ("/jobs?", b'["leaked-body"]', "the jobs listing, page 1"),
+            "not a list": ("/artifacts?", b'{"artifacts": {"leaked-body": 1}}', "the artifacts listing, page 1"),
+        }
+        for name, (where, body, what) in cases.items():
+            with self.subTest(name=name):
+                code, requests, sleeps, root, output = self.fetch(
+                    lambda path, n: (200, {}, body) if where in path else None)
+                self.assertEqual(code, 1, output)
+                self.assertEqual(len([path for path, _ in requests if where in path]), 1)
+                self.assertEqual(sleeps, [])
+                summary_file = root / "target/harness-e2e-campaign/execution-summary.json"
+                summary = json.loads(summary_file.read_text())
+                self.assertEqual((summary["outcome"], summary["phase"], summary["failure"]["code"]),
+                                 ("infra_failed", "workflow_artifact_download", "group_artifact_listing_failed"))
+                self.assertIn(what, summary["unavailable"])
+                self.assertFalse((root / "target/selected-group-artifacts.json").exists())
+                for text in (output, summary_file.read_text()):
+                    self.assertNotIn("leaked-body", text)
+
 
 if __name__ == "__main__":
     unittest.main()
