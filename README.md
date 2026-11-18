@@ -1136,9 +1136,11 @@ one verdict per arm: `worse` (p < 0.05, b > c), `better` (p < 0.05, c > b), else
 `b + c` against itself is the noise floor for every other arm.
 
 `--paired A B` prints, per slice, the flips between two arms with their sign
-test and the largest `|Δp_gold|` among decisions that did not flip, overall and
-on the decisions whose routed `model` or `input_tokens` differ between the
-arms, and the wrong count on noul decisions whose gold is "no". `input_tokens`
+test, `changed` (decisions whose answer moved, flips included, answered against
+unanswered too), the largest `|Δp_gold|` among decisions that did not flip, and
+the wrong counts on noul decisions whose gold is "no". Each comes overall, on
+the decisions whose routed `model` differs, and on those whose `input_tokens`
+are equal or differ between the arms; the equal subset is the control. `input_tokens`
 differs between a long-state arm and its truncating baseline exactly on the
 cases the baseline truncated.
 

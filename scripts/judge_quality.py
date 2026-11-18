@@ -19,9 +19,10 @@ questions share one state).
 --baseline: per slice, b (baseline right, arm wrong) and c (the reverse); on
 the pooled JevBench tiers, the exact two-sided sign test and a verdict per arm
 (worse, better, cannot tell). --paired A B: per slice, the flips between A and
-B with their sign test and the largest |delta p_gold| among decisions that did
-not flip, overall and on the decisions whose routed model or input_tokens
-differ, and the wrong count on noul decisions whose gold is "no".
+B with their sign test, the decisions whose answer changed, the largest
+|delta p_gold| among decisions that did not flip, and the wrong counts on noul
+decisions whose gold is "no"; overall, on the decisions whose routed model
+differs, and on those whose input_tokens are equal or differ.
 
 Writes DIR/judge-quality.md and .json and prints the markdown. Exits 1 when an
 arm lacks a slice, on a refusal, or when an arm is worse than the baseline.
@@ -95,24 +96,44 @@ def decisions(evidence: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {decision["id"]: decision for decision in evidence["decisions"]}
 
 
+def answer(decision: dict[str, Any]) -> Any:
+    """What the arm answered: None when unanswered, the noul side, else the
+    most likely label."""
+    if not decision.get("answered"):
+        return None
+    if decision.get("gold_yes") is not None:
+        return decision["gold_yes"] == decision["correct"]
+    # shortcut: a choice's returned label is not kept on the decision, so its argmax stands in; store the
+    # label if a provider ever answers off its own argmax.
+    probabilities = decision.get("probabilities") or {}
+    return max(probabilities, key=probabilities.get, default=None)
+
+
 def pair(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]], ids: list[str]) -> dict[str, Any]:
-    """Flips from arm a to arm b over `ids`: b counts a right and b wrong."""
+    """Flips from arm a to arm b over `ids`: b counts a right and b wrong;
+    `changed` also counts answers that moved without changing correctness."""
     worse = sum(1 for i in ids if a[i]["correct"] and not b[i]["correct"])
     better = sum(1 for i in ids if b[i]["correct"] and not a[i]["correct"])
+    changed = sum(1 for i in ids if a[i]["correct"] != b[i]["correct"] or answer(a[i]) != answer(b[i]))
     deltas = [abs(a[i]["p_gold"] - b[i]["p_gold"]) for i in ids if a[i]["correct"] == b[i]["correct"]
               and a[i].get("p_gold") is not None and b[i].get("p_gold") is not None]
-    return {"n": len(ids), "b": worse, "c": better, "p": sign_test(worse, better),
-            "max_delta_p_gold": max(deltas, default=None)}
+    no = [i for i in ids if a[i].get("gold_yes") is False]
+    return {"n": len(ids), "b": worse, "c": better, "p": sign_test(worse, better), "changed": changed,
+            "max_delta_p_gold": max(deltas, default=None),
+            "noul_gold_no_wrong": [sum(1 for i in no if not arm[i]["correct"]) for arm in (a, b)]}
+
+
+PAIRED_SUBSETS = ["all", "model_differs", "input_tokens_equal", "input_tokens_differ"]
 
 
 def paired(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> dict[str, Any]:
     ids = sorted(a)
-    no = [i for i in ids if a[i].get("gold_yes") is False]
+    same_tokens = {i: a[i].get("input_tokens") == b[i].get("input_tokens") for i in ids}
     return {
         "all": pair(a, b, ids),
         "model_differs": pair(a, b, [i for i in ids if a[i].get("model") != b[i].get("model")]),
-        "input_tokens_differ": pair(a, b, [i for i in ids if a[i].get("input_tokens") != b[i].get("input_tokens")]),
-        "noul_gold_no_wrong": [sum(1 for i in no if not arm[i]["correct"]) for arm in (a, b)],
+        "input_tokens_equal": pair(a, b, [i for i in ids if same_tokens[i]]),
+        "input_tokens_differ": pair(a, b, [i for i in ids if not same_tokens[i]]),
     }
 
 
@@ -129,8 +150,9 @@ def cell(measurements: dict[str, float], row: str, cases: int) -> str:
 
 def pair_text(result: dict[str, Any]) -> str:
     delta = result["max_delta_p_gold"]
-    return (f"n={result['n']} b={result['b']} c={result['c']} p={result['p']:.4f} "
-            f"max|dp_gold|={'-' if delta is None else f'{delta:.2e}'}")
+    return (f"n={result['n']} b={result['b']} c={result['c']} p={result['p']:.4f} changed={result['changed']} "
+            f"max|dp_gold|={'-' if delta is None else f'{delta:.2e}'} "
+            f"noul gold-no wrong={'/'.join(map(str, result['noul_gold_no_wrong']))}")
 
 
 def report(arms: dict[str, dict[str, dict[str, Any]]], baseline: str | None,
@@ -228,9 +250,8 @@ def markdown(out: dict[str, Any], arms: list[str], baseline: str | None, paired_
                   f"b: {paired_arms[0]} right, {paired_arms[1]} wrong. c: the reverse.", ""]
         for slice_id, result in out["paired"].items():
             lines.append(f"- {slice_id}")
-            for subset in ("all", "model_differs", "input_tokens_differ"):
+            for subset in PAIRED_SUBSETS:
                 lines.append(f"  - {subset}: {pair_text(result[subset])}")
-            lines.append("  - noul with gold no, wrong: " + " / ".join(map(str, result["noul_gold_no_wrong"])))
     lines += ["", "## Notes", ""] + [f"- {note}" for note in NOTES]
     if out["errors"]:
         lines += ["", "## Errors", ""] + [f"- {error}" for error in out["errors"]]

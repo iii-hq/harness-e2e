@@ -32,8 +32,9 @@ def evidence(slice_id, correct, cases=None, model="m", tokens=None, p_gold=None)
                              {"id": "accuracy", "value": sum(correct) / len(correct), "unit": "ratio"}]}
 
 
-def write_arm(directory, slices, shas=None):
-    """An arm's results directory: results.json plus one artifact per slice."""
+def write_arm(directory, slices, shas=None, results_dir=""):
+    """An arm's results directory: results.json (in `results_dir`) plus one
+    artifact per slice, its path relative to the arm root."""
     scenarios = []
     for slice_id, built in slices.items():
         path = f"deliverables/run-{slice_id}/a1/judge_quality_evaluation.json"
@@ -41,8 +42,8 @@ def write_arm(directory, slices, shas=None):
         (directory / path).write_text(json.dumps(built))
         scenarios.append({"scenario_id": slice_id, "behavior_sha256": (shas or {}).get(slice_id, f"sha:{slice_id}"),
                           "runs": [{"deliverables": [{"id": "judge_quality_evaluation", "artifact": {"path": path}}]}]})
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "results.json").write_text(json.dumps({"schema": "results", "scenarios": scenarios}))
+    (directory / results_dir).mkdir(parents=True, exist_ok=True)
+    (directory / results_dir / "results.json").write_text(json.dumps({"schema": "results", "scenarios": scenarios}))
 
 
 def full(easy=None, hard=None, typed=None, **kwargs):
@@ -93,6 +94,18 @@ class JudgeQualityTest(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertIn("p=0.6250 **cannot tell**", text)
 
+        code, text, _ = self.run_main({"base": full(hard=[True] + [False] * 12 + [True] * 7),
+                                       "arm": full(hard=[False] + [True] * 19)}, "--baseline", "base")
+        self.assertEqual(code, 0, text)
+        self.assertIn("b=1 c=12 p=0.0034 **better**", text)
+
+    def test_an_artifact_path_resolves_against_the_arm_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            write_arm(Path(root), full(), results_dir="run-1")
+            slices = judge_quality.load_arm(Path(root))
+        self.assertEqual(sorted(slices), sorted(judge_quality.SLICES))
+        self.assertEqual(slices[HARD]["evidence"]["slice"], HARD)
+
     def test_a_missing_slice_reads_not_measured(self):
         slices = full()
         del slices[TYPED]
@@ -110,24 +123,43 @@ class JudgeQualityTest(unittest.TestCase):
         a = full(hard=[True] * 20)
         b = full(hard=[True] * 20)
         # In b: decisions 0-3 move to another checkpoint, two of them flip;
-        # decisions 10-11 read more tokens, one flips the other way.
+        # decisions 10-12 read more tokens, 10 flips one way, 11 (gold no) the
+        # other, 12 drifts 0.4 without flipping. With equal tokens, 5 drifts
+        # 0.05 and 13 (gold no, wrong in both) goes unanswered.
         moved = b[HARD]["decisions"]
         for i in range(4):
             moved[i]["model"] = "laya-multilingual"
         moved[0]["correct"] = moved[1]["correct"] = False
         a[HARD]["decisions"][10]["correct"] = False
-        for i in (10, 11):
+        for i in (10, 11, 12):
             moved[i]["input_tokens"] = 900
+        moved[11].update(correct=False, p_gold=0.4)
+        moved[12]["p_gold"] = 0.5
         moved[5]["p_gold"] = 0.85
+        a[HARD]["decisions"][13].update(correct=False, p_gold=0.1)
+        moved[13].update(answered=False, correct=False, p_gold=None)
         code, text, report = self.run_main({"a": a, "b": b}, "--paired", "a", "b")
         self.assertEqual(code, 0, text)
         hard = report["paired"][HARD]
-        self.assertEqual((hard["all"]["b"], hard["all"]["c"], hard["all"]["n"]), (2, 1, 20))
-        self.assertAlmostEqual(hard["all"]["max_delta_p_gold"], 0.05)
+        self.assertEqual({k: hard["all"][k] for k in ("n", "b", "c", "changed", "noul_gold_no_wrong")},
+                         {"n": 20, "b": 3, "c": 1, "changed": 5, "noul_gold_no_wrong": [1, 3]})
+        self.assertAlmostEqual(hard["all"]["max_delta_p_gold"], 0.4)
         self.assertEqual((hard["model_differs"]["n"], hard["model_differs"]["b"]), (4, 2))
-        self.assertEqual((hard["input_tokens_differ"]["n"], hard["input_tokens_differ"]["c"]), (2, 1))
-        self.assertEqual(hard["noul_gold_no_wrong"], [0, 1])
-        self.assertIn("model_differs: n=4 b=2 c=0 p=0.5000", text)
+        equal = hard["input_tokens_equal"]
+        self.assertEqual((equal["n"], equal["b"], equal["c"], equal["changed"]), (17, 2, 0, 3))
+        self.assertAlmostEqual(equal["max_delta_p_gold"], 0.05)
+        differ = hard["input_tokens_differ"]
+        self.assertEqual((differ["n"], differ["b"], differ["c"], differ["noul_gold_no_wrong"]), (3, 1, 1, [0, 1]))
+        self.assertIn("model_differs: n=4 b=2 c=0 p=0.5000 changed=2", text)
+        self.assertIn("input_tokens_equal: n=17 b=2 c=0 p=0.5000 changed=3 max|dp_gold|=5.00e-02 "
+                      "noul gold-no wrong=1/2", text)
+
+    def test_an_answer_that_moves_between_two_wrong_labels_counts_as_changed(self):
+        a = {"x": {"answered": True, "correct": False, "p_gold": 0.1, "probabilities": {"a": 0.5, "b": 0.1, "c": 0.4}}}
+        b = {"x": {"answered": True, "correct": False, "p_gold": 0.1, "probabilities": {"a": 0.4, "b": 0.1, "c": 0.5}}}
+        result = judge_quality.pair(a, b, ["x"])
+        self.assertEqual((result["b"], result["c"], result["changed"], result["max_delta_p_gold"]), (0, 0, 1, 0.0))
+        self.assertEqual(judge_quality.pair(a, a, ["x"])["changed"], 0)
 
     def test_sign_test_and_wilson(self):
         self.assertAlmostEqual(judge_quality.sign_test(12, 1), 0.003418, places=6)
