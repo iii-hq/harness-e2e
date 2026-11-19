@@ -155,7 +155,7 @@ assemble() {
 # The revisions the scenarios expect of their fixture sources.
 REGISTRY_REVISION=662eb87c1bdbb395f36264d5d26bf823e2ace783
 # registry_verification's delivery: VERIFICATION_FIXTURE_SHA in src/scenarios/registry.rs.
-REGISTRY_VERIFICATION_REVISION=9cce81250baea1bd99a9f5554c63d9a873b05be0
+REGISTRY_VERIFICATION_REVISION=0d7c5088e1a5f38684acf0630cd57bcfb656433c
 TRENDING_TOPICS_REVISION=3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
 PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "
 
