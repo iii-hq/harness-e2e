@@ -261,6 +261,8 @@ fn out_of_scope_session_flags(report: &E2eRunReport, transcript: &Value) -> Vec<
     }
     function_invocations(transcript)
         .iter()
+        // A browser function's session_id names a browser session, not an agent session.
+        .filter(|invocation| !invocation.call.function_id.starts_with("browser::"))
         .filter_map(|invocation| {
             let arguments = &invocation.call.arguments;
             let target = ["session_id", "root_session_id"]
@@ -516,6 +518,27 @@ mod tests {
             .collect();
         assert_eq!(out_of_scope.len(), 1);
         assert!(out_of_scope[0].summary.contains("someone-elses-session"));
+    }
+
+    #[test]
+    fn a_browser_session_id_is_not_an_agent_session() {
+        let report = report_with_transcript(transcript_with(vec![
+            assistant_call("browser::sessions::start", json!({})),
+            assistant_call(
+                "browser::act",
+                json!({"session_id": "b1", "action": "click"}),
+            ),
+            assistant_call("harness::send", json!({"session_id": "b1"})),
+        ]));
+
+        let flags = deterministic(&report, &RedactionPolicy::default());
+
+        let out_of_scope: Vec<_> = flags
+            .iter()
+            .filter(|flag| flag.kind == AuditFlagKind::OutOfScopeSessionAccess)
+            .collect();
+        assert_eq!(out_of_scope.len(), 1, "{out_of_scope:?}");
+        assert!(out_of_scope[0].summary.ends_with("via 'harness::send'"));
     }
 
     #[test]
