@@ -37,6 +37,8 @@ Which checks the delivery fails becomes public after a run, through the tester's
 3. Commit `registry-verification-delivery/implementation.patch` and `manifest.json` to e2e-fixture's `registry-verification-delivery` branch. Push it as a fast-forward: older releases still fetch the previous commit by SHA.
 4. Set `VERIFICATION_FIXTURE_SHA` (`src/scenarios/registry.rs`) and `REGISTRY_VERIFICATION_REVISION` (`scripts/executor.sh`) to that commit, and `PLANTED_FAILURES` to its count. Re-pin `registry_verification`'s behavior digest. Its earlier runs then show as Redefined.
 
+The delivery branch is e2e-fixture's master plus `registry-verification-delivery/`. A fix to the environment on master (compose, Dockerfile, scripts) reaches verification only through that branch: cherry-pick it there as a fast-forward and do step 4 with the same `PLANTED_FAILURES`. The planted set does not change.
+
 In the E2E extension, create a plan with one scenario and an execution model. All four scenarios use runtime validators; planning scores the delivered `plan.md` with deterministic text checks. Use one run and zero technical retries for initial validation so failures remain visible.
 
 Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the executor workspace disk. Set `TMPDIR` there as well when the host temporary filesystem has a separate quota. The worker process must receive these variables before the run starts; setting them in the browser does not configure the worker.
