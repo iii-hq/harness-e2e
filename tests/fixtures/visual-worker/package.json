@@ -6,16 +6,16 @@
     "start": "node src/index.mjs"
   },
   "dependencies": {
-    "@iii-dev/console-ui": "0.2.0",
-    "iii-sdk": "0.26.0-rc.5",
-    "lucide-react": "1.16.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "@iii-dev/console-ui": "0.4.0",
+    "iii-sdk": "0.26.0",
+    "lucide-react": "1.76.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "esbuild": "0.28.2",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2"
   }
 }
