@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -121,6 +122,34 @@ class LatestCliTests(unittest.TestCase):
 
 
 class KitStackTests(unittest.TestCase):
+    def kit_dir(self, root, skills=False):
+        kit = Path(root) / "deepwork"
+        (kit / "agents").mkdir(parents=True)
+        (kit / "iii.kit.yaml").write_text("name: iii/deepwork\nversion: 0.9.0\n")
+        (kit / "agents/deepwork.md").write_text("# lead\n")
+        if skills:
+            (kit / "skills").mkdir()
+        return kit
+
+    def test_path_kits_expand_the_environment_and_must_be_kits(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as root:
+            kit = self.kit_dir(root)
+            with mock.patch.dict(os.environ, {"KITS_ROOT": root}):
+                self.assertEqual(prepare_execution.stack_kits({"kits": ["path:${KITS_ROOT}/deepwork", "iii/x@1"]}),
+                                 [f"path:{kit}", "iii/x@1"])
+            os.environ.pop("KITS_ROOT_UNSET", None)
+            for bad in ("path:${KITS_ROOT_UNSET}/deepwork", f"path:{root}/missing", "path:relative/dir"):
+                with self.subTest(bad=bad), self.assertRaises(prepare_execution.ResolutionError):
+                    prepare_execution.stack_kits({"kits": [bad]})
+            (kit / "iii.kit.yaml").unlink()
+            with self.assertRaises(prepare_execution.ResolutionError):
+                prepare_execution.stack_kits({"kits": [f"path:{kit}"]})
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(prepare_execution.ResolutionError):
+                prepare_execution.stack_kits({"kits": [f"path:{self.kit_dir(root, skills=True)}"]})
+
     def test_kits_are_executor_inputs_not_compose_keys(self):
         stack = {"iii": "latest", "kits": ["iii/deepwork@0.4.3"], "containers": {}}
         self.assertEqual(prepare_execution.stack_kits(stack), ["iii/deepwork@0.4.3"])

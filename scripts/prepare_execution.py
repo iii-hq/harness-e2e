@@ -202,11 +202,29 @@ def select_slots(snapshot: dict[str, Any], slots: list[dict[str, Any]]) -> tuple
     return selected, [slot for slot in slots if (slot["scenario_id"], slot["repetition"]) not in found]
 
 
+def path_kit(entry: str) -> str:
+    """`path:<directory>` with environment variables expanded, checked to be a kit."""
+    expanded = os.path.expandvars(entry[len("path:"):])
+    if re.search(r"\$\{?\w", expanded):
+        raise ResolutionError(f"kit {entry} uses an unset environment variable")
+    directory = Path(expanded)
+    if not directory.is_absolute():
+        raise ResolutionError(f"kit {entry} must be an absolute directory")
+    if not (directory / "iii.kit.yaml").is_file() or not any((directory / "agents").glob("*.md")):
+        raise ResolutionError(f"kit directory {directory} needs iii.kit.yaml and agents/*.md")
+    if (directory / "skills").exists():
+        raise ResolutionError(f"kit directory {directory} has skills/, which path kits do not install")
+    return f"path:{directory}"
+
+
 def stack_kits(stack: dict[str, Any]) -> list[str]:
-    """Registry kits the stack asks Directory to install natively."""
+    """Kits the stack installs: Registry ones through Directory, `path:` ones from disk."""
     kits = stack.get("kits") or []
-    if not isinstance(kits, list) or any(not isinstance(kit, str) or not KIT.fullmatch(kit) for kit in kits):
-        raise ResolutionError("stack kits must be an array of <author>/<kit>[@version|tag|range]")
+    if not isinstance(kits, list) or any(
+        not isinstance(kit, str) or not (kit.startswith("path:") or KIT.fullmatch(kit)) for kit in kits
+    ):
+        raise ResolutionError("stack kits must be an array of <author>/<kit>[@version|tag|range] or path:<directory>")
+    kits = [path_kit(kit) if kit.startswith("path:") else kit for kit in kits]
     if len(kits) != len(set(kits)):
         raise ResolutionError("stack kits must be unique")
     return kits

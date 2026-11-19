@@ -750,6 +750,10 @@ if [[ -n "$assemble_only" ]]; then
   cp "$compose_file" "$run_root/pre-kit-worker-compose.yaml"
   cp "${compose_file%.yaml}.lock" "$run_root/pre-kit-worker-compose.lock"
   while IFS= read -r kit; do
+    if [[ $kit == path:* ]]; then
+      python3 "$contract_tool" install-path-kit --project-root "$project_dir" --directory "${kit#path:}"
+      continue
+    fi
     receipt="$artifact_dir/stack/kits/$(printf '%s' "$kit" | sha256sum | cut -c1-16).json"
     request=$(jq -cn --arg kit "$kit" '{kit:$kit,apply:true}')
     project_trigger directory::download-kit "$request" 1200000 >"$receipt"

@@ -450,9 +450,9 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("runtime.kits.requested must be a non-empty unique array")
         for kit in requested:
             if not isinstance(kit, str) or not re.fullmatch(
-                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?", kit
+                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?|path:/\S+", kit
             ):
-                raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range]")
+                raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range] or path:<directory>")
         assets = kits.get("assets")
         if assets is not None:
             require_digest(kits.get("lock_sha256"), "runtime.kits.lock_sha256")
@@ -1307,6 +1307,41 @@ def kit_assets(project_root: Path, output_root: Path) -> dict[str, Any]:
     return manifest
 
 
+def install_path_kit(project_root: Path, directory: Path) -> None:
+    """Install a kit from a local directory the way the Directory would have:
+    its agents under agents/ and an entry in kits.lock listing each file."""
+    import shutil
+    import yaml
+
+    manifest = load_yaml((directory / "iii.kit.yaml").read_text())
+    name, version = manifest.get("name"), str(manifest.get("version"))
+    agents = sorted((directory / "agents").glob("*.md"))
+    if not name or not manifest.get("version") or not agents:
+        raise ValueError(f"{directory} needs iii.kit.yaml name and version, and agents/*.md")
+    if (directory / "skills").exists():
+        raise ValueError(f"{directory} has skills/, which path kits do not install")
+    project = project_root.resolve(strict=True)
+    lock_path = project / "kits.lock"
+    lock = load_yaml(lock_path.read_text()) if lock_path.is_file() else {"version": 1, "kits": {}}
+    (project / "agents").mkdir(exist_ok=True)
+    files = {}
+    for source in agents:
+        if source.is_symlink() or not source.is_file():
+            raise ValueError(f"kit agent must be a regular file: {source}")
+        shutil.copyfile(source, project / "agents" / source.name)
+        files[f"agents/{source.name}"] = {"sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    lock.setdefault("kits", {})[name] = {
+        "requested": f"path:{directory}",
+        "version": version,
+        "source": "path",
+        "directory": str(directory),
+        "installed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "workers": manifest.get("workers") or {},
+        "files": files,
+    }
+    lock_path.write_text(yaml.safe_dump(lock, sort_keys=False))
+
+
 def kit_agent_ids(lock_path: Path, selected: str | None = None) -> list[str]:
     """Profiles the installed kits own, plus the profile selected by the suite."""
     lock = load_yaml(lock_path.read_text())
@@ -1648,6 +1683,9 @@ def main() -> int:
     restore_kits.add_argument("--contract", type=Path, required=True)
     restore_kits.add_argument("--source-root", type=Path, required=True)
     restore_kits.add_argument("--project-root", type=Path, required=True)
+    path_kit_install = commands.add_parser("install-path-kit")
+    path_kit_install.add_argument("--project-root", type=Path, required=True)
+    path_kit_install.add_argument("--directory", type=Path, required=True)
     kit_profiles = commands.add_parser("kit-agent-ids")
     kit_profiles.add_argument("--lock", type=Path, required=True)
     kit_profiles.add_argument("--selected")
@@ -1691,6 +1729,9 @@ def main() -> int:
             return 0
         if args.command == "export-kit-assets":
             kit_assets(args.project_root, args.output_root)
+            return 0
+        if args.command == "install-path-kit":
+            install_path_kit(args.project_root, args.directory)
             return 0
         if args.command == "kit-agent-ids":
             print("\n".join(kit_agent_ids(args.lock, args.selected)))

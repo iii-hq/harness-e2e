@@ -2214,6 +2214,32 @@ containers:
         with self.assertRaisesRegex(ValueError, "brings no iii-directory"):
             MODULE.configure_directory_profile_root({"containers": {}}, Path("/private/project"), "e2e-prepare")
 
+    def test_path_kit_install_writes_a_lock_the_kit_readers_accept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            kit = root / "kit"
+            (kit / "agents").mkdir(parents=True)
+            (kit / "iii.kit.yaml").write_text("name: iii/deepwork\nversion: 0.9.0\nworkers:\n  harness: ^1.9.0\n")
+            (kit / "agents/deepwork.md").write_text("# lead\n")
+            (kit / "agents/deepwork-impl.md").write_text("# impl\n")
+            project = root / "project"
+            project.mkdir()
+            MODULE.install_path_kit(project, kit)
+            lock = yaml.safe_load((project / "kits.lock").read_text())["kits"]["iii/deepwork"]
+            self.assertEqual((lock["version"], lock["source"], lock["directory"]), ("0.9.0", "path", str(kit)))
+            self.assertEqual(lock["files"]["agents/deepwork.md"]["sha256"],
+                             hashlib.sha256(b"# lead\n").hexdigest())
+            self.assertEqual(MODULE.kit_agent_ids(project / "kits.lock", "e2e"),
+                             ["deepwork", "deepwork-impl", "e2e"])
+            manifest = MODULE.kit_assets(project, root / "snapshot")
+            self.assertEqual([item["path"] for item in manifest["files"]],
+                             ["agents/deepwork-impl.md", "agents/deepwork.md"])
+            (kit / "agents/deepwork.md").write_text("# changed\n")
+            MODULE.install_path_kit(project, kit)
+            again = MODULE.kit_assets(project, root / "snapshot2")
+            self.assertNotEqual(manifest["files"], again["files"])
+            self.assertNotEqual(manifest["lock_sha256"], again["lock_sha256"])
+
     def test_kit_assets_are_hashed_exported_and_restored_without_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1839,6 +1839,24 @@ files and worker lock are held for the execution, including failed-job
 retries. Kit requirements must fit the stack's existing worker pins; a kit
 cannot silently replace the worker versions the test requested.
 
+A `kits` entry may also be `path:<absolute directory>`, to measure a kit's
+source (for example a workers checkout's `kits/deepwork`) instead of a
+published version. Environment variables are expanded at preparation:
+
+```yaml
+kits:
+  - path:${HARNESS_E2E_KITS_ROOT}/deepwork
+```
+
+An unset variable, or a directory without `iii.kit.yaml` and `agents/*.md`,
+fails preparation. The kit's `agents/*.md` are copied into the project and
+recorded in `kits.lock` (`source: path`, with the directory), without calling
+Directory. A path kit adds no workers: the stack must declare every worker the
+kit's `iii.kit.yaml` lists. A kit with `skills/` is rejected. The frozen agent
+digests are part of the execution contract, so editing a prompt changes the
+execution's identity; the path itself is recorded too, so the same kit from a
+different checkout location is a different execution.
+
 A project template belongs to the stack and is independent of the suite and
 the agent profile:
 
