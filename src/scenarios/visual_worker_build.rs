@@ -413,7 +413,9 @@ so a Worker you start for your own checks is not the one evaluated. It already i
 dependencies; do not change them.
 You may add build scripts to package.json while keeping dependency versions fixed.
 Register `{domain}`, `{canvas}`, and `{ui}` with non-empty descriptions and object JSON
-schemas. Observe `ade::ui::asset` with `iii.observe` once per asset, args `{{kind: 'script' | 'style', path}}`,
+schemas. iii injects `_caller_worker_id` into object payloads for worker-to-worker calls. This is
+runtime metadata, not a business field: set it aside before strict validation,
+and keep rejecting unknown business fields. Observe `ade::ui::asset` with `iii.observe` once per asset, args `{{kind: 'script' | 'style', path}}`,
 targeting `{ui}` at `{script}` and `{style}`. Build the ESM asset with `buildWorkerUi`; it must default-export
 setup(host), register page id `{page}`, and call Worker functions through host.iii.trigger. Use
 PageShell, PageHeader, PageMain, and appropriate shared controls. Scope CSS under
@@ -2100,6 +2102,21 @@ mod tests {
                     .map(|item| u16::from(item.weight))
                     .sum::<u16>(),
                 100
+            );
+        }
+    }
+
+    #[test]
+    fn the_prompt_tells_strict_functions_to_set_aside_the_injected_caller_id() {
+        for kind in [Kind::Form, Kind::Machine] {
+            let prompt = scenario_spec(kind, "run-a").prompt;
+            assert!(
+                prompt.contains("iii injects `_caller_worker_id`"),
+                "{kind:?}"
+            );
+            assert!(
+                prompt.contains("keep rejecting unknown business fields"),
+                "{kind:?}"
             );
         }
     }
