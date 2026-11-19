@@ -142,6 +142,11 @@ pub struct Consolidation {
     pub notes: u64,
     /// The semantic tier's applied decisions, part of `superseded`.
     pub semantic: u64,
+    /// Live memories with no vector when setup stopped waiting, just before
+    /// the pass. Above 0, a memory-consolidate that reads vector coverage
+    /// defers its semantic tier. `None` when setup ran lexical or memory does
+    /// not report its vector coverage.
+    pub unembedded: Option<u64>,
 }
 
 /// What `capture` reads of an attempt.
@@ -459,6 +464,10 @@ fn assemble(
             count("memory_consolidation_notes", pass.notes),
             count("memory_consolidation_semantic", pass.semantic),
         ]);
+        let unembedded = pass
+            .unembedded
+            .map(|n| count("memory_consolidation_unembedded", n));
+        evidence.measurements.extend(unembedded);
     }
     evidence
 }
@@ -2245,9 +2254,10 @@ mod tests {
     }
 
     /// A consolidated arm says what its pass did; every other arm's runs
-    /// keep the measurements they had.
+    /// keep the measurements they had. Vectors still missing count only when
+    /// memory reported them.
     #[test]
-    fn a_consolidation_pass_adds_its_four_counts() {
+    fn a_consolidation_pass_adds_its_counts() {
         let case = case_named("memory_precise_port");
         let ids = |consolidation: Option<Consolidation>| {
             let mut seen = observed(&["a"], Vec::new());
@@ -2264,19 +2274,28 @@ mod tests {
         };
         assert!(ids(None).is_empty());
         let count = |id: &str, value: f64| (id.to_string(), value, "count".to_string());
+        let pass = Consolidation {
+            superseded: 1,
+            llm_calls: 2,
+            notes: 3,
+            semantic: 4,
+            unembedded: None,
+        };
+        let four = [
+            count("memory_consolidation_superseded", 1.0),
+            count("memory_consolidation_llm_calls", 2.0),
+            count("memory_consolidation_notes", 3.0),
+            count("memory_consolidation_semantic", 4.0),
+        ];
+        assert_eq!(ids(Some(pass)), four);
+        let unembedded = ids(Some(Consolidation {
+            unembedded: Some(5),
+            ..pass
+        }));
+        assert_eq!(unembedded[..4], four);
         assert_eq!(
-            ids(Some(Consolidation {
-                superseded: 1,
-                llm_calls: 2,
-                notes: 3,
-                semantic: 4
-            })),
-            [
-                count("memory_consolidation_superseded", 1.0),
-                count("memory_consolidation_llm_calls", 2.0),
-                count("memory_consolidation_notes", 3.0),
-                count("memory_consolidation_semantic", 4.0),
-            ]
+            unembedded[4..],
+            [count("memory_consolidation_unembedded", 5.0)]
         );
     }
 

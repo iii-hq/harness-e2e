@@ -891,7 +891,7 @@ same on every stack, so a case on two stacks is one test to
 | --- | --- |
 | `memory` | Nothing: memory on, as the `memory` suite runs it. |
 | `memory-off` | Memory with `inject_rules` and `inject_memories` off. It holds the same bank and still extracts, but gives the session no section, no rules and no memories. |
-| `memory-consolidated` | The `memory` stack plus `memory-consolidate`, with no scheduled pass. Where `memory-consolidate::run` is registered, setup runs it on the attempt's bank once the case planted and taught it, so the session reads a consolidated bank. A stack whose `compose::status` lists `memory-consolidate` waits up to 90 seconds for the function to register; past that, setup fails as an infrastructure error. `memory-consolidate` starts after `memory`, which holds memory at the version the stack declares against the one its graph would bring. |
+| `memory-consolidated` | The `memory` stack plus `memory-consolidate`, with no scheduled pass. Where `memory-consolidate::run` is registered, setup runs it on the attempt's bank once the case planted and taught it, so the session reads a consolidated bank. A stack whose `compose::status` lists `memory-consolidate` waits up to 90 seconds for the function to register; past that, setup fails as an infrastructure error. `memory-consolidate` defers its semantic tier while some memory of the bank has no vector, and setup runs one pass. So before the pass, setup waits up to 90 seconds (memory's backfill sweep runs every minute) until `memory::recall` reports a vector for every live memory of the bank. Past that, the pass runs anyway, and the run records how many memories still had no vector as `memory_consolidation_unembedded`. A memory that reports no vector coverage is not waited for, and the run records no count. `memory-consolidate` starts after `memory`, which holds memory at the version the stack declares against the one its graph would bring. |
 
 A memory case that scores an answer has a `class` in its results: `lookup`
 when the answer returns a stored value as it was stored, `synthesis` when it
@@ -968,6 +968,10 @@ figure and verdict is the runner's. Read it this way:
   nothing or took no semantic action. A run that set up lexical, while MiniLM
   was still loading, gives the semantic judge no vectors: the report says so
   on a line of its own and does not fail for it.
+  A run whose `memory_consolidation_unembedded` is above 0 still had memories
+  with no vector when setup stopped waiting. A memory-consolidate that reads
+  vector coverage defers its semantic tier then; an older one judges without
+  them. The report does not read that count.
 - A local stack with `memory-consolidate` installed also consolidates each
   attempt's bank in the other memory suites.
 
