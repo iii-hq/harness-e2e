@@ -299,7 +299,7 @@ const trigger=async (fn,payload={})=>{
 };
 await probe.PROBES.kanban_c6_discussion({trigger,stage:id=>stages.push(id),
  control:async operation=>operation==='read_store'?JSON.stringify(tickets):undefined,
- check:async(id,action)=>{if(id==='discussion_survives_edit_delete_and_restart')await action()},
+ check:async(id,...flow)=>{if(id==='discussion_survives_edit_delete_and_restart')await flow.at(-1)()},
 });
 console.log(JSON.stringify({stages,retained:tickets.filter(t=>t.deleted_at&&t.comments.length>0).length}));
 """)
@@ -340,8 +340,8 @@ const trigger=async(fn,payload={})=>{
 };
 await probe.PROBES.kanban_c2_persistence({trigger,stage:()=>{},api:async()=>({status:200,json:async()=>({})}),
  control:async(op,p)=>{if(op==='read_store')return store??JSON.stringify(SHAPE);if(op==='write_store')store=p.value},
- check:async(id,action)=>id==='persistence_iii_crud'?(await action(),true)
-  :(id==='persistence_corrupt_and_duplicate_store_fail_closed'&&recorder.check(id,action))});
+ check:async(id,...flow)=>id==='persistence_iii_crud'?(await flow.at(-1)(),true)
+  :(id==='persistence_corrupt_and_duplicate_store_fail_closed'&&recorder.check(id,...flow))});
 console.log(JSON.stringify(records));
 """.replace('SHAPE', shape))
                 self.assertEqual([c['status'] for c in result], [status])

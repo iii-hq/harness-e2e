@@ -669,7 +669,7 @@ async function create(trigger, fields = {}) {
 
 export const PROBES = {
   async kanban_c1_foundation({ api, trigger, control, browser, baseUrl, output, check, stage, unverified }) {
-    await check('foundation_assets_and_safe_routes', async () => {
+    await check('foundation_assets_and_safe_routes', ['foundation_startup', 'foundation_asset_paths'], async () => {
       stage('foundation_startup')
       expect(standaloneCompose(await trigger('compose::status', { file: '/workspace/worker-compose.yaml' })), 'Compose declares Console or no application')
       const home = await api('/')
@@ -678,7 +678,7 @@ export const PROBES = {
       for (const path of ['/constructor', '/toString', '/__proto__']) expect((await api(path)).status === 404, `${path} was not 404`)
       return 'Standalone HTML loads and prototype-like asset paths return 404.'
     })
-    await check('foundation_configuration_contract', async () => {
+    await check('foundation_configuration_contract', ['foundation_initial_config', 'foundation_preserve_config', 'foundation_direct_config', 'foundation_invalid_config', 'foundation_config_restart'], async () => {
       stage('foundation_initial_config')
       await control('restart', { register_configuration: false, reset_configuration: true })
       const initial = await eventually(async () => {
@@ -720,7 +720,7 @@ export const PROBES = {
       expect(restarted.data_dir === './probe-browser-data' && persisted.value.evaluator_marker === 'preserve-me', 'restart lost existing or unrelated configuration')
       return 'Browser and direct configuration changes select resolved paths; unrelated data survives saving and restart.'
     })
-    await check('foundation_accessible_settings', async () => {
+    await check('foundation_accessible_settings', ['foundation_settings_mobile', 'foundation_settings_desktop'], async () => {
       stage('foundation_settings_mobile')
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
       const input = page.getByRole('textbox')
@@ -748,7 +748,7 @@ export const PROBES = {
 
   async kanban_c2_persistence({ api, trigger, control, check, stage }) {
     let first
-    const crudAvailable = await check('persistence_iii_crud', async () => {
+    const crudAvailable = await check('persistence_iii_crud', ['persistence_defaults', 'persistence_identity', 'persistence_lookup'], async () => {
       stage('persistence_defaults')
       first = await trigger('kanban::tickets::create', { title: '  Defaults ticket  ' })
       expect(first.title === 'Defaults ticket' && first.status === 'backlog' && first.priority === 'medium', 'defaults or title normalization are wrong')
@@ -783,7 +783,7 @@ export const PROBES = {
       expect(await control('read_store') === beforeStore, 'invalid create rewrote persisted bytes')
       return 'Invalid fields and values are rejected without adding a ticket.'
     })
-    await check('persistence_directory_isolation_and_restart', async () => {
+    await check('persistence_directory_isolation_and_restart', ['persistence_isolation', 'persistence_restart'], async () => {
       requireEvidence(crudAvailable, 'Persistence fixture requires working create/list/get functions.')
       stage('persistence_isolation')
       const initial = await json(await api('/api/config'))
@@ -1103,7 +1103,7 @@ export const PROBES = {
       } finally { delayed.release() }
       await context.close()
     })
-    await check('ticket_durable_deletion', async () => {
+    await check('ticket_durable_deletion', ['ticket_deletion_get', 'ticket_deletion_disk', 'ticket_deletion_restart', 'ticket_deletion_key'], async () => {
       const ticket = await create(trigger, { title: 'Durable deletion probe' })
       const response = await api(`/api/tickets/${ticket.key}`, { method: 'DELETE' })
       expect(response.status === 200, 'HTTP deletion by key failed')
@@ -1322,7 +1322,7 @@ export const PROBES = {
       } finally { delayed.release(); await context.close() }
       return 'A status-only move finishing after navigation appears on the relevant board.'
     })
-    await check('edit_move_survives_restart', async () => {
+    await check('edit_move_survives_restart', ['edit_restart', 'edit_mobile'], async () => {
       const ticket = await create(trigger, { title: 'Restart fixture', status: 'backlog' })
       const expected = await trigger('kanban::tickets::update', { id: ticket.id, changes: {
         title: 'Persisted edit', description: 'Independent restart', status: 'todo', priority: 'urgent', assignee: 'Restart author',
@@ -1354,7 +1354,7 @@ export const PROBES = {
       other = await create(trigger, { title: 'Other discussion' })
       return 'A persisted ticket is available for discussion evaluation.'
     })
-    await check('discussion_comments_replies_timeline', async () => {
+    await check('discussion_comments_replies_timeline', ['discussion_post', 'discussion_comments', 'discussion_timeline', 'discussion_parent_navigation'], async () => {
       requireEvidence(ticket && other, 'Discussion fixtures were not created.')
       stage('discussion_post')
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
@@ -1438,7 +1438,7 @@ export const PROBES = {
       expect(sameJson((await trigger('kanban::tickets::get', { id: ticket.id })).comments, expected.comments), 'restored discussion is unusable')
       return 'Empty input, foreign parents and malformed stored discussions fail without rewriting disk state.'
     })
-    await check('discussion_failure_and_overlap_preserve_drafts', async () => {
+    await check('discussion_failure_and_overlap_preserve_drafts', ['discussion_draft_failure', 'discussion_draft_navigation'], async () => {
       requireEvidence(ticket && other, 'Discussion fixtures were not created.')
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       stage('discussion_draft_failure')
@@ -1502,7 +1502,7 @@ export const PROBES = {
       await context.close()
       return 'Editing and failed posts preserve drafts; a delayed post cannot erase another ticket draft or newer activity.'
     })
-    await check('discussion_survives_edit_delete_and_restart', async () => {
+    await check('discussion_survives_edit_delete_and_restart', ['discussion_preservation', 'discussion_restart'], async () => {
       const ticket = await create(trigger, { title: 'Discussion preservation fixture' })
       const other = await create(trigger, { title: 'Existing record fixture' })
       const root = await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Seed', body: 'Original comment' } })
@@ -1525,7 +1525,7 @@ export const PROBES = {
   },
 
   async kanban_c7_live({ api, trigger, control, browser, baseUrl, output, check, stage, unverified }) {
-    await check('live_sse_protocol_contract', async () => {
+    await check('live_sse_protocol_contract', ['live_initial_event', 'live_mutation_event', 'live_failed_write'], async () => {
       stage('live_initial_event')
       const configuration = await json(await api('/api/config'))
       let original
@@ -1584,7 +1584,7 @@ export const PROBES = {
       }
       return 'Named SSE change events carry the exact store, start with an initial event and exclude failed persistence.'
     })
-    await check('live_three_sessions_and_direct_iii', async () => {
+    await check('live_three_sessions_and_direct_iii', ['live_sessions', 'live_focus', 'live_edit_merge', 'live_comment_draft', 'live_replies', 'live_reconnect', 'live_move', 'live_drag', 'live_store', 'live_deletion'], async () => {
       stage('live_sessions')
       const sessions = await Promise.all([0, 1, 2].map(() => newPage(browser)))
       await Promise.all(sessions.map(({ page }) => openLiveSession(page, baseUrl)))
@@ -1697,7 +1697,7 @@ export const PROBES = {
       await Promise.all(sessions.map(({ context }) => context.close()))
       return 'Three sessions synchronize mutations; focus and drafts survive ordinary updates/restart, while a store switch during drag clears stale state.'
     })
-    await check('live_late_responses_disconnect_and_shutdown', async () => {
+    await check('live_late_responses_disconnect_and_shutdown', ['live_late_get', 'live_late_mutation', 'live_cleanup', 'live_shutdown'], async () => {
       stage('live_late_get')
       const ticket = await create(trigger, { title: 'Response ordering probe' })
       const { context, page } = await openTicket(browser, baseUrl, ticket)
@@ -1796,7 +1796,9 @@ export function requireEvidence(value, message) {
 }
 
 // A stage covers the assertions until the next stage or the end of its flow.
-// Only reached stages are recorded; later stages remain unverified, not failed.
+// A flow declares its stages. When a stage fails, the stages it kept the flow
+// from reaching take the same status: behavior the run never demonstrated
+// scores 0 instead of leaving the score's denominator.
 export function createCheckRecorder(checks, onFailure = async () => {}, onComplete = async () => {}) {
   let active
   const record = (id, status, detail) => {
@@ -1807,7 +1809,9 @@ export function createCheckRecorder(checks, onFailure = async () => {}, onComple
     if (active) record(active, 'passed', 'Observed through the running application.')
     active = undefined
   }
-  const check = async (id, action) => {
+  const check = async (id, ...flow) => {
+    const action = flow.pop()
+    const stages = flow[0] ?? []
     try {
       const detail = await action()
       finish()
@@ -1816,9 +1820,14 @@ export function createCheckRecorder(checks, onFailure = async () => {}, onComple
     } catch (error) {
       if (error instanceof ControlError) throw error
       const status = error instanceof BlockedCheck ? 'unverified' : 'failed'
+      const failedAt = active ?? id
       if (active) record(active, status, details(error))
       active = undefined
       record(id, status, details(error))
+      const cause = status === 'failed' ? 'failed' : 'could not be verified'
+      for (const stage of stages.filter((stage) => !checks.some((check) => check.id === stage))) {
+        record(stage, status, `not reached: '${failedAt}' ${cause} earlier in this flow`)
+      }
       await onFailure(id)
       return false
     } finally { await onComplete() }

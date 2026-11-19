@@ -79,9 +79,12 @@ of the detail rendering check.
 
 The other scenarios record checkpoints within ordered flows and use independent
 fixtures where possible. A reached failing checkpoint receives zero; previous
-passes retain their credit; later dependent checkpoints are `unverified` with
-`awarded: null`. An absent prerequisite is not a fabricated failure of every
-downstream behavior. A failed application build/startup still means an incomplete
+passes retain their credit. Each flow declares its checkpoints, and the ones a
+failure kept the flow from reaching also fail and receive zero, with a detail
+naming the checkpoint that failed first: behavior the round never demonstrated
+does not leave the score's denominator. When the probe could not verify a
+checkpoint (`unverified`, for example a fixture it could not plant), the rest of
+that flow is `unverified` too, with `awarded: null`. A failed application build/startup still means an incomplete
 task, and every criterion it left unreached scores 0. A control the
 application made fail is a failed check, and the round still counts: an app
 that is not ready 60 s after a restart while its runtime process runs and
