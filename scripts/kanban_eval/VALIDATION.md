@@ -110,8 +110,9 @@ reference`): 14 of 17 criteria passed before the change and 17 of 17 after.
 
 The revision-2 rubric has 76 weighted criteria across the seven scenarios, with
 100 points per scenario. C3 and C4 execute 11 and 12 independent checks. Other
-ordered flows record checkpoints so completed observations survive later failures
-and unreached behavior stays unverified. Native and standalone prompts use the
+ordered flows record checkpoints so completed observations survive later failures.
+Since 2026-11-19 the checkpoints a failure left unreached fail with it, and the
+ones an unverifiable checkpoint left unreached stay unverified. Native and standalone prompts use the
 same rubric; the native case identity includes its revision and digest.
 
 Regressions derived from the 18–19 September deliveries cover `Total: 5 tickets`,

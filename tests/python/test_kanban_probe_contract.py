@@ -802,7 +802,8 @@ export function registerWorker() {
             "criterion_invalid_config": "passed",
             "criterion_config_restart": "passed",
             "criterion_settings_mobile": "failed",
-            "criterion_settings_desktop": "unverified",
+            # Mobile failed first, so the flow never reached desktop.
+            "criterion_settings_desktop": "failed",
             "criterion_hot_reload": "passed",
         })
 
@@ -991,6 +992,78 @@ console.log(JSON.stringify({{ recorded, checks }}))
                 thread.join()
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 self.assertEqual(json.loads(completed.stdout), expected)
+
+    def run_node(self, script):
+        completed = subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return json.loads(completed.stdout)
+
+    def test_stages_a_failed_flow_never_reached_fail_with_it(self):
+        result = self.run_node(f"""
+import {{ createCheckRecorder, scoreCriteria }} from {json.dumps(PROBE.as_uri())}
+const run = async (throwAt) => {{
+  const checks = []
+  const {{ check, stage }} = createCheckRecorder(checks)
+  await check('flow', ['first', 'second', 'third'], async () => {{
+    for (const id of ['first', 'second', 'third']) {{
+      stage(id)
+      if (id === throwAt) throw new Error(`${{id}} broke`)
+    }}
+  }})
+  return checks
+}}
+const failed = await run('second')
+const rubric = [{{ id: 'criterion_third', description: 'Third?', checks: ['third'] }}]
+console.log(JSON.stringify({{
+  failed: failed.map(({{ id, status, detail }}) => [id, status, detail]),
+  passed: (await run()).map(({{ id, status }}) => [id, status]),
+  criterion: scoreCriteria(failed, rubric)[0].status,
+}}))
+""")
+        self.assertEqual(result["failed"], [
+            ["first", "passed", "Observed through the running application."],
+            ["second", "failed", "second broke"],
+            ["flow", "failed", "second broke"],
+            ["third", "failed", "not reached: 'second' failed earlier in this flow"],
+        ])
+        self.assertEqual(result["passed"], [
+            ["first", "passed"], ["second", "passed"], ["third", "passed"], ["flow", "passed"],
+        ])
+        self.assertEqual(result["criterion"], "failed")
+
+    def test_a_blocked_flow_leaves_its_unreached_stages_unverified(self):
+        result = self.run_node(f"""
+import {{ createCheckRecorder, requireEvidence }} from {json.dumps(PROBE.as_uri())}
+const checks = []
+const {{ check, stage }} = createCheckRecorder(checks)
+await check('flow', ['first', 'second'], async () => {{
+  stage('first')
+  requireEvidence(false, 'fixture unavailable')
+  stage('second')
+}})
+console.log(JSON.stringify(checks.map(({{ id, status, detail }}) => [id, status, detail])))
+""")
+        self.assertEqual(result, [
+            ["first", "unverified", "fixture unavailable"],
+            ["flow", "unverified", "fixture unavailable"],
+            ["second", "unverified", "not reached: 'first' could not be verified earlier in this flow"],
+        ])
+
+    def test_every_staged_flow_declares_exactly_the_stages_its_body_runs(self):
+        source = PROBE.read_text()
+        starts = list(re.finditer(r"await check\('(\w+)', (?:\[([^\]]*)\], )?async", source))
+        self.assertGreater(len(starts), 40)
+        staged = 0
+        for index, start in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(source)
+            ran = re.findall(r"stage\('(\w+)'\)", source[start.end():end])
+            with self.subTest(check=start.group(1)):
+                self.assertEqual(re.findall(r"'(\w+)'", start.group(2) or ""), ran)
+            staged += bool(ran)
+        self.assertEqual(staged, 13)
 
     def test_control_request_is_atomic_correlated_and_has_object_payload(self):
         with tempfile.TemporaryDirectory() as directory:

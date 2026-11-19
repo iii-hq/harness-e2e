@@ -50,9 +50,9 @@ try {
           emit(directory)
           return { id: 'one' }
         },
-        check: async (id, action) => {
+        check: async (id, ...flow) => {
           if (id !== 'live_sse_protocol_contract') return
-          try { await action(); results[variant] = true }
+          try { await flow.at(-1)(); results[variant] = true }
           catch (error) {
             assert.match(error.message, /extra change event/)
             results[variant] = false
