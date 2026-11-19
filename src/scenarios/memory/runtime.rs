@@ -7,6 +7,7 @@
 //! the user's own `main`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -44,6 +45,9 @@ const CONSOLIDATE_WAIT: Duration = Duration::from_secs(90);
 const CONSOLIDATE_CALL: Duration = Duration::from_secs(300);
 const EMBEDDER_WAIT: Duration = Duration::from_secs(300);
 const VECTOR_WAIT: Duration = Duration::from_secs(180);
+/// How long setup waits for the whole bank's vectors before the pass: memory's
+/// backfill sweep runs every 60 s, so one sweep and its embed calls.
+const COVERAGE_WAIT: Duration = Duration::from_secs(90);
 /// How long lexical-only must hold before it is believed.
 const LEXICAL_SETTLE: Duration = Duration::from_secs(15);
 /// No progress for this long fails a teacher turn.
@@ -231,9 +235,10 @@ fn created(reply: &Value) -> Result<Saved> {
     stored(reply)
 }
 
-/// What a `memory-consolidate::run` pass on the attempt's one bank did; a
-/// pass that failed there fails setup.
-fn consolidated(reply: &Value) -> Result<Consolidation> {
+/// What a `memory-consolidate::run` pass on the attempt's one bank did, with
+/// the live memories that had no vector when it ran; a pass that failed there
+/// fails setup.
+fn consolidated(reply: &Value, unembedded: Option<u64>) -> Result<Consolidation> {
     let report = &reply["banks"][0];
     if report.is_null() {
         bail!("memory-consolidate::run failed on the attempt's bank: no report in {reply}");
@@ -254,6 +259,7 @@ fn consolidated(reply: &Value) -> Result<Consolidation> {
         notes: report["notes"].as_array().map_or(0, Vec::len) as u64,
         // Absent when the semantic tier applied nothing.
         semantic: report["semantic"].as_array().map_or(0, Vec::len) as u64,
+        unembedded,
     })
 }
 
@@ -304,8 +310,8 @@ async fn consolidates(context: &E2eContext) -> Result<bool> {
 }
 
 /// Keeps the pass `reply` reports on the registered run, for its snapshot.
-fn keep_consolidation(run_id: &str, reply: &Value) -> Result<()> {
-    let pass = consolidated(reply)?;
+fn keep_consolidation(run_id: &str, reply: &Value, unembedded: Option<u64>) -> Result<()> {
+    let pass = consolidated(reply, unembedded)?;
     lock_unpoisoned(runs())
         .get_mut(run_id)
         .context("the run was never registered")?
@@ -353,6 +359,55 @@ async fn wait_for_vector(context: &E2eContext, bank: &str, id: &str, text: &str)
                 "memory never returned {id} for its own text (retrieval {})",
                 recalled["retrieval"]
             );
+        }
+        sleep(POLL).await;
+    }
+}
+
+/// Whether setup stops waiting for the bank's vectors after one semantic
+/// recall: `Break` with the live memories that still have no vector, or
+/// `None` when an older memory embedded the query but reports no coverage.
+/// A query memory could not embed (`semantic-unavailable`) says nothing
+/// about the vectors, so setup polls again until the wait runs out.
+fn coverage_settled(recall: &Value, timed_out: bool) -> ControlFlow<Option<u64>> {
+    let coverage = &recall["vector_coverage"];
+    let (Some(covered), Some(live)) = (coverage["covered"].as_u64(), coverage["live"].as_u64())
+    else {
+        if recall["retrieval"] == "semantic" || timed_out {
+            // shortcut: a failed embed on the last poll records no count, poll
+            // past the deadline if CI shows a deferred pass with no count.
+            return ControlFlow::Break(None);
+        }
+        return ControlFlow::Continue(());
+    };
+    let unembedded = live.saturating_sub(covered);
+    if unembedded == 0 || timed_out {
+        ControlFlow::Break(Some(unembedded))
+    } else {
+        ControlFlow::Continue(())
+    }
+}
+
+/// Waits until every live memory of the bank has a vector, up to
+/// `COVERAGE_WAIT`, and returns how many had none when the wait ended.
+/// memory-consolidate defers its semantic tier while vectors land, and setup
+/// runs one pass, so a deferral would take no semantic action. A wait that
+/// runs out does not fail setup: the pass runs, and the count says why.
+async fn wait_for_coverage(context: &E2eContext, bank: &str) -> Result<Option<u64>> {
+    let deadline = Instant::now() + COVERAGE_WAIT;
+    loop {
+        // Any query: the coverage is the bank's, not the hits'.
+        let recalled = context
+            .trigger_value(
+                "memory::recall",
+                json!({"bank": bank, "query": "vectors", "mode": "semantic", "limit": 1}),
+            )
+            .await
+            .context("memory::recall")?;
+        if let ControlFlow::Break(unembedded) =
+            coverage_settled(&recalled, Instant::now() >= deadline)
+        {
+            return Ok(unembedded);
         }
         sleep(POLL).await;
     }
@@ -459,11 +514,17 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
             teach(context, case, run_id, retrieval).await?;
         }
         if consolidating {
+            // Lexical-only embeds no query, so every poll would say `semantic-unavailable`.
+            let unembedded = if retrieval == Retrieval::Minilm {
+                wait_for_coverage(context, &bank).await?
+            } else {
+                None
+            };
             let reply = context
                 .trigger_value_with_timeout(CONSOLIDATE, json!({"bank": bank}), CONSOLIDATE_CALL)
                 .await
                 .context(CONSOLIDATE)?;
-            keep_consolidation(run_id, &reply)?;
+            keep_consolidation(run_id, &reply, unembedded)?;
         }
     }
 
@@ -1477,12 +1538,13 @@ mod tests {
                        "semantic": [{"action": "supersede", "reason": "the bucket changed"}]}],
         });
         assert_eq!(
-            consolidated(&clean).unwrap(),
+            consolidated(&clean, Some(0)).unwrap(),
             Consolidation {
                 superseded: 2,
                 llm_calls: 3,
                 notes: 1,
-                semantic: 1
+                semantic: 1,
+                unembedded: Some(0)
             }
         );
         // A worker that sends no model call count, and a pass with nothing to do.
@@ -1491,12 +1553,13 @@ mod tests {
             "banks": [{"bank": "e2e-a", "scanned": 22, "groups": [], "superseded": 0, "reinforced": 0}],
         });
         assert_eq!(
-            consolidated(&quiet).unwrap(),
+            consolidated(&quiet, None).unwrap(),
             Consolidation {
                 superseded: 0,
                 llm_calls: 0,
                 notes: 0,
-                semantic: 0
+                semantic: 0,
+                unembedded: None
             }
         );
         let failed = json!({
@@ -1504,13 +1567,58 @@ mod tests {
             "banks": [{"bank": "e2e-a", "scanned": 0, "groups": [], "superseded": 0,
                        "reinforced": 0, "errors": ["memory::list: timeout"]}],
         });
-        let error = consolidated(&failed).unwrap_err().to_string();
+        let error = consolidated(&failed, None).unwrap_err().to_string();
         assert!(
             error.starts_with("memory-consolidate::run failed on the attempt's bank")
                 && error.contains("timeout"),
             "{error}"
         );
-        assert!(consolidated(&json!({"banks": []})).is_err());
+        assert!(consolidated(&json!({"banks": []}), None).is_err());
+    }
+
+    /// Setup runs the pass once every live memory has a vector, keeps waiting
+    /// while some have none, and runs it anyway when the wait runs out.
+    /// An older memory reports no coverage, so there is nothing to wait for.
+    /// A query memory could not embed keeps the wait going until it runs out.
+    #[test]
+    fn the_pass_waits_for_vectors_only_while_memory_reports_some_missing() {
+        let recall = |covered: u64, live: u64| {
+            json!({"bank": "e2e-a", "memories": [], "retrieval": "semantic",
+                   "vector_coverage": {"covered": covered, "live": live}})
+        };
+        assert_eq!(
+            coverage_settled(&recall(3, 3), false),
+            ControlFlow::Break(Some(0))
+        );
+        assert_eq!(
+            coverage_settled(&recall(0, 0), false),
+            ControlFlow::Break(Some(0))
+        );
+        assert_eq!(
+            coverage_settled(&recall(1, 3), false),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(
+            coverage_settled(&recall(1, 3), true),
+            ControlFlow::Break(Some(2))
+        );
+        let older = json!({"bank": "e2e-a", "memories": [], "retrieval": "semantic"});
+        for timed_out in [false, true] {
+            assert_eq!(
+                coverage_settled(&older, timed_out),
+                ControlFlow::Break(None)
+            );
+        }
+        let unembedded_query =
+            json!({"bank": "e2e-a", "memories": [], "retrieval": "semantic-unavailable"});
+        assert_eq!(
+            coverage_settled(&unembedded_query, false),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(
+            coverage_settled(&unembedded_query, true),
+            ControlFlow::Break(None)
+        );
     }
 
     /// Only a stack whose compose lists memory-consolidate waits for its pass.
@@ -1542,17 +1650,21 @@ mod tests {
             "superseded": 1,
             "banks": [{"bank": "e2e-a", "llm_calls": 2, "notes": ["a note"]}],
         });
-        assert!(keep_consolidation(run_id, &reply).is_err(), "unregistered");
+        assert!(
+            keep_consolidation(run_id, &reply, None).is_err(),
+            "unregistered"
+        );
         register(&CASES[0], run_id);
         assert_eq!(snapshot(run_id).consolidation, None);
-        keep_consolidation(run_id, &reply).unwrap();
+        keep_consolidation(run_id, &reply, Some(2)).unwrap();
         assert_eq!(
             snapshot(run_id).consolidation,
             Some(Consolidation {
                 superseded: 1,
                 llm_calls: 2,
                 notes: 1,
-                semantic: 0
+                semantic: 0,
+                unembedded: Some(2)
             })
         );
         lock_unpoisoned(runs()).remove(run_id);
