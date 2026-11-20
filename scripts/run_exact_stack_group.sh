@@ -27,7 +27,22 @@ group_attempt=${HARNESS_E2E_GROUP_ATTEMPT:-1}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 compose_add_timeout_seconds=${HARNESS_E2E_COMPOSE_ADD_TIMEOUT_SECONDS:-600}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
+# How long the stack's workers have to take their keys from its vault.
+vault_wait_seconds=60
 kanban_bootstrap=${HARNESS_E2E_KANBAN_BOOTSTRAP:-"$repo_root/scripts/kanban_eval/bootstrap.py"}
+
+# A process's environment is readable by every process of its user, the
+# subject's shell included: the launcher hands itself what the group received
+# in a private file and runs again without it, or any catalog name.
+if [[ -z "${HARNESS_E2E_CREDENTIALS_FILE:-}" ]]; then
+  handoff=$(mktemp "${TMPDIR:-/tmp}/harness-e2e-handoff.XXXXXX")
+  dropped=$(python3 "$contract_tool" credentials-handoff --output "$handoff") || { rm -f -- "$handoff"; exit 2; }
+  drop=()
+  for name in $dropped; do drop+=(-u "$name"); done
+  exec env "${drop[@]}" HARNESS_E2E_CREDENTIALS_FILE="$handoff" bash "$launcher"
+fi
+# Until cleanup takes over, no exit leaves the handoff file behind.
+trap 'rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"' EXIT
 
 case "$artifact_dir" in
   "$repo_root"/target/*) ;;
@@ -101,8 +116,10 @@ if ! python3 "$contract_tool" validate-layout \
 fi
 compose_state="$run_root/compose-state"
 tools_dir="$run_root/bin"
-# Outside the project: the secrets worker reads <III_COMPOSE_DIR>/.env on its own.
-env_file="$run_root/credentials/all.env"
+# Outside the project, under a secrets/ folder ide refuses to coder::* and
+# shell::fs::*: the staging file the stack's vault imports from, deleted once
+# it holds the keys, with the vault's master key and a subscription login.
+env_file="$run_root/secrets/all.env"
 # The worker's native execution tree is evidence, not disposable runtime state.
 # Keep it below the uploaded artifact root so a failed results-get or process
 # cleanup cannot erase already committed runs and journal events.
@@ -411,12 +428,20 @@ cleanup() {
     else
       printf '::warning::%s failed during %s before any run started; trying the group once more in %ss\n' \
         "$campaign_group_id" "$failure_phase" "$retry_delay_seconds" >&2
-      sleep "$retry_delay_seconds"
+      # Cancelled while it waits, the group ends here and its handoff with it.
+      # The pause runs in the background: bash defers a trap until a foreground command ends.
+      local pause=""
+      trap 'kill "$pause" 2>/dev/null; rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"; trap - INT; kill -INT $$' INT
+      trap 'kill "$pause" 2>/dev/null; rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"; trap - TERM; kill -TERM $$' TERM
+      sleep "$retry_delay_seconds" &
+      pause=$!
+      wait "$pause"
       mkdir -p "$artifact_dir/attempts/1"
       find "$artifact_dir" -mindepth 1 -maxdepth 1 ! -name attempts -exec mv -t "$artifact_dir/attempts/1" -- {} +
       exec env -u HARNESS_E2E_KANBAN_RUNTIME HARNESS_E2E_GROUP_ATTEMPT=2 bash "$launcher"
     fi
   fi
+  rm -f -- "${HARNESS_E2E_CREDENTIALS_FILE:-}"
   exit "$status"
 }
 
@@ -499,6 +524,54 @@ wait_for_compose() {
   fail "iii compose did not become ready within ${wait_seconds}s (gave up after $((SECONDS - started))s)"
 }
 
+# Whether each consumer has resolved its own secret, in await_vault's
+# variables: every granted provider configured from the vault, the judge
+# (its status call is what makes it resolve), the vault saying each consumer
+# read it, and the subject's provider's catalog, which fills once the provider
+# took its key through the router: without it the first turn finds no model.
+vault_ready() {
+  router=$(project_trigger router::provider::list '{}' "$probe_ms" 2>/dev/null) || return 1
+  jq -e --argjson ids "$providers" '[.providers[] | select(.id as $id | $ids | any(. == $id))] as $p
+    | ($p | length) == ($ids | length) and ($p | all(.configured == true
+      and .credential_source == "secret" and (has("credential_error") | not)))' <<<"$router" >/dev/null || return 1
+  if [[ "$judge" == true ]]; then
+    status=$(project_trigger judge-typesafe::status '{}' "$probe_ms" 2>/dev/null) || return 1
+    jq -e '.configured == true and (has("reason") | not)' <<<"$status" >/dev/null || return 1
+  fi
+  vault=$(project_trigger secrets::list '{}' "$probe_ms" 2>/dev/null) || return 1
+  jq -e --argjson grants "$grants" '[.secrets[] | {key: .name, value: .}] | from_entries as $s
+    | $grants | all($s[.name] as $x | $x != null and $x.consumers == .consumers
+      and (.consumers | any(. == $x.last_resolved_by)) and ($x.last_resolved_at // "") >= $x.updated_at)' \
+    <<<"$vault" >/dev/null || return 1
+  [[ -z "$subject" ]] || jq -e '.models | length > 0' <<<"$(project_trigger router::models::list \
+    "$(jq -cn --arg provider "$subject" '{provider: $provider}')" "$probe_ms" 2>/dev/null)" >/dev/null
+}
+
+# await_vault GRANTS: the vault-grants lines just imported. Nothing restarts:
+# the router takes a secret at once (secrets::on-changed), the judge on its
+# next call, a provider through the router. Hint and fingerprint stay out of
+# the evidence.
+await_vault() {
+  local grants providers subject judge=false router='{}' status='{}' vault deadline said
+  grants=$(jq -sc . <<<"$1")
+  providers=$(jq -c --argjson grants "$grants" '[.providers | to_entries[]
+    | select(.value as $key | $grants | any(.name == $key)) | .key]' "$repo_root/config/provider-credentials.json")
+  subject=$(jq -r '.suite.subject.provider' "$contract_path")
+  [[ "$providers" == *"\"$subject\""* ]] || subject=""
+  if jq -e 'any(.name == "TYPESAFE_API_KEY")' <<<"$grants" >/dev/null; then judge=true; fi
+  deadline=$((SECONDS + vault_wait_seconds))
+  until vault_ready; do
+    if ((SECONDS >= deadline)); then
+      said=$({ jq -r '.providers[]?.credential_error // empty' <<<"$router"; jq -r '.reason // empty' <<<"$status"; } \
+        2>/dev/null | paste -sd';' - || true)
+      rm -f "$iii_failed"
+      fail "the stack's workers did not take their keys from its vault within ${vault_wait_seconds}s: ${said:-no error reported}"
+    fi
+    sleep 0.5
+  done
+  rm -f "$iii_failed"
+}
+
 capture_processes "$artifact_dir/stack/processes-before.json"
 
 failure_phase=cli_install
@@ -566,9 +639,10 @@ fi
 
 # Every credential the group received (those HARNESS_E2E_CREDENTIALS names,
 # which run_in_image.sh sets from its --env-file, and DEEPSEEK_API_KEY,
-# ZAI_API_KEY and TYPESAFE_API_KEY from the environment), nothing else of it,
-# in a private file outside the project; `project` gives each worker only
-# the keys it reads. The placeholder a template ships is emptied, not filled.
+# ZAI_API_KEY and TYPESAFE_API_KEY from the environment, now in the handoff
+# file), nothing else of it, in a private file outside the project, which the
+# stack's vault imports from. No worker reads it. The placeholder a template
+# ships is emptied, not filled.
 # The model's provider without its key is said out loud and the group still runs.
 [[ ! -e "$project_dir/.env" ]] || : >"$project_dir/.env"
 : >"$env_file"
@@ -631,16 +705,16 @@ fi
 # A token already dead fails the group here; a missing one is a warning.
 if [[ -z "$assemble_only" ]]; then
   login=$(python3 "$contract_tool" subscription-login --contract "$contract_path" \
-    --root "$run_root/login" --evidence "$artifact_dir/stack/credentials.json") \
+    --root "$run_root/secrets/login" --evidence "$artifact_dir/stack/credentials.json") \
     || { failure_phase=credentials; fail "${login#error: }"; }
   [[ -z "$login" ]] || project_args+=(--environment "$login")
 fi
 python3 "$contract_tool" project "${project_args[@]}"
 
 # Every worker inherits the compose daemon's environment (iii-compose
-# spawn_plan): neither it nor the engine keeps a credential. Each reaches its
-# consumers through their env files only.
-scrub=()
+# spawn_plan): neither it nor the engine keeps a credential, or where the
+# launcher's are. No worker gets one through its environment.
+scrub=(-u HARNESS_E2E_CREDENTIALS_FILE)
 for name in $credential_names ${HARNESS_E2E_CREDENTIALS:-} \
   $(jq -r '[.providers[], .others[], .subscriptions[]][]' "$repo_root/config/provider-credentials.json"); do
   scrub+=(-u "$name")
@@ -790,10 +864,11 @@ if [[ -n "$assemble_only" ]]; then
   exit 0
 fi
 
-# Preparation, not a retry: compose::add starts the workers it writes with
-# no env_file, and the daemon no longer lends them its environment. When one
-# of them reads a credential, it is scoped now and the project restarted once
-# (only a project-wide restart reloads the manifest); otherwise nothing changes.
+# Preparation, not a retry: compose::add writes the graph's workers without
+# their vault settings. When it brought the router, the judge or the vault,
+# they get their `secret://` references and key file now and the project is
+# restarted once (only a project-wide restart reloads the manifest);
+# otherwise nothing changes.
 scoped=$(python3 "$contract_tool" scope-credentials --contract "$contract_path" \
   --compose "$compose_file" --env-file "$env_file")
 if [[ -n "$scoped" ]]; then
@@ -813,6 +888,29 @@ jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 iii_trigger 30000 engine::workers::list --json '{}' >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
+
+# The keys go into the stack's own vault: the secrets worker re-reads each
+# from the staging file itself, so no value is on a command line, and only a
+# worker under the name of the container that references it may resolve it
+# (a name the caller declares itself; README). Then no file holds a key.
+failure_phase=credentials
+grants=$(python3 "$contract_tool" vault-grants --contract "$contract_path" --compose "$compose_file" \
+  --env-file "$env_file") \
+  || fail "${grants#error: }"
+if [[ -n "$grants" ]]; then
+  vault_deadline=$((SECONDS + vault_wait_seconds))
+  until project_trigger secrets::status '{}' "$probe_ms" >/dev/null 2>&1; do
+    ((SECONDS < vault_deadline)) || fail "the secrets worker did not register within ${vault_wait_seconds}s"
+    sleep 0.5
+  done
+  while IFS= read -r grant; do
+    project_trigger secrets::import "$grant" 30000 | jq -c '{name, ref, consumers}' >>"$artifact_dir/stack/vault.jsonl"
+  done <<<"$grants"
+fi
+rm -f -- "$env_file"
+if [[ -n "$grants" ]]; then
+  await_vault "$grants"
+fi
 
 if [[ "$profile_assets" == true ]] && (( ${kits_requested:-0} == 0 )); then
   failure_phase=profile_assets
@@ -849,6 +947,16 @@ python3 "$contract_tool" materialize \
   --namespace "$namespace" \
   --output "$artifact_dir/run-request.json" \
   --group-id "$campaign_group_id"
+
+# Before the subject exists, as its user: no environment, command line or
+# file under the run's roots may still hold a received value. A check for
+# readable copies only: the stack's own functions still hand a key to a
+# subject that asks for one on purpose (README, Run in Docker).
+failure_phase=credentials
+python3 "$contract_tool" check-readable-copies --root "$run_root" --root "$artifact_dir" \
+  --accept "$run_root/secrets/login" --output "$artifact_dir/stack/readable-copies.json" \
+  || fail "a credential the group received is readable by the subject's user; see stack/readable-copies.json"
+rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"
 
 failure_phase=execution
 run_started=true

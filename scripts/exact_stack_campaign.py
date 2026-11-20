@@ -168,6 +168,13 @@ def received_credentials(environ: Any, env_file: Path | None = None) -> dict[str
     return values
 
 
+def launcher_credentials(environ: Any) -> dict[str, str]:
+    """What the group received once the launcher runs without it in its
+    environment: the private file it handed itself (HARNESS_E2E_CREDENTIALS_FILE)."""
+    handoff = environ.get("HARNESS_E2E_CREDENTIALS_FILE")
+    return received_credentials(environ, Path(handoff) if handoff else None)
+
+
 def catalog_credentials(environ: Any) -> dict[str, str]:
     """The catalog's names that `environ` sets, and nothing else of it: a
     workflow step names exactly those secrets, never `toJSON(secrets)`,
@@ -201,35 +208,120 @@ def package_identity(contract: dict[str, Any]) -> Any:
 
 
 def scope_credentials(containers: dict[str, Any], env_file: str, package_of: Any) -> list[str]:
-    """Hand each container the credentials it reads and none other, by the
-    package the contract says it runs (`package_identity`): the runner every
-    one, to redact them; `provider-<id>` its own key; the router the keys of the stack's
-    providers, which it reads when a slice has none; judge-typesafe its key.
-    A consumer gets a private file of its own beside `env_file`; any other
-    container, a template's `./.env` included, gets no env_file at all.
-    Returns the containers whose env_file changed."""
+    """No container gets a credential in its environment or an env file, the
+    runner and a template's `./.env` included: every process of the
+    subject's user can read both. The stack's `secrets` vault holds the keys
+    the group received (`env_file`), and by the package the contract says each
+    container runs (`package_identity`) the router gets a `secret://`
+    reference for each provider the stack runs, judge-typesafe one for its
+    key; a provider takes its key from the router. `secrets` keeps its master
+    key beside `env_file` and imports from it, outside the project.
+    Returns the containers whose entry changed."""
     providers, _ = credential_catalog()
-    keys = {**providers, **json.loads(CREDENTIAL_CATALOG.read_text()).get("subscriptions", {})}
     received = read_env_file(Path(env_file))
     workers = {name: package_of(container) or "" for name, container in containers.items()}
     present = {worker.removeprefix("provider-") for worker in workers.values() if worker.startswith("provider-")}
-    wanted = {f"provider-{provider}": {key} for provider, key in keys.items()}
-    wanted["llm-router"] = {key for provider, key in providers.items() if provider in present}
-    wanted["judge-typesafe"] = {"TYPESAFE_API_KEY"}
-    changed = []
+    routed = {provider: key for provider, key in providers.items() if provider in present and key in received}
+    before = copy.deepcopy(containers)
     for name, container in containers.items():
-        before = container.get("env_file")
-        if workers[name] == RUNNER:
-            container["env_file"] = [env_file]
-        elif names := sorted(wanted.get(workers[name], set()) & received.keys()):
-            scoped = Path(env_file).with_name(f"{Path(env_file).stem}.{name}.env")
-            write_private(scoped, {key: received[key] for key in names})
-            container["env_file"] = [str(scoped)]
-        else:
-            container.pop("env_file", None)
-        if container.get("env_file") != before:
-            changed.append(name)
-    return changed
+        container.pop("env_file", None)
+        if workers[name] == "llm-router":
+            for provider, key in routed.items():
+                slices = container.setdefault("config_override", {}).setdefault("providers", {})
+                slices.setdefault(provider, {})["api_key"] = f"secret://{key}"
+        elif workers[name] == "judge-typesafe" and "TYPESAFE_API_KEY" in received:
+            container.setdefault("config_override", {})["api_key"] = "secret://TYPESAFE_API_KEY"
+    if references(containers):
+        for name, container in containers.items():
+            if workers[name] == "secrets":
+                container.setdefault("config_override", {}).update(
+                    key_file=str(Path(env_file).with_name("vault.key")), env_file=env_file)
+    return [name for name, container in containers.items() if container != before[name]]
+
+
+def references(containers: dict[str, Any]) -> dict[str, list[str]]:
+    """Each vault secret a container's configuration names (`secret://NAME`),
+    and the containers that name it: the consumers the engine knows them by."""
+    named: dict[str, set[str]] = {}
+    for name, container in containers.items():
+        for secret in re.findall(r'"secret://([A-Za-z_][A-Za-z0-9_.-]*)"', json.dumps(container.get("config_override"))):
+            named.setdefault(secret, set()).add(name)
+    return {secret: sorted(names) for secret, names in sorted(named.items())}
+
+
+def vault_grants(containers: dict[str, Any], package_of: Any, received: Any) -> dict[str, list[str]]:
+    """What the launcher imports into the stack's vault: each referenced
+    secret and who may resolve it. A reference no vault answers would leave
+    its consumer keyless, so a stack without a `secrets` worker is refused;
+    so is a provider the group has a key (`received`, names) for and no
+    router to hand it over."""
+    providers, _ = credential_catalog()
+    workers = {package_of(container) for container in containers.values()}
+    unrouted = sorted(key for provider, key in providers.items()
+                      if f"provider-{provider}" in workers and key in received)
+    if unrouted and "llm-router" not in workers:
+        raise ValueError(f"the stack runs a provider and no llm-router to hand {', '.join(unrouted)} over")
+    grants = references(containers)
+    if grants and "secrets" not in workers:
+        raise ValueError(f"the stack has no secrets worker to hold {', '.join(grants)}; "
+                         "a group with provider keys needs one")
+    return grants
+
+
+def readable_credential_copies(
+    values: dict[str, str], roots: list[Path], accepted: list[Path], proc: Path = Path("/proc"),
+) -> dict[str, Any]:
+    """Where a value the group received can be read as this user right now:
+    the environment and command line of every process it may open, and every
+    regular file under `roots` (installed packages aside), raw or JSON-escaped.
+    A subscription token under `accepted` (the login its provider must read)
+    is listed apart; any other key there is found.
+    Says where and which name, never the value. It is a check for readable
+    copies, not proof of isolation: the stack's own functions still hand a
+    key to a subject that asks for one on purpose."""
+    looked_for = {name: [form.encode() for form in credential_forms(value)]
+                  for name, value in values.items() if len(value) >= REDACTION_MIN_LENGTH}
+    found: list[dict[str, str]] = []
+    kept: list[dict[str, str]] = []
+    scanned = {"processes": 0, "files": 0}
+    tokens = set(json.loads(CREDENTIAL_CATALOG.read_text()).get("subscriptions", {}).values())
+
+    def look(where: Path, into: list[dict[str, str]]) -> bool:
+        try:
+            payload = where.read_bytes()
+        except OSError:
+            return False
+        into.extend({"where": str(where), "name": name}
+                    for name, forms in looked_for.items() if any(form in payload for form in forms))
+        return True
+
+    for process in sorted((path for path in proc.iterdir() if path.name.isdigit()), key=lambda path: int(path.name)):
+        scanned["processes"] += look(process / "environ", found)
+        # Any process may read a command line, root's and non-dumpable ones included.
+        look(process / "cmdline", found)
+    if not scanned["processes"]:
+        raise ValueError(f"could read no process environment under {proc}: nothing was checked")
+    for root in roots:
+        for folder, directories, files in os.walk(root):
+            if Path(folder) == root / "compose-state":
+                directories[:] = [name for name in directories if name != "packages"]
+            for file in sorted(files):
+                path = Path(folder) / file
+                if path.is_file() and not path.is_symlink():
+                    hits: list[dict[str, str]] = []
+                    scanned["files"] += look(path, hits)
+                    login = any(path.is_relative_to(a) for a in accepted)
+                    for hit in hits:
+                        (kept if login and hit["name"] in tokens else found).append(hit)
+    return {
+        "check": "readable copies of a received credential in process environments, command lines and files; "
+                 "not proof of isolation",
+        "scanned": scanned,
+        "checked": sorted(looked_for),
+        "too_short": sorted(values.keys() - looked_for.keys()),
+        "found": found,
+        "accepted": kept,
+    }
 
 
 def credential_forms(value: str) -> list[str]:
@@ -1013,7 +1105,8 @@ def project_scaffold(
         for name in package_names["iii-directory"]:
             containers[name]["config_name"] = scoped_config_name(namespace, "directory")
             containers[name].setdefault("config_override", {}).update(config)
-    if env_file:
+    # The assembled stack is frozen into the contract: no per-attempt path in it.
+    if env_file and not assembling:
         scope_credentials(containers, env_file, package_of)
     # iii telemetry stays off in every worker, whatever the Compose daemon
     # that starts it inherited (a developer's own daemon, say).
@@ -1675,7 +1768,8 @@ def main() -> int:
     package.add_argument("--output", type=Path, required=True)
     package.add_argument("--credentials", type=Path,
                          help="an env file of the credentials the phase received, redacted out of the tree")
-    stack_env = commands.add_parser("credentials-env", help="the stack's .env: every credential the group received")
+    stack_env = commands.add_parser(
+        "credentials-env", help="the vault's staging file: every credential the group received")
     stack_env.add_argument("--contract", type=Path, required=True)
     stack_env.add_argument("--output", type=Path, required=True)
     scope = commands.add_parser("scope-credentials",
@@ -1683,6 +1777,19 @@ def main() -> int:
     scope.add_argument("--contract", type=Path, required=True)
     scope.add_argument("--compose", type=Path, required=True)
     scope.add_argument("--env-file", type=Path, required=True)
+    grants = commands.add_parser("vault-grants",
+                                 help="the secrets::import requests the stack's references need, one per line")
+    grants.add_argument("--contract", type=Path, required=True)
+    grants.add_argument("--compose", type=Path, required=True)
+    grants.add_argument("--env-file", type=Path, required=True)
+    handoff = commands.add_parser(
+        "credentials-handoff", help="write what the group received to a private file; print the names to unset")
+    handoff.add_argument("--output", type=Path, required=True)
+    copies = commands.add_parser(
+        "check-readable-copies", help="find received values in process environments, command lines and files")
+    copies.add_argument("--root", type=Path, action="append", default=[])
+    copies.add_argument("--accept", type=Path, action="append", default=[])
+    copies.add_argument("--output", type=Path, required=True)
     credentials_file = commands.add_parser(
         "credentials-file", help="a private env file of the catalog's credentials this environment sets")
     credentials_file.add_argument("--output", type=Path, required=True)
@@ -1748,7 +1855,7 @@ def main() -> int:
                 except (ValueError, OSError):
                     earlier.append({"unreadable": path.name})
             record = failure_record(args.phase, args.exit_code, args.attempt, args.reason, args.line,
-                                    args.iii_function, stderr, earlier, received_credentials(os.environ))
+                                    args.iii_function, stderr, earlier, launcher_credentials(os.environ))
             args.output.write_text(json.dumps(record, indent=2) + "\n")
             return 0
         if args.command == "export-compose":
@@ -1789,6 +1896,33 @@ def main() -> int:
                 args.compose.write_text(yaml.safe_dump(manifest, sort_keys=False))
                 print("\n".join(changed))
             return 0
+        if args.command == "vault-grants":
+            # A name and the source the secrets worker re-reads it from: no value travels.
+            grants = vault_grants(load_yaml(args.compose.read_text())["containers"],
+                                  package_identity(load_object(args.contract, "contract")),
+                                  read_env_file(args.env_file).keys())
+            for name, consumers in grants.items():
+                print(json.dumps({"name": name, "source": "dotenv", "consumers": consumers}))
+            return 0
+        if args.command == "credentials-handoff":
+            values = received_credentials(os.environ)
+            write_private(args.output, values)
+            # Any catalog name goes too, received or not, and a received name no env file can carry.
+            listed = set(os.environ.get("HARNESS_E2E_CREDENTIALS", "").split()) | credential_catalog()[1]
+            print("\n".join(sorted(values.keys() | (listed & os.environ.keys()))))
+            return 0
+        if args.command == "check-readable-copies":
+            handoff = os.environ.get("HARNESS_E2E_CREDENTIALS_FILE")
+            if handoff and not Path(handoff).is_file():
+                raise ValueError("the credentials handoff file is gone: the values to look for are unknown")
+            report = readable_credential_copies(launcher_credentials(os.environ), args.root, args.accept)
+            args.output.write_text(json.dumps(report, indent=2) + "\n")
+            for name in report["too_short"]:
+                print(f"::warning::{name} is shorter than {REDACTION_MIN_LENGTH} characters: "
+                      "no copy of it is looked for", file=sys.stderr)
+            for hit in report["found"]:
+                print(f"{hit['where']} {hit['name']}", file=sys.stderr)
+            return 1 if report["found"] else 0
         if args.command == "validate-layout":
             validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root, args.compose)
             return 0
@@ -1864,14 +1998,15 @@ def main() -> int:
             if args.engine_config:
                 args.engine_config.write_text(yaml.safe_dump(project_engine_config(manifest, args.engine_port), sort_keys=False))
         elif args.command == "subscription-login":
-            # The token comes from the environment, never the command line.
-            delivered = subscription_login(contract, dict(os.environ), args.root, time.time())
+            # The token comes from the handoff file, never the command line.
+            delivered = subscription_login(contract, {**os.environ, **launcher_credentials(os.environ)},
+                                           args.root, time.time())
             if delivered:
                 assignment, evidence = delivered
                 args.evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
                 print(assignment)
         elif args.command == "credentials-env":
-            values = received_credentials(os.environ)
+            values = launcher_credentials(os.environ)
             write_private(args.output, values)
             # Said out loud; the group still runs.
             provider = contract["suite"]["subject"]["provider"]

@@ -41,8 +41,8 @@ pub const MIN_CREDENTIAL_LENGTH: usize = 8;
 /// The credentials this process received, by name, longest value first:
 /// the defaults above, the provider keys `config/provider-credentials.json`
 /// lists, and the names `HARNESS_E2E_SECRET_ENV_NAMES` and
-/// `HARNESS_E2E_CREDENTIALS` (what the launcher put in the stack's `.env`)
-/// give, each as its variable holds it.
+/// `HARNESS_E2E_CREDENTIALS` (the names a group received; its runner gets no
+/// value) give, each as its variable holds it.
 fn environment_credentials() -> Vec<(String, String)> {
     credentials_from(|name| std::env::var(name).ok())
 }
