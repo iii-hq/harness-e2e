@@ -2113,7 +2113,9 @@ docker run -d --name hub-cache --restart unless-stopped -p 172.17.0.1:5000:5000 
 The phases get none of the worker's environment but where Docker and
 `TMPDIR` are.
 `prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
-for the private Registry and trending topics sources.
+for the private Registry and trending topics sources, and `prepare resolve`
+the same token for the GitHub API, whose anonymous limit (60 calls an hour)
+a few executions use up.
 
 #### Subscription providers
 
