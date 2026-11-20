@@ -2039,8 +2039,9 @@ that file's path. No worker gets a credential through its environment or an
 env file, the runner included. The keys go into the stack's own `secrets`
 vault: the launcher asks `secrets::import` for each by name, the worker
 re-reads the value from a staging file under the run's `secrets/` folder (no
-value is ever on a command line), only the container that references the key
-may resolve it, and the staging file is deleted. llm-router gets a
+value is ever on a command line), only a worker connected under the name of
+the container that references the key may resolve it (a name the caller
+declares itself; see below), and the staging file is deleted. llm-router gets a
 `secret://` reference for each provider the stack runs, and each provider
 takes its key from the router; judge-typesafe gets one for
 `TYPESAFE_API_KEY`. The group waits until each of them resolved its own
@@ -2066,7 +2067,8 @@ one that tries on purpose. Any process of its user can still call
 self-declared worker name (`III_WORKER_NAME`, `III_NAMESPACE`), read a
 provider's `registration_token` from `state` and call
 `router::provider::resolve` with it, point a provider's `api_url` at a
-listener of its own with `configuration::set`, read the workers' memory or
+listener of its own with `configuration::set`, read the memory of the workers
+or of the iii engine, which carries every resolved key between them, or
 decrypt the vault with the key file beside it, or become root through the
 Docker socket of the privileged group container. `secrets::list` and
 `secrets::get` show each key's first 6 and last 4 characters. A user of its

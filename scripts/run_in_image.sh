@@ -34,8 +34,10 @@
 # `prepare build` alone also sees the build cache HARNESS_E2E_WORKER_BUILDS
 # names.
 # The phase learns which variables are credentials from
-# HARNESS_E2E_CREDENTIALS, the names of that file: the launcher writes those
-# into the stack's .env and packaging redacts their values out of evidence.
+# HARNESS_E2E_CREDENTIALS, the names of that file: the launcher hands those to
+# the stack's secrets vault through a staging file it deletes once the vault
+# holds them, the runner gets the names only, and packaging redacts their
+# values out of evidence.
 #
 # The container is labelled harness-e2e.execution=$EXECUTION_KEY,
 # harness-e2e.phase and harness-e2e.group. Interrupted, the wrapper stops it.

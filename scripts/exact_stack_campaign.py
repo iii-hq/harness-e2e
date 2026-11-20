@@ -266,7 +266,8 @@ def readable_credential_copies(
     """Where a value the group received can be read as this user right now:
     the environment and command line of every process it may open, and every
     regular file under `roots` (installed packages aside), raw or JSON-escaped.
-    A hit under `accepted` (a login its provider must read) is listed apart.
+    A subscription token under `accepted` (the login its provider must read)
+    is listed apart; any other key there is found.
     Says where and which name, never the value. It is a check for readable
     copies, not proof of isolation: the stack's own functions still hand a
     key to a subject that asks for one on purpose."""
@@ -275,6 +276,7 @@ def readable_credential_copies(
     found: list[dict[str, str]] = []
     kept: list[dict[str, str]] = []
     scanned = {"processes": 0, "files": 0}
+    tokens = set(json.loads(CREDENTIAL_CATALOG.read_text()).get("subscriptions", {}).values())
 
     def look(where: Path, into: list[dict[str, str]]) -> bool:
         try:
@@ -286,9 +288,9 @@ def readable_credential_copies(
         return True
 
     for process in sorted((path for path in proc.iterdir() if path.name.isdigit()), key=lambda path: int(path.name)):
-        if look(process / "environ", found):
-            scanned["processes"] += 1
-            look(process / "cmdline", found)
+        scanned["processes"] += look(process / "environ", found)
+        # Any process may read a command line, root's and non-dumpable ones included.
+        look(process / "cmdline", found)
     if not scanned["processes"]:
         raise ValueError(f"could read no process environment under {proc}: nothing was checked")
     for root in roots:
@@ -298,11 +300,17 @@ def readable_credential_copies(
             for file in sorted(files):
                 path = Path(folder) / file
                 if path.is_file() and not path.is_symlink():
-                    scanned["files"] += look(path, kept if any(path.is_relative_to(a) for a in accepted) else found)
+                    hits: list[dict[str, str]] = []
+                    scanned["files"] += look(path, hits)
+                    login = any(path.is_relative_to(a) for a in accepted)
+                    for hit in hits:
+                        (kept if login and hit["name"] in tokens else found).append(hit)
     return {
         "check": "readable copies of a received credential in process environments, command lines and files; "
                  "not proof of isolation",
         "scanned": scanned,
+        "checked": sorted(looked_for),
+        "too_short": sorted(values.keys() - looked_for.keys()),
         "found": found,
         "accepted": kept,
     }
@@ -1692,7 +1700,8 @@ def main() -> int:
     package.add_argument("--output", type=Path, required=True)
     package.add_argument("--credentials", type=Path,
                          help="an env file of the credentials the phase received, redacted out of the tree")
-    stack_env = commands.add_parser("credentials-env", help="the stack's .env: every credential the group received")
+    stack_env = commands.add_parser(
+        "credentials-env", help="the vault's staging file: every credential the group received")
     stack_env.add_argument("--contract", type=Path, required=True)
     stack_env.add_argument("--output", type=Path, required=True)
     scope = commands.add_parser("scope-credentials",
@@ -1829,6 +1838,9 @@ def main() -> int:
                 raise ValueError("the credentials handoff file is gone: the values to look for are unknown")
             report = readable_credential_copies(launcher_credentials(os.environ), args.root, args.accept)
             args.output.write_text(json.dumps(report, indent=2) + "\n")
+            for name in report["too_short"]:
+                print(f"::warning::{name} is shorter than {REDACTION_MIN_LENGTH} characters: "
+                      "no copy of it is looked for", file=sys.stderr)
             for hit in report["found"]:
                 print(f"{hit['where']} {hit['name']}", file=sys.stderr)
             return 1 if report["found"] else 0

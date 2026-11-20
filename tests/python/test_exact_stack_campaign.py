@@ -364,12 +364,15 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_the_readable_copies_check_names_where_and_which_never_the_value(self):
         """A value in a process environment or command line this user can
         open, or in a file under the roots, is found and named by place and
-        variable; a login the provider must read is accepted, not found."""
+        variable; a login's own token where its provider must read it is
+        accepted, not found; a value too short to look for is said so."""
         value, quoted = "synthetic-gate-deepseek-0123456789", 'synthetic"gate"typesafe-0123456789'
+        token = "synthetic-gate-claude-token-0123456789"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             handoff = root / "handoff"
-            handoff.write_text(f"DEEPSEEK_API_KEY={value}\nTYPESAFE_API_KEY={quoted}\n")
+            handoff.write_text(f"DEEPSEEK_API_KEY={value}\nTYPESAFE_API_KEY={quoted}\n"
+                               f"CLAUDE_CODE_ACCESS_TOKEN={token}\nZAI_API_KEY=short12\n")
             (root / "run/secrets/login/claude-code").mkdir(parents=True)
             (root / "artifacts").mkdir()
             output = root / "artifacts/readable-copies.json"
@@ -385,11 +388,18 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             report = json.loads(output.read_text())
             self.assertEqual((report["found"], report["accepted"]), ([], []))
             self.assertGreater(report["scanned"]["processes"], 0)
+            self.assertEqual(report["checked"], ["CLAUDE_CODE_ACCESS_TOKEN", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"])
+            self.assertEqual(report["too_short"], ["ZAI_API_KEY"])
+            self.assertIn("::warning::ZAI_API_KEY is shorter", nothing.stderr)
 
-            (root / "run/secrets/login/claude-code/.credentials.json").write_text(json.dumps({"token": value}))
+            (root / "run/secrets/login/claude-code/.credentials.json").write_text(json.dumps({"token": token}))
+            (root / "run/secrets/login/claude-code/notes.txt").write_text(value)
             (root / "artifacts/log.json").write_text(json.dumps({"said": quoted}))
             holder = subprocess.Popen(["sleep", "30"], env={**clean, "PLANTED": value})
-            argued = subprocess.Popen(["python3", "-c", "import time; time.sleep(30)", value], env=clean)
+            # Not dumpable: its environment is closed to this user, its command line is not.
+            argued = subprocess.Popen(["python3", "-c", "import ctypes, time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
+                                       "print(flush=True); time.sleep(30)", value], env=clean, stdout=subprocess.PIPE)
+            argued.stdout.readline()
             self.addCleanup(holder.kill)
             self.addCleanup(argued.kill)
             found = subprocess.run(check, env=environment, capture_output=True, text=True)
@@ -398,11 +408,14 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             self.assertIn({"where": f"/proc/{holder.pid}/environ", "name": "DEEPSEEK_API_KEY"}, report["found"])
             self.assertIn({"where": f"/proc/{argued.pid}/cmdline", "name": "DEEPSEEK_API_KEY"}, report["found"])
             self.assertIn({"where": str(root / "artifacts/log.json"), "name": "TYPESAFE_API_KEY"}, report["found"])
+            self.assertIn({"where": str(root / "run/secrets/login/claude-code/notes.txt"), "name": "DEEPSEEK_API_KEY"},
+                          report["found"])
             self.assertEqual(report["accepted"], [{"where": str(root / "run/secrets/login/claude-code/.credentials.json"),
-                                                   "name": "DEEPSEEK_API_KEY"}])
+                                                   "name": "CLAUDE_CODE_ACCESS_TOKEN"}])
             self.assertIn(f"/proc/{holder.pid}/environ DEEPSEEK_API_KEY", found.stderr)
             for said in (found.stdout, found.stderr, output.read_text()):
                 self.assertNotIn("synthetic", said)
+                self.assertNotIn("short12", said)
             # Read nothing, proved nothing: no process it could open fails it.
             with self.assertRaisesRegex(ValueError, "no process"):
                 MODULE.readable_credential_copies({"DEEPSEEK_API_KEY": value}, [], [], proc=root / "artifacts")

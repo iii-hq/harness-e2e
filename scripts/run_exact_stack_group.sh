@@ -427,9 +427,13 @@ cleanup() {
       printf '::warning::%s failed during %s before any run started; trying the group once more in %ss\n' \
         "$campaign_group_id" "$failure_phase" "$retry_delay_seconds" >&2
       # Cancelled while it waits, the group ends here and its handoff with it.
-      trap 'rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"; trap - INT; kill -INT $$' INT
-      trap 'rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"; trap - TERM; kill -TERM $$' TERM
-      sleep "$retry_delay_seconds"
+      # The pause runs in the background: bash defers a trap until a foreground command ends.
+      local pause=""
+      trap 'kill "$pause" 2>/dev/null; rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"; trap - INT; kill -INT $$' INT
+      trap 'kill "$pause" 2>/dev/null; rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"; trap - TERM; kill -TERM $$' TERM
+      sleep "$retry_delay_seconds" &
+      pause=$!
+      wait "$pause"
       mkdir -p "$artifact_dir/attempts/1"
       find "$artifact_dir" -mindepth 1 -maxdepth 1 ! -name attempts -exec mv -t "$artifact_dir/attempts/1" -- {} +
       exec env -u HARNESS_E2E_KANBAN_RUNTIME HARNESS_E2E_GROUP_ATTEMPT=2 bash "$launcher"
@@ -873,8 +877,9 @@ iii_trigger 30000 engine::workers::list --json '{}' >"$artifact_dir/stack/worker
 capture_processes "$artifact_dir/stack/processes-during.json"
 
 # The keys go into the stack's own vault: the secrets worker re-reads each
-# from the staging file itself, so no value is on a command line, and only the
-# container that references it may resolve it. Then no file holds a key.
+# from the staging file itself, so no value is on a command line, and only a
+# worker under the name of the container that references it may resolve it
+# (a name the caller declares itself; README). Then no file holds a key.
 failure_phase=credentials
 grants=$(python3 "$contract_tool" vault-grants --contract "$contract_path" --compose "$compose_file") \
   || fail "${grants#error: }"

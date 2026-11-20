@@ -230,8 +230,9 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.sleeps = self.root / 'sleeps'
         sleep = tools / 'sleep'
         sleep.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_SLEEPS"\n'
-                         # Interrupted while it waits that long, as a cancelled job is.
-                         '[ "$1" != "${FAKE_SLEEP_TERM:-}" ] || kill -TERM "$PPID"\n')
+                         # Interrupted while it waits that long, as a cancelled job is,
+                         # and still waiting: the launcher must not outwait it.
+                         '[ "$1" != "${FAKE_SLEEP_TERM:-}" ] || { kill -TERM "$PPID"; exec /bin/sleep 60; }\n')
         sleep.chmod(0o755)
         self.contract = campaign_contract()
         self.contract['runtime']['cli']['sha256'] = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
