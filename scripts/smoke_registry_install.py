@@ -207,7 +207,8 @@ def run(binary, directory, registry=REGISTRY):
             assert catalog["scenarios"], "worker registered without a scenario catalog"
             after = call("configuration::get", {"id": CONFIG, "raw": True}, "default")["value"]
             assert after["databases"]["primary"] == before["databases"]["primary"]
-            assert after["history_max_entries"] == before["history_max_entries"]
+            # database 0.6.6 stores no value equal to its default, so the key may be absent.
+            assert after.get("history_max_entries") == before.get("history_max_entries")
             pool = after["databases"]["harness_e2e"]
             assert pool["pool"]["max"] == 1
             assert pool["url"] == "sqlite:" + str(directory / "evidence/control.sqlite")
