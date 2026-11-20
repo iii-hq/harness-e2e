@@ -13,8 +13,9 @@ reports go to. Everything else is resolved here, once for the whole execution:
     runtime    `iii: latest` becomes the newest iii release candidate, with
                its archive digest, a template one commit, every container
                pinned to a `commit:` its repository, folder, full commit and
-               the dependency graph of its newest release, and each fixture
-               repository that follows a branch the commit at its head.
+               the dependency graph of its newest release, each fixture
+               repository that follows a branch the commit at its head, and
+               each `commit:` kit's agents fetched from its commit.
     commits    each of those built at its commit, once per (repository,
                commit, folder) in a build cache, and declared as the
                path:// worker it is now, with what a package would have
@@ -78,6 +79,10 @@ SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 #: What a stack may write as `commit:`, short or full.
 COMMIT = re.compile(r"^[0-9a-f]{4,40}$")
 KIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?$")
+#: A kit at a commit: `commit:<owner>/<repository>/<folder>@<full sha>`.
+COMMIT_KIT = re.compile(r"^commit:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/([A-Za-z0-9_./-]+)@([0-9a-f]{40})$")
+#: Where `commit:` kits are fetched from; a test points it at local repositories.
+GIT_URL = "https://github.com"
 #: Where the Registry points a release: the repository it was built from.
 RELEASE_ASSET = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/")
 #: A pinned container's keys that only say where its commit is.
@@ -217,17 +222,66 @@ def path_kit(entry: str) -> str:
     return f"path:{directory}"
 
 
+def commit_kit(entry: str) -> str:
+    """`commit:<owner>/<repository>/<folder>@<full sha>`, its folder inside the repository."""
+    match = COMMIT_KIT.fullmatch(entry)
+    if not match or any(part in ("", ".", "..") for part in match[2].split("/")):
+        raise ResolutionError(f"kit {entry} must be commit:<owner>/<repository>/<folder>@<full commit sha>")
+    return entry
+
+
+def kit_source(contract_dir: Path, entry: str) -> Path:
+    """Where a `commit:` kit's files are fetched to, inside the contract."""
+    repository, folder, commit = COMMIT_KIT.fullmatch(entry).groups()
+    return contract_dir / "kit-sources" / commit / repository / folder
+
+
 def stack_kits(stack: dict[str, Any]) -> list[str]:
-    """Kits the stack installs: Registry ones through Directory, `path:` ones from disk."""
+    """Kits the stack installs: Registry ones through Directory, `path:` ones
+    from disk, `commit:` ones from their commit (fetch_commit_kits)."""
     kits = stack.get("kits") or []
     if not isinstance(kits, list) or any(
-        not isinstance(kit, str) or not (kit.startswith("path:") or KIT.fullmatch(kit)) for kit in kits
+        not isinstance(kit, str) or not (kit.startswith(("path:", "commit:")) or KIT.fullmatch(kit)) for kit in kits
     ):
-        raise ResolutionError("stack kits must be an array of <author>/<kit>[@version|tag|range] or path:<directory>")
-    kits = [path_kit(kit) if kit.startswith("path:") else kit for kit in kits]
+        raise ResolutionError("stack kits must be an array of <author>/<kit>[@version|tag|range], path:<directory> "
+                              "or commit:<owner>/<repository>/<folder>@<sha>")
+    kits = [path_kit(kit) if kit.startswith("path:") else commit_kit(kit) if kit.startswith("commit:") else kit
+            for kit in kits]
     if len(kits) != len(set(kits)):
         raise ResolutionError("stack kits must be unique")
     return kits
+
+
+def fetch_commit_kits(kits: list[str], contract_dir: Path) -> None:
+    """Each `commit:` kit's iii.kit.yaml and agents/*.md at its commit, into
+    kit_source. Blobless and anonymous: a kit's prompts, not the whole tree,
+    and the token never leaves for a fetch it does not need."""
+    environment = {key: value for key, value in os.environ.items() if key != "GITHUB_TOKEN"}
+    for kit in kits:
+        if not kit.startswith("commit:"):
+            continue
+        repository, folder, commit = COMMIT_KIT.fullmatch(kit).groups()
+        destination = kit_source(contract_dir, kit)
+        if (destination / "iii.kit.yaml").exists():
+            continue
+        with tempfile.TemporaryDirectory(prefix="harness-e2e-kit-") as scratch:
+            for command in (["init", "-q"], ["remote", "add", "origin", f"{GIT_URL}/{repository}.git"],
+                            ["fetch", "-q", "--depth", "1", "--filter=blob:none", "origin", commit],
+                            ["checkout", "-q", "FETCH_HEAD", "--", folder]):
+                subprocess.run(["git", "-C", scratch, *command], env=environment, check=True, stdout=sys.stderr)
+            source = Path(scratch) / folder
+            agents = sorted((source / "agents").glob("*.md"))
+            if not (source / "iii.kit.yaml").exists() or not agents:
+                raise ResolutionError(f"{repository}@{commit[:12]} has no kit in {folder}: "
+                                      "it needs iii.kit.yaml and agents/*.md")
+            if (source / "skills").exists():
+                raise ResolutionError(f"{repository}@{commit[:12]} {folder} has skills/, which commit kits do not install")
+            if any(path.is_symlink() for path in (source / "iii.kit.yaml", *agents)):
+                raise ResolutionError(f"{repository}@{commit[:12]} {folder}: kit files must be regular files")
+            (destination / "agents").mkdir(parents=True)
+            shutil.copy2(source / "iii.kit.yaml", destination)
+            for agent in agents:
+                shutil.copy2(agent, destination / "agents")
 
 
 def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:
@@ -823,6 +877,7 @@ def command_runtime(args: argparse.Namespace) -> None:
     skipped: list[dict[str, str]] = []
     cli = resolve_cli(requested, token, skipped)
     commits = resolve_commits(stack, token, cli["version"])
+    fetch_commit_kits(stack_kits(stack), args.contract_dir)
     # What was asked, what runs, and every newer candidate passed over and why.
     # FIXTURE_TOKEN reads the private fixture; any token reads the public one.
     fixtures, fixture_fallbacks = resolve_fixtures(os.environ.get("FIXTURE_TOKEN") or token)

@@ -2239,6 +2239,12 @@ containers:
             again = MODULE.kit_assets(project, root / "snapshot2")
             self.assertNotEqual(manifest["files"], again["files"])
             self.assertNotEqual(manifest["lock_sha256"], again["lock_sha256"])
+            entry = "commit:iii-hq/workers/kits/deepwork@" + "c" * 40
+            MODULE.install_path_kit(project, kit, entry)
+            lock = yaml.safe_load((project / "kits.lock").read_text())["kits"]["iii/deepwork"]
+            self.assertEqual((lock["requested"], lock["source"]), (entry, "commit"))
+            self.assertNotIn("directory", lock)
+            self.assertEqual(MODULE.kit_assets(project, root / "snapshot3")["files"], again["files"])
 
     def test_kit_assets_are_hashed_exported_and_restored_without_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2263,6 +2269,16 @@ containers:
                 "assets": manifest["files"],
             }
             MODULE.validate_contract(contract)
+            for requested, valid in ((f"commit:iii-hq/workers/kits/deepwork@{'d' * 40}", True),
+                                     (f"commit:iii-hq/workers/kits/deepwork@{'d' * 12}", False)):
+                with self.subTest(requested=requested):
+                    other = json.loads(json.dumps(contract))
+                    other["runtime"]["kits"]["requested"] = [requested]
+                    if valid:
+                        MODULE.validate_contract(other)
+                    else:
+                        with self.assertRaises(ValueError):
+                            MODULE.validate_contract(other)
             restored = root / "restored"
             (restored / "agents").mkdir(parents=True)
             (restored / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)

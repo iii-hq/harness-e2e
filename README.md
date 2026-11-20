@@ -1855,7 +1855,26 @@ Directory. A path kit adds no workers: the stack must declare every worker the
 kit's `iii.kit.yaml` lists. A kit with `skills/` is rejected. The frozen agent
 digests are part of the execution contract, so editing a prompt changes the
 execution's identity; the path itself is recorded too, so the same kit from a
-different checkout location is a different execution.
+different checkout location is a different execution. Preparation in Docker
+sees only the execution's own checkout and none of the caller's environment,
+so there a `path:` kit must be a directory below that checkout.
+
+A kit can also come from a commit, `commit:<owner>/<repository>/<folder>@<full
+sha>`, which is how `eval::start-validation` measures a prompt change: each
+side of the validation installs the kit from its own commit.
+
+```yaml
+kits:
+  - commit:iii-hq/workers/kits/deepwork@0123456789abcdef0123456789abcdef01234567
+```
+
+`prepare resolve` fetches only that folder at that commit (blobless and without
+the token) into `kit-sources/` of the contract, and the kit installs as a
+`path:` kit does, recorded with `source: commit` and the entry as `requested`.
+The contract's kit asset digests are what tells two commits apart: they differ
+exactly when the prompts do. Like a path kit, it adds no workers;
+`stacks/deepwork-source.yaml` is the deepwork stack that declares the one
+deepwork needs and harness does not bring (`kanban`).
 
 A project template belongs to the stack and is independent of the suite and
 the agent profile:

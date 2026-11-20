@@ -450,9 +450,10 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("runtime.kits.requested must be a non-empty unique array")
         for kit in requested:
             if not isinstance(kit, str) or not re.fullmatch(
-                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?|path:/\S+", kit
+                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?|path:/\S+|commit:\S+@[0-9a-f]{40}", kit
             ):
-                raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range] or path:<directory>")
+                raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range], "
+                                 "path:<directory> or commit:<owner>/<repository>/<folder>@<sha>")
         assets = kits.get("assets")
         if assets is not None:
             require_digest(kits.get("lock_sha256"), "runtime.kits.lock_sha256")
@@ -1307,9 +1308,11 @@ def kit_assets(project_root: Path, output_root: Path) -> dict[str, Any]:
     return manifest
 
 
-def install_path_kit(project_root: Path, directory: Path) -> None:
+def install_path_kit(project_root: Path, directory: Path, requested: str | None = None) -> None:
     """Install a kit from a local directory the way the Directory would have:
-    its agents under agents/ and an entry in kits.lock listing each file."""
+    its agents under agents/ and an entry in kits.lock listing each file. A
+    `commit:` kit names its `requested` entry; its directory is the copy
+    preparation fetched, which says nothing about what ran, so it is left out."""
     import shutil
     import yaml
 
@@ -1331,10 +1334,9 @@ def install_path_kit(project_root: Path, directory: Path) -> None:
         shutil.copyfile(source, project / "agents" / source.name)
         files[f"agents/{source.name}"] = {"sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
     lock.setdefault("kits", {})[name] = {
-        "requested": f"path:{directory}",
+        "requested": requested or f"path:{directory}",
         "version": version,
-        "source": "path",
-        "directory": str(directory),
+        **({"source": "commit"} if requested else {"source": "path", "directory": str(directory)}),
         "installed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "workers": manifest.get("workers") or {},
         "files": files,
@@ -1686,6 +1688,7 @@ def main() -> int:
     path_kit_install = commands.add_parser("install-path-kit")
     path_kit_install.add_argument("--project-root", type=Path, required=True)
     path_kit_install.add_argument("--directory", type=Path, required=True)
+    path_kit_install.add_argument("--requested", help="the commit: entry the directory was fetched for")
     kit_profiles = commands.add_parser("kit-agent-ids")
     kit_profiles.add_argument("--lock", type=Path, required=True)
     kit_profiles.add_argument("--selected")
@@ -1731,7 +1734,7 @@ def main() -> int:
             kit_assets(args.project_root, args.output_root)
             return 0
         if args.command == "install-path-kit":
-            install_path_kit(args.project_root, args.directory)
+            install_path_kit(args.project_root, args.directory, args.requested)
             return 0
         if args.command == "kit-agent-ids":
             print("\n".join(kit_agent_ids(args.lock, args.selected)))
