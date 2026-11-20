@@ -611,8 +611,9 @@ impl PlanStore {
                 inputs[name].as_str().unwrap_or_default().to_owned(),
             ));
         }
-        // The worker's own token, if it has one, spares the API's anonymous limit.
-        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        // The worker's own token (its environment's, else the signed-in
+        // `gh`'s, as for the fixtures) spares the API's anonymous limit.
+        if let Some(token) = self.github_token().await {
             dispatch.push(("GITHUB_TOKEN".into(), token));
         }
         let mut warnings = Vec::new();

@@ -1707,9 +1707,18 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
         "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness provided worker-compose.yaml here and owns its lifecycle.\n\nThe installed `@iii-dev/console-ui` package is the exact component and build API. Use its `buildWorkerUi` driver for `ui/page.tsx` and scoped `ui/styles.css`, and serve the built assets from `dist/ui`.\n",
         if kind == Kind::Form { "Form Flow Builder" } else { "State Machine Canvas" }, contract.worker
     ))?;
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/visual-worker");
-    for name in ["package.json", "package-lock.json"] {
-        fs::copy(fixture.join(name), root.join(name))?;
+    // Embedded: a released runner has no source tree to read them from.
+    for (name, content) in [
+        (
+            "package.json",
+            &include_bytes!("../../tests/fixtures/visual-worker/package.json")[..],
+        ),
+        (
+            "package-lock.json",
+            &include_bytes!("../../tests/fixtures/visual-worker/package-lock.json")[..],
+        ),
+    ] {
+        fs::write(root.join(name), content)?;
     }
     let mut install = Command::new("npm");
     install

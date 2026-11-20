@@ -1844,6 +1844,43 @@ files and worker lock are held for the execution, including failed-job
 retries. Kit requirements must fit the stack's existing worker pins; a kit
 cannot silently replace the worker versions the test requested.
 
+A `kits` entry may also be `path:<absolute directory>`, to measure a kit's
+source (for example a workers checkout's `kits/deepwork`) instead of a
+published version. Environment variables are expanded at preparation:
+
+```yaml
+kits:
+  - path:${HARNESS_E2E_KITS_ROOT}/deepwork
+```
+
+An unset variable, or a directory without `iii.kit.yaml` and `agents/*.md`,
+fails preparation. The kit's `agents/*.md` are copied into the project and
+recorded in `kits.lock` (`source: path`, with the directory), without calling
+Directory. A path kit adds no workers: the stack must declare every worker the
+kit's `iii.kit.yaml` lists. A kit with `skills/` is rejected. The frozen agent
+digests are part of the execution contract, so editing a prompt changes the
+execution's identity; the path itself is recorded too, so the same kit from a
+different checkout location is a different execution. Preparation in Docker
+sees only the execution's own checkout and none of the caller's environment,
+so there a `path:` kit must be a directory below that checkout.
+
+A kit can also come from a commit, `commit:<owner>/<repository>/<folder>@<full
+sha>`, which is how `eval::start-validation` measures a prompt change: each
+side of the validation installs the kit from its own commit.
+
+```yaml
+kits:
+  - commit:iii-hq/workers/kits/deepwork@0123456789abcdef0123456789abcdef01234567
+```
+
+`prepare resolve` fetches only that folder at that commit (blobless and without
+the token) into `kit-sources/` of the contract, and the kit installs as a
+`path:` kit does, recorded with `source: commit` and the entry as `requested`.
+The contract's kit asset digests are what tells two commits apart: they differ
+exactly when the prompts do. Like a path kit, it adds no workers;
+`stacks/deepwork-source.yaml` is the deepwork stack that declares the one
+deepwork needs and harness does not bring (`kanban`).
+
 A project template belongs to the stack and is independent of the suite and
 the agent profile:
 
@@ -2081,7 +2118,9 @@ docker run -d --name hub-cache --restart unless-stopped -p 172.17.0.1:5000:5000 
 The phases get none of the worker's environment but where Docker and
 `TMPDIR` are.
 `prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
-for the private Registry and trending topics sources.
+for the private Registry and trending topics sources, and `prepare resolve`
+the same token for the GitHub API, whose anonymous limit (60 calls an hour)
+a few executions use up.
 
 #### Subscription providers
 
