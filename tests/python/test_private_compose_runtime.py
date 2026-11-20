@@ -276,7 +276,8 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
             'FAKE_SLEEPS':str(self.sleeps),
             'FAKE_VERSION':self.contract['runtime']['cli']['version'], 'FAKE_CATALOG':json.dumps(catalog()),
             'FAKE_LOCK':yaml.safe_dump(self.lock, sort_keys=False),
-            'DEEPSEEK_API_KEY':'synthetic-secret-never-upload',
+            # Its own per test: the readable-copies check reads every process on the machine.
+            'DEEPSEEK_API_KEY':'synthetic-secret-never-upload-' + self.root.name,
         })
 
     def launch(self):
