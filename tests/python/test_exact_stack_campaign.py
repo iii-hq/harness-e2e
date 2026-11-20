@@ -167,10 +167,10 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inside its project"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
 
-    def test_credentials_reach_only_the_workers_that_read_them(self):
-        """The shell, Harness and every other worker get no credential: only
-        the provider that reads a key, the router that falls back to it, the
-        judge that calls Typesafe, and the runner, which redacts them all.
+    def test_no_container_gets_a_credential_in_its_environment(self):
+        """No worker, the runner included, is started with a key or an env
+        file: the stack's `secrets` vault holds them, the router and the
+        Typesafe judge get `secret://` references, which are not secrets.
         A template's own `./.env` reference goes too. Values are synthetic."""
         contract = campaign_contract({
             "harness": "1.9.0", "state": "0.22.1", "llm-router": "1.4.0", "provider-deepseek": "0.1.0",
@@ -181,13 +181,15 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "state": {"worker": "package://state"},
             "fp": {"worker": "package://fp", "env_file": ["./.env"]},
             "secrets": {"worker": "package://secrets", "env_file": ["./.env"]},
-            "llm-router": {"worker": "package://llm-router", "env_file": ["./.env"]},
+            "llm-router": {"worker": "package://llm-router", "env_file": ["./.env"],
+                           "config_override": {"providers": {"deepseek": {"max_tokens": 4096}}}},
             "provider-deepseek": {"worker": "package://provider-deepseek"},
             "provider-openai": {"worker": "package://provider-openai"},
             "judge-typesafe": {"worker": "package://judge-typesafe"},
         }}
         with tempfile.TemporaryDirectory() as directory:
-            private = Path(directory) / "all.env"
+            private = Path(directory) / "secrets" / "all.env"
+            private.parent.mkdir()
             private.write_text("".join(f"{name}=synthetic-{name.lower()}-0123456789\n" for name in
                                        ("DEEPSEEK_API_KEY", "TYPESAFE_API_KEY", "ZAI_API_KEY")))
             project = MODULE.project_scaffold(contract, "project-one", Path("/data"),
@@ -195,43 +197,74 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             containers = project["containers"]
             self.assertIn("harness-e2e", containers)  # the runner is added, never assumed
             self.assertIn("iii-directory", containers)  # born in the scaffold
-            received = {name: sorted(MODULE.read_env_file(Path(container["env_file"][0])))
-                        for name, container in containers.items() if "env_file" in container}
-            self.assertEqual(received, {
-                "harness-e2e": ["DEEPSEEK_API_KEY", "TYPESAFE_API_KEY", "ZAI_API_KEY"],
-                "provider-deepseek": ["DEEPSEEK_API_KEY"],
-                "llm-router": ["DEEPSEEK_API_KEY"],
-                "judge-typesafe": ["TYPESAFE_API_KEY"],
-            })
-            self.assertEqual(containers["harness-e2e"]["env_file"], [str(private)])
-            for name in ("provider-deepseek", "llm-router", "judge-typesafe"):
-                scoped = Path(containers[name]["env_file"][0])
-                self.assertEqual(scoped.parent, private.parent)
-                self.assertEqual(scoped.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(MODULE.read_env_file(scoped)[received[name][0]],
-                                 MODULE.read_env_file(private)[received[name][0]])
+            self.assertEqual([name for name, container in containers.items() if "env_file" in container], [])
+            # Only providers the stack runs and the group received a key for;
+            # the stack's own settings for one stay.
+            self.assertEqual(containers["llm-router"]["config_override"], {"providers": {"deepseek": {
+                "max_tokens": 4096, "api_key": "secret://DEEPSEEK_API_KEY"}}})
+            self.assertEqual(containers["judge-typesafe"]["config_override"], {"api_key": "secret://TYPESAFE_API_KEY"})
+            # The master key and the staging file the import reads, outside the project.
+            self.assertEqual(containers["secrets"]["config_override"], {
+                "key_file": str(private.parent / "vault.key"), "env_file": str(private)})
+            self.assertNotIn("synthetic-", yaml.safe_dump(project))
+            self.assertEqual(sorted(path.name for path in private.parent.iterdir()), ["all.env"])
+            self.assertEqual(MODULE.vault_grants(containers, MODULE.package_identity(contract)), {
+                "DEEPSEEK_API_KEY": ["llm-router"], "TYPESAFE_API_KEY": ["judge-typesafe"]})
         directory = containers["iii-directory"]["config_override"]
         self.assertFalse(directory["auto_download"])
         self.assertEqual(directory["agents_folder"], "/isolated/project/agents")
         with self.assertRaisesRegex(ValueError, "must be absolute"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), "relative/.env", {}, template)
 
+    def test_a_stack_without_a_secrets_worker_fails_closed_rather_than_keyless(self):
+        """A reference no vault can answer would leave the provider keyless:
+        the group stops, naming the keys, before anything runs."""
+        package_of = MODULE.package_identity(campaign_contract())
+        containers = {
+            "llm-router": {"worker": "package://llm-router",
+                           "config_override": {"providers": {"zai": {"api_key": "secret://ZAI_API_KEY"}}}},
+            "judge-typesafe": {"worker": "package://judge-typesafe",
+                               "config_override": {"api_key": "secret://TYPESAFE_API_KEY"}},
+        }
+        with self.assertRaisesRegex(ValueError, "no secrets worker to hold TYPESAFE_API_KEY, ZAI_API_KEY"):
+            MODULE.vault_grants(containers, package_of)
+        self.assertEqual(MODULE.vault_grants({"llm-router": {"worker": "package://llm-router"}}, package_of), {})
+
+    def test_assembly_freezes_no_vault_path(self):
+        """The assembled stack is frozen into the contract: a per-attempt key
+        file or a reference has no place in it, nor has an env file."""
+        contract = campaign_contract()
+        contract["runtime"]["compose"] = {"containers": {
+            "harness-e2e": {"worker": "package://harness-e2e"},
+            "llm-router": {"worker": "package://llm-router"},
+            "provider-deepseek": {"worker": "package://provider-deepseek"},
+            "secrets": {"worker": "package://secrets"},
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory) / "all.env"
+            private.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\n")
+            project = MODULE.project_scaffold(contract, "project-one", Path("/data"), str(private), {},
+                                              assembling=True)
+        text = yaml.safe_dump(project)
+        for absent in ("env_file", "key_file", "secret://", str(private)):
+            self.assertNotIn(absent, text)
+
     def test_a_consumer_born_after_the_scaffold_is_scoped_before_the_runs(self):
-        """`compose::add` writes the graph's workers with no env_file and the
-        daemon no longer hands them its environment: the router or provider
-        it brings is given its own key, and only that, before the runs."""
+        """`compose::add` writes the graph's workers with no reference: the
+        router or judge it brings gets its `secret://` reference, and the
+        vault its key file, before the runs; nothing gets an env file."""
         compose = {"containers": {
             "harness-e2e": {"worker": "package://harness-e2e", "env_file": ["PRIVATE"]},
             "llm-router": {"worker": "package://api.workers.iii.dev/llm-router"},
+            "secrets": {"worker": "package://api.workers.iii.dev/secrets"},
             "provider-deepseek": {"worker": "package://provider-deepseek"},
             "ide": {"worker": "package://ide"},
         }}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            private = root / "credentials/all.env"
+            private = root / "secrets/all.env"
             private.parent.mkdir()
             private.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\nZAI_API_KEY=synthetic-zai-0123456789\n")
-            compose["containers"]["harness-e2e"]["env_file"] = [str(private)]
             file = root / "project/worker-compose.yaml"
             file.parent.mkdir()
             file.write_text(yaml.safe_dump(compose, sort_keys=False))
@@ -241,25 +274,29 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                      "--compose", str(file), "--env-file", str(private)]
             first = subprocess.run(scope, capture_output=True, text=True)
             self.assertEqual(first.returncode, 0, first.stderr)
-            self.assertEqual(first.stdout.split(), ["llm-router", "provider-deepseek"])
+            self.assertEqual(first.stdout.split(), ["harness-e2e", "llm-router", "secrets"])
             scoped = yaml.safe_load(file.read_text())["containers"]
-            self.assertNotIn("env_file", scoped["ide"])
-            self.assertEqual(scoped["harness-e2e"]["env_file"], [str(private)])
-            for name in ("llm-router", "provider-deepseek"):
-                self.assertEqual(sorted(MODULE.read_env_file(Path(scoped[name]["env_file"][0]))), ["DEEPSEEK_API_KEY"])
+            self.assertEqual([name for name, container in scoped.items() if "env_file" in container], [])
+            self.assertEqual(scoped["llm-router"]["config_override"],
+                             {"providers": {"deepseek": {"api_key": "secret://DEEPSEEK_API_KEY"}}})
+            self.assertEqual(scoped["secrets"]["config_override"]["key_file"], str(root / "secrets/vault.key"))
+            for name in ("provider-deepseek", "ide", "harness-e2e"):
+                self.assertNotIn("config_override", scoped[name])
+            self.assertNotIn("synthetic-", file.read_text())
             again = subprocess.run(scope, capture_output=True, text=True)
             self.assertEqual((again.returncode, again.stdout), (0, ""))
 
     def test_workers_built_from_commits_keep_their_credentials_under_any_container_name(self):
-        """A runner and a provider built from commits are path:// workers under
-        names of their own: the contract, not the name, says which package
-        each is, in the scaffold and again after compose::add."""
+        """A runner, a provider and a router under names of their own: the
+        contract, not the name, says which package each is, and the vault's
+        consumer is the name the router runs under."""
         contract = campaign_contract()
         contract["runtime"]["compose"] = {"containers": {
             "e2e": {"worker": "path:///builds/harness-e2e-0123abc", "scripts": {"run": "./run"}},
             "model": {"worker": "path:///builds/provider-deepseek-0123abc", "scripts": {"run": "./run"}},
             "harness": {"worker": "package://harness", "version": "1.9.0"},
-            "llm-router": {"worker": "package://llm-router", "version": "1.5.0"},
+            "router": {"worker": "package://llm-router", "version": "1.5.0"},
+            "vault": {"worker": "package://secrets", "version": "0.2.3"},
         }}
         contract["runtime"]["commits"] = {
             "e2e": {"worker": "harness-e2e", "commit": "0123abc" * 5},
@@ -272,11 +309,12 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             project = MODULE.project_scaffold(contract, "project-one", Path("/data"), str(private), {})
             containers = project["containers"]
             self.assertNotIn("provider-deepseek", containers)  # the built one is the provider
-            self.assertEqual(containers["e2e"]["env_file"], [str(private)])
-            self.assertEqual(sorted(MODULE.read_env_file(Path(containers["model"]["env_file"][0]))), ["DEEPSEEK_API_KEY"])
-            self.assertEqual(sorted(MODULE.read_env_file(Path(containers["llm-router"]["env_file"][0]))),
-                             ["DEEPSEEK_API_KEY"])
-            self.assertNotIn("env_file", containers["harness"])
+            self.assertEqual([name for name, container in containers.items() if "env_file" in container], [])
+            self.assertEqual(containers["router"]["config_override"],
+                             {"providers": {"deepseek": {"api_key": "secret://DEEPSEEK_API_KEY"}}})
+            self.assertIn("key_file", containers["vault"]["config_override"])
+            self.assertEqual(MODULE.vault_grants(containers, MODULE.package_identity(contract)),
+                             {"DEEPSEEK_API_KEY": ["router"]})
             file = root / "worker-compose.yaml"
             file.write_text(yaml.safe_dump(project, sort_keys=False))
             before = file.read_text()
@@ -289,6 +327,89 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             private.unlink()
             with self.assertRaises(FileNotFoundError):  # the file the group wrote is required
                 MODULE.project_scaffold(contract, "project-one", Path("/data"), str(private), {})
+
+    def test_vault_grants_name_keys_and_consumers_never_values(self):
+        """What the launcher asks `secrets::import` for: a name, the source
+        the worker re-reads it from, and who may resolve it. Never a value."""
+        compose = {"containers": {
+            "llm-router": {"worker": "package://llm-router",
+                           "config_override": {"providers": {"deepseek": {"api_key": "secret://DEEPSEEK_API_KEY"}}}},
+            "judge-typesafe": {"worker": "package://judge-typesafe",
+                               "config_override": {"api_key": "secret://TYPESAFE_API_KEY"}},
+            "secrets": {"worker": "package://secrets"},
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "contract.json").write_text(json.dumps(campaign_contract()))
+            file = root / "worker-compose.yaml"
+            file.write_text(yaml.safe_dump(compose))
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "vault-grants", "--contract", str(root / "contract.json"),
+                 "--compose", str(file)],
+                capture_output=True, text=True, env={**os.environ, "DEEPSEEK_API_KEY": "synthetic-deepseek-0123456789"})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [
+                {"name": "DEEPSEEK_API_KEY", "source": "dotenv", "consumers": ["llm-router"]},
+                {"name": "TYPESAFE_API_KEY", "source": "dotenv", "consumers": ["judge-typesafe"]},
+            ])
+            self.assertNotIn("synthetic", result.stdout + result.stderr)
+            del compose["containers"]["secrets"]
+            file.write_text(yaml.safe_dump(compose))
+            refused = subprocess.run(
+                ["python3", str(SCRIPT), "vault-grants", "--contract", str(root / "contract.json"),
+                 "--compose", str(file)], capture_output=True, text=True)
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn("no secrets worker to hold DEEPSEEK_API_KEY, TYPESAFE_API_KEY", refused.stdout)
+
+    def test_the_readable_copies_check_names_where_and_which_never_the_value(self):
+        """A value in a process environment or command line this user can
+        open, or in a file under the roots, is found and named by place and
+        variable; a login the provider must read is accepted, not found."""
+        value, quoted = "synthetic-gate-deepseek-0123456789", 'synthetic"gate"typesafe-0123456789'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            handoff = root / "handoff"
+            handoff.write_text(f"DEEPSEEK_API_KEY={value}\nTYPESAFE_API_KEY={quoted}\n")
+            (root / "run/secrets/login/claude-code").mkdir(parents=True)
+            (root / "artifacts").mkdir()
+            output = root / "artifacts/readable-copies.json"
+            check = ["python3", str(SCRIPT), "check-readable-copies", "--root", str(root / "run"),
+                     "--root", str(root / "artifacts"), "--accept", str(root / "run/secrets/login"),
+                     "--output", str(output)]
+            clean = {name: item for name, item in os.environ.items()
+                     if not name.startswith(("DEEPSEEK_", "ZAI_", "TYPESAFE_", "HARNESS_E2E_"))}
+            environment = {**clean, "HARNESS_E2E_CREDENTIALS_FILE": str(handoff)}
+
+            nothing = subprocess.run(check, env=environment, capture_output=True, text=True)
+            self.assertEqual(nothing.returncode, 0, nothing.stdout + nothing.stderr)
+            report = json.loads(output.read_text())
+            self.assertEqual((report["found"], report["accepted"]), ([], []))
+            self.assertGreater(report["scanned"]["processes"], 0)
+
+            (root / "run/secrets/login/claude-code/.credentials.json").write_text(json.dumps({"token": value}))
+            (root / "artifacts/log.json").write_text(json.dumps({"said": quoted}))
+            holder = subprocess.Popen(["sleep", "30"], env={**clean, "PLANTED": value})
+            argued = subprocess.Popen(["python3", "-c", "import time; time.sleep(30)", value], env=clean)
+            self.addCleanup(holder.kill)
+            self.addCleanup(argued.kill)
+            found = subprocess.run(check, env=environment, capture_output=True, text=True)
+            self.assertEqual(found.returncode, 1, found.stdout + found.stderr)
+            report = json.loads(output.read_text())
+            self.assertIn({"where": f"/proc/{holder.pid}/environ", "name": "DEEPSEEK_API_KEY"}, report["found"])
+            self.assertIn({"where": f"/proc/{argued.pid}/cmdline", "name": "DEEPSEEK_API_KEY"}, report["found"])
+            self.assertIn({"where": str(root / "artifacts/log.json"), "name": "TYPESAFE_API_KEY"}, report["found"])
+            self.assertEqual(report["accepted"], [{"where": str(root / "run/secrets/login/claude-code/.credentials.json"),
+                                                   "name": "DEEPSEEK_API_KEY"}])
+            self.assertIn(f"/proc/{holder.pid}/environ DEEPSEEK_API_KEY", found.stderr)
+            for said in (found.stdout, found.stderr, output.read_text()):
+                self.assertNotIn("synthetic", said)
+            # Read nothing, proved nothing: no process it could open fails it.
+            with self.assertRaisesRegex(ValueError, "no process"):
+                MODULE.readable_credential_copies({"DEEPSEEK_API_KEY": value}, [], [], proc=root / "artifacts")
+            # The handoff gone means the values are unknown: never a pass.
+            handoff.unlink()
+            gone = subprocess.run(check, env=environment, capture_output=True, text=True)
+            self.assertEqual(gone.returncode, 2, gone.stdout)
 
     def test_a_template_pin_never_holds_the_application_back(self):
         """The execution's lock wins, everything else runs latest. The Linkly
@@ -403,7 +524,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                         contract, "project-one", Path("/data"), str(private), {}, template,
                     )
                     container = project["containers"].get(f"provider-{provider}")
-                    self.assertEqual(sorted(MODULE.read_env_file(Path(container.pop("env_file")[0]))), [key])
+                # Its key reaches it through the router, never its environment.
                 self.assertEqual(container, {
                     "worker": f"package://provider-{provider}",
                     "version": "1.2.3",
@@ -431,8 +552,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                          if container["worker"] == "package://provider-deepseek"}
             self.assertEqual(list(providers), ["selected-model"])
             self.assertEqual(providers["selected-model"]["config_override"], {"setting": "keep"})
-            self.assertEqual(sorted(MODULE.read_env_file(Path(providers["selected-model"]["env_file"][0]))),
-                             ["DEEPSEEK_API_KEY"])
+            self.assertNotIn("env_file", providers["selected-model"])
 
     def test_campaign_provider_name_cannot_replace_an_unrelated_template_container(self):
         template = {"containers": {
@@ -614,9 +734,8 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         # the runner's `primary` database is declared, not left to the worker.
         self.assertEqual(project["containers"]["db"]["config_override"],
                          {"databases": {"primary": {"url": "sqlite:./data/iii.db"}}})
-        # No credential was received: only the runner names the private file.
-        self.assertEqual({name: c["env_file"] for name, c in project["containers"].items() if "env_file" in c},
-                         {"e2e": [str(root / ".env")]})
+        # No container names an env file, the runner included.
+        self.assertEqual({name: c["env_file"] for name, c in project["containers"].items() if "env_file" in c}, {})
 
     def test_a_template_database_keeps_its_databases_and_gains_primary(self):
         template = {"containers": {
@@ -780,14 +899,18 @@ project_trigger() {
 
     def test_common_runner_keeps_the_one_env_file_private_and_out_of_the_evidence(self):
         runner = RUNNER_SCRIPT.read_text()
-        # Outside the project, which the secrets worker reads a `.env` from.
-        self.assertIn('env_file="$run_root/credentials/all.env"', runner)
+        # Outside the project, under a folder ide's protected globs refuse
+        # (**/secrets/**) to coder::* and shell::fs::*.
+        self.assertIn('env_file="$run_root/secrets/all.env"', runner)
+        self.assertIn('--root "$run_root/secrets/login"', runner)
         self.assertIn('chmod 700 "$compose_state" "${env_file%/*}"', runner)
         self.assertIn('chmod 600 "$env_file"', runner)
         self.assertIn(': >"$project_dir/.env"', runner)
-        # Neither the engine nor the compose daemon keeps a credential to lend.
+        # Neither the engine nor the compose daemon keeps a credential, or
+        # where the launcher's are, to lend to every worker.
         self.assertEqual(runner.count('exec env "${scrub[@]}"'), 2)
-        self.assertLess(runner.index("credential_names=$(cut"), runner.index("scrub=()"))
+        self.assertIn("scrub=(-u HARNESS_E2E_CREDENTIALS_FILE)", runner)
+        self.assertLess(runner.index("credential_names=$(cut"), runner.index("scrub=("))
         # The runtime tree is checked before any credential is written into it.
         self.assertLess(runner.index("validate-layout"), runner.index(': >"$env_file"'))
         # And written after a template scaffold, so it replaces the placeholder.
@@ -868,28 +991,32 @@ fail() { printf '[FAIL] %s\\n' "$1" >&2; return 1; }
 trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
 """ + env_block + login_block + 'printf "%s\\n" "${project_args[@]}"\n'
 
-        def launch(directory: Path, provider: str, env: dict[str, str]):
+        def launch(directory: Path, provider: str, env: dict[str, str], handed: dict[str, str]):
             contract = campaign_contract()
             contract["suite"]["subject"]["provider"] = provider
             (directory / "contract.json").write_text(json.dumps(contract))
             (directory / "run").mkdir()
             (directory / "artifacts/stack").mkdir(parents=True)
+            # The launcher runs without them: they come from its handoff file.
+            handoff = directory / "handoff"
+            MODULE.write_private(handoff, handed)
             clean = {name: value for name, value in os.environ.items()
                      if not name.startswith(("CODEX_", "CLAUDE_CODE_", "DEEPSEEK_", "ZAI_", "TYPESAFE_"))}
             return subprocess.run(
                 ["bash", "-c", shell, "launcher", str(SCRIPT), str(directory / "contract.json"),
                  str(directory / "run"), str(directory / "artifacts")],
-                env={**clean, **env}, capture_output=True, text=True, check=False,
+                env={**clean, **env, "HARNESS_E2E_CREDENTIALS_FILE": str(handoff)},
+                capture_output=True, text=True, check=False,
             )
 
         expired = "eyJhbGciOiJub25lIn0." + base64.urlsafe_b64encode(
             json.dumps({"exp": 1_000}).encode()).decode().rstrip("=") + ".signature"
         with tempfile.TemporaryDirectory() as directory:
-            result = launch(Path(directory), "openai-codex", {"CODEX_ACCESS_TOKEN": expired})
+            result = launch(Path(directory), "openai-codex", {}, {"CODEX_ACCESS_TOKEN": expired})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("[FAIL] CODEX_ACCESS_TOKEN expired before the group started", result.stderr)
             self.assertTrue(result.stdout.endswith("phase=credentials\n"), result.stdout)
-            self.assertFalse((Path(directory) / "run/login").exists())
+            self.assertFalse((Path(directory) / "run/secrets/login").exists())
 
         with tempfile.TemporaryDirectory() as directory:
             expires_at = str(int((time.time() + 7200) * 1000))
@@ -897,12 +1024,13 @@ trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
                 # As run_in_image.sh names the --env-file's variables; the
                 # expiry, no secret, comes by name.
                 "HARNESS_E2E_CREDENTIALS": "CLAUDE_CODE_ACCESS_TOKEN ZAI_API_KEY",
-                "CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-group-access",
                 "CLAUDE_CODE_EXPIRES_AT": expires_at,
+            }, {
+                "CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-group-access",
                 "ZAI_API_KEY": "zai-key", "DEEPSEEK_API_KEY": "deepseek-key",
             })
             self.assertEqual(result.returncode, 0, result.stderr)
-            login = Path(directory) / "run/login/claude-code"
+            login = Path(directory) / "run/secrets/login/claude-code"
             self.assertEqual(result.stdout.splitlines(),
                              ["--environment", f"provider-claude-code.CLAUDE_CONFIG_DIR={login}", "phase=earlier"])
             self.assertEqual(json.loads((login / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"],
@@ -917,6 +1045,130 @@ trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
             for path in (Path(directory) / "artifacts").rglob("*"):
                 if path.is_file():
                     self.assertNotIn("group-access", path.read_text())
+
+    def test_the_launcher_runs_without_credentials_in_its_environment(self):
+        """Any process of the subject's user reads the launcher's environment:
+        the launcher hands itself what the group received in a private file
+        and runs again without it, or any catalog name it was given."""
+        runner = RUNNER_SCRIPT.read_text()
+        marker = "# A process's environment is readable"
+        head = marker + runner.split(marker, 1)[1].split("' EXIT\n", 1)[0] + "' EXIT\n"
+        self.assertLess(runner.index(marker), runner.index("run_root=$(mktemp -d"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            probe = root / "probe.sh"
+            probe.write_text('printf "%s %s %s\\n" "${DEEPSEEK_API_KEY:+set}" "${ANTHROPIC_API_KEY:+set}" '
+                             '"$HARNESS_E2E_CREDENTIALS_FILE"\n')
+            shell = f"set -Eeuo pipefail\ncontract_tool={SCRIPT}\nlauncher={probe}\n" + head
+            clean = {name: value for name, value in os.environ.items()
+                     if not name.startswith(("DEEPSEEK_", "ZAI_", "TYPESAFE_", "ANTHROPIC_", "HARNESS_E2E_"))}
+            result = subprocess.run(["bash", "-c", shell], capture_output=True, text=True, env={
+                **clean, "TMPDIR": directory, "HARNESS_E2E_CREDENTIALS": "ZAI_API_KEY",
+                "DEEPSEEK_API_KEY": "synthetic-deepseek-0123456789", "ZAI_API_KEY": "synthetic-zai-0123456789",
+                # Not received, still a catalog name: dropped all the same.
+                "ANTHROPIC_API_KEY": "synthetic-anthropic-0123456789",
+            })
+            self.assertEqual(result.returncode, 0, result.stderr)
+            dropped_deepseek, dropped_anthropic, handoff = result.stdout.split(" ")
+            self.assertEqual((dropped_deepseek, dropped_anthropic), ("", ""))
+            handoff = Path(handoff.strip())
+            self.assertEqual(handoff.parent, root)
+            self.assertEqual(handoff.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(MODULE.read_env_file(handoff), {
+                "DEEPSEEK_API_KEY": "synthetic-deepseek-0123456789", "ZAI_API_KEY": "synthetic-zai-0123456789"})
+            self.assertNotIn("synthetic", result.stdout + result.stderr)
+            # Run again with the file, it does not hand off twice, and no early
+            # exit leaves the file behind.
+            again = subprocess.run(["bash", "-c", shell + "exit 2\n"], capture_output=True, text=True,
+                                   env={**clean, "HARNESS_E2E_CREDENTIALS_FILE": str(handoff)})
+            self.assertEqual((again.returncode, again.stdout), (2, ""))
+            self.assertFalse(handoff.exists())
+
+    def test_keys_reach_the_vault_and_leave_every_file_before_the_subject_exists(self):
+        runner = RUNNER_SCRIPT.read_text()
+        up = runner.rindex('capture_processes "$artifact_dir/stack/processes-during.json"')
+        imported = runner.index("secrets::import")
+        staged = runner.index('rm -f -- "$env_file"')
+        checked = runner.index("check-readable-copies")
+        handed = runner.rindex('rm -f -- "$HARNESS_E2E_CREDENTIALS_FILE"')
+        run = runner.index("project_trigger e2e::run")
+        self.assertLess(up, imported)
+        self.assertLess(imported, staged)
+        self.assertLess(staged, checked)
+        self.assertLess(runner.index("failure_phase=materialization"), checked)
+        self.assertLess(checked, handed)
+        self.assertLess(handed, run)
+        self.assertIn('--root "$run_root" --root "$artifact_dir"', runner)
+        # Every exit removes the handoff, after the retry that still needs it.
+        cleanup = runner[runner.index("cleanup() {"):runner.index("\n}\n", runner.index("cleanup() {"))]
+        self.assertLess(cleanup.index('bash "$launcher"'), cleanup.index('rm -f -- "${HARNESS_E2E_CREDENTIALS_FILE:-}"'))
+        self.assertLess(cleanup.index('rm -f -- "${HARNESS_E2E_CREDENTIALS_FILE:-}"'), cleanup.index('exit "$status"'))
+
+    def test_the_launcher_waits_until_each_consumer_resolved_its_own_secret(self):
+        """The router takes its key at once, the judge on its next call, and
+        the subject's provider through the router, whose catalog then fills:
+        the runs wait for all of it, and say which consumer had no key."""
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index("vault_ready() {")
+        functions = source[start:source.index("\n}\n", source.index("await_vault() {")) + 3]
+        shell = """set -Eeuo pipefail
+root=$1 contract_path=$1/contract.json repo_root=$2 probe_ms=5000 vault_wait_seconds=$3 iii_failed=$1/failed
+fail() { printf '[FAIL] %s\\n' "$1" >&2; return 1; }
+# One canned answer per call, the last one kept.
+project_trigger() {
+  local file="$root/answers/$1"
+  printf '%s\\n' "$1" >>"$root/calls"
+  head -n 1 "$file"
+  if (($(wc -l <"$file") > 1)); then sed -i 1d "$file"; fi
+}
+""" + functions + 'await_vault "$(cat "$root/grants")"\n'
+        missing = "secret DEEPSEEK_API_KEY not found in the secrets worker; store it there or fix the reference"
+        answers = {
+            "router::provider::list": [
+                {"providers": [{"id": "deepseek", "configured": False, "credential_source": "secret",
+                                "credential_error": missing}]},
+                {"providers": [{"id": "deepseek", "configured": True, "credential_source": "secret"},
+                               {"id": "zai", "configured": False, "credential_source": "none"}]},
+            ],
+            "judge-typesafe::status": [{"configured": True}],
+            "secrets::list": [
+                {"secrets": [
+                    {"name": "DEEPSEEK_API_KEY", "consumers": ["llm-router"], "updated_at": "2026-11-20T10:00:00.100Z",
+                     "last_resolved_at": "2026-11-20T10:00:00.107Z", "last_resolved_by": "llm-router"},
+                    {"name": "TYPESAFE_API_KEY", "consumers": ["judge-typesafe"], "updated_at": "2026-11-20T10:00:00.200Z",
+                     "last_resolved_at": None, "last_resolved_by": None}]},
+                {"secrets": [
+                    {"name": "DEEPSEEK_API_KEY", "consumers": ["llm-router"], "updated_at": "2026-11-20T10:00:00.100Z",
+                     "last_resolved_at": "2026-11-20T10:00:00.107Z", "last_resolved_by": "llm-router"},
+                    {"name": "TYPESAFE_API_KEY", "consumers": ["judge-typesafe"], "updated_at": "2026-11-20T10:00:00.200Z",
+                     "last_resolved_at": "2026-11-20T10:00:01.000Z", "last_resolved_by": "judge-typesafe"}]},
+            ],
+            "router::models::list": [{"models": []}, {"models": [{"id": "deepseek-chat"}]}],
+        }
+
+        def wait(answered: dict, seconds: int):
+            directory = Path(tempfile.mkdtemp())
+            self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(directory)]))
+            (directory / "answers").mkdir()
+            for function, lines in answered.items():
+                (directory / "answers" / function).write_text("".join(json.dumps(line) + "\n" for line in lines))
+            (directory / "contract.json").write_text(json.dumps(campaign_contract()))
+            (directory / "grants").write_text(
+                '{"name":"DEEPSEEK_API_KEY","source":"dotenv","consumers":["llm-router"]}\n'
+                '{"name":"TYPESAFE_API_KEY","source":"dotenv","consumers":["judge-typesafe"]}')
+            result = subprocess.run(["bash", "-c", shell, "launcher", str(directory), str(ROOT), str(seconds)],
+                                    capture_output=True, text=True)
+            return result, (directory / "calls").read_text().splitlines()
+
+        result, calls = wait(answers, 60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The judge resolves on the status call, so the vault is read after it.
+        self.assertLess(calls.index("judge-typesafe::status"), calls.index("secrets::list"))
+        self.assertEqual(calls.count("router::models::list"), 2)
+
+        result, _ = wait({**answers, "router::provider::list": answers["router::provider::list"][:1]}, 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(missing, result.stderr)
 
     def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -973,6 +1225,7 @@ trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
             self.assertIn("must not overlap", result.stdout)
             self.assertFalse(list(artifacts.rglob("*.env")))
             self.assertFalse(list(artifacts.glob("harness-e2e-compose.*")))
+            self.assertFalse(list(artifacts.glob("harness-e2e-handoff.*")))
 
     def test_uploads_preserve_hidden_files_only_from_validated_packages_or_safe_diagnostics(self):
         workflow = WORKFLOW.read_text()

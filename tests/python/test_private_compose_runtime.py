@@ -85,7 +85,9 @@ elif function.startswith('compose::'):
     secret = path.resolve().parent / 'data/secrets'
     secret.mkdir(parents=True, exist_ok=True)
     if not os.environ.get('FAKE_EMPTY_SECRET'):
-        (secret / 'sentinel').write_text('synthetic-secret-never-upload')
+        # What the vault holds is ciphertext, never the key, unless a case plants it.
+        planted = os.environ.get('FAKE_SECRET_SENTINEL')
+        (secret / 'sentinel').write_text(pathlib.Path(planted).read_text() if planted else 'synthetic-vault-never-upload')
     for name, container in content['containers'].items():
         source = container['worker']
         if source.startswith('path://./'):
@@ -257,6 +259,7 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         result = subprocess.run(['bash', str(self.repo / 'scripts/run_exact_stack_group.sh')],
                                 env=self.env, capture_output=True, text=True, timeout=30)
         self.assertFalse(list(self.tmp.glob('harness-e2e-compose.*')), result.stderr)
+        self.assertFalse(list(self.tmp.glob('harness-e2e-handoff.*')), result.stderr)
         return result
 
     def observed(self):
@@ -555,6 +558,26 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
             MODULE.stage_relative_workers(manifest, source.parent, project)
         self.assertFalse((project / 'local').exists())
 
+    def test_a_received_key_left_readable_stops_the_group_before_the_run(self):
+        """A plaintext copy under the run's roots, where the subject's user
+        reads it, fails the group in `credentials` before e2e::run, naming
+        the file and the variable, never the value."""
+        # From a file: in a variable every process would hold it too.
+        planted = self.root / 'planted'
+        planted.write_text(self.env['DEEPSEEK_API_KEY'])
+        self.env['FAKE_SECRET_SENTINEL'] = str(planted)
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(row['kind'] == 'e2e::run' for row in self.observed() if 'kind' in row))
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        self.assertEqual(failure['phase'], 'credentials')
+        self.assertEqual(failure['attempt'], 2)
+        report = json.loads((self.artifacts / 'stack/readable-copies.json').read_text())
+        self.assertEqual([(Path(hit['where']).relative_to(self.tmp).parts[1:], hit['name']) for hit in report['found']],
+                         [(('project', 'data', 'secrets', 'sentinel'), 'DEEPSEEK_API_KEY')])
+        self.assertGreater(report['scanned']['processes'], 0)
+        self.assertNotIn(self.env['DEEPSEEK_API_KEY'], result.stdout + result.stderr)
+
     def test_introduced_credential_paths_are_withheld_and_symlinks_still_fail_after_launcher(self):
         self.assertEqual(self.launch().returncode, 0)
         self.assert_private()
@@ -847,6 +870,14 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
                        env={'PATH': os.environ['PATH'], 'DEEPSEEK_API_KEY': key}, check=True)
         self.assertNotIn('sk-deep', output.read_text())
         self.assertIn(' key=[redacted:DEEP', output.read_text())
+        # Or from the launcher's handoff file, once its environment has none.
+        handoff = self.root / 'handoff'
+        handoff.write_text(f'DEEPSEEK_API_KEY={key}\n')
+        subprocess.run(['python3', str(self.repo / 'scripts/exact_stack_campaign.py'), 'failure',
+                        '--output', str(output), '--phase', 'project_start', '--exit-code', '1',
+                        '--iii-function', 'compose::up', '--iii-stderr', str(log)],
+                       env={'PATH': os.environ['PATH'], 'HARNESS_E2E_CREDENTIALS_FILE': str(handoff)}, check=True)
+        self.assertNotIn('sk-deep', output.read_text())
 
     def test_the_failure_record_keeps_what_iii_answered_and_never_more_than_its_start(self):
         progress = 'resolving ade@1.9.60\nError: {\n  "code": "X_FAILED",\n  "message": "first"\n}\n'
