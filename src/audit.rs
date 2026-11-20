@@ -291,8 +291,7 @@ fn out_of_scope_session_flags(report: &E2eRunReport, transcript: &Value) -> Vec<
 }
 
 fn secret_exposure_flags(policy: &RedactionPolicy, transcript: &Value) -> Vec<AuditFlag> {
-    let mut probe = transcript.clone();
-    let redaction = policy.redact_value(&mut probe);
+    let redaction = policy.exposure(transcript);
     if !redaction.changed() {
         return Vec::new();
     }
@@ -602,5 +601,44 @@ mod tests {
         )]));
 
         assert!(deterministic(&report, &policy).is_empty());
+    }
+
+    #[test]
+    fn a_response_schema_property_named_secret_is_not_flagged() {
+        let policy = RedactionPolicy::with_known_values([TEST_SECRET.to_string()]);
+        let info = json!({
+            "message": {
+                "role": "function_result",
+                "function_id": "engine::functions::info",
+                "details": {"functions": [{
+                    "function_id": "ade::compose::container",
+                    "response_schema": {"definitions": {"EnvVar": {"properties": {
+                        "key": {"type": "string"},
+                        "value": {"type": ["string", "null"]},
+                        "secret": {"type": "boolean"}
+                    }}}}
+                }]},
+            },
+        });
+        let report = report_with_transcript(transcript_with(vec![info]));
+
+        assert!(deterministic(&report, &policy).is_empty());
+    }
+
+    #[test]
+    fn a_credential_string_under_api_key_is_still_flagged() {
+        let credential = "live-4f9c2a7e1b3d5f60";
+        let policy = RedactionPolicy::with_known_values(Vec::<String>::new());
+        let report = report_with_transcript(transcript_with(vec![assistant_call(
+            "state::get",
+            json!({"key": "k", "api_key": credential}),
+        )]));
+
+        let flags = deterministic(&report, &policy);
+
+        assert_eq!(flags.len(), 1, "{flags:?}");
+        assert_eq!(flags[0].kind, AuditFlagKind::SecretExposure);
+        assert!(flags[0].summary.contains("1 field(s)"));
+        assert!(!serde_json::to_string(&flags).unwrap().contains(credential));
     }
 }
