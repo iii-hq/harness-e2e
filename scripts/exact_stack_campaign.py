@@ -249,12 +249,20 @@ def references(containers: dict[str, Any]) -> dict[str, list[str]]:
     return {secret: sorted(names) for secret, names in sorted(named.items())}
 
 
-def vault_grants(containers: dict[str, Any], package_of: Any) -> dict[str, list[str]]:
+def vault_grants(containers: dict[str, Any], package_of: Any, received: Any) -> dict[str, list[str]]:
     """What the launcher imports into the stack's vault: each referenced
     secret and who may resolve it. A reference no vault answers would leave
-    its consumer keyless, so a stack without a `secrets` worker is refused."""
+    its consumer keyless, so a stack without a `secrets` worker is refused;
+    so is a provider the group has a key (`received`, names) for and no
+    router to hand it over."""
+    providers, _ = credential_catalog()
+    workers = {package_of(container) for container in containers.values()}
+    unrouted = sorted(key for provider, key in providers.items()
+                      if f"provider-{provider}" in workers and key in received)
+    if unrouted and "llm-router" not in workers:
+        raise ValueError(f"the stack runs a provider and no llm-router to hand {', '.join(unrouted)} over")
     grants = references(containers)
-    if grants and not any(package_of(container) == "secrets" for container in containers.values()):
+    if grants and "secrets" not in workers:
         raise ValueError(f"the stack has no secrets worker to hold {', '.join(grants)}; "
                          "a group with provider keys needs one")
     return grants
@@ -1713,6 +1721,7 @@ def main() -> int:
                                  help="the secrets::import requests the stack's references need, one per line")
     grants.add_argument("--contract", type=Path, required=True)
     grants.add_argument("--compose", type=Path, required=True)
+    grants.add_argument("--env-file", type=Path, required=True)
     handoff = commands.add_parser(
         "credentials-handoff", help="write what the group received to a private file; print the names to unset")
     handoff.add_argument("--output", type=Path, required=True)
@@ -1822,15 +1831,17 @@ def main() -> int:
         if args.command == "vault-grants":
             # A name and the source the secrets worker re-reads it from: no value travels.
             grants = vault_grants(load_yaml(args.compose.read_text())["containers"],
-                                  package_identity(load_object(args.contract, "contract")))
+                                  package_identity(load_object(args.contract, "contract")),
+                                  read_env_file(args.env_file).keys())
             for name, consumers in grants.items():
                 print(json.dumps({"name": name, "source": "dotenv", "consumers": consumers}))
             return 0
         if args.command == "credentials-handoff":
             values = received_credentials(os.environ)
             write_private(args.output, values)
-            # Any catalog name goes too, received or not.
-            print("\n".join(sorted(values.keys() | (credential_catalog()[1] & os.environ.keys()))))
+            # Any catalog name goes too, received or not, and a received name no env file can carry.
+            listed = set(os.environ.get("HARNESS_E2E_CREDENTIALS", "").split()) | credential_catalog()[1]
+            print("\n".join(sorted(values.keys() | (listed & os.environ.keys()))))
             return 0
         if args.command == "check-readable-copies":
             handoff = os.environ.get("HARNESS_E2E_CREDENTIALS_FILE")

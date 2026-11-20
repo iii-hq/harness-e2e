@@ -881,7 +881,8 @@ capture_processes "$artifact_dir/stack/processes-during.json"
 # worker under the name of the container that references it may resolve it
 # (a name the caller declares itself; README). Then no file holds a key.
 failure_phase=credentials
-grants=$(python3 "$contract_tool" vault-grants --contract "$contract_path" --compose "$compose_file") \
+grants=$(python3 "$contract_tool" vault-grants --contract "$contract_path" --compose "$compose_file" \
+  --env-file "$env_file") \
   || fail "${grants#error: }"
 if [[ -n "$grants" ]]; then
   vault_deadline=$((SECONDS + vault_wait_seconds))

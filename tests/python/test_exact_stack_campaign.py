@@ -208,7 +208,8 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 "key_file": str(private.parent / "vault.key"), "env_file": str(private)})
             self.assertNotIn("synthetic-", yaml.safe_dump(project))
             self.assertEqual(sorted(path.name for path in private.parent.iterdir()), ["all.env"])
-            self.assertEqual(MODULE.vault_grants(containers, MODULE.package_identity(contract)), {
+            self.assertEqual(MODULE.vault_grants(containers, MODULE.package_identity(contract),
+                                                 MODULE.read_env_file(private)), {
                 "DEEPSEEK_API_KEY": ["llm-router"], "TYPESAFE_API_KEY": ["judge-typesafe"]})
         directory = containers["iii-directory"]["config_override"]
         self.assertFalse(directory["auto_download"])
@@ -226,9 +227,15 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "judge-typesafe": {"worker": "package://judge-typesafe",
                                "config_override": {"api_key": "secret://TYPESAFE_API_KEY"}},
         }
+        received = {"TYPESAFE_API_KEY", "ZAI_API_KEY"}
         with self.assertRaisesRegex(ValueError, "no secrets worker to hold TYPESAFE_API_KEY, ZAI_API_KEY"):
-            MODULE.vault_grants(containers, package_of)
-        self.assertEqual(MODULE.vault_grants({"llm-router": {"worker": "package://llm-router"}}, package_of), {})
+            MODULE.vault_grants(containers, package_of, received)
+        self.assertEqual(MODULE.vault_grants({"llm-router": {"worker": "package://llm-router"}}, package_of, received), {})
+        # A provider the group has a key for, and no router to hand it over: keyless all the same.
+        lone = {"provider-deepseek": {"worker": "package://provider-deepseek"}, "secrets": {"worker": "package://secrets"}}
+        with self.assertRaisesRegex(ValueError, "no llm-router to hand DEEPSEEK_API_KEY"):
+            MODULE.vault_grants(lone, package_of, {"DEEPSEEK_API_KEY"})
+        self.assertEqual(MODULE.vault_grants(lone, package_of, set()), {})  # no key, nothing to hand
 
     def test_assembly_freezes_no_vault_path(self):
         """The assembled stack is frozen into the contract: a per-attempt key
@@ -313,8 +320,8 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             self.assertEqual(containers["router"]["config_override"],
                              {"providers": {"deepseek": {"api_key": "secret://DEEPSEEK_API_KEY"}}})
             self.assertIn("key_file", containers["vault"]["config_override"])
-            self.assertEqual(MODULE.vault_grants(containers, MODULE.package_identity(contract)),
-                             {"DEEPSEEK_API_KEY": ["router"]})
+            self.assertEqual(MODULE.vault_grants(containers, MODULE.package_identity(contract),
+                                                 MODULE.read_env_file(private)), {"DEEPSEEK_API_KEY": ["router"]})
             file = root / "worker-compose.yaml"
             file.write_text(yaml.safe_dump(project, sort_keys=False))
             before = file.read_text()
@@ -341,11 +348,14 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "contract.json").write_text(json.dumps(campaign_contract()))
+            staging = root / "all.env"
+            staging.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\n"
+                               "TYPESAFE_API_KEY=synthetic-typesafe-0123456789\n")
             file = root / "worker-compose.yaml"
             file.write_text(yaml.safe_dump(compose))
             result = subprocess.run(
                 ["python3", str(SCRIPT), "vault-grants", "--contract", str(root / "contract.json"),
-                 "--compose", str(file)],
+                 "--compose", str(file), "--env-file", str(staging)],
                 capture_output=True, text=True, env={**os.environ, "DEEPSEEK_API_KEY": "synthetic-deepseek-0123456789"})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [
@@ -357,7 +367,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             file.write_text(yaml.safe_dump(compose))
             refused = subprocess.run(
                 ["python3", str(SCRIPT), "vault-grants", "--contract", str(root / "contract.json"),
-                 "--compose", str(file)], capture_output=True, text=True)
+                 "--compose", str(file), "--env-file", str(staging)], capture_output=True, text=True)
             self.assertEqual(refused.returncode, 2)
             self.assertIn("no secrets worker to hold DEEPSEEK_API_KEY, TYPESAFE_API_KEY", refused.stdout)
 
@@ -1070,20 +1080,22 @@ trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             probe = root / "probe.sh"
-            probe.write_text('printf "%s %s %s\\n" "${DEEPSEEK_API_KEY:+set}" "${ANTHROPIC_API_KEY:+set}" '
-                             '"$HARNESS_E2E_CREDENTIALS_FILE"\n')
+            probe.write_text('printf "%s %s %s %s\\n" "${DEEPSEEK_API_KEY:+set}" "${ANTHROPIC_API_KEY:+set}" '
+                             '"${CUSTOM_TOKEN:+set}" "$HARNESS_E2E_CREDENTIALS_FILE"\n')
             shell = f"set -Eeuo pipefail\ncontract_tool={SCRIPT}\nlauncher={probe}\n" + head
             clean = {name: value for name, value in os.environ.items()
                      if not name.startswith(("DEEPSEEK_", "ZAI_", "TYPESAFE_", "ANTHROPIC_", "HARNESS_E2E_"))}
             result = subprocess.run(["bash", "-c", shell], capture_output=True, text=True, env={
-                **clean, "TMPDIR": directory, "HARNESS_E2E_CREDENTIALS": "ZAI_API_KEY",
+                **clean, "TMPDIR": directory, "HARNESS_E2E_CREDENTIALS": "ZAI_API_KEY CUSTOM_TOKEN",
+                # Received, but no env file can carry it: never handed off, still dropped.
+                "CUSTOM_TOKEN": "synthetic-custom\n0123456789",
                 "DEEPSEEK_API_KEY": "synthetic-deepseek-0123456789", "ZAI_API_KEY": "synthetic-zai-0123456789",
                 # Not received, still a catalog name: dropped all the same.
                 "ANTHROPIC_API_KEY": "synthetic-anthropic-0123456789",
             })
             self.assertEqual(result.returncode, 0, result.stderr)
-            dropped_deepseek, dropped_anthropic, handoff = result.stdout.split(" ")
-            self.assertEqual((dropped_deepseek, dropped_anthropic), ("", ""))
+            dropped_deepseek, dropped_anthropic, dropped_custom, handoff = result.stdout.split(" ")
+            self.assertEqual((dropped_deepseek, dropped_anthropic, dropped_custom), ("", "", ""))
             handoff = Path(handoff.strip())
             self.assertEqual(handoff.parent, root)
             self.assertEqual(handoff.stat().st_mode & 0o777, 0o600)

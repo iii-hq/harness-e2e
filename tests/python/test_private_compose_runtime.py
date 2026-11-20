@@ -189,9 +189,31 @@ elif function in ('e2e::archive', 'e2e::archive-head'):
     if os.environ.get('FAKE_FAIL') == 'archive':
         error('ARCHIVE_UNAVAILABLE', 'longitudinal storage is not configured')
     answer({'status':'ok'})
+elif function == 'secrets::status':
+    answer({'count': 0})
+elif function == 'secrets::import':
+    # The vault re-reads the value from its staging file: a request names it only.
+    request = json.loads(option('--json'))
+    record('secrets::import', request=request)
+    answer({**request, 'ref': 'secret://' + request['name'], 'store': 'vault', 'hint': 'synthe...load'})
+elif function == 'secrets::list':
+    imported = [json.loads(line)['request'] for line in open(os.environ['FAKE_CALLS'])
+                if json.loads(line)['kind'] == 'secrets::import']
+    answer({'secrets': [{'name': grant['name'], 'consumers': grant['consumers'],
+                         'last_resolved_by': grant['consumers'][0], 'updated_at': '2026-11-20T00:00:00.000Z',
+                         'last_resolved_at': '2026-11-20T00:00:00.007Z'} for grant in imported]})
+elif function == 'router::provider::list':
+    answer({'providers': [{'id': 'deepseek', 'configured': True, 'credential_source': 'secret',
+                           'credential_ref': 'secret://DEEPSEEK_API_KEY'}]})
+elif function == 'router::models::list':
+    answer({'models': ['deepseek-v4-flash']})
 else:
     raise SystemExit('unimplemented fake boundary: ' + function)
 '''
+
+
+STACK = {'harness': '1.9.0', 'harness-e2e': '0.6.0-experimental', 'llm-router': '1.5.5',
+         'provider-deepseek': '1.0.0', 'secrets': '0.2.3'}
 
 
 class PrivateComposeRuntimeTests(unittest.TestCase):
@@ -238,10 +260,12 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.contract['runtime']['cli']['sha256'] = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
         self.contract['runtime']['compose'] = {'containers': {
             name: {'worker': 'package://' + name, 'version': version}
-            for name, version in {'harness':'1.9.0', 'harness-e2e':'0.6.0-experimental', 'provider-deepseek':'1.0.0'}.items()
+            for name, version in STACK.items()
         }}
-        self.lock = lock_of({'harness':'1.9.0', 'harness-e2e':'0.6.0-experimental', 'provider-deepseek':'1.0.0'})
-        self.lock['graphs'] = {'harness':['harness'], 'harness-e2e':['harness-e2e'], 'provider-deepseek':['provider-deepseek']}
+        self.lock = lock_of(STACK)
+        # Every real stack's provider takes its key from the router, and the router from the vault.
+        self.lock['graphs'] = {'harness':['harness'], 'harness-e2e':['harness-e2e'],
+                               'provider-deepseek':['provider-deepseek', 'llm-router', 'secrets']}
         self.env = {key: value for key, value in os.environ.items()
                     if not key.startswith(('HARNESS_E2E_', 'FAKE_')) and key not in MODULE.credential_catalog()[1]}
         self.env.update({
@@ -284,6 +308,15 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.assertEqual(bundle['withheld'], [])
         paths = {entry['path'] for entry in bundle['files']}
         self.assertFalse(any(path.endswith('.env') or '/secrets/' in path or 'compose-state/' in path for path in paths))
+        # The key reached the stack's vault by name, for the router alone, and no value is kept;
+        # assembling starts no stack, so nothing is imported.
+        imported = [row['request'] for row in rows if row['kind'] == 'secrets::import']
+        if self.env.get('HARNESS_E2E_ASSEMBLE_ONLY'):
+            self.assertEqual(imported, [])
+        else:
+            self.assertEqual(imported, [{'name': 'DEEPSEEK_API_KEY', 'source': 'dotenv', 'consumers': ['llm-router']}])
+            self.assertEqual((self.artifacts / 'stack/vault.jsonl').read_text(),
+                             '{"name":"DEEPSEEK_API_KEY","ref":"secret://DEEPSEEK_API_KEY","consumers":["llm-router"]}\n')
         return rows, paths
 
     def test_non_template_launcher_keeps_runtime_private_and_evidence_factual(self):
@@ -323,7 +356,7 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         runner = yaml.safe_load(up['manifest'])['containers']['harness-e2e']['environment']
         self.assertEqual(runner['HARNESS_E2E_STACK_MODE'], 'registry')
         self.assertEqual(json.loads(runner['HARNESS_E2E_STACK_VERSIONS']),
-                         {'harness': '1.9.0', 'harness-e2e': '0.6.0-experimental', 'provider-deepseek': '1.0.0'})
+                         STACK)
         self.assertEqual(runner['HARNESS_E2E_STACK_DIGEST'], MODULE.canonical_sha256(self.lock))
 
     def test_a_stack_without_a_lock_leaves_the_runner_its_own_identity(self):
