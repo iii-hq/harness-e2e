@@ -12,6 +12,6 @@ description: Measure Harness capability, retain reproducible evidence, and expos
 iii_engine_version: ">=0.26.0"
 
 dependencies:
-  browser: "^0.2.15"
-  database: "^0.6.0"
-  storage: "^0.1.10"
+  browser: "^0.3.6"
+  database: "^0.6.6"
+  storage: "^0.2.5"

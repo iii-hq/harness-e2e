@@ -185,7 +185,7 @@ with a run-scoped iii Worker declared in `{compose}`. The Compose worker and con
 Do not declare `engine:`; the run-scoped project uses the existing iii Engine.
 Keep all chess logic and the Console page in this Worker. Chess libraries and external network
 services are forbidden.
-The Harness has already materialized `iii-sdk@0.26.0-rc.5` and its lockfile in this workspace solely
+The Harness has already materialized `iii-sdk@0.26.0` and its lockfile in this workspace solely
 for iii integration. Do not change dependencies. Set `scripts.run` to exactly `npm start`; the
 supplied start script runs `src/index.mjs`.
 Do not launch `npm`, `node`, or the Worker directly. The Harness starts and stops it through Compose
@@ -1416,7 +1416,7 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
             "private": true,
             "type": "module",
             "scripts": {"start": "node src/index.mjs"},
-            "dependencies": {"iii-sdk": "0.26.0-rc.5"}
+            "dependencies": {"iii-sdk": "0.26.0"}
         }))?,
     )?;
     fs::copy(
@@ -1860,7 +1860,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             lock["packages"]["node_modules/iii-sdk"]["version"],
-            "0.26.0-rc.5"
+            "0.26.0"
         );
         assert!(lock["packages"]
             .as_object()
