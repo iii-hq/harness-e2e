@@ -2249,6 +2249,11 @@ containers:
             compose_lock.write_text("containers:\n  e2e:\n    worker: package://harness-e2e\n")
             with self.assertRaisesRegex(ValueError, "needs harness, which the stack does not run"):
                 MODULE.install_path_kit(project, kit, entry, compose_lock)
+            # A Harness built from a commit is a path:// container the lock never lists.
+            (root / "worker-compose.yaml").write_text(
+                "containers:\n  harness:\n    worker: path:///builds/harness\n")
+            MODULE.install_path_kit(project, kit, entry, compose_lock)
+            (root / "worker-compose.yaml").unlink()
             compose_lock.write_text("containers:\n  app:\n    worker: package://api.workers.iii.dev/harness\n")
             MODULE.install_path_kit(project, kit, entry, compose_lock)
 

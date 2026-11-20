@@ -1318,7 +1318,9 @@ def install_path_kit(project_root: Path, directory: Path, requested: str | None 
     `commit:` kit names its `requested` entry; its directory is the copy
     preparation fetched, which says nothing about what ran, so it is left out.
     Such a kit adds no workers, so with `compose_lock` every worker its
-    manifest lists must already run in the stack."""
+    manifest lists must already run in the stack: a package the lock
+    resolved, or a container of the compose file beside it, where a worker
+    built from a commit is declared as path:// and never locked."""
     import shutil
     import yaml
 
@@ -1333,7 +1335,11 @@ def install_path_kit(project_root: Path, directory: Path, requested: str | None 
     # lock as the kits before this one left it; check ranges if a source kit
     # ever needs a newer worker than the stack resolves.
     if compose_lock is not None:
-        containers = (load_yaml(compose_lock.read_text()) or {}).get("containers") or {}
+        compose = compose_lock.with_suffix(".yaml")
+        containers = {
+            **((load_yaml(compose.read_text()) or {}).get("containers") or {} if compose.is_file() else {}),
+            **((load_yaml(compose_lock.read_text()) or {}).get("containers") or {}),
+        }
         running = {*containers, *(worker_name(str(c.get("worker", ""))) for c in containers.values()
                                   if isinstance(c, dict))}
         missing = sorted(set(manifest.get("workers") or {}) - running)
