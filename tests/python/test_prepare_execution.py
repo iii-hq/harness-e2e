@@ -156,6 +156,7 @@ class KitStackTests(unittest.TestCase):
         self.assertEqual(prepare_execution.stack_kits({"kits": [entry, "iii/x@1"]}), [entry, "iii/x@1"])
         self.assertEqual(prepare_execution.kit_source(Path("/c"), entry), Path(f"/c/kit-sources/{sha}/iii-hq/workers/kits/deepwork"))
         for bad in (f"commit:iii-hq/workers/kits/deepwork@{sha[:12]}", f"commit:iii-hq/workers/../x@{sha}",
+                    f"commit:../../workers/x@{sha}", f"commit:owner/../x/y@{sha}",
                     f"commit:iii-hq/workers@{sha}", f"commit:iii-hq/workers/kits//deepwork@{sha}"):
             with self.subTest(bad=bad), self.assertRaises(prepare_execution.ResolutionError):
                 prepare_execution.stack_kits({"kits": [bad]})
@@ -176,6 +177,10 @@ class KitStackTests(unittest.TestCase):
             (work / "kits/broken/agents").mkdir(parents=True)
             (work / "kits/broken/iii.kit.yaml").write_text("name: iii/broken\nversion: 1\n")
             (work / "kits/broken/agents/a.md").symlink_to("/etc/hostname")
+            (work / "kits/linked").symlink_to("deepwork")
+            (work / "kits/outside").mkdir()
+            (work / "kits/outside/iii.kit.yaml").write_text("name: iii/outside\nversion: 1\n")
+            (work / "kits/outside/agents").symlink_to("../deepwork/agents")
             git("init", "-q", cwd=work)
             git("add", ".", cwd=work)
             git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "kit", cwd=work)
@@ -193,8 +198,17 @@ class KitStackTests(unittest.TestCase):
                 prepare_execution.fetch_commit_kits(["iii/x@1", *entries], contract)
                 with self.assertRaisesRegex(prepare_execution.ResolutionError, "regular files"):
                     prepare_execution.fetch_commit_kits([f"commit:owner/repo/kits/broken@{first}"], contract)
+                for folder in ("linked", "outside"):
+                    with self.subTest(folder=folder), self.assertRaisesRegex(prepare_execution.ResolutionError,
+                                                                             "must not be symlinks"):
+                        prepare_execution.fetch_commit_kits([f"commit:owner/repo/kits/{folder}@{first}"], contract)
                 with self.assertRaises(subprocess.CalledProcessError):
                     prepare_execution.fetch_commit_kits([f"commit:owner/repo/kits/missing@{first}"], contract)
+                # A fetch cut short before its manifest is fetched again, whole.
+                partial = prepare_execution.kit_source(contract, entries[0])
+                (partial / "iii.kit.yaml").unlink()
+                (partial / "agents/deepwork.md").write_text("trunc")
+                prepare_execution.fetch_commit_kits(entries[:1], contract)
             old, new = (prepare_execution.kit_source(contract, entry) for entry in entries)
             self.assertEqual(sorted(str(path.relative_to(old)) for path in old.rglob("*")),
                              ["agents", "agents/deepwork.md", "iii.kit.yaml"])

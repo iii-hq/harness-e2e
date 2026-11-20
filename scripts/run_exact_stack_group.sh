@@ -753,13 +753,14 @@ if [[ -n "$assemble_only" ]]; then
   cp "${compose_file%.yaml}.lock" "$run_root/pre-kit-worker-compose.lock"
   while IFS= read -r kit; do
     if [[ $kit == path:* ]]; then
-      python3 "$contract_tool" install-path-kit --project-root "$project_dir" --directory "${kit#path:}"
+      python3 "$contract_tool" install-path-kit --project-root "$project_dir" --directory "${kit#path:}" \
+        --compose-lock "${compose_file%.yaml}.lock"
       continue
     fi
     if [[ $kit == commit:* ]]; then
       spec=${kit#commit:}
       python3 "$contract_tool" install-path-kit --project-root "$project_dir" --requested "$kit" \
-        --directory "$kit_source_root/${spec##*@}/${spec%@*}"
+        --directory "$kit_source_root/${spec##*@}/${spec%@*}" --compose-lock "${compose_file%.yaml}.lock"
       continue
     fi
     receipt="$artifact_dir/stack/kits/$(printf '%s' "$kit" | sha256sum | cut -c1-16).json"

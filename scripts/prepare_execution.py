@@ -225,7 +225,7 @@ def path_kit(entry: str) -> str:
 def commit_kit(entry: str) -> str:
     """`commit:<owner>/<repository>/<folder>@<full sha>`, its folder inside the repository."""
     match = COMMIT_KIT.fullmatch(entry)
-    if not match or any(part in ("", ".", "..") for part in match[2].split("/")):
+    if not match or any(part in ("", ".", "..") for part in f"{match[1]}/{match[2]}".split("/")):
         raise ResolutionError(f"kit {entry} must be commit:<owner>/<repository>/<folder>@<full commit sha>")
     return entry
 
@@ -262,6 +262,7 @@ def fetch_commit_kits(kits: list[str], contract_dir: Path) -> None:
             continue
         repository, folder, commit = COMMIT_KIT.fullmatch(kit).groups()
         destination = kit_source(contract_dir, kit)
+        # Written last: a fetch cut short is fetched again.
         if (destination / "iii.kit.yaml").exists():
             continue
         with tempfile.TemporaryDirectory(prefix="harness-e2e-kit-") as scratch:
@@ -270,6 +271,9 @@ def fetch_commit_kits(kits: list[str], contract_dir: Path) -> None:
                             ["checkout", "-q", "FETCH_HEAD", "--", folder]):
                 subprocess.run(["git", "-C", scratch, *command], env=environment, check=True, stdout=sys.stderr)
             source = Path(scratch) / folder
+            # A symlinked folder on the way would read files from outside the fetched tree.
+            if source.resolve() != Path(scratch).resolve() / folder or (source / "agents").is_symlink():
+                raise ResolutionError(f"{repository}@{commit[:12]} {folder}: the kit's folders must not be symlinks")
             agents = sorted((source / "agents").glob("*.md"))
             if not (source / "iii.kit.yaml").exists() or not agents:
                 raise ResolutionError(f"{repository}@{commit[:12]} has no kit in {folder}: "
@@ -278,10 +282,10 @@ def fetch_commit_kits(kits: list[str], contract_dir: Path) -> None:
                 raise ResolutionError(f"{repository}@{commit[:12]} {folder} has skills/, which commit kits do not install")
             if any(path.is_symlink() for path in (source / "iii.kit.yaml", *agents)):
                 raise ResolutionError(f"{repository}@{commit[:12]} {folder}: kit files must be regular files")
-            (destination / "agents").mkdir(parents=True)
-            shutil.copy2(source / "iii.kit.yaml", destination)
+            (destination / "agents").mkdir(parents=True, exist_ok=True)
             for agent in agents:
                 shutil.copy2(agent, destination / "agents")
+            shutil.copy2(source / "iii.kit.yaml", destination)
 
 
 def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:

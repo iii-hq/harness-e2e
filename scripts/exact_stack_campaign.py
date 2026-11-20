@@ -450,7 +450,7 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("runtime.kits.requested must be a non-empty unique array")
         for kit in requested:
             if not isinstance(kit, str) or not re.fullmatch(
-                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?|path:/\S+|commit:\S+@[0-9a-f]{40}", kit
+                r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:@\S+)?|path:/\S+|commit:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}", kit
             ):
                 raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range], "
                                  "path:<directory> or commit:<owner>/<repository>/<folder>@<sha>")
@@ -1308,11 +1308,14 @@ def kit_assets(project_root: Path, output_root: Path) -> dict[str, Any]:
     return manifest
 
 
-def install_path_kit(project_root: Path, directory: Path, requested: str | None = None) -> None:
+def install_path_kit(project_root: Path, directory: Path, requested: str | None = None,
+                     compose_lock: Path | None = None) -> None:
     """Install a kit from a local directory the way the Directory would have:
     its agents under agents/ and an entry in kits.lock listing each file. A
     `commit:` kit names its `requested` entry; its directory is the copy
-    preparation fetched, which says nothing about what ran, so it is left out."""
+    preparation fetched, which says nothing about what ran, so it is left out.
+    Such a kit adds no workers, so with `compose_lock` every worker its
+    manifest lists must already run in the stack."""
     import shutil
     import yaml
 
@@ -1323,6 +1326,14 @@ def install_path_kit(project_root: Path, directory: Path, requested: str | None 
         raise ValueError(f"{directory} needs iii.kit.yaml name and version, and agents/*.md")
     if (directory / "skills").exists():
         raise ValueError(f"{directory} has skills/, which path kits do not install")
+    if compose_lock is not None:
+        containers = (load_yaml(compose_lock.read_text()) or {}).get("containers") or {}
+        running = {*containers, *(worker_name(str(c.get("worker", ""))) for c in containers.values()
+                                  if isinstance(c, dict))}
+        missing = sorted(set(manifest.get("workers") or {}) - running)
+        if missing:
+            raise ValueError(f"kit {name} needs {', '.join(missing)}, which the stack does not run; "
+                             f"{requested or 'a path kit'} adds no workers, so declare them in the stack")
     project = project_root.resolve(strict=True)
     lock_path = project / "kits.lock"
     lock = load_yaml(lock_path.read_text()) if lock_path.is_file() else {"version": 1, "kits": {}}
@@ -1689,6 +1700,7 @@ def main() -> int:
     path_kit_install.add_argument("--project-root", type=Path, required=True)
     path_kit_install.add_argument("--directory", type=Path, required=True)
     path_kit_install.add_argument("--requested", help="the commit: entry the directory was fetched for")
+    path_kit_install.add_argument("--compose-lock", type=Path, help="the stack's worker-compose.lock the kit's workers must be in")
     kit_profiles = commands.add_parser("kit-agent-ids")
     kit_profiles.add_argument("--lock", type=Path, required=True)
     kit_profiles.add_argument("--selected")
@@ -1734,7 +1746,7 @@ def main() -> int:
             kit_assets(args.project_root, args.output_root)
             return 0
         if args.command == "install-path-kit":
-            install_path_kit(args.project_root, args.directory, args.requested)
+            install_path_kit(args.project_root, args.directory, args.requested, args.compose_lock)
             return 0
         if args.command == "kit-agent-ids":
             print("\n".join(kit_agent_ids(args.lock, args.selected)))

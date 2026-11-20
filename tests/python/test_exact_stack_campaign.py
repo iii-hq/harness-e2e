@@ -2245,6 +2245,12 @@ containers:
             self.assertEqual((lock["requested"], lock["source"]), (entry, "commit"))
             self.assertNotIn("directory", lock)
             self.assertEqual(MODULE.kit_assets(project, root / "snapshot3")["files"], again["files"])
+            compose_lock = root / "worker-compose.lock"
+            compose_lock.write_text("containers:\n  e2e:\n    worker: package://harness-e2e\n")
+            with self.assertRaisesRegex(ValueError, "needs harness, which the stack does not run"):
+                MODULE.install_path_kit(project, kit, entry, compose_lock)
+            compose_lock.write_text("containers:\n  app:\n    worker: package://api.workers.iii.dev/harness\n")
+            MODULE.install_path_kit(project, kit, entry, compose_lock)
 
     def test_kit_assets_are_hashed_exported_and_restored_without_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:
