@@ -1,0 +1,35 @@
+# Select suite=deepwork and profile=deepwork-e2e, to measure deepwork's source.
+#
+# The deepwork stack, ready for a kit that adds no workers: a `path:` kit or
+# the `commit:` one eval writes for each side of a validation, such as
+# commit:iii-hq/workers/kits/deepwork@<sha>. Those install only the profiles,
+# so the stack declares kanban, the one worker of the kit that harness does
+# not bring along. As written it installs the published kit.
+iii: latest
+kits:
+  - iii/deepwork
+
+containers:
+  harness:
+    worker: package://harness
+    version: latest
+    config_override:
+      filesystem_boundary: workspace
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+  kanban:
+    worker: package://kanban
+    version: latest
+  fp:
+    worker: package://fp
+    version: latest
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

@@ -2492,6 +2492,49 @@ containers:
         with self.assertRaisesRegex(ValueError, "brings no iii-directory"):
             MODULE.configure_directory_profile_root({"containers": {}}, Path("/private/project"), "e2e-prepare")
 
+    def test_path_kit_install_writes_a_lock_the_kit_readers_accept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            kit = root / "kit"
+            (kit / "agents").mkdir(parents=True)
+            (kit / "iii.kit.yaml").write_text("name: iii/deepwork\nversion: 0.9.0\nworkers:\n  harness: ^1.9.0\n")
+            (kit / "agents/deepwork.md").write_text("# lead\n")
+            (kit / "agents/deepwork-impl.md").write_text("# impl\n")
+            project = root / "project"
+            project.mkdir()
+            MODULE.install_path_kit(project, kit)
+            lock = yaml.safe_load((project / "kits.lock").read_text())["kits"]["iii/deepwork"]
+            self.assertEqual((lock["version"], lock["source"], lock["directory"]), ("0.9.0", "path", str(kit)))
+            self.assertEqual(lock["files"]["agents/deepwork.md"]["sha256"],
+                             hashlib.sha256(b"# lead\n").hexdigest())
+            self.assertEqual(MODULE.kit_agent_ids(project / "kits.lock", "e2e"),
+                             ["deepwork", "deepwork-impl", "e2e"])
+            manifest = MODULE.kit_assets(project, root / "snapshot")
+            self.assertEqual([item["path"] for item in manifest["files"]],
+                             ["agents/deepwork-impl.md", "agents/deepwork.md"])
+            (kit / "agents/deepwork.md").write_text("# changed\n")
+            MODULE.install_path_kit(project, kit)
+            again = MODULE.kit_assets(project, root / "snapshot2")
+            self.assertNotEqual(manifest["files"], again["files"])
+            self.assertNotEqual(manifest["lock_sha256"], again["lock_sha256"])
+            entry = "commit:iii-hq/workers/kits/deepwork@" + "c" * 40
+            MODULE.install_path_kit(project, kit, entry)
+            lock = yaml.safe_load((project / "kits.lock").read_text())["kits"]["iii/deepwork"]
+            self.assertEqual((lock["requested"], lock["source"]), (entry, "commit"))
+            self.assertNotIn("directory", lock)
+            self.assertEqual(MODULE.kit_assets(project, root / "snapshot3")["files"], again["files"])
+            compose_lock = root / "worker-compose.lock"
+            compose_lock.write_text("containers:\n  e2e:\n    worker: package://harness-e2e\n")
+            with self.assertRaisesRegex(ValueError, "needs harness, which the stack does not run"):
+                MODULE.install_path_kit(project, kit, entry, compose_lock)
+            # A Harness built from a commit is a path:// container the lock never lists.
+            (root / "worker-compose.yaml").write_text(
+                "containers:\n  harness:\n    worker: path:///builds/harness\n")
+            MODULE.install_path_kit(project, kit, entry, compose_lock)
+            (root / "worker-compose.yaml").unlink()
+            compose_lock.write_text("containers:\n  app:\n    worker: package://api.workers.iii.dev/harness\n")
+            MODULE.install_path_kit(project, kit, entry, compose_lock)
+
     def test_kit_assets_are_hashed_exported_and_restored_without_runtime_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2515,6 +2558,18 @@ containers:
                 "assets": manifest["files"],
             }
             MODULE.validate_contract(contract)
+            for requested, valid in ((f"commit:iii-hq/workers/kits/deepwork@{'d' * 40}", True),
+                                     (f"commit:iii-hq/workers/kits/deepwork@{'d' * 12}", False),
+                                     (f"commit:../../x/y@{'d' * 40}", False),
+                                     (f"commit:o/r/kits//x@{'d' * 40}", False)):
+                with self.subTest(requested=requested):
+                    other = json.loads(json.dumps(contract))
+                    other["runtime"]["kits"]["requested"] = [requested]
+                    if valid:
+                        MODULE.validate_contract(other)
+                    else:
+                        with self.assertRaises(ValueError):
+                            MODULE.validate_contract(other)
             restored = root / "restored"
             (restored / "agents").mkdir(parents=True)
             (restored / ".iii/registry-skills/iii/deepwork").mkdir(parents=True)
