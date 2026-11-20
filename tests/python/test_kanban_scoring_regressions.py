@@ -52,6 +52,45 @@ console.log(JSON.stringify({scope:await (await probe.ticketDetail(page,ticket)).
 """, browser=True)
         self.assertEqual(result, {'scope': 'details', 'rejected': True})
 
+    def test_detail_fields_beside_a_shared_title_and_action_block_count_without_borrowing_from_the_board(self):
+        # Releases 0.35-0.37 (C4 r01/r03): the title and Delete share one heading block
+        # and every field, a Title row included, is its sibling.
+        result = self.node("""
+const ticket={key:'KAN-1',title:'Persisted details probe',description:'UTF-8: ação e café',status:'in_review',priority:'urgent',assignee:'Lin'};
+const lanes=cards=>['Backlog','To do','In progress','In review','Done'].map(l=>`<section><h3>${l}<span>1</span></h3>${l==='In review'?cards:''}</section>`).join('');
+const page_=(dl,cards)=>`<main><section id="board-view"><section id="ticket-detail"><div class="detail-heading"><div><p>KAN-1</p><h2>Persisted details probe</h2></div><div><button>Delete ticket</button><button>Close details</button></div></div>${dl}</section><div id="board">${cards}</div></section></main>`;
+const dl=description=>`<dl><dt>Title</dt><dd>Persisted details probe</dd><dt>Description</dt><dd>${description}</dd><dt>Status</dt><dd>In review</dd><dt>Priority</dt><dd>Urgent</dd><dt>Assignee</dt><dd>Lin</dd></dl>`;
+const cards=lanes('<a href="#t/1"><h4>Persisted details probe</h4><p>Urgent</p><p>Lin</p></a><a href="#t/2"><h4>Browser-created ticket</h4><p>UTF-8: ação e café</p></a>');
+const verdict=async()=>probe.assertTicketDetails(page,ticket).then(()=>'accepted',()=>'rejected');
+await page.setContent(page_(dl('UTF-8: ação e café'),cards));const sibling=await verdict();
+await page.setContent(page_(dl('Stale'),cards));const borrowed=await verdict();
+await page.setContent(`<main><div id="board">${['Backlog','In review'].map(l=>`<section><h3>${l}</h3>${l==='In review'?'<div><h4>Persisted details probe</h4><p>UTF-8: ação e café</p><p>Urgent</p><p>Lin</p><button>Delete ticket</button></div>':''}</section>`).join('')}</div></main>`);
+const laneHeading=await verdict();
+await page.setContent('<main><section id="ticket-detail"><div class="h"><h2>Persisted details probe</h2><button>Delete ticket</button></div><dl><dd>Stale</dd><dd>In review</dd><dd>Urgent</dd><dd>Lin</dd></dl></section><div id="board"><div class="card"><h4>Persisted details probe</h4></div><div class="card"><h4>Other</h4><p>UTF-8: ação e café</p></div></div></main>');
+const divCards=await verdict();
+const mixed=(key,title)=>`<button><span>${key}</span> ${title}<span>UTF-8: ação e café</span><span>Urgent</span><span>Lin</span></button>`;
+await page.setContent(`<main><div id="board"><section><div>Backlog</div></section><section><div>In review</div>${mixed('KAN-2','Browser-created ticket')}${mixed('KAN-1','Persisted details probe')}</section></div><aside><h2>Persisted details probe</h2><button>Delete ticket</button><p>Stale</p><p>In review</p><p>Urgent</p><p>Lin</p></aside></main>`);
+const mixedCards=await verdict();
+console.log(JSON.stringify({sibling,borrowed,laneHeading,divCards,mixedCards}));
+""", browser=True)
+        self.assertEqual(result, {'sibling': 'accepted', 'borrowed': 'rejected', 'laneHeading': 'rejected',
+                                  'divCards': 'rejected', 'mixedCards': 'rejected'})
+
+    def test_detail_accepts_read_only_form_values_but_not_unselected_options(self):
+        # Release 0.37 C4 r02 shows persisted values in read-only inputs and disabled selects.
+        result = self.node("""
+const ticket={key:'KAN-1',title:'Persisted details probe',description:'UTF-8: ação e café',status:'in_review',priority:'urgent',assignee:'Lin'};
+const form=(status,extra='')=>`<aside id="detail"><h2>Persisted details probe</h2><form><label for="d">Description</label><textarea id="d" readonly></textarea><label for="s">Status</label><select id="s" disabled><option value="backlog">Backlog</option><option value="in_review">In review</option></select><label for="p">Priority</label><select id="p" disabled><option value="low">Low</option><option value="urgent">Urgent</option></select><label for="a">Assignee</label><input id="a" readonly>${extra}</form><button>Delete ticket</button></aside><script>d.value='UTF-8: ação e café';s.value='${status}';p.value='urgent';a.value='Lin'</script>`;
+const verdict=async()=>probe.assertTicketDetails(page,ticket).then(()=>'accepted',()=>'rejected');
+await page.setContent(form('in_review'));const controls=await verdict();
+await page.setContent(form('backlog'));const unselected=await verdict();
+await page.setContent(form('backlog','<input type="radio" name="r" value="in_review">'));const radio=await verdict();
+await page.setContent(form('in_review').replace(/ readonly| disabled/g,''));const editable=await verdict();
+console.log(JSON.stringify({controls,unselected,radio,editable}));
+""", browser=True)
+        self.assertEqual(result, {'controls': 'accepted', 'unselected': 'rejected', 'radio': 'rejected',
+                                  'editable': 'rejected'})
+
     def test_cards_accept_span_titles_and_details_are_scoped_away_from_the_board(self):
         result = self.node("""
 const ticket={id:'id-1',key:'KAN-1',title:'Ticket [one]',description:'Details',status:'in_review',priority:'urgent',assignee:'Lin'};

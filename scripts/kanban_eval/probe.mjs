@@ -261,7 +261,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 3,
+    rubric_version: 4,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -274,7 +274,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 3,
+    rubric_version: 4,
     case_id: caseId,
     checks,
     status,
@@ -487,6 +487,30 @@ export async function holdResponse(page, pattern, method) {
 
 export async function assertTicketDetails(page, ticket) {
   const detail = await ticketDetail(page, ticket)
+  // The title and action may share a heading block, so read fields from the widest
+  // ancestor that adds no card, no other title heading and no board lane.
+  const ancestors = detail.locator('xpath=ancestor::*[not(self::body or self::html)]')
+  // A card is a title copy inside a link, button or list item below the region; a
+  // labelled title field (for example a <dd>) beside the detail is not one.
+  const cardTitles = async (scope) => boardTicketTitle(scope, ticket.title).evaluateAll((titles, root) => titles.filter((title) => {
+    const card = title.closest('a, button, li, article, [draggable="true"], [role="link"], [role="button"], [role="listitem"]')
+    return card && card !== root && root.contains(card)
+  }).length, await scope.elementHandle())
+  const headings = (scope) => scope.getByRole('heading', { name: ticket.title, exact: true }).filter({ visible: true }).count()
+  const ownHeadings = await headings(detail)
+  const ownCards = await ticketCard(detail, ticket).count()
+  let region = detail
+  for (let index = await ancestors.count() - 1; index >= 0; index--) {
+    const candidate = ancestors.nth(index)
+    if (await cardTitles(candidate) || await headings(candidate) > ownHeadings
+      || await ticketCard(candidate, ticket).count() > ownCards
+      || await boardLaneHeading(candidate, ['Backlog', 'To do', 'In progress', 'In review', 'Done']).count()) break
+    region = candidate
+  }
+  // Persisted values may be shown as read-only form values instead of text; C4 has no editing.
+  const controls = await region.locator(':is(textarea, select, input:not([type=checkbox]):not([type=radio])):is([readonly], :disabled)')
+    .filter({ visible: true }).evaluateAll((elements) => elements.flatMap((element) => element.tagName === 'SELECT'
+      ? [...element.selectedOptions].flatMap((option) => [option.value, option.label]) : [element.value]))
   const displayedStatus = ticket.status === 'todo' ? 'to do' : ticket.status.replaceAll('_', ' ')
   const status = new RegExp(`^(?:${literalPattern(ticket.status)}|${literalPattern(displayedStatus)})$`, 'i')
   const values = [
@@ -497,8 +521,9 @@ export async function assertTicketDetails(page, ticket) {
     if (value == null || value === '') continue
     const text = value instanceof RegExp ? value
       : presentation ? new RegExp(`^${literalPattern(value)}$`, 'i') : value
-    expect(await detail.getByText(text, { exact: true }).filter({ visible: true }).count() > 0,
-      `detail omitted persisted value: ${value}`)
+    expect(await region.getByText(text, { exact: true }).filter({ visible: true }).count() > 0
+      || controls.some((control) => (text instanceof RegExp ? text.test(control) : control === text)),
+    `detail omitted persisted value: ${value}`)
   }
   return detail
 }
@@ -1011,14 +1036,14 @@ export const PROBES = {
       const { context, page, dialog } = await newForm('Failed creation draft')
       await page.route('**/api/tickets', (route) => route.request().method() === 'POST'
         ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }) : route.continue())
-      await dialog.getByRole('button', { name: 'Create ticket' }).click()
+      await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click()
       await expectText(mutationFailureFeedback(page), /\S/)
       expect(await dialog.isVisible(), 'failed create closed the modal')
       for (const [label, value] of [['Title', 'Failed creation draft'], ['Description', fields.description], ['Status', fields.status], ['Priority', fields.priority], ['Assignee', fields.assignee]]) {
         expect(await dialog.getByLabel(label).inputValue() === value, `failed create erased ${label}`)
       }
       await page.unroute('**/api/tickets')
-      await dialog.getByRole('button', { name: 'Create ticket' }).click()
+      await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click()
       await eventually(async () => !await dialog.isVisible(), 'creation retry did not close the modal')
       const ticket = (await json(await api('/api/tickets'))).tickets.find(({ title }) => title === 'Failed creation draft')
       expect(ticket, 'creation retry did not persist its draft')
@@ -1029,7 +1054,7 @@ export const PROBES = {
       const { context, page, dialog } = await newForm(title)
       const [response] = await Promise.all([
         page.waitForResponse((response) => new URL(response.url()).pathname === '/api/tickets' && response.request().method() === 'POST'),
-        dialog.getByRole('button', { name: 'Create ticket' }).click(),
+        dialog.getByRole('button', { name: 'Create ticket', exact: true }).click(),
       ])
       expect(response.status() === 201, 'successful creation did not return HTTP 201')
       const { ticket } = await response.json()
@@ -1079,7 +1104,7 @@ export const PROBES = {
       const detail = await ticketDetail(page, ticket)
       await page.route('**/api/tickets/**', (route) => route.request().method() === 'DELETE'
         ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }) : route.continue())
-      await detail.getByRole('button', { name: 'Delete ticket' }).click()
+      await detail.getByRole('button', { name: /^delete ticket$/i }).click()
       await expectText(mutationFailureFeedback(page), /\S/)
       await ticketDetail(page, ticket)
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.id === ticket.id, 'failed delete removed the persisted ticket')
@@ -1092,7 +1117,7 @@ export const PROBES = {
       const detail = await ticketDetail(page, ticket)
       const delayed = await holdResponse(page, '**/api/tickets/**', 'DELETE')
       try {
-        await detail.getByRole('button', { name: 'Delete ticket' }).click()
+        await detail.getByRole('button', { name: /^delete ticket$/i }).click()
         await delayed.reached()
         await boardNavigation(page).first().click()
         delayed.release()
