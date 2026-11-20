@@ -779,12 +779,13 @@ fi
 
 # Preparation, not a retry: compose::add starts the workers it writes with
 # no env_file, and the daemon no longer lends them its environment. When one
-# of them reads a credential, it is scoped now and the project restarted once
+# of them reads a credential, it is scoped now; when it wrote the runner's
+# browser, its prompt guidance is turned off. Either restarts the project once
 # (only a project-wide restart reloads the manifest); otherwise nothing changes.
 scoped=$(python3 "$contract_tool" scope-credentials --contract "$contract_path" \
   --compose "$compose_file" --env-file "$env_file")
 if [[ -n "$scoped" ]]; then
-  log "Scoped credentials for the workers compose::add wrote: $(paste -sd' ' - <<<"$scoped")"
+  log "Scoped credentials and settings for the workers compose::add wrote: $(paste -sd' ' - <<<"$scoped")"
   compose_trigger compose::restart "file=$compose_file" >"$artifact_dir/stack/credentials-restart.json"
   jq -e '.status == "ok"' "$artifact_dir/stack/credentials-restart.json" >/dev/null
 fi

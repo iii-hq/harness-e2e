@@ -167,5 +167,64 @@ class KitStackTests(unittest.TestCase):
             self.assertEqual(yaml.safe_load((root / "stack.yaml").read_text())["kits"], ["iii/deepwork@0.4.3"])
 
 
+class RunnerBrowserTests(unittest.TestCase):
+    def freeze(self, compose: str, commits: dict | None = None):
+        """The browser container the contracts and stack.yaml freeze from an
+        assembled compose file."""
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "contracts").mkdir()
+            (root / "assembled").mkdir()
+            (root / "assembled/worker-compose.yaml").write_text(compose)
+            (root / "assembled/worker-compose.lock").write_text("version: 1\ncontainers: {}\n")
+            runtime = {"commits": commits} if commits else {}
+            (root / "contracts/suite.json").write_text(json.dumps({"runtime": runtime}))
+            (root / "contracts/resolution.json").write_text("{}")
+            (root / "execution.json").write_text(json.dumps({"iii": "0.26.0"}))
+            prepare_execution.command_lock(SimpleNamespace(contract_dir=root, assembled=root / "assembled"))
+            frozen = json.loads((root / "contracts/suite.json").read_text())["runtime"]["compose"]["containers"]
+            self.assertEqual(yaml.safe_load((root / "stack.yaml").read_text())["containers"], frozen)
+            return frozen["browser"]
+
+    def test_the_browser_the_runner_brings_runs_without_its_prompt_guidance(self):
+        """browser 0.3 appends its scraping guidance to every agent's system
+        prompt while `scrapling.inject_guidance` is on: 0.37.0 measured 1970
+        injected prompt tokens where 0.36.0 measured 1421. The browser the
+        runner's graph brings has it off; one the stack declares keeps what it had."""
+        runner = "containers:\n  harness-e2e:\n    worker: package://harness-e2e\n    start_after:\n    - browser\n"
+        off = {"scrapling": {"inject_guidance": False}}
+        added = "  # added by compose::add\n  browser:\n    worker: package://api.workers.iii.dev/browser\n"
+        self.assertEqual(self.freeze(runner + added)["config_override"], off)
+        held = "  browser:\n    worker: package://browser\n    version: 0.3.6\n"
+        built = {"e2e": {"worker": "harness-e2e", "dependencies": ["browser"]}}
+        self.assertEqual(self.freeze(runner + held, built)["config_override"], off)
+        # The Harness A/B arms: declared beside harness 1.8.x, held for the runner.
+        declared = held.replace("0.3.6", "0.2.31") + "    config_override:\n      headless: true\n"
+        self.assertEqual(self.freeze(runner + declared)["config_override"], {"headless": True})
+        self.assertNotIn("config_override", self.freeze(runner + held))
+
+    def test_a_kit_stack_freezes_the_runners_browser_quiet_though_its_rewrites_drop_the_markers(self):
+        """A stack with kits and no template (deepwork) rewrites the assembled
+        file with configure-profile-root, before and after the kits install,
+        and the rewrite drops Compose's markers before the file is frozen."""
+        import subprocess
+
+        added = "  # added by compose::add\n  {0}:\n    worker: package://api.workers.iii.dev/{0}\n"
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "worker-compose.yaml"
+            file.write_text("containers:\n" + added.format("iii-directory") + added.format("browser"))
+            for clear in ([], ["--clear"]):
+                result = subprocess.run(
+                    ["python3", str(ROOT / "scripts/exact_stack_campaign.py"), "configure-profile-root",
+                     "--compose", str(file), "--profile-root", directory, "--namespace", "e2e-prepare", *clear],
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            assembled = file.read_text()
+        self.assertNotIn("# added by compose::add", assembled)
+        self.assertEqual(self.freeze(assembled)["config_override"], {"scrapling": {"inject_guidance": False}})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1553,6 +1553,11 @@ optional `template`
 (`<id>` or `<id>@<revision>` of `iii-hq/templates`). Credentials never go in a
 stack: the executor stamps the namespace, the runner's data directory, the
 model's provider, what the suite needs and the private env file per group.
+It also turns off the prompt guidance (`scrapling.inject_guidance`) of the
+`browser` the runner brings, the one `compose::add` writes with the runner's
+graph: browser 0.3 would otherwise append its scraping guidance to every
+agent's system prompt, the subject's included. A `browser` the stack or its
+template declares (the Harness A/B arms pin 0.2.31) keeps its own settings.
 Scripts always come from the dispatched ref.
 
 A container may pin `commit:` (short or full sha) instead of `version:`:

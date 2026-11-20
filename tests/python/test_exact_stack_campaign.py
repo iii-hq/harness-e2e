@@ -117,6 +117,15 @@ def catalog():
     }
 
 
+# The browser as `compose::add` writes it when the runner's graph brings it.
+COMPOSE_ADDED_BROWSER = """\
+  # added by compose::add
+  browser:
+    worker: package://api.workers.iii.dev/browser
+    version: 0.3.6
+"""
+
+
 def lock_of(versions: dict[str, str]):
     """A worker-compose.lock resolving each package to one version, with the
     registry host Compose records."""
@@ -219,7 +228,8 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_a_consumer_born_after_the_scaffold_is_scoped_before_the_runs(self):
         """`compose::add` writes the graph's workers with no env_file and the
         daemon no longer hands them its environment: the router or provider
-        it brings is given its own key, and only that, before the runs."""
+        it brings is given its own key, and only that, before the runs. The
+        browser the runner's graph brings has its prompt guidance turned off."""
         compose = {"containers": {
             "harness-e2e": {"worker": "package://harness-e2e", "env_file": ["PRIVATE"]},
             "llm-router": {"worker": "package://api.workers.iii.dev/llm-router"},
@@ -234,21 +244,72 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             compose["containers"]["harness-e2e"]["env_file"] = [str(private)]
             file = root / "project/worker-compose.yaml"
             file.parent.mkdir()
-            file.write_text(yaml.safe_dump(compose, sort_keys=False))
+            file.write_text(yaml.safe_dump(compose, sort_keys=False) + COMPOSE_ADDED_BROWSER)
             contract = root / "contract.json"
             contract.write_text(json.dumps(campaign_contract()))
             scope = ["python3", str(SCRIPT), "scope-credentials", "--contract", str(contract),
                      "--compose", str(file), "--env-file", str(private)]
             first = subprocess.run(scope, capture_output=True, text=True)
             self.assertEqual(first.returncode, 0, first.stderr)
-            self.assertEqual(first.stdout.split(), ["llm-router", "provider-deepseek"])
+            self.assertEqual(first.stdout.split(), ["llm-router", "provider-deepseek", "browser"])
             scoped = yaml.safe_load(file.read_text())["containers"]
+            self.assertEqual(scoped["browser"]["config_override"], {"scrapling": {"inject_guidance": False}})
             self.assertNotIn("env_file", scoped["ide"])
             self.assertEqual(scoped["harness-e2e"]["env_file"], [str(private)])
             for name in ("llm-router", "provider-deepseek"):
                 self.assertEqual(sorted(MODULE.read_env_file(Path(scoped[name]["env_file"][0]))), ["DEEPSEEK_API_KEY"])
             again = subprocess.run(scope, capture_output=True, text=True)
             self.assertEqual((again.returncode, again.stdout), (0, ""))
+
+    def test_the_guidance_switch_lands_where_the_browser_reads_it(self):
+        """browser reads its config flat or under a `browser:` wrapper and
+        fills every key it is not given; a null section is an empty one."""
+        self.assertEqual(MODULE.compose_added("containers:\n  harness:\n    worker: package://harness\n"
+                                              + COMPOSE_ADDED_BROWSER), {"browser"})
+        off = {"inject_guidance": False}
+        cases = [
+            (None, {"scrapling": off}),
+            ({"scrapling": None}, {"scrapling": off}),
+            ({"headless": True, "scrapling": {"max_sessions": 2}},
+             {"headless": True, "scrapling": {"max_sessions": 2, **off}}),
+            ({"browser": {"headless": True}}, {"browser": {"headless": True, "scrapling": off}}),
+            ({"browser": {"scrapling": None}}, {"browser": {"scrapling": off}}),
+        ]
+        for before, after in cases:
+            with self.subTest(before=before):
+                containers = {"browser": {"worker": "package://api.workers.iii.dev/browser", "config_override": before}}
+                self.assertEqual(MODULE.quiet_browser(containers, {"browser"}), ["browser"])
+                self.assertEqual(containers["browser"]["config_override"], after)
+                self.assertEqual(MODULE.quiet_browser(containers, {"browser"}), [])  # already off
+        containers = {"web": {"worker": "package://browser"}, "state": {"worker": "package://state"}}
+        self.assertEqual(MODULE.quiet_browser(containers, {"state"}), [])
+        self.assertEqual(containers, {"web": {"worker": "package://browser"}, "state": {"worker": "package://state"}})
+
+    def test_a_browser_the_stack_declares_keeps_its_settings(self):
+        """The Harness A/B arms declare browser 0.2.31 next to harness 1.8.x,
+        guidance and all, and must stay comparable with the arms recorded
+        before. A browser the stack or template declares is not one
+        compose::add wrote: the scaffold and the scoping after it leave it be."""
+        contract, _ = self.pinned_contract()
+        containers = contract["runtime"]["compose"]["containers"]
+        containers["browser"] = {"worker": "package://browser", "version": "0.2.31",
+                                 "config_override": {"scrapling": {"max_sessions": 2}}}
+        containers["harness-e2e"]["start_after"] = ["browser"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "all.env"
+            private.write_text("DEEPSEEK_API_KEY=synthetic-deepseek-0123456789\n")
+            project = MODULE.project_scaffold(contract, "project-one", Path("/data"), str(private), {})
+            self.assertEqual(project["containers"]["browser"]["config_override"], {"scrapling": {"max_sessions": 2}})
+            file = root / "worker-compose.yaml"
+            file.write_text(yaml.safe_dump(project, sort_keys=False))
+            before = file.read_text()
+            (root / "contract.json").write_text(json.dumps(contract))
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "scope-credentials", "--contract", str(root / "contract.json"),
+                 "--compose", str(file), "--env-file", str(private)], capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+            self.assertEqual(file.read_text(), before)
 
     def test_workers_built_from_commits_keep_their_credentials_under_any_container_name(self):
         """A runner and a provider built from commits are path:// workers under
