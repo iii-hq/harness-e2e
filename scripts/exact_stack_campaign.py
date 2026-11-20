@@ -324,6 +324,35 @@ def readable_credential_copies(
     }
 
 
+def compose_added(text: str) -> set[str]:
+    """The containers `compose::add` wrote into a compose file: Compose marks
+    each one it adds from a graph, and never one a stack or template declares."""
+    return {key for _, key in re.findall(r"^( +)# added by compose::add\n\1([\w.-]+):", text, re.M)}
+
+
+def quiet_browser(containers: dict[str, Any], names: set[str]) -> list[str]:
+    """Turn browser's prompt guidance off in the named containers running it.
+
+    browser 0.3 observes harness::hook::on-pre-generate while
+    `scrapling.inject_guidance` is on (its default) and appends its scraping
+    guidance to every agent's system prompt. The runner brings it, so the
+    subject must not read it; callers name only that one, never a browser the
+    stack or template declares. Returns the containers it changed."""
+    changed = []
+    for name, container in containers.items():
+        if name not in names or worker_name(str(container.get("worker", ""))) != "browser":
+            continue
+        override = container["config_override"] = container.get("config_override") or {}
+        # browser reads its config flat or under a `browser:` wrapper.
+        if isinstance(override.get("browser"), dict):
+            override = override["browser"]
+        scrapling = override["scrapling"] = override.get("scrapling") or {}
+        if scrapling.get("inject_guidance") is not False:
+            scrapling["inject_guidance"] = False
+            changed.append(name)
+    return changed
+
+
 def credential_forms(value: str) -> list[str]:
     """A value as written and as JSON escapes it, longest first."""
     forms = {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}
@@ -1773,7 +1802,8 @@ def main() -> int:
     stack_env.add_argument("--contract", type=Path, required=True)
     stack_env.add_argument("--output", type=Path, required=True)
     scope = commands.add_parser("scope-credentials",
-                                help="give the containers Compose added their credentials, and no other")
+                                help="give the containers Compose added their credentials, and no other, "
+                                     "and the browser it added its prompt guidance off")
     scope.add_argument("--contract", type=Path, required=True)
     scope.add_argument("--compose", type=Path, required=True)
     scope.add_argument("--env-file", type=Path, required=True)
@@ -1879,19 +1909,24 @@ def main() -> int:
         if args.command == "configure-profile-root":
             import yaml
 
-            manifest = load_yaml(args.compose.read_text())
+            text = args.compose.read_text()
+            manifest = load_yaml(text)
             if args.clear:
                 clear_directory_profile_root(manifest)
             else:
                 configure_directory_profile_root(manifest, args.profile_root, args.namespace)
+            # This rewrite drops Compose's markers, the only sign of the runner's browser.
+            quiet_browser(manifest.get("containers") or {}, compose_added(text))
             args.compose.write_text(yaml.safe_dump(manifest, sort_keys=False))
             return 0
         if args.command == "scope-credentials":
             import yaml
 
-            manifest = load_yaml(args.compose.read_text())
-            changed = scope_credentials(manifest["containers"], str(args.env_file),
-                                        package_identity(load_object(args.contract, "contract")))
+            text = args.compose.read_text()
+            manifest = load_yaml(text)
+            changed = [*scope_credentials(manifest["containers"], str(args.env_file),
+                                          package_identity(load_object(args.contract, "contract"))),
+                       *quiet_browser(manifest["containers"], compose_added(text))]
             if changed:
                 args.compose.write_text(yaml.safe_dump(manifest, sort_keys=False))
                 print("\n".join(changed))

@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from exact_stack_campaign import load_yaml, merged, worker_name  # noqa: E402
+from exact_stack_campaign import compose_added, load_yaml, merged, quiet_browser, worker_name  # noqa: E402
 from report_execution import round_offset  # noqa: E402
 
 
@@ -1027,11 +1027,19 @@ def command_lock(args: argparse.Namespace) -> None:
     import yaml
 
     directory = args.contract_dir
-    compose = load_yaml((args.assembled / "worker-compose.yaml").read_text())
+    compose_text = (args.assembled / "worker-compose.yaml").read_text()
+    compose = load_yaml(compose_text)
     lock_text = (args.assembled / "worker-compose.lock").read_text()
     lock = load_yaml(lock_text)
     paths = contract_paths(directory)
-    requested = (json.loads(paths[0].read_text())["runtime"].get("kits") or {}).get("requested") if paths else None
+    runtime = json.loads(paths[0].read_text())["runtime"] if paths else {}
+    requested = (runtime.get("kits") or {}).get("requested")
+    # The browser the runner brings: added with its graph, or held for a
+    # runner built from a commit. One the stack declares is neither.
+    brought = compose_added(compose_text) | {
+        dependency for pin in (runtime.get("commits") or {}).values()
+        if pin.get("worker") == RUNNER for dependency in pin.get("dependencies") or []}
+    quiet_browser(compose.get("containers") or {}, brought)
     kits = None
     kit_assets = args.assembled / "kit-assets"
     if requested and not kit_assets.is_dir():

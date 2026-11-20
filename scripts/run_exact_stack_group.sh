@@ -866,13 +866,14 @@ fi
 
 # Preparation, not a retry: compose::add writes the graph's workers without
 # their vault settings. When it brought the router, the judge or the vault,
-# they get their `secret://` references and key file now and the project is
-# restarted once (only a project-wide restart reloads the manifest);
-# otherwise nothing changes.
+# they get their `secret://` references and key file now; when it wrote the
+# runner's browser, its prompt guidance is turned off. Either restarts the
+# project once (only a project-wide restart reloads the manifest); otherwise
+# nothing changes.
 scoped=$(python3 "$contract_tool" scope-credentials --contract "$contract_path" \
   --compose "$compose_file" --env-file "$env_file")
 if [[ -n "$scoped" ]]; then
-  log "Scoped credentials for the workers compose::add wrote: $(paste -sd' ' - <<<"$scoped")"
+  log "Scoped credentials and settings for the workers compose::add wrote: $(paste -sd' ' - <<<"$scoped")"
   compose_trigger compose::restart "file=$compose_file" >"$artifact_dir/stack/credentials-restart.json"
   jq -e '.status == "ok"' "$artifact_dir/stack/credentials-restart.json" >/dev/null
 fi
