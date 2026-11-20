@@ -1419,9 +1419,10 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
             "dependencies": {"iii-sdk": "0.26.0-rc.5"}
         }))?,
     )?;
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chess-worker/package-lock.json"),
+    // Embedded: a released runner has no source tree to read it from.
+    fs::write(
         workspace.join("package-lock.json"),
+        include_bytes!("../../tests/fixtures/chess-worker/package-lock.json"),
     )?;
     let mut install = Command::new("npm");
     install
