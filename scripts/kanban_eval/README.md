@@ -111,8 +111,13 @@ does not rescore stored reports.
 Selectors accept accessible links/buttons with span titles, list-based lanes,
 `Total: 5 tickets`, visible empty-state text and presentation labels such as
 `Urgent`. Detail validation is scoped to the detail panel so identical text on
-a board card does not count as a missing field. Keyboard actions, the selected
-ticket, actual field values, counts, persisted state and focus are still checked.
+a board card does not count as a missing field. Fields are read from the widest
+ancestor of the panel that adds no link or button named with the ticket title, no
+card title copy, no other title heading and no board lane, so fields beside a
+heading block holding the title and the Delete action count. Visible read-only or
+disabled form values count as field values; a select counts only its selected
+option. Keyboard actions, the selected ticket, actual field values, counts,
+persisted state and focus are still checked.
 Browser contexts are closed after each flow, including failed flows, to avoid
 leaking intercepted requests or live connections into the next check.
 

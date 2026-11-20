@@ -118,9 +118,14 @@ same rubric; the native case identity includes its revision and digest.
 Regressions derived from the 18–19 September deliveries cover `Total: 5 tickets`,
 visible empty-state text, span titles inside accessible cards, presentation labels
 such as `Urgent`, and repeated board/detail values. Detail scoping also covers a
-header containing the Delete action and a div panel inside a shared board section;
-wrong detail values cannot borrow matching text from a card. Browser creation
-still verifies every submitted field in the response and persisted GET.
+header containing the Delete action, a div panel inside a shared board section, a
+heading block that holds both the title and the Delete action with the fields beside
+it, and read-only or disabled form values, where a select counts only its selected
+option; editable controls do not count. The region stops widening before an ancestor
+that adds a link or button named with the ticket title, a title copy inside a
+card-like element, another title heading or a board lane heading, which keeps it off
+the board that holds the ticket's own card. Browser creation still verifies every
+submitted field in the response and persisted GET.
 
 Local validation uses real Chromium and a controlled HTTP application to execute
 the complete C3/C4 probes. Positive presentation variants pass. Negative controls

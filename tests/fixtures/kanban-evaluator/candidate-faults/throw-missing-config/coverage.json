@@ -1,6 +1,6 @@
 {
   "schema": "kanban-evaluation-coverage",
-  "rubric_version": 3,
+  "rubric_version": 4,
   "case_id": "kanban_c1_foundation",
   "complete": false,
   "criteria": [
