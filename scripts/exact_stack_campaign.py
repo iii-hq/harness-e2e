@@ -454,6 +454,9 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             ):
                 raise ValueError("runtime.kits.requested entries must be <author>/<kit>[@version|tag|range], "
                                  "path:<directory> or commit:<owner>/<repository>/<folder>@<sha>")
+            if kit.startswith("commit:") and any(part in ("", ".", "..")
+                                                 for part in kit[len("commit:"):].rpartition("@")[0].split("/")):
+                raise ValueError(f"runtime.kits.requested entry {kit} has an empty, . or .. segment")
         assets = kits.get("assets")
         if assets is not None:
             require_digest(kits.get("lock_sha256"), "runtime.kits.lock_sha256")
@@ -1324,8 +1327,11 @@ def install_path_kit(project_root: Path, directory: Path, requested: str | None 
     agents = sorted((directory / "agents").glob("*.md"))
     if not name or not manifest.get("version") or not agents:
         raise ValueError(f"{directory} needs iii.kit.yaml name and version, and agents/*.md")
-    if (directory / "skills").exists():
+    if os.path.lexists(directory / "skills"):
         raise ValueError(f"{directory} has skills/, which path kits do not install")
+    # ponytail: names only, not the manifest's version ranges, and against the
+    # lock as the kits before this one left it; check ranges if a source kit
+    # ever needs a newer worker than the stack resolves.
     if compose_lock is not None:
         containers = (load_yaml(compose_lock.read_text()) or {}).get("containers") or {}
         running = {*containers, *(worker_name(str(c.get("worker", ""))) for c in containers.values()

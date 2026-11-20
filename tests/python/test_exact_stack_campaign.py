@@ -2276,7 +2276,9 @@ containers:
             }
             MODULE.validate_contract(contract)
             for requested, valid in ((f"commit:iii-hq/workers/kits/deepwork@{'d' * 40}", True),
-                                     (f"commit:iii-hq/workers/kits/deepwork@{'d' * 12}", False)):
+                                     (f"commit:iii-hq/workers/kits/deepwork@{'d' * 12}", False),
+                                     (f"commit:../../x/y@{'d' * 40}", False),
+                                     (f"commit:o/r/kits//x@{'d' * 40}", False)):
                 with self.subTest(requested=requested):
                     other = json.loads(json.dumps(contract))
                     other["runtime"]["kits"]["requested"] = [requested]

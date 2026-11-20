@@ -181,6 +181,10 @@ class KitStackTests(unittest.TestCase):
             (work / "kits/outside").mkdir()
             (work / "kits/outside/iii.kit.yaml").write_text("name: iii/outside\nversion: 1\n")
             (work / "kits/outside/agents").symlink_to("../deepwork/agents")
+            (work / "kits/dangling/agents").mkdir(parents=True)
+            (work / "kits/dangling/iii.kit.yaml").write_text("name: iii/dangling\nversion: 1\n")
+            (work / "kits/dangling/agents/a.md").write_text("# a\n")
+            (work / "kits/dangling/skills").symlink_to("../shared-skills")
             git("init", "-q", cwd=work)
             git("add", ".", cwd=work)
             git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "kit", cwd=work)
@@ -202,6 +206,8 @@ class KitStackTests(unittest.TestCase):
                     with self.subTest(folder=folder), self.assertRaisesRegex(prepare_execution.ResolutionError,
                                                                              "must not be symlinks"):
                         prepare_execution.fetch_commit_kits([f"commit:owner/repo/kits/{folder}@{first}"], contract)
+                with self.assertRaisesRegex(prepare_execution.ResolutionError, "has skills/"):
+                    prepare_execution.fetch_commit_kits([f"commit:owner/repo/kits/dangling@{first}"], contract)
                 with self.assertRaises(subprocess.CalledProcessError):
                     prepare_execution.fetch_commit_kits([f"commit:owner/repo/kits/missing@{first}"], contract)
                 # A fetch cut short before its manifest is fetched again, whole.

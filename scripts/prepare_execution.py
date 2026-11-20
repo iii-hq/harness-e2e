@@ -278,14 +278,16 @@ def fetch_commit_kits(kits: list[str], contract_dir: Path) -> None:
             if not (source / "iii.kit.yaml").exists() or not agents:
                 raise ResolutionError(f"{repository}@{commit[:12]} has no kit in {folder}: "
                                       "it needs iii.kit.yaml and agents/*.md")
-            if (source / "skills").exists():
+            if os.path.lexists(source / "skills"):
                 raise ResolutionError(f"{repository}@{commit[:12]} {folder} has skills/, which commit kits do not install")
             if any(path.is_symlink() for path in (source / "iii.kit.yaml", *agents)):
                 raise ResolutionError(f"{repository}@{commit[:12]} {folder}: kit files must be regular files")
             (destination / "agents").mkdir(parents=True, exist_ok=True)
             for agent in agents:
                 shutil.copy2(agent, destination / "agents")
-            shutil.copy2(source / "iii.kit.yaml", destination)
+            # Whole or absent: it is what says the fetch completed.
+            shutil.copy2(source / "iii.kit.yaml", destination / "iii.kit.yaml.part")
+            os.replace(destination / "iii.kit.yaml.part", destination / "iii.kit.yaml")
 
 
 def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:
