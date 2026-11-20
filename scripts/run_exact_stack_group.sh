@@ -41,6 +41,8 @@ case "$artifact_dir" in
 esac
 contract_path="$artifact_dir/stack-lock.json"
 contract_asset_root=$(realpath "$(dirname "$HARNESS_E2E_CONTRACT")/../kit-assets" 2>/dev/null || true)
+# Where prepare_execution.py runtime fetched each `commit:` kit: <sha>/<repository>/<folder>.
+kit_source_root=$(realpath -m "$(dirname "$HARNESS_E2E_CONTRACT")/../kit-sources")
 # A file, not a variable: the contract carries the assembled stack and its
 # lock, which outgrow what one environment string may hold.
 cp "$HARNESS_E2E_CONTRACT" "$contract_path"
@@ -750,6 +752,17 @@ if [[ -n "$assemble_only" ]]; then
   cp "$compose_file" "$run_root/pre-kit-worker-compose.yaml"
   cp "${compose_file%.yaml}.lock" "$run_root/pre-kit-worker-compose.lock"
   while IFS= read -r kit; do
+    if [[ $kit == path:* ]]; then
+      python3 "$contract_tool" install-path-kit --project-root "$project_dir" --directory "${kit#path:}" \
+        --compose-lock "${compose_file%.yaml}.lock"
+      continue
+    fi
+    if [[ $kit == commit:* ]]; then
+      spec=${kit#commit:}
+      python3 "$contract_tool" install-path-kit --project-root "$project_dir" --requested "$kit" \
+        --directory "$kit_source_root/${spec##*@}/${spec%@*}" --compose-lock "${compose_file%.yaml}.lock"
+      continue
+    fi
     receipt="$artifact_dir/stack/kits/$(printf '%s' "$kit" | sha256sum | cut -c1-16).json"
     request=$(jq -cn --arg kit "$kit" '{kit:$kit,apply:true}')
     project_trigger directory::download-kit "$request" 1200000 >"$receipt"
