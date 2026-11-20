@@ -28,6 +28,18 @@ CASE_IDS = [
 
 
 class KanbanProbeContractTest(unittest.TestCase):
+    def test_probe_and_candidate_fault_evidence_carry_the_runner_rubric_version(self):
+        # The runner rejects evidence whose rubric_version is not its RUBRIC_VERSION.
+        runner = (ROOT / "src/scenarios/kanban/mod.rs").read_text()
+        version = int(re.search(r"const RUBRIC_VERSION: u8 = (\d+);", runner).group(1))
+        self.assertEqual([int(v) for v in re.findall(r"rubric_version: (\d+)", PROBE.read_text())], [version, version])
+        fixtures = [(path, json.loads(path.read_text())) for path in
+                    sorted((ROOT / "tests/fixtures/kanban-evaluator/candidate-faults").glob("*/*.json"))]
+        # A prerequisite failure (build-sleep) never reached the probe, so it has no rubric version.
+        self.assertEqual([path.parent.name for path, evidence in fixtures if "rubric_version" not in evidence], ["build-sleep"])
+        for path, evidence in fixtures:
+            self.assertEqual(evidence.get("rubric_version", version), version, path)
+
     def test_c7_store_switch_delivers_the_reload_iii_026_no_longer_triggers(self):
         # iii 0.26 removed the `configuration` trigger the C7 base snapshot
         # reloads from; without this call criterion_store failed every round.

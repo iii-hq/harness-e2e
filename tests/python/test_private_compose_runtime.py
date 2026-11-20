@@ -85,7 +85,9 @@ elif function.startswith('compose::'):
     secret = path.resolve().parent / 'data/secrets'
     secret.mkdir(parents=True, exist_ok=True)
     if not os.environ.get('FAKE_EMPTY_SECRET'):
-        (secret / 'sentinel').write_text('synthetic-secret-never-upload')
+        # What the vault holds is ciphertext, never the key, unless a case plants it.
+        planted = os.environ.get('FAKE_SECRET_SENTINEL')
+        (secret / 'sentinel').write_text(pathlib.Path(planted).read_text() if planted else 'synthetic-vault-never-upload')
     for name, container in content['containers'].items():
         source = container['worker']
         if source.startswith('path://./'):
@@ -187,9 +189,31 @@ elif function in ('e2e::archive', 'e2e::archive-head'):
     if os.environ.get('FAKE_FAIL') == 'archive':
         error('ARCHIVE_UNAVAILABLE', 'longitudinal storage is not configured')
     answer({'status':'ok'})
+elif function == 'secrets::status':
+    answer({'count': 0})
+elif function == 'secrets::import':
+    # The vault re-reads the value from its staging file: a request names it only.
+    request = json.loads(option('--json'))
+    record('secrets::import', request=request)
+    answer({**request, 'ref': 'secret://' + request['name'], 'store': 'vault', 'hint': 'synthe...load'})
+elif function == 'secrets::list':
+    imported = [json.loads(line)['request'] for line in open(os.environ['FAKE_CALLS'])
+                if json.loads(line)['kind'] == 'secrets::import']
+    answer({'secrets': [{'name': grant['name'], 'consumers': grant['consumers'],
+                         'last_resolved_by': grant['consumers'][0], 'updated_at': '2026-11-20T00:00:00.000Z',
+                         'last_resolved_at': '2026-11-20T00:00:00.007Z'} for grant in imported]})
+elif function == 'router::provider::list':
+    answer({'providers': [{'id': 'deepseek', 'configured': True, 'credential_source': 'secret',
+                           'credential_ref': 'secret://DEEPSEEK_API_KEY'}]})
+elif function == 'router::models::list':
+    answer({'models': ['deepseek-v4-flash']})
 else:
     raise SystemExit('unimplemented fake boundary: ' + function)
 '''
+
+
+STACK = {'harness': '1.9.0', 'harness-e2e': '0.6.0-experimental', 'llm-router': '1.5.5',
+         'provider-deepseek': '1.0.0', 'secrets': '0.2.3'}
 
 
 class PrivateComposeRuntimeTests(unittest.TestCase):
@@ -228,17 +252,20 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.sleeps = self.root / 'sleeps'
         sleep = tools / 'sleep'
         sleep.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$FAKE_SLEEPS"\n'
-                         # Interrupted while it waits that long, as a cancelled job is.
-                         '[ "$1" != "${FAKE_SLEEP_TERM:-}" ] || kill -TERM "$PPID"\n')
+                         # Interrupted while it waits that long, as a cancelled job is,
+                         # and still waiting: the launcher must not outwait it.
+                         '[ "$1" != "${FAKE_SLEEP_TERM:-}" ] || { kill -TERM "$PPID"; exec /bin/sleep 60; }\n')
         sleep.chmod(0o755)
         self.contract = campaign_contract()
         self.contract['runtime']['cli']['sha256'] = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
         self.contract['runtime']['compose'] = {'containers': {
             name: {'worker': 'package://' + name, 'version': version}
-            for name, version in {'harness':'1.9.0', 'harness-e2e':'0.6.0-experimental', 'provider-deepseek':'1.0.0'}.items()
+            for name, version in STACK.items()
         }}
-        self.lock = lock_of({'harness':'1.9.0', 'harness-e2e':'0.6.0-experimental', 'provider-deepseek':'1.0.0'})
-        self.lock['graphs'] = {'harness':['harness'], 'harness-e2e':['harness-e2e'], 'provider-deepseek':['provider-deepseek']}
+        self.lock = lock_of(STACK)
+        # Every real stack's provider takes its key from the router, and the router from the vault.
+        self.lock['graphs'] = {'harness':['harness'], 'harness-e2e':['harness-e2e'],
+                               'provider-deepseek':['provider-deepseek', 'llm-router', 'secrets']}
         self.env = {key: value for key, value in os.environ.items()
                     if not key.startswith(('HARNESS_E2E_', 'FAKE_')) and key not in MODULE.credential_catalog()[1]}
         self.env.update({
@@ -249,7 +276,8 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
             'FAKE_SLEEPS':str(self.sleeps),
             'FAKE_VERSION':self.contract['runtime']['cli']['version'], 'FAKE_CATALOG':json.dumps(catalog()),
             'FAKE_LOCK':yaml.safe_dump(self.lock, sort_keys=False),
-            'DEEPSEEK_API_KEY':'synthetic-secret-never-upload',
+            # Its own per test: the readable-copies check reads every process on the machine.
+            'DEEPSEEK_API_KEY':'synthetic-secret-never-upload-' + self.root.name,
         })
 
     def launch(self):
@@ -257,6 +285,7 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         result = subprocess.run(['bash', str(self.repo / 'scripts/run_exact_stack_group.sh')],
                                 env=self.env, capture_output=True, text=True, timeout=30)
         self.assertFalse(list(self.tmp.glob('harness-e2e-compose.*')), result.stderr)
+        self.assertFalse(list(self.tmp.glob('harness-e2e-handoff.*')), result.stderr)
         return result
 
     def observed(self):
@@ -280,6 +309,15 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         self.assertEqual(bundle['withheld'], [])
         paths = {entry['path'] for entry in bundle['files']}
         self.assertFalse(any(path.endswith('.env') or '/secrets/' in path or 'compose-state/' in path for path in paths))
+        # The key reached the stack's vault by name, for the router alone, and no value is kept;
+        # assembling starts no stack, so nothing is imported.
+        imported = [row['request'] for row in rows if row['kind'] == 'secrets::import']
+        if self.env.get('HARNESS_E2E_ASSEMBLE_ONLY'):
+            self.assertEqual(imported, [])
+        else:
+            self.assertEqual(imported, [{'name': 'DEEPSEEK_API_KEY', 'source': 'dotenv', 'consumers': ['llm-router']}])
+            self.assertEqual((self.artifacts / 'stack/vault.jsonl').read_text(),
+                             '{"name":"DEEPSEEK_API_KEY","ref":"secret://DEEPSEEK_API_KEY","consumers":["llm-router"]}\n')
         return rows, paths
 
     def test_non_template_launcher_keeps_runtime_private_and_evidence_factual(self):
@@ -319,7 +357,7 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         runner = yaml.safe_load(up['manifest'])['containers']['harness-e2e']['environment']
         self.assertEqual(runner['HARNESS_E2E_STACK_MODE'], 'registry')
         self.assertEqual(json.loads(runner['HARNESS_E2E_STACK_VERSIONS']),
-                         {'harness': '1.9.0', 'harness-e2e': '0.6.0-experimental', 'provider-deepseek': '1.0.0'})
+                         STACK)
         self.assertEqual(runner['HARNESS_E2E_STACK_DIGEST'], MODULE.canonical_sha256(self.lock))
 
     def test_a_stack_without_a_lock_leaves_the_runner_its_own_identity(self):
@@ -554,6 +592,26 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'inside its source directory'):
             MODULE.stage_relative_workers(manifest, source.parent, project)
         self.assertFalse((project / 'local').exists())
+
+    def test_a_received_key_left_readable_stops_the_group_before_the_run(self):
+        """A plaintext copy under the run's roots, where the subject's user
+        reads it, fails the group in `credentials` before e2e::run, naming
+        the file and the variable, never the value."""
+        # From a file: in a variable every process would hold it too.
+        planted = self.root / 'planted'
+        planted.write_text(self.env['DEEPSEEK_API_KEY'])
+        self.env['FAKE_SECRET_SENTINEL'] = str(planted)
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(row['kind'] == 'e2e::run' for row in self.observed() if 'kind' in row))
+        failure = json.loads((self.artifacts / 'failure.json').read_text())
+        self.assertEqual(failure['phase'], 'credentials')
+        self.assertEqual(failure['attempt'], 2)
+        report = json.loads((self.artifacts / 'stack/readable-copies.json').read_text())
+        self.assertEqual([(Path(hit['where']).relative_to(self.tmp).parts[1:], hit['name']) for hit in report['found']],
+                         [(('project', 'data', 'secrets', 'sentinel'), 'DEEPSEEK_API_KEY')])
+        self.assertGreater(report['scanned']['processes'], 0)
+        self.assertNotIn(self.env['DEEPSEEK_API_KEY'], result.stdout + result.stderr)
 
     def test_introduced_credential_paths_are_withheld_and_symlinks_still_fail_after_launcher(self):
         self.assertEqual(self.launch().returncode, 0)
@@ -847,6 +905,14 @@ class PrivateComposeRuntimeTests(unittest.TestCase):
                        env={'PATH': os.environ['PATH'], 'DEEPSEEK_API_KEY': key}, check=True)
         self.assertNotIn('sk-deep', output.read_text())
         self.assertIn(' key=[redacted:DEEP', output.read_text())
+        # Or from the launcher's handoff file, once its environment has none.
+        handoff = self.root / 'handoff'
+        handoff.write_text(f'DEEPSEEK_API_KEY={key}\n')
+        subprocess.run(['python3', str(self.repo / 'scripts/exact_stack_campaign.py'), 'failure',
+                        '--output', str(output), '--phase', 'project_start', '--exit-code', '1',
+                        '--iii-function', 'compose::up', '--iii-stderr', str(log)],
+                       env={'PATH': os.environ['PATH'], 'HARNESS_E2E_CREDENTIALS_FILE': str(handoff)}, check=True)
+        self.assertNotIn('sk-deep', output.read_text())
 
     def test_the_failure_record_keeps_what_iii_answered_and_never_more_than_its_start(self):
         progress = 'resolving ade@1.9.60\nError: {\n  "code": "X_FAILED",\n  "message": "first"\n}\n'

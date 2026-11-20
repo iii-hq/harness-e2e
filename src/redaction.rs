@@ -41,8 +41,8 @@ pub const MIN_CREDENTIAL_LENGTH: usize = 8;
 /// The credentials this process received, by name, longest value first:
 /// the defaults above, the provider keys `config/provider-credentials.json`
 /// lists, and the names `HARNESS_E2E_SECRET_ENV_NAMES` and
-/// `HARNESS_E2E_CREDENTIALS` (what the launcher put in the stack's `.env`)
-/// give, each as its variable holds it.
+/// `HARNESS_E2E_CREDENTIALS` (the names a group received; its runner gets no
+/// value) give, each as its variable holds it.
 fn environment_credentials() -> Vec<(String, String)> {
     credentials_from(|name| std::env::var(name).ok())
 }
@@ -164,6 +164,15 @@ impl RedactionPolicy {
         report
     }
 
+    /// For the audit: what `redact_value` would find, without changing `value`,
+    /// and with a sensitive key counted only when it may hold a credential.
+    /// Artifacts keep `redact_value`, which blanks whatever such a key holds.
+    pub fn exposure(&self, value: &Value) -> RedactionReport {
+        let mut report = RedactionReport::default();
+        exposure(self, value, &mut report);
+        report
+    }
+
     pub fn sanitize_bytes(
         &self,
         media_type: &str,
@@ -276,6 +285,44 @@ fn redact_value(policy: &RedactionPolicy, value: &mut Value, report: &mut Redact
             report.merge(nested);
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn exposure(policy: &RedactionPolicy, value: &Value, report: &mut RedactionReport) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if sensitive_key(key) && may_hold_credential(value) {
+                    report.redacted_fields = report.redacted_fields.saturating_add(1);
+                    report.rules.insert("sensitive_field".into());
+                } else {
+                    exposure(policy, value, report);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                exposure(policy, value, report);
+            }
+        }
+        Value::String(text) => report.merge(policy.redact_text(text).1),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// A JSON Schema node (`"secret": {"type": "boolean"}` in a function's response
+/// schema), flag or list under a sensitive key describes a credential rather
+/// than holding one, so `exposure` searches it instead of counting it.
+fn may_hold_credential(value: &Value) -> bool {
+    match value {
+        Value::String(_) | Value::Number(_) => true,
+        Value::Object(object) => {
+            !object.is_empty()
+                && !["type", "$ref", "anyOf", "oneOf", "allOf", "enum"]
+                    .iter()
+                    .any(|keyword| object.contains_key(*keyword))
+        }
+        Value::Null | Value::Bool(_) | Value::Array(_) => false,
     }
 }
 
@@ -401,6 +448,37 @@ mod tests {
         assert!(!rendered.contains("github_pat_"));
         assert!(!rendered.contains("abcdefghijklmnop"));
         policy.assert_clean(rendered.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn exposure_counts_credentials_and_not_schemas_under_sensitive_keys() {
+        let policy = RedactionPolicy::with_known_values(["super-secret-value".into()]);
+        let schema = json!({
+            "properties": {
+                "secret": {"type": "boolean"},
+                "password": {"type": "string"},
+                "client_secret": {"$ref": "#/definitions/ApiKey"},
+                "cookie": {}
+            },
+            "definitions": {"ApiKey": {"type": "object"}},
+            "entry": {"key": "PORT", "secret": false},
+            "list": {"api_key": []}
+        });
+        assert!(!policy.exposure(&schema).changed());
+        // Artifact redaction is as strong as before: it still blanks all seven.
+        assert_eq!(policy.redact_value(&mut schema.clone()).redacted_fields, 7);
+
+        let exposed = json!({
+            "api_key": "plain-credential",
+            "password": 12345678,
+            "authorization": {"scheme": "Bearer", "token": "opaque-9f8e7d6c5b4a"},
+            "secret": {"type": "string", "default": "github_pat_abcdefghijklmnopqrstuvwxyz"},
+            "note": "known=super-secret-value"
+        });
+        let report = policy.exposure(&exposed);
+        assert_eq!((report.redacted_fields, report.redacted_values), (3, 2));
+        assert!(report.rules.contains("github_token"));
+        assert!(report.rules.contains("known_secret"));
     }
 
     #[test]

@@ -2071,14 +2071,55 @@ execution whose model's provider has no key, or with a value under 8
 characters (the evidence is not checked for it), says so and still runs.
 
 Inside, `scripts/run_in_image.sh` tells the phase which variables are
-credentials (`HARNESS_E2E_CREDENTIALS`, the names of that file); the launcher
-writes exactly those, plus `DEEPSEEK_API_KEY`, `ZAI_API_KEY` and
-`TYPESAFE_API_KEY` when its environment has them, into the stack's `.env`,
-warns when the model's provider's key is missing, and gives the runner their
-names. The runner replaces each such value (and each the catalog names) by
-`[redacted:NAME]`, as written and as JSON escapes it, in every artifact and
-journal event before it hashes it, so a key the subject printed never reaches
-a digest. `exact_stack_campaign.py package` looks for them again, raw and
+credentials (`HARNESS_E2E_CREDENTIALS`, the names of that file). Every process
+of a user can read the environment of the others, the subject's shell
+included, so the launcher first writes what it received (those names, plus
+`DEEPSEEK_API_KEY`, `ZAI_API_KEY` and `TYPESAFE_API_KEY` when its environment
+has them) to a private file and runs again without them, or any other name
+the catalog lists; the engine and Compose start without them and without
+that file's path. No worker gets a credential through its environment or an
+env file, the runner included. The keys go into the stack's own `secrets`
+vault: the launcher asks `secrets::import` for each by name, the worker
+re-reads the value from a staging file under the run's `secrets/` folder (no
+value is ever on a command line), only a worker connected under the name of
+the container that references the key may resolve it (a name the caller
+declares itself; see below), and the staging file is deleted. llm-router gets a
+`secret://` reference for each provider the stack runs, and each provider
+takes its key from the router; judge-typesafe gets one for
+`TYPESAFE_API_KEY`. The group waits until each of them resolved its own
+secret and the model's provider lists its models, and otherwise fails in its
+`credentials` phase with the error the router or the judge reported. A stack
+that receives a key but runs no `secrets` worker fails there too, rather than
+running keyless. The vault's master key and a subscription login stay on disk
+under that `secrets/` folder, which ide refuses to `coder::*` and
+`shell::fs::*`. The launcher warns when the model's provider's key is missing
+and gives the runner the names, never the values.
+
+Right before `e2e::run`, as the subject's user, `check-readable-copies` reads
+the environment and command line of every process it can open and every file
+under the run's roots, and fails the group in `credentials` on any received
+value it finds there, raw or JSON-escaped, naming the process or file and the
+variable in `stack/readable-copies.json`, never the value. It checks for
+readable copies, nothing more. A local run whose own shell still exports a
+key fails there: the subject could read that shell's environment too.
+
+That keeps an honest subject from reading a key by accident; it does not stop
+one that tries on purpose. Any process of its user can still call
+`secrets::access` to add a consumer and then `secrets::resolve` under that
+self-declared worker name (`III_WORKER_NAME`, `III_NAMESPACE`), read a
+provider's `registration_token` from `state` and call
+`router::provider::resolve` with it, point a provider's `api_url` at a
+listener of its own with `configuration::set`, read the memory of the workers
+or of the iii engine, which carries every resolved key between them, or
+decrypt the vault with the key file beside it, or become root through the
+Docker socket of the privileged group container. `secrets::list` and
+`secrets::get` show each key's first 6 and last 4 characters. A user of its
+own for the subject (MOT-5712) closes what needs the same user; the calls
+need worker names the engine authenticates, or keys kept off the runner.
+
+The runner redacts what has the shape of a credential (`sk-…`, bearer tokens,
+JWTs) in every artifact and journal event before it hashes it.
+`exact_stack_campaign.py package` looks for the received values, raw and
 escaped: in the launcher's `logs/`, which nothing hashes, it replaces them;
 anywhere else a file is bound by a digest (the runner's references, the
 campaign bundle, Release Control's checks), so it rewrites nothing and refuses
@@ -2156,8 +2197,8 @@ credential: it goes with the provider credentials above, in the same file of
 `data_dir/.phase-credentials/` handed to the group and to the packaging that
 checks its evidence, removed when each ends; `prepare assemble` and a commit's
 build get none. [`config/provider-credentials.json`](config/provider-credentials.json)
-names it under `subscriptions`: never set on the Stacks page, but redacted
-like any other credential, by the runner and again by packaging. What else the
+names it under `subscriptions`: never set on the Stacks page, but kept out
+of every environment and looked for by packaging like any other credential. What else the
 login holds is no secret and goes to the group by name: `CODEX_ACCOUNT_ID`,
 `CLAUDE_CODE_EXPIRES_AT` (epoch milliseconds). The launcher writes the login
 the provider reads, into the group's runtime tree and not its evidence, and
@@ -2167,9 +2208,10 @@ without it. A token already expired fails the group in its `credentials`
 phase; one that expires before the group's deadline is said out loud. The
 subject is denied the credential vault (`auth::*`) and each provider's own
 sign-in, status and logout (`provider::*::auth::*`), and the audit flags a
-call to either. It can still read the access token (from its workers'
-environment or the login file), as it can an API key; the runner redacts it by
-value from what it records, and any JWT (`eyJ….eyJ….…`) by its shape. As the
+call to either. No worker holds the access token in its environment, and the
+login file sits under the run's `secrets/` folder, which `coder::*` and
+`shell::fs::*` refuse; `cat` from `shell::exec` still reads it. The runner
+redacts any JWT (`eyJ….eyJ….…`) by its shape. As the
 [Executor image](#executor-image) section says, a subject is also
 root-equivalent on this host, where the login itself is.
 

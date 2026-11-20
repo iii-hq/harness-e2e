@@ -8,6 +8,18 @@ contract change; older results keep their original rubric and are not rescored.
 HTTP restart tests should bind a fresh ephemeral port rather than reusing a port
 whose old socket can remain in a connection pool.
 
+Kanban rubric version 4 changes only C4 evidence. Details read persisted fields
+from the widest ancestor of the detail panel that adds no link or button named with
+the ticket title, no title copy inside a link, button, list item, article or
+draggable element, no other heading named like the title and no board lane heading,
+so fields beside a heading block that holds both the title and the Delete action
+count. Visible read-only or disabled form values also count, where a select counts
+only its selected option. Creation clicks the exact `Create ticket` action
+and deletion the whole-name `Delete ticket` action. Version 3 results are not
+rescored. `provenance.controller_sha256["probe.mjs"]` = `082752870f1c…` identifies
+the version 3 results from 0.35.0 to 0.37.0, which already apply #402; every earlier
+version 3 result carries a different digest.
+
 C5 selects a visible, hit-tested point in the target lane and checks the exact
 status-only PATCH for the dragged ticket. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.

@@ -489,7 +489,8 @@ the visible missing-field explanation in `data-testid="validation-message"`.
 Persist this default flowchart
 through `{canvas}`:
 `flowchart TD\n  Intake --> Type{{Work item}}\n  Type -->|bug| Bug\n  Type -->|feature| Feature\n  Bug --> Ready\n  Feature --> Ready`.
-After `add_environment`, insert `Environment` between Bug and Ready."#,
+After `add_environment`, the same Canvas id must hold exactly this flowchart, lines in this order:
+`flowchart TD\n  Intake --> Type{{Work item}}\n  Type -->|bug| Bug\n  Type -->|feature| Feature\n  Bug --> Environment\n  Environment --> Ready\n  Feature --> Ready`."#,
         preview = contract.functions["preview"],
         canvas = contract.functions["canvas"],
     )
@@ -2127,6 +2128,17 @@ mod tests {
                 prompt.contains("keep rejecting unknown business fields"),
                 "{kind:?}"
             );
+        }
+    }
+
+    /// The Canvas checks compare source byte for byte, so the prompt states
+    /// the whole edited flowchart rather than describing the change.
+    #[test]
+    fn the_form_prompt_states_the_exact_edited_flowchart() {
+        let prompt = scenario_spec(Kind::Form, "run-a").prompt;
+        for source in [form_source(), edited_source(Kind::Form)] {
+            let shown = format!("`{}`", source.replace('\n', "\\n"));
+            assert!(prompt.contains(&shown), "{shown}");
         }
     }
 
