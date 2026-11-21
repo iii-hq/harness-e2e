@@ -20,6 +20,28 @@ rescored. `provenance.controller_sha256["probe.mjs"]` = `082752870f1c…` identi
 the version 3 results from 0.35.0 to 0.37.0, which already apply #402; every earlier
 version 3 result carries a different digest.
 
+Kanban rubric version 5 changes how board counts and text values are matched in
+C3, C4, C5 and C7 evidence. A column heading is the column name alone or the name
+followed by `N`, `N ticket(s)` or `(N)`, and a separator (`,`, `:`, `·`, `–`, `—`
+or `-`) may now stand between them, so `Backlog, 0 tickets` names the Backlog
+column and `Backlog archive, 0 tickets` does not. A lane count is an element
+holding only `N` or `(N)`, or the heading itself when its visible text reads as
+the column name and that count (`Backlog, 0 tickets`, `Backlog (0)`); a count
+carried only by the heading's aria-label does not count, nor does a number elsewhere
+in its text, and a lane whose heading and badge both show
+the count counts once. A visible board total is `N ticket(s)`, optionally followed
+by `on (the) board`, `total` or `in total` and an optional trailing period, or
+`Total`, optionally followed by `ticket(s)`, then an optional colon, then `N`,
+optionally followed by `ticket(s)`, or an element holding only `N` and labeled
+`Total` or `Total tickets`; matching ignores case. Playwright tests a regular
+expression against an element's raw text and raw label, so a lane count (`N` or
+`(N)`), the total and its label, card priority, detail status and detail
+presentation values now ignore whitespace before and after the text. Other
+surrounding text still fails, so `10 tickets total` is not a zero total and `0
+tickets selected` is not a total. Version 4 results are not rescored.
+`provenance.controller_sha256["probe.mjs"]` = `bbb269d804a3…` identifies the
+version 4 results of 0.38.0.
+
 C5 selects a visible, hit-tested point in the target lane and checks the exact
 status-only PATCH for the dragged ticket. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.

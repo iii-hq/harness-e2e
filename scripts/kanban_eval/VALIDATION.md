@@ -127,6 +127,38 @@ card-like element, another title heading or a board lane heading, which keeps it
 the board that holds the ticket's own card. Browser creation still verifies every
 submitted field in the response and persisted GET.
 
+Rubric version 5 (MOT-5834) comes from three C3 rounds that showed correct counts.
+0.38.0 r01 named each column `Backlog, 0 tickets` with the count in its own span,
+0.38.0 r02 indented `Total <output>0</output> tickets` across lines, and 0.36.0 r02
+read `0 tickets total`. Lane headings now accept a `,`, `:`, `·`, `–`, `—` or `-`
+separator before the count, the total accepts `N tickets total` and `N tickets in
+total`, and every anchored text or label match (lane count, total, `Total` label,
+card priority, detail status and presentation values) ignores surrounding
+whitespace. Regressions accept the three shapes and an indented `Total` label at the
+right count and reject them at a wrong one; negatives reject a `Backlog archive, 0
+tickets` heading as Backlog, an indented `10` as a zero lane count, `10 tickets
+total` and `0 tickets selected` as a zero total, a `Subtotal` label, and `High
+priority` or `Not urgent` as the value. Loading and a failed first read still cannot
+show a zero total or zero lane counts. The six captured DOMs replay with lanes and
+total found at the right count and nothing at the wrong count. Review on #412 found
+that a count written only in the heading text (`Backlog, 0 tickets`, `Backlog (0)`,
+`Backlog 0`) was never read, because the lane count looked only for a separate
+element. The heading now counts when its visible text reads as the column name and
+that count; a count only in its aria-label does not, nor does the number appearing
+elsewhere in the heading text (`Backlog 10 tickets (0 selected)` is not a zero), and
+a heading with a badge counts once. A regression covers each form and both guards.
+
+Two known limits remain. The total is searched across the whole page, so `0
+tickets` (now also indented, or `0 tickets total`) inside each empty lane passes the
+zero-total checks when the board summary is wrong or missing; plain `0 tickets`
+already did. `board_total` still catches it at the seeded count, where each lane
+shows one ticket. Excluding matches inside a lane was not done because `boardLane`
+widens to the outermost ancestor without another lane heading, up to `<html>` when
+the other lanes have no heading, which would hide a correct summary. A heading such
+as `Done: 0` in a status panel also reads as a Done lane heading, so a correct
+board with such a panel fails its lane checks, as a panel with a plain `Done`
+heading already did.
+
 Local validation uses real Chromium and a controlled HTTP application to execute
 the complete C3/C4 probes. Positive presentation variants pass. Negative controls
 independently reject an incorrect total, missing modal focus and discarded creation
