@@ -111,7 +111,9 @@ does not rescore stored reports.
 Selectors accept accessible links/buttons with span titles, list-based lanes,
 `Total: 5 tickets`, visible empty-state text and presentation labels such as
 `Urgent`. A lane heading may separate its name from its count with `,`, `:`, `·`,
-`–`, `—` or `-` (`Backlog, 0 tickets`). The total also reads `5 tickets total` or
+`–`, `—` or `-` (`Backlog, 0 tickets`). The count may sit in its own element or in
+the heading's visible text, never only in its aria-label. The total also reads
+`5 tickets total` or
 `5 tickets in total`. Lane counts, the total and its `Total` label, card priority
 and detail status or presentation values ignore whitespace before and after the
 text, since Playwright tests a regular expression against raw text and labels;

@@ -134,13 +134,18 @@ read `0 tickets total`. Lane headings now accept a `,`, `:`, `·`, `–`, `—` 
 separator before the count, the total accepts `N tickets total` and `N tickets in
 total`, and every anchored text or label match (lane count, total, `Total` label,
 card priority, detail status and presentation values) ignores surrounding
-whitespace. Regressions accept the three shapes and an indented `Total` label at
-the right count and reject them at a wrong one; negatives reject a `Backlog
-archive, 0 tickets` heading as Backlog, an indented `10` as a zero lane count, `10
-tickets total` and `0 tickets selected` as a zero total, a `Subtotal` label, and
-`High priority` or `Not urgent` as the value. Loading and a failed first read still
-cannot show a zero total or zero lane counts. The six captured DOMs replay with
-lanes and total found at the right count and nothing at the wrong count.
+whitespace. Regressions accept the three shapes and an indented `Total` label at the
+right count and reject them at a wrong one; negatives reject a `Backlog archive, 0
+tickets` heading as Backlog, an indented `10` as a zero lane count, `10 tickets
+total` and `0 tickets selected` as a zero total, a `Subtotal` label, and `High
+priority` or `Not urgent` as the value. Loading and a failed first read still cannot
+show a zero total or zero lane counts. The six captured DOMs replay with lanes and
+total found at the right count and nothing at the wrong count. Review on #412 found
+that a count written only in the heading text (`Backlog, 0 tickets`, `Backlog (0)`,
+`Backlog 0`) was never read, because the lane count looked only for a separate
+element. The heading now counts when its visible text shows the number; a count only
+in its aria-label does not, and a heading with a badge counts once. A regression
+covers each form and both guards.
 
 Two known limits remain. The total is searched across the whole page, so `0
 tickets` (now also indented, or `0 tickets total`) inside each empty lane passes the
