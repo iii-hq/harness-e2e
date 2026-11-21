@@ -776,6 +776,24 @@ after the runner saw the turn finish. Cleanup deletes the teacher session before
 memory read another bank on a teacher turn, it retires there what the
 teacher's extraction wrote.
 
+The case's `memory_evaluation.json` carries `teacher.extraction` and, where
+the case reads the bank after its session, `bank_after.extraction`: `passes`,
+`calls`, `created`, `reinforced`, `superseded`, `dropped` by memory's reason
+and `last_error`, the difference between two `memory::doctor` replies taken
+around the phase. A failed learned gate, or a control that found nothing
+stored, repeats them in its reason. Model calls with nothing created and
+nothing dropped mean the model returned no memory item; memory does not count
+rule items, so `teacher.rules` shows whether a rule line was learned. A
+`dropped` reason names the filter that refused an item, no pass means memory
+never asked the model, and `last_error` is why the window's latest counted
+pass failed. The doctor
+counts every session memory extracts. The measured sessions run as kind `e2e`,
+which memory does not extract, so on a suite run alone a teacher window holds
+that teacher's passes, and `bank_after.extraction` is all zeros when memory
+behaves; on a shared stack other user sessions are counted too. The field is
+absent when the doctor did not answer or memory's doctor reports no
+`extraction`.
+
 The `memory-strict` suite holds seven delivery cases, three rounds and one
 technical retry each (21 runs), on the `memory-strict` stack: the `memory`
 stack plus the capture variable on the harness and a declared context-manager,

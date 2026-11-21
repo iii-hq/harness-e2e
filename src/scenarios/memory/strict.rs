@@ -601,6 +601,7 @@ mod tests {
                     memory("p", port.clone()),
                 ],
                 rules: Default::default(),
+                extraction: None,
             }),
             ..Snapshot::default()
         };

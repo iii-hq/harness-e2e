@@ -114,6 +114,55 @@ pub struct Extraction {
     pub memories: Vec<StoredMemory>,
     /// Rule name -> content.
     pub rules: BTreeMap<String, String>,
+    /// Memory's extraction passes while the session was read; absent when a
+    /// doctor call failed or memory's doctor reports no pass health.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction: Option<Passes>,
+}
+
+/// Memory's extraction passes between two `memory::doctor` replies. They are
+/// of every session memory extracts, since the doctor does not tell sessions
+/// apart; a pass that never asked the model is not counted.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Passes {
+    pub passes: u64,
+    /// Model calls, failed ones included.
+    pub calls: u64,
+    pub created: u64,
+    pub reinforced: u64,
+    pub superseded: u64,
+    /// Memories the model returned that were not written, by memory's reason.
+    /// Memory does not tally rule items.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dropped: BTreeMap<String, u64>,
+    /// Why the window's latest counted pass failed, as the doctor states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+impl Passes {
+    /// The counters, as a failed gate repeats them.
+    pub fn summary(&self) -> String {
+        let dropped = if self.dropped.is_empty() {
+            "none".to_string()
+        } else {
+            let reasons: Vec<String> = self
+                .dropped
+                .iter()
+                .map(|(why, count)| format!("{why} {count}"))
+                .collect();
+            reasons.join(", ")
+        };
+        format!(
+            "memory's extraction in that window (every session): passes {}, model calls {}, created {}, reinforced {}, superseded {}, dropped {dropped}, last error {}",
+            self.passes,
+            self.calls,
+            self.created,
+            self.reinforced,
+            self.superseded,
+            self.last_error.as_deref().unwrap_or("none")
+        )
+    }
 }
 
 impl Extraction {
@@ -1117,14 +1166,20 @@ fn learned(evidence: &Evidence, label: &str) -> (bool, String) {
     } else if teacher.learned_lines().any(|line| line.contains(value)) {
         (true, format!("learned {label} ({value}) as a rule"))
     } else {
-        (
-            false,
-            format!(
-                "extraction kept {} memories and {} rule lines from the teacher, none with {label} ({value})",
-                teacher.learned().count(),
-                teacher.learned_lines().count()
-            ),
-        )
+        let kept = format!(
+            "extraction kept {} memories and {} rule lines from the teacher, none with {label} ({value})",
+            teacher.learned().count(),
+            teacher.learned_lines().count()
+        );
+        (false, with_passes(kept, teacher))
+    }
+}
+
+/// `details`, followed by what memory's extraction did when that was recorded.
+fn with_passes(details: String, teacher: &Extraction) -> String {
+    match &teacher.extraction {
+        Some(passes) => format!("{details}; {}", passes.summary()),
+        None => details,
     }
 }
 
@@ -1196,7 +1251,12 @@ fn stored(
         .map(|(name, _)| format!("rule {name}"));
     let holders: Vec<String> = memories.chain(rules).collect();
     let details = if holders.is_empty() {
-        format!("nothing in the bank holds {label} ({value})")
+        let missing = format!("nothing in the bank holds {label} ({value})");
+        if want {
+            with_passes(missing, teacher)
+        } else {
+            missing
+        }
     } else {
         format!("{label} ({value}) is stored in: {}", holders.join(", "))
     };
@@ -1723,6 +1783,15 @@ mod tests {
             .find(|award| award.id == id)
             .unwrap_or_else(|| panic!("no award {id}"))
             .awarded
+    }
+
+    fn reason<'a>(evaluation: &'a ObjectiveEvaluation, id: &str) -> &'a str {
+        &evaluation
+            .awards
+            .iter()
+            .find(|award| award.id == id)
+            .unwrap_or_else(|| panic!("no award {id}"))
+            .reason
     }
 
     /// The system prompt a session with the case's rules sees.
@@ -3006,6 +3075,7 @@ mod tests {
                 .iter()
                 .map(|(name, content)| (name.to_string(), content.to_string()))
                 .collect(),
+            extraction: None,
         }
     }
 
@@ -3437,6 +3507,115 @@ mod tests {
         assert_eq!(award(&stored, "health_reached_turn"), Some(20));
         let dropped = run(control, &[&release], vec![]);
         assert_eq!(award(&dropped, "health_kept"), Some(0));
+    }
+
+    const SUMMARY: &str = "memory's extraction in that window";
+
+    /// One pass, one model call, and the item it returned dropped as rejected.
+    fn one_rejected() -> Passes {
+        Passes {
+            passes: 1,
+            calls: 1,
+            dropped: BTreeMap::from([("rejected".to_string(), 1)]),
+            ..Passes::default()
+        }
+    }
+
+    #[test]
+    fn a_failed_learned_gate_says_what_extraction_did() {
+        let case = case_named("memory_honors_do_not_keep");
+        let release = format!("The project releases with release-{}.", canary(RUN, "ctrl"));
+        let run = |teacher: Extraction| {
+            evaluate(
+                case,
+                &taught_evidence(case, &["x"], vec![], PROMPT, teacher),
+            )
+        };
+        let diagnosed = run(Extraction {
+            extraction: Some(one_rejected()),
+            ..taught(&[], &[])
+        });
+        assert_eq!(award(&diagnosed, "control_learned"), Some(0));
+        let said = reason(&diagnosed, "control_learned");
+        assert!(said.contains("model calls 1"), "{said}");
+        assert!(said.contains("dropped rejected 1"), "{said}");
+        // Nothing recorded: the reason is what it always was.
+        let unrecorded = run(taught(&[], &[]));
+        let said = reason(&unrecorded, "control_learned");
+        assert!(
+            said.starts_with("extraction kept 0 memories and 0 rule lines"),
+            "{said}"
+        );
+        assert!(!said.contains(SUMMARY), "{said}");
+        // A passing gate needs no diagnosis.
+        let learned = run(Extraction {
+            extraction: Some(one_rejected()),
+            ..taught(&[&release], &[])
+        });
+        assert_eq!(award(&learned, "control_learned"), Some(20));
+        assert!(!reason(&learned, "control_learned").contains(SUMMARY));
+    }
+
+    #[test]
+    fn the_controls_missing_diagnosis_says_what_extraction_did() {
+        let release = format!("The project releases with release-{}.", canary(RUN, "ctrl"));
+        let run = |name: &str| {
+            let case = case_named(name);
+            let teacher = Extraction {
+                extraction: Some(one_rejected()),
+                ..taught(&[&release], &[])
+            };
+            evaluate(
+                case,
+                &taught_evidence(case, &["x"], vec![], PROMPT, teacher),
+            )
+        };
+        let control = run("memory_keeps_without_a_rule");
+        assert_eq!(award(&control, "health_kept"), Some(0));
+        let said = reason(&control, "health_kept");
+        assert!(said.contains(SUMMARY), "{said}");
+        assert!(said.contains("dropped rejected 1"), "{said}");
+        // Nothing stored is what this case wants: no diagnosis.
+        let honored = run("memory_honors_do_not_keep");
+        assert_eq!(award(&honored, "health_not_kept"), Some(50));
+        assert!(!reason(&honored, "health_not_kept").contains(SUMMARY));
+    }
+
+    #[test]
+    fn pass_health_is_an_optional_part_of_the_evidence() {
+        let plain = taught(&[], &[]);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("extraction").is_none(), "{json}");
+        // An artifact written before the field still reads.
+        let old: Extraction = serde_json::from_value(json!({
+            "session_id": "teach_a", "waited_ms": 0, "memories": [], "rules": {}
+        }))
+        .unwrap();
+        assert_eq!(old.extraction, None);
+        let quiet = Extraction {
+            extraction: Some(Passes {
+                passes: 1,
+                calls: 1,
+                created: 1,
+                ..Passes::default()
+            }),
+            ..taught(&[], &[])
+        };
+        let json = serde_json::to_value(&quiet).unwrap();
+        assert!(json["extraction"].get("dropped").is_none(), "{json}");
+        assert!(json["extraction"].get("last_error").is_none(), "{json}");
+        let loud = Extraction {
+            extraction: Some(Passes {
+                last_error: Some("router::complete: no provider".into()),
+                ..one_rejected()
+            }),
+            ..taught(&[], &[])
+        };
+        for extraction in [quiet, loud] {
+            let back: Extraction =
+                serde_json::from_value(serde_json::to_value(&extraction).unwrap()).unwrap();
+            assert_eq!(back, extraction);
+        }
     }
 
     #[test]
