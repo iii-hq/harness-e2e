@@ -143,9 +143,10 @@ show a zero total or zero lane counts. The six captured DOMs replay with lanes a
 total found at the right count and nothing at the wrong count. Review on #412 found
 that a count written only in the heading text (`Backlog, 0 tickets`, `Backlog (0)`,
 `Backlog 0`) was never read, because the lane count looked only for a separate
-element. The heading now counts when its visible text shows the number; a count only
-in its aria-label does not, and a heading with a badge counts once. A regression
-covers each form and both guards.
+element. The heading now counts when its visible text reads as the column name and
+that count; a count only in its aria-label does not, nor does the number appearing
+elsewhere in the heading text (`Backlog 10 tickets (0 selected)` is not a zero), and
+a heading with a badge counts once. A regression covers each form and both guards.
 
 Two known limits remain. The total is searched across the whole page, so `0
 tickets` (now also indented, or `0 tickets total`) inside each empty lane passes the

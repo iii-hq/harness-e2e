@@ -347,11 +347,11 @@ export function boardLane(page, label) {
 export function boardLaneCount(page, label, count) {
   const lane = boardLane(page, label)
   const badge = lane.getByText(new RegExp(`^\\s*(?:${count}|\\(${count}\\))\\s*$`))
-  // A heading may carry its count in its own text ("Backlog, 0 tickets"); the count must be visible there,
-  // not only in its aria-label.
-  const heading = lane.getByRole('heading', {
-    name: new RegExp(`^(?:${label})\\s*[,:·–—-]?\\s*(?:${count}(?:\\s+tickets?)?|\\(${count}\\))$`, 'i'),
-  }).filter({ hasText: new RegExp(`(?:^|\\D)${count}(?:\\D|$)`) })
+  // A heading may carry its count in its own text ("Backlog, 0 tickets"). What it shows must read as this
+  // lane and count too, not only its aria-label.
+  const shown = `(?:${label})\\s*[,:·–—-]?\\s*(?:${count}(?:\\s+tickets?)?|\\(${count}\\))`
+  const heading = lane.getByRole('heading', { name: new RegExp(`^${shown}$`, 'i') })
+    .filter({ hasText: new RegExp(`^\\s*${shown}\\s*$`, 'i') })
   // One count per lane, whether the heading, a badge or both show it.
   return badge.or(heading).filter({ visible: true }).first()
 }

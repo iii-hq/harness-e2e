@@ -25,9 +25,10 @@ C3, C4, C5 and C7 evidence. A column heading is the column name alone or the nam
 followed by `N`, `N ticket(s)` or `(N)`, and a separator (`,`, `:`, `·`, `–`, `—`
 or `-`) may now stand between them, so `Backlog, 0 tickets` names the Backlog
 column and `Backlog archive, 0 tickets` does not. A lane count is an element
-holding only `N` or `(N)`, or the heading itself when its visible text shows the
-number (`Backlog, 0 tickets`, `Backlog (0)`); a count carried only by the
-heading's aria-label does not count, and a lane whose heading and badge both show
+holding only `N` or `(N)`, or the heading itself when its visible text reads as
+the column name and that count (`Backlog, 0 tickets`, `Backlog (0)`); a count
+carried only by the heading's aria-label does not count, nor does a number elsewhere
+in its text, and a lane whose heading and badge both show
 the count counts once. A visible board total is `N ticket(s)`, optionally followed
 by `on (the) board`, `total` or `in total` and an optional trailing period, or
 `Total`, optionally followed by `ticket(s)`, then an optional colon, then `N`,

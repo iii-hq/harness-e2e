@@ -225,7 +225,8 @@ const labels=['Backlog','To do','In progress','In review','Done'];
 const board=head=>`<main>${labels.map(label=>`<section>${head(label)}<ul></ul></section>`).join('')}</main>`;
 const forms={comma:l=>`<h2>${l}, 0 tickets</h2>`,paren:l=>`<h2>${l} (0)</h2>`,space:l=>`<h2>${l} 0</h2>`,colon:l=>`<h2>${l}: 0</h2>`,
  ariaSpan:l=>`<h2 aria-label="${l}, 0 tickets"><span>${l}</span><span>0</span></h2>`,loading:l=>`<h2>${l}</h2>`,ten:l=>`<h2>${l}, 10 tickets</h2>`,
- ariaOnly:l=>`<h2 aria-label="${l}, 0 tickets">${l}</h2>`,ariaAgainstBadge:l=>`<h2 aria-label="${l}, 0 tickets"><span>${l}</span><span>3</span></h2>`};
+ ariaOnly:l=>`<h2 aria-label="${l}, 0 tickets">${l}</h2>`,ariaAgainstBadge:l=>`<h2 aria-label="${l}, 0 tickets"><span>${l}</span><span>3</span></h2>`,
+ ariaAgainstText:l=>`<h2 aria-label="${l}, 0 tickets">${l} 10 tickets (0 selected)</h2>`};
 const out={};
 for(const [name,head] of Object.entries(forms)){
  await page.setContent(board(head));
@@ -235,8 +236,9 @@ console.log(JSON.stringify(out));
 """, browser=True)
         self.assertEqual(result, {'comma': [1, 0, 0], 'paren': [1, 0, 0], 'space': [1, 0, 0], 'colon': [1, 0, 0],
                                   'ariaSpan': [1, 0, 0], 'loading': [0, 0, 0], 'ten': [0, 0, 1],
-                                  # What the heading shows wins over its aria-label: no visible count, or another one.
-                                  'ariaOnly': [0, 0, 0], 'ariaAgainstBadge': [0, 0, 0]})
+                                  # What the heading shows wins over its aria-label: no visible count, another
+                                  # badge, or a heading that reads as another count with the number elsewhere.
+                                  'ariaOnly': [0, 0, 0], 'ariaAgainstBadge': [0, 0, 0], 'ariaAgainstText': [0, 0, 0]})
 
     def test_card_and_detail_values_accept_surrounding_whitespace_without_accepting_other_words(self):
         # Pretty-printed markup indents text nodes; Playwright tests a RegExp against raw textContent.
