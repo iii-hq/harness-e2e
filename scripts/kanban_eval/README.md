@@ -146,7 +146,8 @@ and logs live under `/runtime-state/compose`, outside the source workspace. A
 new `worker-compose.lock` containing only Compose's canonical empty local-project
 lock is recorded as generated output; changes to an existing lock or a lock with
 dependencies are still rejected. Git tree IDs compare source contents and modes,
-including binary files. Build output and data remain excluded from source capture.
+including binary files. Build output, data and the build record Compose writes
+under `.iii/build` (iii 0.27 and later) remain excluded from source capture.
 
 The subject chooses its Compose namespace. The controller resolves it from
 `worker-compose.yaml` the way Compose does (top-level `namespace:`, else

@@ -1,5 +1,23 @@
 # Kanban validation — 2026-09-20
 
+## Compose build record on iii 0.27 — 2026-11-21
+
+iii 0.27.0-rc.1 Compose records each container build in
+`.iii/build/<container>/build.json`, with a `built_at` time, and ignores the
+directory with its own `.gitignore`. Source capture stages with `--force`, so the
+record entered both trees, and the rebuild when evaluation started the
+application rewrote it. In the 0.39.0 software-engineering run
+([Actions run 44903707338](https://github.com/iii-hq/harness-e2e/actions/runs/44903707338)),
+C1 r03 ended `evaluation_failed` with "candidate source changed during evaluation:
+.iii/build/.gitignore, .iii/build/kanban/build.json", although its functional
+probes had passed (MOT-5846).
+
+Source capture now leaves `.iii/build` out, as it does build output and data, and
+resets it to `HEAD`. A record the subject built, staged or committed stays out of
+`subject.diff`, and its rewrite is not a source change. A change to the subject's
+source during evaluation is still rejected. Runs on iii 0.26.1-rc.2 wrote no
+build record.
+
 ## Candidate-caused failures count — 2026-11-12
 
 A Kanban app that did not come back from a restart, or kept no
