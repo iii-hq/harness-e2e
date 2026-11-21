@@ -129,6 +129,49 @@ class KanbanRunnerTest(unittest.TestCase):
                 self.assertEqual(integrity['changed_paths'], ['app.bin'])
                 self.assertNotEqual(integrity['subject_tree'], integrity['evaluated_tree'])
 
+    def test_integrity_ignores_the_build_record_compose_rewrites_when_it_starts(self):
+        # iii 0.27 Compose records each container build, with its time, under .iii/build and ignores the directory.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / 'workspace'
+            (repo / 'kanban/src').mkdir(parents=True)
+            evidence = Path(directory) / 'evidence'
+            evidence.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repo), *args])
+            def commit(message):
+                git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', message)
+            def build(built_at):
+                (repo / '.iii/build/kanban').mkdir(parents=True, exist_ok=True)
+                (repo / '.iii/build/.gitignore').write_text('*\n')
+                (repo / '.iii/build/kanban/build.json').write_text(
+                    json.dumps({'container': 'kanban', 'command': 'npm run build', 'built_at': built_at}))
+            git('init', '--quiet')
+            (repo / 'kanban/src/index.ts').write_text('export const ready = true\n')
+            git('add', '.')
+            commit('baseline')
+            def local_exec(_candidate, command):
+                return [str(repo) if arg == '/workspace' else arg for arg in command]
+            with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
+                for subject_record in ('none', 'built', 'staged', 'committed'):
+                    with self.subTest(subject_record=subject_record):
+                        if subject_record != 'none':
+                            build('2026-11-21T13:00:00Z')
+                        if subject_record in ('staged', 'committed'):
+                            git('add', '--force', '.iii/build')
+                        if subject_record == 'committed':
+                            commit('subject commits its build record')
+                        runner.capture_candidate_diff('candidate', evidence, 'subject')
+                        build('2026-11-21T13:07:42Z')
+                        runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                        runner.verify_candidate_source('candidate', evidence)
+                        self.assertFalse(json.loads((evidence / 'source-integrity.json').read_text())['changed'])
+                        self.assertNotIn(b'.iii/build', (evidence / 'subject.diff').read_bytes())
+                (repo / 'kanban/src/index.ts').write_text('export const ready = false\n')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                with self.assertRaisesRegex(runner.EvaluationError, 'candidate source changed.*kanban/src/index.ts'):
+                    runner.verify_candidate_source('candidate', evidence)
+
     def test_only_new_canonical_empty_compose_lock_is_runtime_generated(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory) / 'workspace'

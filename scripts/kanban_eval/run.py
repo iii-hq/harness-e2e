@@ -147,9 +147,10 @@ def docker_exec(container, command):
 
 
 def stage_changes_command(workspace):
+    # Compose (iii 0.27+) rewrites its build record under .iii/build, with the build time, whenever it builds.
     return ['/bin/sh', '-c', '''set -eu
-git -C "$1" add --all --force -- . ':!kanban/node_modules' ':!kanban/dist' ':!data'
-git -C "$1" reset --quiet HEAD -- kanban/node_modules kanban/dist data
+git -C "$1" add --all --force -- . ':!kanban/node_modules' ':!kanban/dist' ':!data' ':!.iii/build'
+git -C "$1" reset --quiet HEAD -- kanban/node_modules kanban/dist data .iii/build
 ''', 'stage-changes', str(workspace)]
 
 
