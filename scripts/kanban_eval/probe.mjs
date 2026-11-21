@@ -261,7 +261,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 4,
+    rubric_version: 5,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -274,7 +274,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 4,
+    rubric_version: 5,
     case_id: caseId,
     checks,
     status,
@@ -333,7 +333,7 @@ async function screenshot(page, output, name) {
 }
 
 function boardLaneHeading(page, labels) {
-  const count = '(?:\\s*(?:\\d+(?:\\s+tickets?)?|\\(\\d+\\)))?'
+  const count = '(?:\\s*[,:·–—-]?\\s*(?:\\d+(?:\\s+tickets?)?|\\(\\d+\\)))?'
   return page.getByRole('heading', { name: new RegExp(`^(?:${labels.join('|')})${count}$`, 'i') })
 }
 
@@ -345,7 +345,7 @@ export function boardLane(page, label) {
 }
 
 export function boardLaneCount(page, label, count) {
-  return boardLane(page, label).getByText(new RegExp(`^(?:${count}|\\(${count}\\))$`)).filter({ visible: true })
+  return boardLane(page, label).getByText(new RegExp(`^\\s*(?:${count}|\\(${count}\\))\\s*$`)).filter({ visible: true })
 }
 
 export async function boardLaneWithCount(page, label, count) {
@@ -388,9 +388,10 @@ export async function dragToVisibleLane(source, target, page) {
 }
 
 export function boardTicketTotal(page, count) {
-  const labeled = page.getByLabel(/^total(?: tickets)?$/i)
+  // Playwright tests a RegExp against raw label text and textContent, so indentation must be allowed.
+  const labeled = page.getByLabel(/^\s*total(?:\s+tickets)?\s*$/i)
     .filter({ hasText: new RegExp(`^\\s*${count}\\s*$`) })
-  const text = page.getByText(new RegExp(`^(?:${count}\\s+tickets?(?:\\s+on\\s+(?:the\\s+)?board\\.?)?|total(?:\\s+tickets?)?\\s*:?\\s*${count}(?:\\s+tickets?)?)$`, 'i'))
+  const text = page.getByText(new RegExp(`^\\s*(?:${count}\\s+tickets?(?:\\s+(?:on\\s+(?:the\\s+)?board|(?:in\\s+)?total)\\.?)?|total(?:\\s+tickets?)?\\s*:?\\s*${count}(?:\\s+tickets?)?)\\s*$`, 'i'))
   // A summary and a labeled output may both present the same total.
   return labeled.or(text).filter({ visible: true }).first()
 }
@@ -401,6 +402,11 @@ export function boardTicketTitle(scope, title) {
 
 function literalPattern(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Exactly this text in any case; Playwright tests a RegExp against raw textContent, so whitespace around it is allowed.
+function wholeText(text) {
+  return new RegExp(`^\\s*${literalPattern(text)}\\s*$`, 'i')
 }
 
 export function ticketCard(page, ticket) {
@@ -419,7 +425,7 @@ export async function ticketCardRegion(scope, ticket) {
     if (await candidate.evaluate((element, boundary) => element === boundary
       || ['HTML', 'BODY', 'MAIN'].includes(element.tagName), scopeElement)) continue
     const hasValues = await Promise.all(values.map((value) => candidate.getByText(
-      value === ticket.priority ? new RegExp(`^${literalPattern(value)}$`, 'i') : value, { exact: true },
+      value === ticket.priority ? wholeText(value) : value, { exact: true },
     ).filter({ visible: true }).count()))
     if (hasValues.every((count) => count > 0)
       && await candidate.getByRole('heading').filter({ visible: true }).count() <= 1) return candidate
@@ -512,7 +518,7 @@ export async function assertTicketDetails(page, ticket) {
     .filter({ visible: true }).evaluateAll((elements) => elements.flatMap((element) => element.tagName === 'SELECT'
       ? [...element.selectedOptions].flatMap((option) => [option.value, option.label]) : [element.value]))
   const displayedStatus = ticket.status === 'todo' ? 'to do' : ticket.status.replaceAll('_', ' ')
-  const status = new RegExp(`^(?:${literalPattern(ticket.status)}|${literalPattern(displayedStatus)})$`, 'i')
+  const status = new RegExp(`^\\s*(?:${literalPattern(ticket.status)}|${literalPattern(displayedStatus)})\\s*$`, 'i')
   const values = [
     [ticket.description, false], [status, false],
     [ticket.priority, true], [ticket.assignee, false],
@@ -520,7 +526,7 @@ export async function assertTicketDetails(page, ticket) {
   for (const [value, presentation] of values) {
     if (value == null || value === '') continue
     const text = value instanceof RegExp ? value
-      : presentation ? new RegExp(`^${literalPattern(value)}$`, 'i') : value
+      : presentation ? wholeText(value) : value
     expect(await region.getByText(text, { exact: true }).filter({ visible: true }).count() > 0
       || controls.some((control) => (text instanceof RegExp ? text.test(control) : control === text)),
     `detail omitted persisted value: ${value}`)
@@ -924,7 +930,7 @@ export const PROBES = {
         const lane = boardLane(page, label)
         const card = await ticketCardRegion(lane, seeded[index])
         await eventually(async () => await card.getByText(seeded[index].key, { exact: true }).count() === 1, `${label} readable key is missing from its card`)
-        expect(await card.getByText(/^high$/i).count() === 1, `${label} priority is missing from its card`)
+        expect(await card.getByText(wholeText('high')).count() === 1, `${label} priority is missing from its card`)
         expect(await card.getByText('Grace', { exact: true }).count() === 1, `${label} assignee is missing from its card`)
       }
       await context.close()
@@ -1673,7 +1679,7 @@ export const PROBES = {
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { status: 'done' } })
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => {
         const detail = await ticketDetail(page, { ...ticket, title: 'Dirty local title' })
-        return await detail.getByText(/^done$/i).filter({ visible: true }).count() === 1
+        return await detail.getByText(wholeText('done')).filter({ visible: true }).count() === 1
       }, 'remote move did not update detail status')))
       await eventually(async () => await boardLane(sessions[2].page, 'Done').getByRole('heading', { name: 'Dirty local title' }).count(), 'remote move did not update the board lane')
       stage('live_drag')

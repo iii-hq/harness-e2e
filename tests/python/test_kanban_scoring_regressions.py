@@ -23,6 +23,42 @@ console.log(JSON.stringify(found));
 """, browser=True)
         self.assertEqual(result, [1, 1, 1, 0, 0])
 
+    def test_total_accepts_captured_summaries_without_accepting_another_count_or_sentence(self):
+        # 0.38.0 C3 r02 indents "Total <output>N</output> tickets"; 0.36.0 C3 r02 reads "N tickets total".
+        # "10 tickets total" fails if the leading tolerance is more than whitespace, and
+        # "0 tickets selected" fails if the words after the number are open-ended.
+        result = self.node("""
+const found=[];
+for(const [html,count] of [
+ ['<p id="summary">\\n  <span>Total</span>\\n  <output>0</output> <span>tickets</span>\\n</p>',0],
+ ['<p id="summary">\\n  <span>Total</span>\\n  <output>0</output> <span>tickets</span>\\n</p>',5],
+ ['<p id="summary"><strong>0</strong> tickets total</p>',0],
+ ['<p id="summary"><strong>0</strong> tickets total</p>',5],
+ ['<p>0 tickets in total</p>',0],
+ ['<p>10 tickets total</p>',0],
+ ['<p>0 tickets selected</p>',0],
+]){await page.setContent(html);found.push(await probe.boardTicketTotal(page,count).count());}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, [1, 0, 1, 0, 1, 0, 0])
+
+    def test_labeled_total_accepts_an_indented_label_without_accepting_another_label(self):
+        # getByLabel tests a RegExp against the raw label text, like getByText. The output sits
+        # apart from its label so only the labeled form can find it; "Subtotal" fails if the
+        # label match is unanchored.
+        result = self.node("""
+const labeled=label=>`<header>${label}<span>tickets on the board</span></header><footer><output id="t">0</output></footer>`;
+const found=[];
+for(const [html,count] of [
+ [labeled('<label for="t">\\n  Total\\n</label>'),0],
+ [labeled('<label for="t">\\n  Total\\n</label>'),5],
+ ['<div><output aria-label=" Total tickets ">0</output></div>',0],
+ [labeled('<label for="t">\\n  Subtotal\\n</label>'),0],
+]){await page.setContent(html);found.push(await probe.boardTicketTotal(page,count).count());}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, [1, 0, 1, 0])
+
     def test_detail_header_actions_do_not_hide_sibling_fields(self):
         result = self.node("""
 const ticket={key:'KAN-1',title:'Ticket',description:'Details',status:'todo',priority:'urgent',assignee:'Lin'};
@@ -159,6 +195,44 @@ const lane=probe.boardLane(page,'Backlog');
 console.log(JSON.stringify({id:await lane.getAttribute('id'),count:await (await probe.boardLaneWithCount(page,'Backlog',1)).count()}));
 """, browser=True)
         self.assertEqual(result, {'id': 'backlog', 'count': 1})
+
+    def test_lane_headings_accept_a_separator_before_the_count_without_accepting_another_column(self):
+        # 0.38.0 C3 r01 names each column "Backlog, 0 tickets" and shows the count in its own span.
+        # "Backlog archive, 0 tickets" fails if the separator admits words, and an indented
+        # "10" fails at count 0 if the count tolerates more than whitespace.
+        result = self.node("""
+const labels=['Backlog','To do','In progress','In review','Done'];
+const separators=[',',':',' ·',' –',' -'];
+await page.setContent(`<main><p>0 tickets</p><div id="board">${labels.map((label,index)=>`<section class="column"><h2 aria-label="${label}${separators[index]} 0 tickets"><span>${label}</span><span class="column-count">${index?'\\n  0\\n':'0'}</span></h2><div class="column-cards"></div></section>`).join('')}</div></main>`);
+const accepted=[],wrongCount=[];
+for(const label of labels){
+ accepted.push(await (await probe.boardLaneWithCount(page,label,0)).getAttribute('class'));
+ wrongCount.push(await probe.boardLaneCount(page,label,1).count());
+}
+await page.setContent('<main><section><h2 aria-label="Backlog archive, 0 tickets"><span>Backlog archive</span><span>0</span></h2></section><section><h2>To do</h2></section><section><h2>Done</h2><span>\\n  10\\n</span></section></main>');
+const archive=await probe.boardLane(page,'Backlog').count();
+const tenAsZero=await probe.boardLaneCount(page,'Done',0).count();
+console.log(JSON.stringify({accepted,wrongCount,archive,tenAsZero}));
+""", browser=True)
+        self.assertEqual(result, {'accepted': ['column'] * 5, 'wrongCount': [0] * 5, 'archive': 0, 'tenAsZero': 0})
+
+    def test_card_and_detail_values_accept_surrounding_whitespace_without_accepting_other_words(self):
+        # Pretty-printed markup indents text nodes; Playwright tests a RegExp against raw textContent.
+        # "High priority" and "Not urgent" fail if the tolerance admits more than whitespace.
+        result = self.node("""
+const card=priority=>`<main><section><h2>Backlog <span>1</span></h2><div class="card"><h3>Target</h3><p>KAN-1</p><p>\\n  ${priority}\\n</p><p>Grace</p></div></section><section><h2>Done <span>0</span></h2></section></main>`;
+const region=async()=>(await probe.ticketCardRegion(probe.boardLane(page,'Backlog'),{title:'Target',key:'KAN-1',priority:'high',assignee:'Grace'})).evaluate(element=>element.tagName);
+await page.setContent(card('High'));const indentedCard=await region();
+await page.setContent(card('High priority'));const otherCard=await region();
+const ticket={key:'KAN-1',title:'Ticket',description:'Details',status:'todo',priority:'urgent',assignee:'Lin'};
+const detail=priority=>`<section id="detail"><header><h2>Ticket</h2><button>Delete ticket</button></header><p>KAN-1</p><p>Details</p><p>\\n  To do\\n</p><p>\\n  ${priority}\\n</p><p>Lin</p></section>`;
+const verdict=async()=>probe.assertTicketDetails(page,ticket).then(()=>'accepted',()=>'rejected');
+await page.setContent(detail('Urgent'));const indentedDetail=await verdict();
+await page.setContent(detail('Not urgent'));const otherDetail=await verdict();
+console.log(JSON.stringify({indentedCard,otherCard,indentedDetail,otherDetail}));
+""", browser=True)
+        self.assertEqual(result, {'indentedCard': 'DIV', 'otherCard': 'H3',
+                                  'indentedDetail': 'accepted', 'otherDetail': 'rejected'})
 
     def test_card_metadata_cannot_be_borrowed_from_a_sibling_card(self):
         result = self.node("""

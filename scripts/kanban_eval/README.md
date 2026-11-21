@@ -110,8 +110,13 @@ does not rescore stored reports.
 
 Selectors accept accessible links/buttons with span titles, list-based lanes,
 `Total: 5 tickets`, visible empty-state text and presentation labels such as
-`Urgent`. Detail validation is scoped to the detail panel so identical text on
-a board card does not count as a missing field. Fields are read from the widest
+`Urgent`. A lane heading may separate its name from its count with `,`, `:`, `·`,
+`–`, `—` or `-` (`Backlog, 0 tickets`). The total also reads `5 tickets total` or
+`5 tickets in total`. Lane counts, the total and its `Total` label, card priority
+and detail status or presentation values ignore whitespace before and after the
+text, since Playwright tests a regular expression against raw text and labels;
+other surrounding words still fail. Detail validation is scoped to the detail panel
+so identical text on a board card does not count as a missing field. Fields are read from the widest
 ancestor of the panel that adds no link or button named with the ticket title, no
 card title copy, no other title heading and no board lane, so fields beside a
 heading block holding the title and the Delete action count. Visible read-only or
