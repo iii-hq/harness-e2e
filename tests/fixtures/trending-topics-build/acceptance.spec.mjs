@@ -91,8 +91,11 @@ async function focusStyle(link) {
         for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
           if (parseFloat(css[`border${side}Width`]) >= 1 && visible(css[`border${side}Color`])) styles.push(['border', side, css[`border${side}Width`], css[`border${side}Color`]]);
         }
-        if (css.boxShadow.split(/,(?![^(]*\))/).some(shadow => /[1-9]/.test(shadow.replace(/rgba?\([^)]*\)/, ''))
-            && visible(shadow.match(/rgba?\([^)]*\)/)?.[0] ?? 'transparent', pseudo || shadow.includes('inset') ? bg : outside))) styles.push(['shadow', css.boxShadow]);
+        // Each visible shadow is its own indicator, so one the link already shows never reads as new.
+        for (const shadow of css.boxShadow.split(/,(?![^(]*\))/).map(layer => layer.trim())) {
+          if (/[1-9]/.test(shadow.replace(/rgba?\([^)]*\)/, ''))
+              && visible(shadow.match(/rgba?\([^)]*\)/)?.[0] ?? 'transparent', pseudo || shadow.includes('inset') ? bg : outside)) styles.push(['shadow', shadow]);
+        }
         if (css.textDecorationLine !== 'none' && visible(css.textDecorationColor)) styles.push(['decoration', css.textDecoration]);
         if (current.parentElement) {
           if (contrast(bg.map((channel, index) => channel * opacity + outside[index] * (1 - opacity)), outside) >= 3) styles.push(['background', bg]);

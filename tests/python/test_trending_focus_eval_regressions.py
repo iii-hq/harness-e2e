@@ -21,5 +21,5 @@ class TrendingFocusEvalRegressions(unittest.TestCase):
             "outline": True, "background": True, "translucent": True, "faded": False, "transparent": False,
             "lowContrast": False, "imperceptible": False,
             "pillOutline": True, "pillShadow": True, "pillInset": True, "pillPageColor": False, "pseudoInsideRing": True,
-            "pillInsetShadow": True, "pseudoInsideOutline": True,
+            "pillInsetShadow": True, "pseudoInsideOutline": True, "pillKeptShadow": False, "pillAddedShadow": True,
         })
