@@ -47,6 +47,28 @@ class ChessEvalRegressionsTest(unittest.TestCase):
         self.assertFalse(result["brokenImages"]["passed"])
         self.assertTrue(result["visibleImages"]["passed"])
         self.assertFalse(result["transparentImages"]["passed"])
+        for name in (
+            "pointerEventsNone",
+            "shadowOutline",
+            "shadowOnlyGlyph",
+            "strokeOutline",
+            "svgPointerEventsNone",
+        ):
+            self.assertTrue(result[name]["passed"], name)
+        self.assertTrue(result["pointerEventsRestored"])
+        for name in (
+            "blurredHalo",
+            "faintShadow",
+            "sameColorOutline",
+            "hairlineStroke",
+            "farShadow",
+            "fadedStroke",
+            "fadedShadow",
+            "fillTransparent",
+            "coveredPointerEventsNone",
+            "pointerEventsNoneBehindSquare",
+        ):
+            self.assertFalse(result[name]["passed"], name)
         self.assertEqual(result["controls"], {"outboundFakeResults": 100, "inboundFakeRequests": 100})
         self.assertEqual(
             [packet["invocation_id"] for packet in result["rpc"]["requests"]],

@@ -8,6 +8,14 @@ import { isDeepStrictEqual as sameJson } from 'node:util'
 
 export { sameJson }
 
+// A move that sends only the status, bare or under one wrapper key such as {"changes": {...}}.
+export function statusOnlyPatch(body, status) {
+  const expected = { status }
+  if (sameJson(body, expected)) return true
+  const entries = body && typeof body === 'object' && !Array.isArray(body) ? Object.entries(body) : []
+  return entries.length === 1 && sameJson(entries[0][1], expected)
+}
+
 const CASES = [
   'kanban_c1_foundation',
   'kanban_c2_persistence',
@@ -261,7 +269,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 5,
+    rubric_version: 6,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -274,7 +282,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 5,
+    rubric_version: 6,
     case_id: caseId,
     checks,
     status,
@@ -423,22 +431,41 @@ export function ticketCard(page, ticket) {
     .filter({ visible: true })
 }
 
+// The value alone or after its own field label ("Assignee: Grace"); "High priority" is still another value.
+function labeledText(text, label) {
+  return new RegExp(`^\\s*(?:(?:${label})\\s*[:\\-–—]?\\s*)?${literalPattern(text)}\\s*$`, 'i')
+}
+
+// What a card must show for each ticket field the probe seeded.
+export function cardFields(ticket) {
+  return [
+    ['readable key', ticket.key, (value) => value],
+    ['priority', ticket.priority, (value) => labeledText(value, 'priority')],
+    ['assignee', ticket.assignee, (value) => labeledText(value, 'assignee|assigned to|owner')],
+  ].filter(([, value]) => value != null && value !== '').map(([field, value, text]) => ({ field, text: text(value) }))
+}
+
 export async function ticketCardRegion(scope, ticket) {
   const title = boardTicketTitle(scope, ticket.title)
-  const values = [ticket.key, ticket.priority, ticket.assignee].filter((value) => value != null && value !== '')
+  const fields = cardFields(ticket)
   const ancestors = title.locator('xpath=ancestor-or-self::*')
   const scopeElement = await scope.elementHandle()
   for (let index = 0; index < await ancestors.count(); index++) {
     const candidate = ancestors.nth(index)
     if (await candidate.evaluate((element, boundary) => element === boundary
       || ['HTML', 'BODY', 'MAIN'].includes(element.tagName), scopeElement)) continue
-    const hasValues = await Promise.all(values.map((value) => candidate.getByText(
-      value === ticket.priority ? wholeText(value) : value, { exact: true },
-    ).filter({ visible: true }).count()))
+    const hasValues = await Promise.all(fields.map(({ text }) => candidate.getByText(text, { exact: true })
+      .filter({ visible: true }).count()))
     if (hasValues.every((count) => count > 0)
       && await candidate.getByRole('heading').filter({ visible: true }).count() <= 1) return candidate
   }
   return title
+}
+
+// The opener may be a "New ticket" link to a modal route; the anchored link name keeps card titles out.
+export function ticketCreationOpener(page) {
+  return page.getByRole('button', { name: 'New ticket' })
+    .or(page.getByRole('link', { name: /^\s*\+?\s*new ticket\s*(?:…|\.{3})?\s*$/i })).filter({ visible: true }).first()
 }
 
 export function ticketCreationDialog(page) {
@@ -544,6 +571,18 @@ export async function assertTicketDetails(page, ticket) {
 
 export function boardNavigation(page) {
   return page.getByRole('link', { name: /^(?:←\s*)?(?:back to )?(?:the )?board[.!]?$/i }).filter({ visible: true }).first()
+}
+
+// A header link and an in-page action may both lead to settings; the form checks verify where the first visible one goes.
+export function settingsNavigation(page) {
+  return page.getByRole('link', { name: /^settings$/i }).filter({ visible: true }).first()
+}
+
+// A failed first read, worded as "Unable to load", "Could not load", "Can't reach" or an error.
+const BOARD_LOAD_FAILURE = /unable|error|fail|could\s*not|couldn['’]t|can\s*not|can['’]t/i
+
+export function boardLoadFailure(page) {
+  return page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: BOARD_LOAD_FAILURE })
 }
 
 export function mutationFailureFeedback(page) {
@@ -892,7 +931,7 @@ export const PROBES = {
             expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
             for (const [, label] of statuses) expect(await boardLaneCount(page, label, 0).count() === 0, 'loading fabricated zero lane counts')
           } else if (state === 'error') {
-            await expectText(page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: /unable|error|fail/i }), /unable|error|fail/i)
+            await expectText(boardLoadFailure(page), BOARD_LOAD_FAILURE)
             expect(await boardTicketTotal(page, 0).count() === 0, 'failed first read fabricated a zero total')
             for (const [, label] of statuses) expect(await boardLaneCount(page, label, 0).count() === 0, 'failed first read fabricated zero lane counts')
           } else {
@@ -937,9 +976,10 @@ export const PROBES = {
         const [, label] = statuses[index]
         const lane = boardLane(page, label)
         const card = await ticketCardRegion(lane, seeded[index])
-        await eventually(async () => await card.getByText(seeded[index].key, { exact: true }).count() === 1, `${label} readable key is missing from its card`)
-        expect(await card.getByText(wholeText('high')).count() === 1, `${label} priority is missing from its card`)
-        expect(await card.getByText('Grace', { exact: true }).count() === 1, `${label} assignee is missing from its card`)
+        expect(seeded[index].key, `${label} ticket has no readable key`)
+        for (const { field, text } of cardFields({ key: seeded[index].key, priority: 'high', assignee: 'Grace' })) {
+          await eventually(async () => await card.getByText(text, { exact: true }).count() === 1, `${label} ${field} is missing from its card`)
+        }
       }
       await context.close()
     })
@@ -973,12 +1013,12 @@ export const PROBES = {
       }, 'settings form did not save the selected directory')
       try {
         const alternateDir = `./board-probe-${randomUUID()}`
-        await page.getByRole('link', { name: /^settings$/i }).click()
+        await settingsNavigation(page).click()
         await settingsFormLoaded(initialConfig.data_dir)
         await saveDirectory(alternateDir)
         await boardNavigation(page).click()
         await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', STORE_SWITCH_TIMEOUT_MS)
-        await page.getByRole('link', { name: /^settings$/i }).click()
+        await settingsNavigation(page).click()
         await settingsFormLoaded(alternateDir)
         await saveDirectory(initialConfig.data_dir)
         await boardNavigation(page).click()
@@ -1013,7 +1053,7 @@ export const PROBES = {
     const fields = { description: 'UTF-8: ação e café', status: 'in_review', priority: 'urgent', assignee: 'Lin' }
     const newForm = async (title) => {
       const opened = await pageFor(browser, baseUrl, { width: 390, height: 844 })
-      await opened.page.getByRole('button', { name: 'New ticket' }).click()
+      await ticketCreationOpener(opened.page).click()
       const dialog = ticketCreationDialog(opened.page)
       await dialog.getByLabel('Title').fill(title)
       await dialog.getByLabel('Description').fill(fields.description)
@@ -1040,7 +1080,7 @@ export const PROBES = {
     })
     await check('ticket_modal', async () => {
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
-      await page.getByRole('button', { name: 'New ticket' }).click()
+      await ticketCreationOpener(page).click()
       const dialog = ticketCreationDialog(page)
       await assertAccessibleFormControls(dialog)
       expect(await dialog.getByLabel('Title').evaluate((element) => element === document.activeElement), 'modal did not focus the title field')
@@ -1300,7 +1340,7 @@ export const PROBES = {
       })
       await dragToVisibleLane(card, target, page)
       await eventually(() => attempted, 'failed drag did not send its PATCH')
-      expect(sameJson(attempted.postDataJSON(), { status: 'done' }), 'failed drag PATCH changed fields besides status')
+      expect(statusOnlyPatch(attempted.postDataJSON(), 'done'), 'failed drag PATCH sent fields besides status')
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'todo', 'failed drag changed persisted status')
       const todo = await boardLaneWithCount(page, 'To do', todoCount)
       expect(await todo.getByRole('heading', { name: 'Drag probe' }).count() === 1, 'failed drag moved the visible card')
@@ -1326,7 +1366,7 @@ export const PROBES = {
       })
       await dragToVisibleLane(card, target, page)
       await eventually(() => patch, 'successful drag did not send its PATCH')
-      expect(sameJson(patch.postDataJSON(), { status: 'done' }), 'drag PATCH changed fields besides status')
+      expect(statusOnlyPatch(patch.postDataJSON(), 'done'), 'drag PATCH sent fields besides status')
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'done', 'drag did not persist done status')
       await boardLaneWithCount(page, 'Done', doneCount + 1)
       await boardLaneWithCount(page, 'To do', todoCount - 1)
@@ -1349,8 +1389,8 @@ export const PROBES = {
       try {
         await dragToVisibleLane(card, review, page)
         const patch = await delayed.reached()
-        expect(sameJson(patch.postDataJSON(), { status: 'in_review' }), 'late drag PATCH changed fields besides status')
-        await page.getByRole('link', { name: /^settings$/i }).click()
+        expect(statusOnlyPatch(patch.postDataJSON(), 'in_review'), 'late drag PATCH sent fields besides status')
+        await settingsNavigation(page).click()
         delayed.release()
         await delayed.delivered()
         await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'in_review', 'late move did not persist after navigation')

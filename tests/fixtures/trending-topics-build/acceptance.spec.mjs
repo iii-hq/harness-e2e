@@ -78,21 +78,23 @@ async function focusStyle(link) {
         let opacity = Number(css.opacity);
         for (let parent = current.parentElement; parent; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity);
         const bg = background(current);
-        const visible = color => {
+        const outside = current.parentElement ? background(current.parentElement) : bg;
+        const visible = (color, backdrop = bg) => {
           const value = rgba(color), alpha = value[3] / 255 * opacity;
-          return alpha > 0 && contrast(bg.map((channel, index) => value[index] * alpha + channel * (1 - alpha)), bg) >= 3;
+          return alpha > 0 && contrast(backdrop.map((channel, index) => value[index] * alpha + channel * (1 - alpha)), backdrop) >= 3;
         };
-        if (!['none', 'hidden'].includes(css.outlineStyle) && parseFloat(css.outlineWidth) >= 1 && visible(css.outlineColor)) {
+        // An element's outline or outer shadow outside its border box paints over the parent; pseudo-element rings stay on their host.
+        const ring = !pseudo && parseFloat(css.outlineOffset) + parseFloat(css.outlineWidth) / 2 > 0 ? outside : bg;
+        if (!['none', 'hidden'].includes(css.outlineStyle) && parseFloat(css.outlineWidth) >= 1 && visible(css.outlineColor, ring)) {
           styles.push(['outline', css.outline, css.outlineOffset]);
         }
         for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
           if (parseFloat(css[`border${side}Width`]) >= 1 && visible(css[`border${side}Color`])) styles.push(['border', side, css[`border${side}Width`], css[`border${side}Color`]]);
         }
-        if ((css.boxShadow.match(/rgba?\([^)]*\)/g) ?? []).some(visible)
-            && /[1-9]/.test(css.boxShadow.replace(/rgba?\([^)]*\)/g, ''))) styles.push(['shadow', css.boxShadow]);
+        if (css.boxShadow.split(/,(?![^(]*\))/).some(shadow => /[1-9]/.test(shadow.replace(/rgba?\([^)]*\)/, ''))
+            && visible(shadow.match(/rgba?\([^)]*\)/)?.[0] ?? 'transparent', pseudo || shadow.includes('inset') ? bg : outside))) styles.push(['shadow', css.boxShadow]);
         if (css.textDecorationLine !== 'none' && visible(css.textDecorationColor)) styles.push(['decoration', css.textDecoration]);
         if (current.parentElement) {
-          const outside = background(current.parentElement);
           if (contrast(bg.map((channel, index) => channel * opacity + outside[index] * (1 - opacity)), outside) >= 3) styles.push(['background', bg]);
         }
       }

@@ -38,6 +38,34 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         accepted = {name for name, passed in json.loads(result.stdout)["disclosure"].items() if passed}
         self.assertEqual(accepted, {"nested", "controlled_sibling"})
 
+    def test_config_array_order_accepts_a_whole_or_per_index_reversal(self):
+        # One changed array and one changed entry per index are both ordered JSON Pointer diffs.
+        script = """
+const { configArrayReordered } = require(process.argv[1]);
+const c = (path, before, after, kind = 'changed', area = 'config') => ({ area, path, kind, before, after });
+const cases = {
+  whole: [c('/required', ['one', 'two'], ['two', 'one'])],
+  per_index: [c('/required/0', 'one', 'two'), c('/required/1', 'two', 'one')],
+  set_semantics: [],
+  unchanged: [c('/required', ['one', 'two'], ['one', 'two'])],
+  one_index: [c('/required/0', 'one', 'two')],
+  wrong_values: [c('/required/0', 'one', 'two'), c('/required/1', 'one', 'two')],
+  wrong_area: [c('/required', ['one', 'two'], ['two', 'one'], 'changed', 'functions')],
+  swapped: [c('/required/0', 'two', 'one'), c('/required/1', 'one', 'two')],
+  per_index_removed: [c('/required/0', 'one', 'two', 'removed'), c('/required/1', 'two', 'one', 'removed')],
+  per_index_added: [c('/required/0', 'one', 'two', 'added'), c('/required/1', 'two', 'one', 'added')],
+};
+console.log(JSON.stringify(Object.fromEntries(Object.entries(cases).map(
+  ([name, changes]) => [name, configArrayReordered({ status: 200, body: { changes } })]))));
+"""
+        result = subprocess.run(["node", "-e", script, str(SCRIPT)], cwd=ROOT, text=True,
+                                capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        accepted = {name for name, passed in json.loads(result.stdout).items() if passed}
+        self.assertEqual(accepted, {"whole", "per_index"})
+        # The probe scores the case through this helper, not an inline copy of the old check.
+        self.assertIn("? configArrayReordered(result)", SCRIPT.read_text())
+
     def test_the_probe_runs_when_node_reads_it_on_stdin(self):
         # validate.py pipes the probe into `node -`, where require.main is
         # undefined: a guard on require.main === module alone ran nothing,

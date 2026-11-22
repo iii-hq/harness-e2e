@@ -27,6 +27,14 @@ async function request(path) {
 function changes(result) { return Array.isArray(result.body?.changes) ? result.body.changes : []; }
 function change(result, predicate) { return changes(result).find(predicate); }
 function endpoint(from, to, worker = 'orders-worker') { return `/w/${worker}/compare/${from}...${to}`; }
+// Reversed config.required ['one','two']: one changed array, or one changed entry per index.
+function configArrayReordered(result) {
+  const config = changes(result).filter(c => c.area === 'config' && c.kind === 'changed');
+  const has = (path, before, after) => config.some(c => c.path === path
+    && JSON.stringify(c.before) === JSON.stringify(before) && JSON.stringify(c.after) === JSON.stringify(after));
+  return has('/required', ['one', 'two'], ['two', 'one'])
+    || (has('/required/0', 'one', 'two') && has('/required/1', 'two', 'one'));
+}
 
 async function temporaryOrderingProbes() {
   const ids = ['required_order', 'enum_order', 'config_array_order'];
@@ -69,8 +77,7 @@ async function temporaryOrderingProbes() {
       const result = await request(endpoint(...versions));
       const expected = id === 'config_array_order' ? 'Configuration required-array order produces a change' : `${id} alone creates no change`;
       const correct = id === 'config_array_order'
-        ? changes(result).some(c => c.area === 'config' && c.path === '/required' && c.kind === 'changed'
-          && JSON.stringify(c.before) === '["one","two"]' && JSON.stringify(c.after) === '["two","one"]')
+        ? configArrayReordered(result)
         : Array.isArray(result.body?.changes) && result.body.changes.length === 0;
       observe(`implementation.${id}`, result.status === 200 && correct, expected, result);
     }
@@ -291,7 +298,7 @@ async function main() {
   await fs.writeFile(`${output}/feature.json`, `${JSON.stringify({ api_url: api, app_url: app, observations, cases }, null, 2)}\n`);
 }
 
-module.exports = { comparisonFailure, expandedDetail };
+module.exports = { comparisonFailure, configArrayReordered, expandedDetail };
 // Run as the probe on stdin (`node -`, which has no main module) or as a script;
 // a test that requires it for comparisonFailure, from ESM too, runs nothing.
 if (module.id === '[stdin]' || require.main === module) main().catch(async error => {

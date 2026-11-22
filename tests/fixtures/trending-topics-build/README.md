@@ -75,7 +75,10 @@ Visual reading order is top-to-bottom, then left-to-right for vertically
 overlapping title rectangles. CSS-counter-only ranks are not part of this contract.
 The focus check requires a newly visible outline, border, shadow, decoration or
 background indicator with at least 3:1 contrast on the link, its isolated ancestors
-or pseudo-elements. Transparent or imperceptible style changes do not count.
+or pseudo-elements. An outline or outer shadow drawn outside the link's border box
+is measured against the background around the link; borders, decorations, inset
+shadows and pseudo-element rings against the link's own background. Transparent or
+imperceptible style changes do not count.
 This is not a general WCAG conformance audit or a test of every masked effect. Body checks reject hidden text and common
 vertical clipping; they are not a general proof of visual legibility. Screenshots
 remain available for inspection without assigning aesthetic points.

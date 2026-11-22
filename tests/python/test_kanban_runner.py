@@ -106,22 +106,23 @@ class KanbanRunnerTest(unittest.TestCase):
             subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test',
                             '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false',
                             'commit', '--quiet', '-m', 'baseline'], check=True)
+            base = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD']).decode().strip()
 
             def local_exec(_candidate, command):
                 return [str(repo) if arg == '/workspace' else arg for arg in command]
 
             with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
                 (repo / 'app.bin').write_bytes(b'\0delivered')
-                runner.capture_candidate_diff('candidate', evidence, 'subject')
+                runner.capture_candidate_diff('candidate', evidence, 'subject', base)
                 state = root / 'runtime-state/compose/default'
                 state.mkdir(parents=True)
                 (state / 'state.json').write_text('{"pid":1234}')
-                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                 runner.verify_candidate_source('candidate', evidence)
                 self.assertFalse(json.loads((evidence / 'source-integrity.json').read_text())['changed'])
 
                 (repo / 'app.bin').write_bytes(b'\0mutated')
-                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                 with self.assertRaisesRegex(runner.EvaluationError, 'candidate source changed.*app.bin'):
                     runner.verify_candidate_source('candidate', evidence)
                 integrity = json.loads((evidence / 'source-integrity.json').read_text())
@@ -150,6 +151,7 @@ class KanbanRunnerTest(unittest.TestCase):
             (repo / 'kanban/src/index.ts').write_text('export const ready = true\n')
             git('add', '.')
             commit('baseline')
+            base = git('rev-parse', 'HEAD').decode().strip()
             def local_exec(_candidate, command):
                 return [str(repo) if arg == '/workspace' else arg for arg in command]
             with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
@@ -161,16 +163,45 @@ class KanbanRunnerTest(unittest.TestCase):
                             git('add', '--force', '.iii/build')
                         if subject_record == 'committed':
                             commit('subject commits its build record')
-                        runner.capture_candidate_diff('candidate', evidence, 'subject')
+                        runner.capture_candidate_diff('candidate', evidence, 'subject', base)
                         build('2026-11-21T13:07:42Z')
-                        runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                        runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                         runner.verify_candidate_source('candidate', evidence)
                         self.assertFalse(json.loads((evidence / 'source-integrity.json').read_text())['changed'])
                         self.assertNotIn(b'.iii/build', (evidence / 'subject.diff').read_bytes())
                 (repo / 'kanban/src/index.ts').write_text('export const ready = false\n')
-                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                 with self.assertRaisesRegex(runner.EvaluationError, 'candidate source changed.*kanban/src/index.ts'):
                     runner.verify_candidate_source('candidate', evidence)
+
+    def test_delivered_diff_includes_changes_the_subject_committed(self):
+        # 5 of 18 C4 subjects in 0.36.0-0.40.0 ran git commit; a diff against HEAD then came out empty.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / 'workspace'
+            repo.mkdir()
+            evidence = Path(directory) / 'evidence'
+            evidence.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repo), *args])
+            def commit(message):
+                git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', message)
+            git('init', '--quiet')
+            (repo / 'index.ts').write_text('export const ready = false\n')
+            git('add', '.')
+            commit('baseline')
+            base = git('rev-parse', 'HEAD').decode().strip()
+            (repo / 'index.ts').write_text('export const ready = true\n')
+            git('add', '.')
+            commit('subject commits its work')
+            def local_exec(_candidate, command):
+                return [str(repo) if arg == '/workspace' else arg for arg in command]
+            with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
+                runner.capture_candidate_diff('candidate', evidence, 'subject', base)
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
+                runner.verify_candidate_source('candidate', evidence)
+            self.assertIn(b'+export const ready = true', (evidence / 'subject.diff').read_bytes())
+            self.assertFalse(json.loads((evidence / 'source-integrity.json').read_text())['subject_diff_empty'])
 
     def test_only_new_canonical_empty_compose_lock_is_runtime_generated(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -185,24 +216,25 @@ class KanbanRunnerTest(unittest.TestCase):
             git('add', '.')
             git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
                 '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'baseline')
+            base = git('rev-parse', 'HEAD').decode().strip()
             def local_exec(_candidate, command):
                 return [str(repo) if arg == '/workspace' else arg for arg in command]
             with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
-                runner.capture_candidate_diff('candidate', evidence, 'subject')
+                runner.capture_candidate_diff('candidate', evidence, 'subject', base)
                 lock = repo / 'worker-compose.lock'
                 lock.write_text('version: 1\ncontainers: {}\n')
-                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                 runner.verify_candidate_source('candidate', evidence)
                 integrity = json.loads((evidence / 'source-integrity.json').read_text())
                 self.assertFalse(integrity['changed'])
                 self.assertEqual(integrity['generated_paths'], ['worker-compose.lock'])
                 lock.write_text('version: 1\ncontainers: {dependency: altered}\n')
-                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                 with self.assertRaises(runner.EvaluationError):
                     runner.verify_candidate_source('candidate', evidence)
-                runner.capture_candidate_diff('candidate', evidence, 'subject')
+                runner.capture_candidate_diff('candidate', evidence, 'subject', base)
                 lock.write_text('version: 1\ncontainers: {}\n')
-                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated', base)
                 with self.assertRaises(runner.EvaluationError):
                     runner.verify_candidate_source('candidate', evidence)
 
@@ -776,7 +808,7 @@ class KanbanRunnerTest(unittest.TestCase):
             dependencies.mkdir()
             (repo / 'kanban/node_modules').symlink_to(dependencies, target_is_directory=True)
 
-            subprocess.run(runner.stage_changes_command(repo), check=True)
+            subprocess.run(runner.stage_changes_command(repo, 'HEAD'), check=True)
             staged = subprocess.check_output(
                 ['git', '-C', str(repo), 'diff', '--cached', '--name-status', 'HEAD'], text=True)
             self.assertEqual(set(staged.splitlines()), {

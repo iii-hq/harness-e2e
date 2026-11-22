@@ -1,6 +1,6 @@
 {
   "schema": "kanban-evaluation",
-  "rubric_version": 5,
+  "rubric_version": 6,
   "case_id": "kanban_c1_foundation",
   "checks": [
     {
