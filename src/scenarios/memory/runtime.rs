@@ -37,6 +37,8 @@ const PRE_GENERATE: &str = "harness::hook::on-pre-generate";
 /// A stack that carries memory-consolidate is the consolidated arm.
 const CONSOLIDATE: &str = "memory-consolidate::run";
 const EMBEDDER: &str = "all-MiniLM-L6-v2";
+/// iii-directory's local MiniLM, router::embed's keyless fallback.
+const MINILM_EMBED: &str = "provider::minilm::embed";
 const POLL: Duration = Duration::from_secs(2);
 /// How long a stack that declares memory-consolidate may take to register
 /// its pass: the runner's grace for a control plane still registering.
@@ -167,6 +169,13 @@ pub fn lexical_settled(first: Instant, now: Instant) -> bool {
     now.duration_since(first) >= LEXICAL_SETTLE
 }
 
+/// Whether `provider::minilm::embed`'s `error` says MiniLM is still on its
+/// way: its bundle is not on disk yet or still downloading. Not compiled,
+/// no model path or no such function: it never will be.
+pub fn minilm_coming(error: &str) -> bool {
+    error.contains("is not provisioned") || error.contains("is still downloading")
+}
+
 /// A bank that was never created, or is already in the trash.
 pub fn bank_already_gone(error: &str) -> bool {
     error.contains("bank_not_found")
@@ -174,7 +183,8 @@ pub fn bank_already_gone(error: &str) -> bool {
 
 /// Waits until memory ranks with MiniLM or lexical-only, the two modes the
 /// suite accepts, and says which. MiniLM is taken at once; lexical-only once
-/// two answers at least `LEXICAL_SETTLE` apart both say so.
+/// two answers at least `LEXICAL_SETTLE` apart both say so, and never while
+/// MiniLM is still coming: past `EMBEDDER_WAIT` setup fails with its error.
 async fn wait_for_embedder(context: &E2eContext) -> Result<Retrieval> {
     let deadline = Instant::now() + EMBEDDER_WAIT;
     let mut first_lexical = None;
@@ -183,11 +193,25 @@ async fn wait_for_embedder(context: &E2eContext) -> Result<Retrieval> {
         let last = match context.trigger_value("memory::doctor", json!({})).await {
             Ok(doctor) => match embedder(&doctor) {
                 Embedder::Ready(Retrieval::Lexical) => {
-                    let now = Instant::now();
-                    if lexical_settled(*first_lexical.get_or_insert(now), now) {
-                        return Ok(Retrieval::Lexical);
+                    // Memory configured not to embed never waits for MiniLM.
+                    let embeds = !doctor.to_string().contains("embeddings disabled by config");
+                    let probe = context
+                        .trigger_value(MINILM_EMBED, json!({"input": ["probe"]}))
+                        .await
+                        .map_err(|error| format!("{error:#}"));
+                    match probe {
+                        Err(error) if embeds && minilm_coming(&error) => {
+                            first_lexical = None;
+                            format!("{doctor}; {MINILM_EMBED} is still coming: {error}")
+                        }
+                        _ => {
+                            let now = Instant::now();
+                            if lexical_settled(*first_lexical.get_or_insert(now), now) {
+                                return Ok(Retrieval::Lexical);
+                            }
+                            doctor.to_string()
+                        }
                     }
-                    doctor.to_string()
                 }
                 Embedder::Ready(retrieval) => return Ok(retrieval),
                 Embedder::Other(detail) => {
@@ -1524,6 +1548,36 @@ mod tests {
         assert!(!lexical_settled(first, first));
         assert!(!lexical_settled(first, first + Duration::from_secs(14)));
         assert!(lexical_settled(first, first + Duration::from_secs(15)));
+    }
+
+    /// iii-directory's answer, wrapped as the runner's invoke error.
+    fn minilm_error(reason: &str) -> String {
+        format!("invoke provider::minilm::embed: {reason}")
+    }
+
+    #[test]
+    fn minilm_is_waited_for_while_no_download_has_put_its_bundle_on_disk() {
+        assert!(minilm_coming(&minilm_error(
+            "provider/not_configured: the MiniLM bundle at /root/.cache/iii/minilm is not provisioned"
+        )));
+    }
+
+    #[test]
+    fn minilm_is_waited_for_while_its_bundle_is_still_downloading() {
+        assert!(minilm_coming(&minilm_error(
+            "provider/internal: the MiniLM bundle at /root/.cache/iii/minilm is still downloading"
+        )));
+    }
+
+    #[test]
+    fn minilm_is_not_waited_for_when_it_never_will_embed() {
+        for never in [
+            "provider/not_configured: MiniLM is not compiled for this target",
+            "provider/not_configured: function_search_model_path is null",
+            "function_not_found: provider::minilm::embed",
+        ] {
+            assert!(!minilm_coming(&minilm_error(never)), "{never}");
+        }
     }
 
     #[test]
