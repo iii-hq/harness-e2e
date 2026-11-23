@@ -849,7 +849,11 @@ records which mode ran (`retrieval` in its evidence, and the
 `memory_setup_retrieval_minilm` measurement: 1 for MiniLM, 0 for
 lexical-only). Lexical-only counts once the doctor has said so
 for 15 seconds, so a stack still loading MiniLM is not taken for one without
-it. Setup fails when memory embeds with any other model. To run a case on your own stack, from a checkout:
+it. While `provider::minilm::embed` says its bundle is not provisioned yet or
+still downloading, setup keeps waiting instead, up to 300 seconds, and then
+fails with that error as an infrastructure error: the run is not measured
+rather than scored as lexical-only. Setup fails when memory embeds with any
+other model. To run a case on your own stack, from a checkout:
 
 ```bash
 D=~/iii-memory-e2e && mkdir -p "$D" && cd "$D"
