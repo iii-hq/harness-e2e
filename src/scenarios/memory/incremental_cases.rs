@@ -238,6 +238,7 @@ mod tests {
                 waited_ms: 0,
                 memories: runtime::memories_of(second),
                 rules: Default::default(),
+                extraction: None,
             }),
             ..score::Snapshot::default()
         };

@@ -18,11 +18,11 @@ use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use super::cases::{bank, canary, labels, planted, render, Case, Change};
+use super::cases::{audits_bank_after, bank, canary, labels, planted, render, Case, Change};
 use super::observe::observe;
 use super::score::{
-    ChangeOutcome, Consolidation, Extraction, PromptRecord, Retrieval, Snapshot, StoredMemory,
-    LEARNED_RULE,
+    ChangeOutcome, Consolidation, Extraction, Passes, PromptRecord, Retrieval, Snapshot,
+    StoredMemory, LEARNED_RULE,
 };
 use crate::context::E2eContext;
 use crate::scenarios::common::lock_unpoisoned;
@@ -54,6 +54,8 @@ const LEXICAL_SETTLE: Duration = Duration::from_secs(15);
 const TEACHER_WAIT: Duration = Duration::from_secs(300);
 /// Memory's extraction call times out at 60 s and the queue retries it.
 const EXTRACTION_WAIT: Duration = Duration::from_secs(240);
+/// A diagnostic must not stall a case.
+const DOCTOR_WAIT: Duration = Duration::from_secs(30);
 /// Where memory keeps each session's extraction cursor.
 const CURSOR_SCOPE: &str = "memory_cursor";
 // shortcut: `setup` has no subject, so the teacher always talks to the
@@ -88,6 +90,9 @@ struct Run {
     /// Each answered exchange's prompt prefix digest, in order, or why the
     /// status could not be read.
     surface_digests: Vec<Result<Option<String>, String>>,
+    /// Memory's doctor reply when setup ended; null unless the case reads the
+    /// bank after its session.
+    passes_before: Value,
 }
 
 /// A memory as memory stored it.
@@ -435,6 +440,7 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
             consolidation: None,
             checkpoints: super::learning_checkpoints::config(case).map(|_| Vec::new()),
             surface_digests: Vec::new(),
+            passes_before: Value::Null,
         },
     );
     prompts
@@ -558,6 +564,13 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
         .get_mut(run_id)
         .expect("registered above")
         .trigger = Some(trigger);
+    if audits_bank_after(case) {
+        let reply = doctor(context).await;
+        lock_unpoisoned(runs())
+            .get_mut(run_id)
+            .expect("registered above")
+            .passes_before = reply;
+    }
     Ok(())
 }
 
@@ -637,6 +650,7 @@ async fn teach(
 ) -> Result<()> {
     let session = enroll_teacher(run_id);
     let bank = bank(run_id);
+    let before = doctor(context).await;
     let sent: Result<()> = async {
         for (index, template) in case.teacher.iter().enumerate() {
             let response: SendResponse = context
@@ -695,7 +709,7 @@ async fn teach(
     let transcript = transcript?;
     // Waited for even when memory read another bank: cleanup then retires
     // what extraction wrote there once it is all in.
-    let taught = if super::learning_checkpoints::config(case).is_some() {
+    let mut taught = if super::learning_checkpoints::config(case).is_some() {
         lock_unpoisoned(runs())
             .get(run_id)
             .and_then(|run| run.taught.clone())
@@ -710,6 +724,10 @@ async fn teach(
         .and_then(|reply| unexpected_reply(&transcript, reply))
     {
         bail!("case precondition no longer holds: the teacher replied {other:?}");
+    }
+    // Before the vector wait, so the window holds the teacher's passes only.
+    if let Some(taught) = &mut taught {
+        taught.extraction = passes_between(&before, &doctor(context).await);
     }
     // Lexical-only stores no vector to wait for.
     if retrieval == Retrieval::Minilm {
@@ -809,6 +827,7 @@ async fn checkpoint(
                 waited_ms: checkpoint.waited_ms,
                 memories: memories_of(&list),
                 rules: rules_of(&rules),
+                extraction: None,
             });
         }
         if let Some(checkpoints) = &mut run.checkpoints {
@@ -966,6 +985,7 @@ async fn extraction(
         waited_ms: u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
         memories: memories_of(&list),
         rules: rules_of(&rules),
+        extraction: None,
     })
 }
 
@@ -976,7 +996,60 @@ pub async fn bank_after(
     run_id: &str,
     transcript: &Value,
 ) -> Result<Extraction> {
-    extraction(context, &format!("e2e_{run_id}"), &bank(run_id), transcript).await
+    let mut read = extraction(context, &format!("e2e_{run_id}"), &bank(run_id), transcript).await?;
+    let before = lock_unpoisoned(runs())
+        .get(run_id)
+        .map(|run| run.passes_before.clone())
+        .unwrap_or_default();
+    read.extraction = passes_between(&before, &doctor(context).await);
+    Ok(read)
+}
+
+/// Memory's doctor reply, or null: a diagnostic, so an unanswered doctor
+/// records nothing and fails nothing.
+async fn doctor(context: &E2eContext) -> Value {
+    context
+        .trigger_value_with_timeout("memory::doctor", json!({}), DOCTOR_WAIT)
+        .await
+        .unwrap_or_default()
+}
+
+/// Memory's extraction passes between two doctor replies, from their
+/// since-boot counters; `None` when either reply holds no pass health.
+fn passes_between(before: &Value, after: &Value) -> Option<Passes> {
+    let (mut before, after) = (before.get("extraction")?, after.get("extraction")?);
+    if !before.is_object() || !after.is_object() {
+        return None;
+    }
+    let count = |value: &Value| value.as_u64().unwrap_or(0);
+    // Fewer passes than before: memory restarted in the window, so all it
+    // counted since its boot is inside the window.
+    if count(&after["passes"]) < count(&before["passes"]) {
+        before = &Value::Null;
+    }
+    let moved = |after: &Value, before: &Value| count(after).saturating_sub(count(before));
+    let total = |field: &str| moved(&after["total"][field], &before["total"][field]);
+    let dropped = after["total"]["dropped"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(why, n)| (why.clone(), moved(n, &before["total"]["dropped"][why])))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    let passes = moved(&after["passes"], &before["passes"]);
+    Some(Passes {
+        passes,
+        calls: total("calls"),
+        created: total("created"),
+        reinforced: total("reinforced"),
+        superseded: total("superseded"),
+        dropped,
+        // Every counted pass sets or clears the error and an uncounted one
+        // keeps it, so without a counted pass here it is an earlier window's.
+        last_error: (passes > 0)
+            .then(|| after["last_error"].as_str().map(str::to_string))
+            .flatten(),
+    })
 }
 
 /// Keeps seed `index`'s memory for the changes and the evidence.
@@ -1922,6 +1995,90 @@ mod tests {
         assert!(recorded[0].cursor_entry_id.is_none());
         assert!(recorded[0].memories.is_empty());
         lock_unpoisoned(runs()).remove(run_id);
+    }
+
+    #[test]
+    fn the_passes_between_two_doctor_replies_are_the_difference_of_their_totals() {
+        let before = json!({"ok": true, "extraction": {"passes": 3, "total": {
+            "calls": 3, "created": 2, "dropped": {"known": 1}}}});
+        let after = json!({"ok": true, "extraction": {"passes": 5, "total": {
+            "calls": 6, "created": 2, "reinforced": 1, "dropped": {"known": 1, "rejected": 2}}}});
+        assert_eq!(
+            passes_between(&before, &after),
+            Some(Passes {
+                passes: 2,
+                calls: 3,
+                created: 0,
+                reinforced: 1,
+                superseded: 0,
+                // `known` did not move in the window.
+                dropped: BTreeMap::from([("rejected".to_string(), 2)]),
+                last_error: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_doctor_reply_without_pass_health_records_nothing() {
+        let health =
+            json!({"ok": true, "checks": [], "extraction": {"passes": 1, "total": {"calls": 1}}});
+        // A memory that predates the field.
+        let older = json!({"ok": true, "checks": []});
+        for (before, after) in [
+            (Value::Null, health.clone()),
+            (health.clone(), Value::Null),
+            (older.clone(), health.clone()),
+            (health.clone(), older.clone()),
+        ] {
+            assert_eq!(passes_between(&before, &after), None, "{before} -> {after}");
+        }
+        assert!(passes_between(&health, &health).is_some());
+    }
+
+    #[test]
+    fn a_memory_restarted_in_the_window_counts_from_its_boot() {
+        let before = json!({"extraction": {"passes": 9, "total": {"calls": 9}}});
+        let after = json!({"extraction": {"passes": 1, "total": {"calls": 1, "created": 1}}});
+        assert_eq!(
+            passes_between(&before, &after),
+            Some(Passes {
+                passes: 1,
+                calls: 1,
+                created: 1,
+                ..Passes::default()
+            })
+        );
+    }
+
+    #[test]
+    fn the_last_pass_error_is_kept_as_the_doctor_states_it() {
+        let before = json!({"extraction": {"passes": 0, "total": {}}});
+        let failed = json!({"extraction": {"passes": 1, "last_error": "router::complete: no provider",
+            "total": {"calls": 1}}});
+        assert_eq!(
+            passes_between(&before, &failed).and_then(|passes| passes.last_error),
+            Some("router::complete: no provider".to_string())
+        );
+        let clean = json!({"extraction": {"passes": 1, "total": {"calls": 1}}});
+        assert_eq!(
+            passes_between(&before, &clean).and_then(|passes| passes.last_error),
+            None
+        );
+        // No pass counted in the window: the error is an earlier window's.
+        assert_eq!(
+            passes_between(&failed, &failed).and_then(|passes| passes.last_error),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_doctor_records_nothing_and_fails_nothing() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let reply = tokio::time::timeout(Duration::from_secs(2), doctor(&context))
+            .await
+            .expect("an unreachable doctor must return promptly");
+        assert_eq!(reply, Value::Null);
+        assert_eq!(passes_between(&reply, &reply), None);
     }
 
     #[test]
