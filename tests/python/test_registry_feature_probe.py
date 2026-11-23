@@ -66,6 +66,58 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(cases).map(
         # The probe scores the case through this helper, not an inline copy of the old check.
         self.assertIn("? configArrayReordered(result)", SCRIPT.read_text())
 
+    def test_the_probe_browser_opens_the_app_on_localhost(self):
+        # The fixture's Next 16 dev server refuses its HMR socket to a 127.0.0.1 origin, and a page
+        # opened there never hydrated: 0.41.0 registry-implementation r01's select never fetched its pair.
+        script = """
+const { appOrigin } = require(process.argv[1]);
+console.log(JSON.stringify(['http://127.0.0.1:43000', 'http://127.0.0.1:43000/workers', 'http://localhost:43000',
+  'http://127.0.0.10:43000', 'http://web:43000', undefined].map(appOrigin)));
+"""
+        result = subprocess.run(["node", "-e", script, str(SCRIPT)], cwd=ROOT, text=True,
+                                capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ["http://localhost:43000", "http://localhost:43000/workers",
+                                                     "http://localhost:43000", "http://127.0.0.10:43000",
+                                                     "http://web:43000", None])
+        self.assertIn("const app = appOrigin(process.env.E2E_APP_URL);", SCRIPT.read_text())
+
+    def test_keyboard_selector_waits_for_a_controlled_select_to_settle(self):
+        # Hydrated, 0.41.0 r01's controlled select kept 2.0.0 until router.push landed on 1.1.0;
+        # reading right after Enter failed a working selector.
+        playwright = Path(os.environ.get("PLAYWRIGHT_MODULE_PATH", ROOT / "dashboard/node_modules/playwright/index.mjs"))
+        self.assertTrue(playwright.exists(), "Playwright is required for evaluator regression controls")
+        script = """
+const { keyboardSelectChanges } = require(process.argv[1]);
+const { chromium } = require(process.argv[2]);
+const select = (handler = '', attrs = '') => `<select id="s" ${attrs}><option>a</option><option>b</option></select><script>${handler}</script>`;
+const pages = {
+  native: select(),
+  controlled_late: select("let v='a';s.addEventListener('change',()=>{const n=s.value;s.value=v;setTimeout(()=>{v=n;s.value=n},800)})"),
+  always_reverts: select("s.addEventListener('change',()=>{s.value='a'})"),
+  disabled: select('', 'disabled'),
+};
+(async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
+  const out = {};
+  try {
+    for (const [name, html] of Object.entries(pages)) {
+      const page = await browser.newPage();
+      await page.setContent(html);
+      out[name] = await keyboardSelectChanges(page, page.locator('select'), 2000);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+  console.log(JSON.stringify(out));
+})();
+"""
+        result = subprocess.run(["node", "-e", script, str(SCRIPT), str(playwright.parent)], cwd=ROOT, text=True,
+                                capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         {"native": True, "controlled_late": True, "always_reverts": False, "disabled": False})
+        self.assertIn("keyboard = await keyboardSelectChanges(page, selects.nth(1), timeout);", SCRIPT.read_text())
+
     def test_the_probe_runs_when_node_reads_it_on_stdin(self):
         # validate.py pipes the probe into `node -`, where require.main is
         # undefined: a guard on require.main === module alone ran nothing,

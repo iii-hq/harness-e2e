@@ -3,7 +3,11 @@ const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 
 const api = process.env.TEST_API_URL || process.env.API_URL;
-const app = process.env.E2E_APP_URL;
+// The fixture's Next dev server refuses its HMR socket to a 127.0.0.1 origin, so a page opened there never hydrates.
+function appOrigin(url) {
+  return url?.replace(/^(https?:\/\/)127\.0\.0\.1(?=[:/]|$)/, '$1localhost');
+}
+const app = appOrigin(process.env.E2E_APP_URL);
 const output = '/tmp/registry-validation';
 const observations = [];
 const cases = {};
@@ -221,6 +225,20 @@ async function expandedDetail(page) {
   return { expanded, observed: { controlFound: !!(await detail.count()), ...disclosure } };
 }
 
+// A controlled select keeps its value until the app's own navigation lands, so wait for the change.
+async function keyboardSelectChanges(page, select, timeout) {
+  const originalValue = await select.inputValue();
+  const selectedIndex = await select.evaluate(node => node.selectedIndex);
+  const optionCount = await select.locator('option').count();
+  await select.focus();
+  await page.keyboard.press(selectedIndex < optionCount - 1 ? 'ArrowDown' : 'ArrowUp');
+  await page.keyboard.press('Enter');
+  await page.waitForLoadState('networkidle');
+  const deadline = Date.now() + timeout;
+  while (await select.inputValue() === originalValue && Date.now() < deadline) await page.waitForTimeout(250);
+  return await select.inputValue() !== originalValue;
+}
+
 async function browserProbes(apiHealthy) {
   const { chromium } = require('@playwright/test');
   const ids = ['shared_url','stale_results','history','expanded_detail','keyboard_selectors','versions_regression','readme_regression','api_reference_regression'];
@@ -240,16 +258,7 @@ async function browserProbes(apiHealthy) {
     observe('implementation.expanded_detail', detail.expanded, 'Closed timeout row opens and shows 3000 and 5000', detail.observed);
     const selects = page.locator('select');
     let keyboard = false;
-    if (await selects.count() >= 2) {
-      const originalValue = await selects.nth(1).inputValue();
-      const selectedIndex = await selects.nth(1).evaluate(node => node.selectedIndex);
-      const optionCount = await selects.nth(1).locator('option').count();
-      await selects.nth(1).focus();
-      await page.keyboard.press(selectedIndex < optionCount - 1 ? 'ArrowDown' : 'ArrowUp');
-      await page.keyboard.press('Enter');
-      await page.waitForLoadState('networkidle');
-      keyboard = (await selects.nth(1).inputValue()) !== originalValue;
-    }
+    if (await selects.count() >= 2) keyboard = await keyboardSelectChanges(page, selects.nth(1), timeout);
     observe('implementation.keyboard_selectors', keyboard, 'Keyboard input changes the selected version', { selectCount: await selects.count(), keyboard });
     const navigationPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const navigation = await comparisonFailure(navigationPage, app, 'navigation', timeout, `${output}/failure-navigation.png`);
@@ -298,7 +307,7 @@ async function main() {
   await fs.writeFile(`${output}/feature.json`, `${JSON.stringify({ api_url: api, app_url: app, observations, cases }, null, 2)}\n`);
 }
 
-module.exports = { comparisonFailure, configArrayReordered, expandedDetail };
+module.exports = { appOrigin, comparisonFailure, configArrayReordered, expandedDetail, keyboardSelectChanges };
 // Run as the probe on stdin (`node -`, which has no main module) or as a script;
 // a test that requires it for comparisonFailure, from ESM too, runs nothing.
 if (module.id === '[stdin]' || require.main === module) main().catch(async error => {

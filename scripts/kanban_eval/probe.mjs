@@ -269,7 +269,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 6,
+    rubric_version: 7,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -282,7 +282,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 6,
+    rubric_version: 7,
     case_id: caseId,
     checks,
     status,
@@ -585,13 +585,25 @@ export function boardLoadFailure(page) {
   return page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: BOARD_LOAD_FAILURE })
 }
 
+// The prompt asks for a loading state without naming a role, so visible text that starts with "Loading" counts too.
+export function boardLoadingIndicator(page) {
+  return page.getByRole('status').filter({ hasText: /load/i })
+    .or(page.getByText(/^\s*loading\b/i).filter({ visible: true }))
+}
+
+// Loading text still on screen; a status that reads "Loaded 2 tickets" is not.
+export function loadingText(page) {
+  return page.getByRole('status').filter({ hasText: /loading/i })
+    .or(page.getByText(/^\s*loading\b/i).filter({ visible: true }))
+}
+
 export function mutationFailureFeedback(page) {
   return page.getByRole('alert').or(page.getByRole('status'))
     .filter({ hasText: /probe failure|(?:unable|failed|could not).*(?:sav|mov|creat|delet|post)|error/i }).filter({ visible: true })
 }
 
 export async function assertClearedDiscussionDraft(page, title) {
-  const draft = page.getByRole('textbox', { name: 'Comment', exact: true }).filter({ visible: true })
+  const draft = commentBody(page).filter({ visible: true })
   // Switching stores may return to the board instead of retaining stale details.
   if (await draft.count() === 0) await page.getByRole('heading', { name: title, exact: true }).click()
   await eventually(async () => await draft.count() === 1 && await draft.inputValue() === '',
@@ -619,11 +631,18 @@ export function saveTicketAction(scope) {
   return scope.getByRole('button', { name: /^save(?: changes| ticket)?$/i }).filter({ visible: true })
 }
 
+// The prompt names no label for the comment body: accept the usual names, never the author or a ticket field.
+const COMMENT_BODY = /^\s*(?:(?:your|new)\s+|(?:add|write|leave|post|type)\s+(?:an?\s+|your\s+)?)?comment(?:\s+(?:body|text))?(?:\s*(?:\(required\)|…|\.{3}|[:*]))*\s*$|^\s*body\s*$/i
+
+export function commentBody(page) {
+  return page.getByRole('textbox', { name: COMMENT_BODY })
+}
+
 // The prompt asks for an author without naming its label, so find it beside the
 // comment body instead of requiring the reference's "Your name".
 export function commentAuthor(page) {
   return page.locator('form')
-    .filter({ has: page.getByRole('textbox', { name: 'Comment', exact: true }) })
+    .filter({ has: commentBody(page) })
     .getByRole('textbox', { name: /\b(?:name|author)\b/i })
     .filter({ visible: true })
 }
@@ -927,9 +946,12 @@ export const PROBES = {
         try {
           await page.goto(baseUrl)
           if (state === 'loading') {
-            await expectText(page.getByRole('status').filter({ hasText: /load/i }), /load/i)
+            await expectText(boardLoadingIndicator(page), /load/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
             for (const [, label] of statuses) expect(await boardLaneCount(page, label, 0).count() === 0, 'loading fabricated zero lane counts')
+            // A loading state clears once the read lands: a stuck spinner or static help text is not one.
+            release()
+            await eventually(async () => await loadingText(page).count() === 0, 'loading state stayed after the first read')
           } else if (state === 'error') {
             await expectText(boardLoadFailure(page), BOARD_LOAD_FAILURE)
             expect(await boardTicketTotal(page, 0).count() === 0, 'failed first read fabricated a zero total')
@@ -1439,7 +1461,7 @@ export const PROBES = {
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await commentAuthor(page).fill('Alice')
-      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('<img src=x onerror=alert(1)> first')
+      await commentBody(page).fill('<img src=x onerror=alert(1)> first')
       await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       const safeComment = page.getByText('<img src=x onerror=alert(1)> first', { exact: true })
       await expectText(safeComment, /first/)
@@ -1448,7 +1470,7 @@ export const PROBES = {
       const entry = (body) => page.getByText(body, { exact: true }).locator('xpath=ancestor::*[self::li or self::article or @role="listitem"][1]')
       await entry('<img src=x onerror=alert(1)> first').getByRole('button', { name: /^reply/i }).click()
       await commentAuthor(page).fill('Bob')
-      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('second')
+      await commentBody(page).fill('second')
       await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       await expectText(page.getByText('second', { exact: true }), /second/)
       let stored = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
@@ -1522,7 +1544,7 @@ export const PROBES = {
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       stage('discussion_draft_failure')
       const author = commentAuthor(page)
-      const body = page.getByRole('textbox', { name: 'Comment', exact: true })
+      const body = commentBody(page)
       await author.fill('Draft author')
       await body.fill('Draft during edit')
       await (await ticketEditor(page)).getByRole('button', { name: 'Cancel' }).click()
@@ -1547,7 +1569,7 @@ export const PROBES = {
       await openTicketFromBoard(page, other)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
       await commentAuthor(page).fill('Other author')
-      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Other ticket draft')
+      await commentBody(page).fill('Other ticket draft')
       await openTicketFromBoard(page, ticket)
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.unroute('**/api/tickets/*/comments')
@@ -1570,11 +1592,11 @@ export const PROBES = {
       await reached
       await openTicketFromBoard(page, other)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
-      expect(await page.getByRole('textbox', { name: 'Comment', exact: true }).inputValue() === 'Other ticket draft', 'navigation erased another ticket draft')
+      expect(await commentBody(page).inputValue() === 'Other ticket draft', 'navigation erased another ticket draft')
       await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Concurrent', body: 'Newer activity' } })
       release()
       await delivered
-      await eventually(async () => (await page.getByRole('textbox', { name: 'Comment', exact: true }).inputValue()) === 'Other ticket draft', 'late response erased another ticket draft')
+      await eventually(async () => (await commentBody(page).inputValue()) === 'Other ticket draft', 'late response erased another ticket draft')
       const stored = await trigger('kanban::tickets::get', { id: ticket.id })
       expect(stored.comments.some(({ body }) => body === 'Late activity') && stored.comments.some(({ body }) => body === 'Newer activity'), 'overlapping response lost posted activity')
       await screenshot(page, output, 'discussion-overlap-mobile')
@@ -1688,7 +1710,7 @@ export const PROBES = {
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).title === 'Dirty local title', 'local edit did not save')
       expect((await trigger('kanban::tickets::get', { id: ticket.id })).priority === 'urgent', 'saving overwrote untouched remote priority')
       stage('live_comment_draft')
-      const preservedDraft = sessions[0].page.getByRole('textbox', { name: 'Comment', exact: true })
+      const preservedDraft = commentBody(sessions[0].page)
       await commentAuthor(sessions[0].page).fill('Draft author')
       await preservedDraft.fill('Ordinary update draft')
       await preservedDraft.focus()
@@ -1698,7 +1720,7 @@ export const PROBES = {
 
       stage('live_replies')
       await commentAuthor(sessions[1].page).fill('Remote author')
-      await sessions[1].page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Live comment')
+      await commentBody(sessions[1].page).fill('Live comment')
       const [posted] = await Promise.all([
         sessions[1].page.waitForResponse((response) => response.url().endsWith('/comments') && response.request().method() === 'POST'),
         sessions[1].page.getByRole('button', { name: /^post (comment|reply)$/i }).click(),

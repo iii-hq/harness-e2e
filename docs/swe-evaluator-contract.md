@@ -56,6 +56,19 @@ one key (`{"changes":{"status":"done"}}`); a second key or any other field still
 fails. Version 5 results are not rescored. `provenance.controller_sha256["probe.mjs"]`
 = `9524ad8ca7a6…` identifies the version 5 results of 0.39.0 and 0.40.0.
 
+Kanban rubric version 7 changes C3 and C6 evidence. While the first read is held, the
+C3 loading state is a status mentioning load, as in version 6, or visible text that
+starts with `Loading`. Once the read lands, any status saying loading and any visible
+text starting with `Loading` must be gone, so a stuck spinner or static help text
+fails. Loading must still show no zero total or zero lane count. The comment body in
+C6 and C7 is the textbox named `Comment`, `Comment body`, `Comment text`, `Your
+comment`, `New comment`, `Add comment`, `Add a comment`, `Write your comment`, `Post a
+comment`, `Type a comment` and similar, optionally followed by `:`, `*`, `(required)`
+or `…`, or `Body`; `Comments`, `Comment author`, `Commenter`, `Comment by`, `Notes`
+and `Description` never match.
+Version 6 results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
+`aca16eaa8489…` identifies the version 6 results of 0.41.0 and 0.42.0.
+
 C5 selects a visible, hit-tested point in the target lane and checks a status-only
 PATCH for the dragged ticket, sent bare or under one wrapper key. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.
@@ -73,7 +86,12 @@ visible comparison data, then show an error and remove the old result. Both path
 need attempt-scoped HTTP 503 receipts. Missing receipts, restart or cleanup failure
 leave this observation unavailable; a proven request followed by incorrect UI is
 a measured failure. Other independent observations remain available. Faults are
-always cleared; seeded versions are not renamed to induce a failure.
+always cleared; seeded versions are not renamed to induce a failure. The probe's
+browser opens the app on `localhost`, not `127.0.0.1`: the fixture's Next dev server
+refuses its HMR socket to a `127.0.0.1` origin, and a page opened there never hydrates,
+so client-side version changes never ran. On a hydrated page a controlled select keeps
+its value until the app's own navigation lands, so the keyboard check waits for the
+change instead of reading it right after `Enter`.
 
 Chess retains DOM, paint, hit testing, observed FENs, interactions and matched RPC.
 The playable UI criterion remains strict. Screenshot completeness is evaluated

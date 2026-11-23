@@ -23,7 +23,7 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 const RUBRIC: &str = include_str!("../../../scripts/kanban_eval/rubric.json");
-const RUBRIC_VERSION: u8 = 6;
+const RUBRIC_VERSION: u8 = 7;
 const CATALOG: &str = include_str!("catalog.json");
 /// Short labels for readers, per case and criterion. Kept out of rubric.json:
 /// the rubric is hashed into the case and copied into the run, and a label

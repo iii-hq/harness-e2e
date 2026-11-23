@@ -356,6 +356,55 @@ console.log(JSON.stringify(found));
 """, browser=True)
         self.assertEqual(result, [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0])
 
+    def test_board_loading_accepts_visible_loading_text_outside_a_status_but_not_other_words(self):
+        # 0.41.0 C3 r02 showed "Loading tickets…" in a busy section while its only status stayed empty.
+        result = self.node("""
+const found=[];
+for(const html of ['<p role="status" aria-live="polite"></p><section aria-busy="true"><p>Loading tickets…</p></section>',
+ '<p role="status">Loading tickets…</p>','<p role="status">Loaded 2 tickets</p>','<div><span>Loading…</span></div>',
+ '<p hidden>Loading tickets…</p>','<p>Tickets appear after loading.</p>','<button>Reload</button>','<p>Loaded 0 tickets</p>',
+ '<a href="#">Download</a>','<p>lazy-loading enabled</p>']){
+ await page.setContent(html);const indicator=probe.boardLoadingIndicator(page);
+ found.push(await indicator.count()?(await indicator.first().textContent()).trim():null);
+}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, ['Loading tickets…', 'Loading tickets…', 'Loaded 2 tickets', 'Loading…',
+                                  None, None, None, None, None, None])
+
+    def test_loading_text_must_clear_once_the_first_read_lands(self):
+        # A stuck spinner (CSS overriding hidden) or static help text is not a loading state.
+        result = self.node("""
+const found=[];
+for(const html of ['<section hidden><p>Loading tickets…</p></section><p role="status">Loaded 0 tickets</p>',
+ '<p role="status"></p><p>0 tickets</p>','<p role="status">Board up to date.</p>',
+ '<style>.l{display:grid}</style><section class="l" hidden><p>Loading tickets…</p></section>',
+ '<p>Loading tickets can take a few seconds after the engine starts.</p>','<p role="status">Loading tickets…</p>']){
+ await page.setContent(html);found.push(await probe.loadingText(page).count());
+}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, [0, 0, 0, 1, 1, 1])
+
+    def test_comment_body_accepts_the_subjects_own_label_but_never_the_author_or_a_ticket_field(self):
+        # 0.41.0 C6 r03 labelled its body "Comment body"; the prompt names no label for it.
+        result = self.node("""
+const form=(body)=>`<form><label for="author">Author</label><input id="author"><label for="body">${body}</label><textarea id="body"></textarea></form>`;
+const ids=async(locator)=>locator.evaluateAll(nodes=>nodes.map(node=>node.id));
+const found=[];
+for(const html of [form('Comment'),form('Comment body'),form('Your comment'),form('Comment text'),form('Body'),
+ form('Add a comment'),form('Write a comment…'),form('Add comment'),form('Comment:'),form('Comment *'),form('Comment (required)'),
+ form('Write your comment'),form('Type a comment…'),form('Post a comment'),
+ form('Comments'),form('Notes'),form('Description'),form('Comment author'),form('Commenter'),form('Comment by'),
+ '<form><label for="d">Description</label><textarea id="d"></textarea><label for="a">Assignee name</label><input id="a"></form>',
+ '<div hidden><form><label for="stale">Comment</label><textarea id="stale"></textarea></form></div>'+form('Comment body')]){
+ await page.setContent(html);found.push([await ids(probe.commentBody(page)),await ids(probe.commentAuthor(page))]);
+}
+console.log(JSON.stringify(found));
+""", browser=True)
+        accepted, rejected = [['body'], ['author']], [[], []]
+        self.assertEqual(result, [accepted] * 14 + [rejected] * 7 + [accepted])
+
     def test_status_only_patch_accepts_a_wrapped_status_but_not_other_fields(self):
         # 0.40.0 C5 r02 sends {"changes":{"status":"done"}} and its server saves only the status.
         result = self.node("""

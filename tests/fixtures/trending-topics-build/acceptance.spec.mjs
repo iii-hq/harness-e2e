@@ -9,7 +9,8 @@ const normalize = text => text.replace(/\s+/g, ' ').trim();
 const titleLink = (page, topic) => page.getByRole('link', { name: topic.title, exact: true });
 
 // Rendered text, including split inline text; hidden or commonly clipped blocks do not count.
-function renderedText(node) {
+// A label also skips decorative aria-hidden glyphs (arrows, icons) that hold no letter or digit.
+function renderedText(node, label = false) {
   if (node.nodeType === Node.TEXT_NODE) return Number.parseFloat(getComputedStyle(node.parentElement).fontSize) === 0 ? '' : node.textContent;
   if (!(node instanceof Element)) return '';
   const css = getComputedStyle(node);
@@ -22,13 +23,14 @@ function renderedText(node) {
   if (node.tagName === 'BR') return ' ';
   if ((['hidden', 'clip'].includes(css.overflowY) || Number(css.webkitLineClamp) > 0)
       && node.scrollHeight > node.clientHeight + 1) return '';
-  const text = [...node.childNodes].map(renderedText).join('');
+  const decorative = label && node.getAttribute('aria-hidden') === 'true' && !/[\p{L}\p{N}]/u.test(node.textContent);
+  const text = decorative ? '' : [...node.childNodes].map(child => renderedText(child, label)).join('');
   return css.display.startsWith('inline') ? text : ` ${text} `;
 }
 
 async function visibleLabel(locator, text) {
   await expect(locator).toBeVisible();
-  await expect.poll(async () => normalize(await locator.evaluate(renderedText))).toBe(normalize(text));
+  await expect.poll(async () => normalize(await locator.evaluate(renderedText, true))).toBe(normalize(text));
 }
 
 async function article(page, topic) {
