@@ -1589,9 +1589,10 @@ pub const CASES: [Case; 44] = [
             },
             // Saved last, so newer than the on-call line; no word of the
             // question and no change word, only the entity both carry.
-            // shortcut: only lexical-only recall surely leaves it out without
-            // the link; with MiniLM its meaning may rank it, so check that
-            // `memory::preview` omits it before a MiniLM run counts as a pass.
+            // Its meaning alone never admits it either: with MiniLM its cosine
+            // to the question is about 0.23 (z about 0.5, measured on memory
+            // 0.3.12). It arrives through the link, or through the retired
+            // on-call line's words once consolidation retired that line.
             Seed {
                 entities: &["dana"],
                 ..seed(
@@ -1619,7 +1620,9 @@ pub const CASES: [Case; 44] = [
                 "Departure and escalation contact injected",
                 "Were the newer note that the on-call engineer left and the escalation contact both injected on the turn?",
             ),
-            // Scored: recall ranks the near-miss, and the link never reaches it.
+            // Scored: recall ranks the near-miss close in meaning, and the link
+            // never reaches it; only its tags (another subject than the one the
+            // question names) keep it out.
             scored(
                 "near_miss_left_out",
                 15,
