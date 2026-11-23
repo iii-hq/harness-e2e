@@ -128,6 +128,16 @@ pub struct Passes {
     pub passes: u64,
     /// Model calls, failed ones included.
     pub calls: u64,
+    /// Items the model's replies held, memories and rules, before any check.
+    /// This and the next two are absent from a memory that predates them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned: Option<u64>,
+    /// Replies with no JSON array, which memory reads as nothing returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_array: Option<u64>,
+    /// Rule-kind items the model returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_items: Option<u64>,
     pub created: u64,
     pub reinforced: u64,
     pub superseded: u64,
@@ -153,8 +163,16 @@ impl Passes {
                 .collect();
             reasons.join(", ")
         };
+        let replies: String = [
+            ("returned", self.returned),
+            ("no array", self.no_array),
+            ("rule items", self.rule_items),
+        ]
+        .into_iter()
+        .filter_map(|(name, count)| Some(format!(", {name} {}", count?)))
+        .collect();
         format!(
-            "memory's extraction in that window (every session): passes {}, model calls {}, created {}, reinforced {}, superseded {}, dropped {dropped}, last error {}",
+            "memory's extraction in that window (every session): passes {}, model calls {}{replies}, created {}, reinforced {}, superseded {}, dropped {dropped}, last error {}",
             self.passes,
             self.calls,
             self.created,
@@ -3554,6 +3572,28 @@ mod tests {
         });
         assert_eq!(award(&learned, "control_learned"), Some(20));
         assert!(!reason(&learned, "control_learned").contains(SUMMARY));
+    }
+
+    #[test]
+    fn the_summary_prints_the_reply_counters_memory_reports() {
+        let reported = Passes {
+            passes: 2,
+            calls: 2,
+            returned: Some(1),
+            no_array: Some(1),
+            rule_items: Some(0),
+            dropped: BTreeMap::from([("malformed".to_string(), 1)]),
+            ..Passes::default()
+        };
+        assert_eq!(
+            reported.summary(),
+            "memory's extraction in that window (every session): passes 2, model calls 2, returned 1, no array 1, rule items 0, created 0, reinforced 0, superseded 0, dropped malformed 1, last error none"
+        );
+        // An older memory sends none of them: the line is what it always was.
+        assert_eq!(
+            one_rejected().summary(),
+            "memory's extraction in that window (every session): passes 1, model calls 1, created 0, reinforced 0, superseded 0, dropped rejected 1, last error none"
+        );
     }
 
     #[test]

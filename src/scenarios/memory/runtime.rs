@@ -640,6 +640,11 @@ fn record_strays(run_id: &str, transcript: &Value) -> Vec<Option<String>> {
     read
 }
 
+/// How the setup error for a teacher reply other than the case's fixed one
+/// starts. The teacher is not the subject, so the suite retries it on a fresh
+/// attempt: new sessions, bank and canaries.
+pub const TEACHER_OFF_SCRIPT: &str = "case precondition no longer holds: the teacher replied";
+
 /// Sends the case's teacher messages, waits until memory's extraction has
 /// read them, and keeps the bank as it then stands.
 async fn teach(
@@ -687,7 +692,7 @@ async fn teach(
                     .teacher_reply
                     .and_then(|reply| unexpected_reply(&transcript, reply))
                 {
-                    bail!("case precondition no longer holds: the teacher replied {other:?}");
+                    bail!("{TEACHER_OFF_SCRIPT} {other:?}");
                 }
                 checkpoint(context, case, run_id, index, &session, &bank).await?;
             }
@@ -723,7 +728,7 @@ async fn teach(
         .teacher_reply
         .and_then(|reply| unexpected_reply(&transcript, reply))
     {
-        bail!("case precondition no longer holds: the teacher replied {other:?}");
+        bail!("{TEACHER_OFF_SCRIPT} {other:?}");
     }
     // Before the vector wait, so the window holds the teacher's passes only.
     if let Some(taught) = &mut taught {
@@ -1029,6 +1034,8 @@ fn passes_between(before: &Value, after: &Value) -> Option<Passes> {
     }
     let moved = |after: &Value, before: &Value| count(after).saturating_sub(count(before));
     let total = |field: &str| moved(&after["total"][field], &before["total"][field]);
+    // An older memory sends no such counter: absent, not zero.
+    let reported = |field: &str| after["total"].get(field).map(|_| total(field));
     let dropped = after["total"]["dropped"]
         .as_object()
         .into_iter()
@@ -1040,6 +1047,9 @@ fn passes_between(before: &Value, after: &Value) -> Option<Passes> {
     Some(Passes {
         passes,
         calls: total("calls"),
+        returned: reported("returned"),
+        no_array: reported("no_array"),
+        rule_items: reported("rules"),
         created: total("created"),
         reinforced: total("reinforced"),
         superseded: total("superseded"),
@@ -2008,12 +2018,38 @@ mod tests {
             Some(Passes {
                 passes: 2,
                 calls: 3,
+                // A memory that predates the reply counters sends none.
+                returned: None,
+                no_array: None,
+                rule_items: None,
                 created: 0,
                 reinforced: 1,
                 superseded: 0,
                 // `known` did not move in the window.
                 dropped: BTreeMap::from([("rejected".to_string(), 2)]),
                 last_error: None,
+            })
+        );
+    }
+
+    #[test]
+    fn the_reply_counters_are_read_when_memory_reports_them() {
+        let before = json!({"extraction": {"passes": 1, "total": {
+            "calls": 1, "returned": 1, "no_array": 0, "rules": 0, "created": 1}}});
+        let after = json!({"extraction": {"passes": 3, "total": {
+            "calls": 3, "returned": 2, "no_array": 1, "rules": 0, "created": 1,
+            "dropped": {"malformed": 1}}}});
+        assert_eq!(
+            passes_between(&before, &after),
+            Some(Passes {
+                passes: 2,
+                calls: 2,
+                returned: Some(1),
+                no_array: Some(1),
+                // Reported and unmoved: zero, not absent.
+                rule_items: Some(0),
+                dropped: BTreeMap::from([("malformed".to_string(), 1)]),
+                ..Passes::default()
             })
         );
     }

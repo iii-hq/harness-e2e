@@ -756,9 +756,11 @@ included. The measured session then runs as in `memory`:
 The long-message and do-not-keep cases were written to fail before memory
 changes; `memory_keeps_without_a_rule` is their control, green on both builds.
 All three ask their teacher to reply with one word, `noted`, and setup fails
-as an infrastructure error on any other reply: a reply restating the host
-would teach it from a short line, and one refusing to keep the diagnosis would
-change what extraction reads in one twin only.
+as an infrastructure error (`teacher_off_script`) on any other reply: a reply
+restating the host would teach it from a short line, and one refusing to keep
+the diagnosis would change what extraction reads in one twin only. The slot
+re-runs within the suite's technical retries, on a fresh attempt with new
+sessions, bank and canaries.
 
 Extraction calls a model, so these gates move with it: memory pins it with
 `extraction_model` (`deepseek::deepseek-flash` on the `memory` stack), and the
@@ -780,13 +782,18 @@ The case's `memory_evaluation.json` carries `teacher.extraction` and, where
 the case reads the bank after its session, `bank_after.extraction`: `passes`,
 `calls`, `created`, `reinforced`, `superseded`, `dropped` by memory's reason
 and `last_error`, the difference between two `memory::doctor` replies taken
-around the phase. A failed learned gate, or a control that found nothing
-stored, repeats them in its reason. Model calls with nothing created and
-nothing dropped mean the model returned no memory item; memory does not count
-rule items, so `teacher.rules` shows whether a rule line was learned. A
-`dropped` reason names the filter that refused an item, no pass means memory
-never asked the model, and `last_error` is why the window's latest counted
-pass failed. The doctor
+around the phase. A memory that reports them adds `returned` (items in the
+model's replies, memories and rules, before any check), `no_array` (replies
+with no JSON array, read as nothing returned) and `rule_items` (the doctor's
+`rules`); an older memory leaves them out. A failed learned gate, or a control
+that found nothing stored, repeats them in its reason. Model calls with
+nothing created and nothing dropped mean the model returned no memory item:
+`returned 0` with `no_array 0` is an empty array, and `no_array` counts
+replies with no array at all. `dropped` does not count rule items, so
+`teacher.rules` shows whether a rule line was learned. A `dropped` reason
+names the filter that refused an item (`malformed`: an item that did not
+parse), no pass means memory never asked the model, and `last_error` is why
+the window's latest counted pass failed. The doctor
 counts every session memory extracts. The measured sessions run as kind `e2e`,
 which memory does not extract, so on a suite run alone a teacher window holds
 that teacher's passes, and `bank_after.extraction` is all zeros when memory

@@ -3544,10 +3544,19 @@ fn journal_checkpoint_failure(phase: FailurePhase, message: String) -> RunFailur
 }
 
 fn scenario_setup_failure(message: String) -> RunFailure {
-    infrastructure_failure(
-        FailurePhase::Setup,
-        format!("scenario setup failed: {message}"),
-    )
+    let retry = message.starts_with(crate::scenarios::memory::runtime::TEACHER_OFF_SCRIPT);
+    let message = format!("scenario setup failed: {message}");
+    if retry {
+        // Each attempt gets its own id, so the retry asks a new teacher session
+        // on a new bank.
+        return RunFailure::retryable(
+            RunStatus::InfrastructureError,
+            FailurePhase::Setup,
+            "teacher_off_script",
+            message,
+        );
+    }
+    infrastructure_failure(FailurePhase::Setup, message)
 }
 
 fn update_score(report: &mut E2eRunReport) {
@@ -6200,6 +6209,41 @@ mod tests {
             failure.message,
             "scenario setup failed: fixture digest mismatch"
         );
+    }
+
+    #[test]
+    fn a_teacher_off_its_script_reruns_the_slot() {
+        use crate::scenarios::memory::runtime::TEACHER_OFF_SCRIPT;
+        let teacher = scenario_setup_failure(format!(
+            "{TEACHER_OFF_SCRIPT} \"noted. I will not keep health details.\""
+        ));
+        assert_eq!(teacher.status, RunStatus::InfrastructureError);
+        assert_eq!(teacher.phase, FailurePhase::Setup);
+        assert_eq!(teacher.code, "teacher_off_script");
+        assert_eq!(teacher.retry_scope, crate::report::RetryScope::SameSlot);
+        let mut report = test_run_report();
+        report.push_typed_failure(
+            teacher.status,
+            teacher.phase,
+            teacher.code,
+            teacher.retry_scope,
+            teacher.contamination,
+            teacher.message,
+        );
+        assert!(is_retryable_technical_failure(&report));
+        // Every other setup failure, other preconditions included, is final.
+        for other in [
+            "fixture digest mismatch",
+            "case precondition no longer holds: memory::preview injects fp-a first, not \"x\"",
+        ] {
+            let failure = scenario_setup_failure(other.into());
+            assert_eq!(failure.code, "infrastructure_failed", "{other}");
+            assert_eq!(
+                failure.retry_scope,
+                crate::report::RetryScope::None,
+                "{other}"
+            );
+        }
     }
 
     #[test]
