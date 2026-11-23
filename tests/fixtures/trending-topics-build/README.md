@@ -68,6 +68,9 @@ All six topics are exercised; no result is inferred from only the first article.
 
 Tests use published accessible names, native links and observable layout; they
 do not require `data-testid`, a component structure or particular CSS classes.
+A label's visible text must match its required name. Decorative `aria-hidden`
+glyphs without a letter or digit, such as an arrow inside `All topics`, are not
+part of it; hidden words, counts and visible arrows still are.
 There is no screenshot diff, prescribed design or aesthetic score.
 
 The public brief defines visible rank as text or native ordered-list numbering.
