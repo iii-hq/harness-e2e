@@ -146,20 +146,21 @@ def docker_exec(container, command):
     return ['docker', 'exec', container, *command]
 
 
-def stage_changes_command(workspace):
+def stage_changes_command(workspace, base):
     # Compose (iii 0.27+) rewrites its build record under .iii/build, with the build time, whenever it builds.
     return ['/bin/sh', '-c', '''set -eu
 git -C "$1" add --all --force -- . ':!kanban/node_modules' ':!kanban/dist' ':!data' ':!.iii/build'
-git -C "$1" reset --quiet HEAD -- kanban/node_modules kanban/dist data .iii/build
-''', 'stage-changes', str(workspace)]
+git -C "$1" reset --quiet "$2" -- kanban/node_modules kanban/dist data .iii/build
+''', 'stage-changes', str(workspace), base]
 
 
-def capture_candidate_diff(candidate, evidence, name, cancel=None):
-    if bounded(docker_exec(candidate, stage_changes_command('/workspace')),
+# The subject may commit its work, so the delivered change is measured from the scenario snapshot, not HEAD.
+def capture_candidate_diff(candidate, evidence, name, base, cancel=None):
+    if bounded(docker_exec(candidate, stage_changes_command('/workspace', base)),
                evidence / f'{name}-stage.log', 10, candidate, cancel):
         raise EvaluationError('candidate change capture failed')
     if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'diff', '--cached',
-                                       '--no-ext-diff', '--binary', 'HEAD']),
+                                       '--no-ext-diff', '--binary', base]),
                evidence / f'{name}.diff', 10, candidate, cancel):
         raise EvaluationError('candidate diff capture failed')
     if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'write-tree']),
@@ -872,7 +873,7 @@ print('workspace readable; trusted files, evaluator process and external network
             if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME, keeper]),
                        evidence / 'subject-cleanup.log', 10, candidate, cancel):
                 raise EvaluationError('candidate background process cleanup failed')
-        capture_candidate_diff(candidate, evidence, 'subject', cancel)
+        capture_candidate_diff(candidate, evidence, 'subject', metadata['snapshot_git_head'], cancel)
         delivered_diff_captured = True
 
         build_checks = []
@@ -920,7 +921,7 @@ print('workspace readable; trusted files, evaluator process and external network
                     result['duration_ms'] = round((time.monotonic() - started) * 1000)
                     (evidence / 'result.json').write_text(json.dumps(result, indent=2))
 
-        capture_candidate_diff(candidate, evidence, 'evaluated', cancel)
+        capture_candidate_diff(candidate, evidence, 'evaluated', metadata['snapshot_git_head'], cancel)
         evaluated_diff_captured = True
         verify_candidate_source(candidate, evidence, cancel)
 
@@ -933,7 +934,7 @@ print('workspace readable; trusted files, evaluator process and external network
         if (delivered_diff_captured and not evaluated_diff_captured
                 and not isinstance(error, KeyboardInterrupt)):
             try:
-                capture_candidate_diff(candidate, evidence, 'evaluated', cancel)
+                capture_candidate_diff(candidate, evidence, 'evaluated', metadata['snapshot_git_head'], cancel)
                 evaluated_diff_captured = True
             except (Exception, KeyboardInterrupt):
                 pass

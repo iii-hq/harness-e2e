@@ -123,8 +123,15 @@ ancestor of the panel that adds no link or button named with the ticket title, n
 card title copy, no other title heading and no board lane, so fields beside a
 heading block holding the title and the Delete action count. Visible read-only or
 disabled form values count as field values; a select counts only its selected
-option. Keyboard actions, the selected ticket, actual field values, counts,
-persisted state and focus are still checked.
+option. A card's priority and assignee may follow their own field label
+(`Assignee: Grace`). A failed first load counts when an alert or status reads
+`could not`, `can't` or `cannot` as well as `unable`, `error` or `fail`. Settings
+navigation follows the first visible `Settings` link, so a repeated header and
+in-page link is not ambiguous. The C4 opener is a `New ticket` button or a link whose
+whole name is `New ticket`, so a card titled with those words never opens creation.
+A drag PATCH may wrap its status in one key such as `changes`. Keyboard actions, the
+selected ticket, actual field values, counts, persisted state and focus are still
+checked.
 Browser contexts are closed after each flow, including failed flows, to avoid
 leaking intercepted requests or live connections into the next check.
 

@@ -1,5 +1,50 @@
 # Kanban validation — 2026-09-20
 
+## Rubric version 6 after the 0.40.0 run — 2026-11-21
+
+The 0.40.0 software-engineering run
+([Actions run 44929805507](https://github.com/iii-hq/harness-e2e/actions/runs/44929805507))
+and the 0.39.0 run
+([Actions run 44903707338](https://github.com/iii-hq/harness-e2e/actions/runs/44903707338))
+failed working Kanban deliveries on details the prompt does not set (MOT-5857):
+
+- 0.40.0 C3 r01 and r03 showed a recoverable first-load error, `Could not load
+  tickets (HTTP 500).` in an alert and `Tickets could not be loaded.` in a status,
+  each with a working Retry. The error check accepted only `unable`, `error` or
+  `fail`. It now also accepts `could not`, `couldn't`, `cannot` and `can't`.
+  Loading and empty states, and error text outside an alert or status, still fail.
+- 0.40.0 C3 r02 showed `Assignee: Grace` on its card. The card check matched the
+  assignee exactly, found no element holding key, priority and assignee, and
+  reported the key missing. A field may now follow its own label (`Priority:`,
+  `Assignee:`, `Assigned to`, `Owner:`); another value (`Assignee: Graceful`),
+  another label (`Reviewer: Grace`) or extra words (`High priority`) still fail,
+  and the failure names the missing field.
+- 0.40.0 C5 r02 sent its drags as `{"changes":{"status":"done"}}` and persisted
+  only the status. The three drag checks required the bare `{"status":"done"}`.
+  A status-only body under one wrapper key now counts; a second key or any other
+  field still fails.
+- 0.39.0 C3 r02 added a header link and a board action, both named `Settings` and
+  both leading to the settings page. The strict locator refused to pick one.
+  Settings navigation in C3 and C5 now follows the first visible link named
+  `Settings`. A missing or renamed link still fails, and a first link that leads
+  elsewhere fails the settings form checks. A broken second link is not exercised.
+- 0.39.0 C4 r02 opened creation from `<a href="#/tickets/new">New ticket</a>`; the
+  probe clicked only a button. The opener is now a visible `New ticket` button or a
+  link whose whole name is `New ticket`, so a card whose title contains those words
+  never opens creation. The submit stays the exact `Create ticket`.
+
+The C4 deleted-ticket HTTP 500 (6 of 18 runs in 0.36.0-0.40.0) stays the subject's.
+A handler error crossing `iii.trigger` arrives as `invocation_failed:
+TICKET_NOT_FOUND: …`, and those subjects mapped the status with a class check or
+an anchored prefix. The prompt asks for 404, and the base code's own unanchored
+match works through the wrapper.
+
+Five of those 18 C4 subjects committed their work, so `subject.diff`, taken
+against `HEAD`, came out empty and `subject_diff_empty` read true although the
+work was evaluated (0.40.0 C4 r01 scored 100). Source capture now diffs, and
+resets the excluded paths, against the scenario snapshot commit. Source integrity
+compares trees and is unchanged. Version 5 results are not rescored.
+
 ## Compose build record on iii 0.27 — 2026-11-21
 
 iii 0.27.0-rc.1 Compose records each container build in

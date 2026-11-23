@@ -20,4 +20,6 @@ class TrendingFocusEvalRegressions(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), {
             "outline": True, "background": True, "translucent": True, "faded": False, "transparent": False,
             "lowContrast": False, "imperceptible": False,
+            "pillOutline": True, "pillShadow": True, "pillInset": True, "pillPageColor": False, "pseudoInsideRing": True,
+            "pillInsetShadow": True, "pseudoInsideOutline": True, "pillKeptShadow": False, "pillAddedShadow": True,
         })

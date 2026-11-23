@@ -240,6 +240,48 @@ console.log(JSON.stringify(out));
                                   # badge, or a heading that reads as another count with the number elsewhere.
                                   'ariaOnly': [0, 0, 0], 'ariaAgainstBadge': [0, 0, 0], 'ariaAgainstText': [0, 0, 0]})
 
+    def test_settings_navigation_accepts_a_repeated_link_but_follows_the_first_visible_one(self):
+        # 0.39.0 C3 r02 links to /settings from both its header and its board actions, which a strict
+        # locator rejects as ambiguous. A broken first visible link is still followed (the form checks
+        # then fail it), and a missing or renamed link still fails.
+        result = self.node("""
+let board='';
+await page.route('http://kanban.test/**',route=>{const path=new URL(route.request().url()).pathname;route.fulfill({contentType:'text/html',body:path==='/'?board:`<h1>${path}</h1>`})});
+const follow=async html=>{board=html;await page.goto('http://kanban.test/');return probe.settingsNavigation(page).click({timeout:500}).then(()=>new URL(page.url()).pathname,error=>error.name)};
+console.log(JSON.stringify({
+ repeated:await follow('<nav><a href="/settings">Settings</a></nav><main><a class="button-link" href="/settings">Settings</a></main>'),
+ collapsedFirst:await follow('<a href="/elsewhere" style="display:block;width:0;height:0;overflow:hidden">Settings</a><a href="/settings">Settings</a>'),
+ brokenFirst:await follow('<a href="/elsewhere">Settings</a><a href="/settings">Settings</a>'),
+ missing:await follow('<nav><a href="/">Board</a></nav>'),
+ otherName:await follow('<a href="/settings">Settings archive</a>'),
+}));
+""", browser=True)
+        self.assertEqual(result, {'repeated': '/settings', 'collapsedFirst': '/settings', 'brokenFirst': '/elsewhere',
+                                  'missing': 'TimeoutError', 'otherName': 'TimeoutError'})
+
+    def test_creation_opener_accepts_a_new_ticket_link_without_accepting_a_card_or_other_action(self):
+        # 0.39.0 C4 r02 opens its creation modal from <a href="#/tickets/new">New ticket</a>. A card whose
+        # title contains "new ticket" must not become the opener even when it comes first.
+        result = self.node("""
+await page.setContent(`<a href="#/tickets/new">New ticket</a>
+<dialog><h2>Create ticket</h2><label>Title <input></label><button aria-label="Close create ticket dialog">Close</button><button>Create ticket</button></dialog>
+<script>addEventListener('hashchange',()=>{if(location.hash==='#/tickets/new')document.querySelector('dialog').showModal()})</script>`);
+await probe.ticketCreationOpener(page).click();
+await probe.ticketCreationDialog(page).waitFor({timeout:5000});
+const routed=await probe.ticketCreationDialog(page).count();
+const openers=[];
+for (const html of ['<button>New ticket</button>','<button>+ New ticket</button>','<a href="#new">New ticket…</a>',
+  '<a href="/tickets/9">KAN-9 Write new ticket docs</a><button>New ticket</button>',
+  '<a href="/tickets/9">KAN-9 Write new ticket docs</a>','<button>Edit ticket</button>','<button>Create</button>',
+  '<button hidden>New ticket</button>','<a href="/tickets/1">KAN-1 Browser-created ticket</a>']) {
+  await page.setContent(html);
+  const opener=probe.ticketCreationOpener(page);
+  openers.push(await opener.count() && /new ticket/i.test(await opener.textContent()) && !/KAN-9/.test(await opener.textContent()) ? 1 : 0);
+}
+console.log(JSON.stringify({routed,openers}));
+""", browser=True)
+        self.assertEqual(result, {'routed': 1, 'openers': [1, 1, 1, 1, 0, 0, 0, 0, 0]})
+
     def test_card_and_detail_values_accept_surrounding_whitespace_without_accepting_other_words(self):
         # Pretty-printed markup indents text nodes; Playwright tests a RegExp against raw textContent.
         # "High priority" and "Not urgent" fail if the tolerance admits more than whitespace.
@@ -275,6 +317,53 @@ const region=await probe.ticketCardRegion(probe.boardLane(page,'Backlog'),ticket
 console.log(JSON.stringify({tag:await region.evaluate(element=>element.tagName),className:await region.getAttribute('class')}));
 """, browser=True)
         self.assertEqual(result, {'tag': 'DIV', 'className': 'card'})
+
+    def test_card_metadata_accepts_a_field_label_without_accepting_another_value_or_label(self):
+        # 0.40.0 C3 r02 writes "Assignee: Grace" in one paragraph. "Graceful" fails if the value
+        # is unanchored, and "Reviewer: Grace" if any label is allowed before it.
+        result = self.node("""
+const ticket={title:'Backlog probe',key:'KAN-1',priority:'high',assignee:'Grace'};
+const card=(priority,assignee)=>`<main><section><h2>Backlog <span>1</span></h2><article class="card"><div class="card-meta"><span>KAN-1</span><span>${priority}</span></div><h3>Backlog probe</h3><p>${assignee}</p></article></section><section><h2>Done <span>0</span></h2></section></main>`;
+const found={};
+for(const [name,priority,assignee] of [['bare','high','Grace'],['labeled','high','Assignee: Grace'],['assignedTo','Priority: high','Assigned to Grace'],['otherValue','high','Assignee: Graceful'],['otherLabel','high','Reviewer: Grace'],['otherPriority','High priority','Grace']]){
+ await page.setContent(card(priority,assignee));
+ const region=await probe.ticketCardRegion(probe.boardLane(page,'Backlog'),ticket);
+ found[name]=await region.evaluate(element=>element.tagName);
+}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, {'bare': 'ARTICLE', 'labeled': 'ARTICLE', 'assignedTo': 'ARTICLE',
+                                  'otherValue': 'H3', 'otherLabel': 'H3', 'otherPriority': 'H3'})
+
+    def test_card_fields_name_the_missing_field(self):
+        result = self.node("""
+console.log(JSON.stringify(probe.cardFields({key:'KAN-1',priority:'high',assignee:''}).map(({field})=>field)));
+""")
+        self.assertEqual(result, ['readable key', 'priority'])
+
+    def test_board_load_failure_accepts_could_not_wording_but_not_loading_or_empty_states(self):
+        # 0.40.0 C3 r01 alerts "Could not load tickets (HTTP 500)." and r03's status reads
+        # "Tickets could not be loaded."; the failure still has to be announced in an alert or status.
+        result = self.node("""
+const found=[];
+for(const html of ['<p role="alert">Could not load tickets (HTTP 500).</p>','<p role="status">Tickets could not be loaded.</p>',
+ '<p role="alert">Couldn’t load tickets</p>',"<p role=\\"status\\">Can't reach the server</p>",'<p role="alert">Cannot load tickets</p>',
+ '<p role="alert">Unable to load tickets (500).</p>','<p role="status">Failed to load</p>','<p role="alert">Error 500</p>',
+ '<p role="status">Loading tickets…</p>','<p role="status">No tickets yet</p>','<p role="alert">Tickets loaded</p>','<p>Unable to load tickets (500).</p>']){
+ await page.setContent(html);found.push(await probe.boardLoadFailure(page).count());
+}
+console.log(JSON.stringify(found));
+""", browser=True)
+        self.assertEqual(result, [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0])
+
+    def test_status_only_patch_accepts_a_wrapped_status_but_not_other_fields(self):
+        # 0.40.0 C5 r02 sends {"changes":{"status":"done"}} and its server saves only the status.
+        result = self.node("""
+const bodies=[{status:'done'},{changes:{status:'done'}},{ticket:{status:'done'}},{status:'todo'},{changes:{status:'done',title:'x'}},
+ {status:'done',title:'x'},{changes:{status:'done'},title:'x'},{a:{status:'done'},b:{status:'done'}},null,[{status:'done'}],'done'];
+console.log(JSON.stringify(bodies.map(body=>probe.statusOnlyPatch(body,'done'))));
+""")
+        self.assertEqual(result, [True, True, True, False, False, False, False, False, False, False, False])
 
     def test_parent_accessible_label_variant_still_requires_real_navigation(self):
         result = self.node("""

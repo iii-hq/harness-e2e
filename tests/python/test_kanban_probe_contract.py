@@ -40,6 +40,12 @@ class KanbanProbeContractTest(unittest.TestCase):
         for path, evidence in fixtures:
             self.assertEqual(evidence.get("rubric_version", version), version, path)
 
+    def test_settings_and_creation_openers_are_only_reached_through_their_tolerant_helpers(self):
+        # An inline strict locator fails a page with a repeated Settings link or a "New ticket" link.
+        probe = PROBE.read_text()
+        self.assertEqual(probe.count("getByRole('link', { name: /^settings$/i })"), 1)
+        self.assertEqual(probe.count("getByRole('button', { name: 'New ticket' })"), 1)
+
     def test_c7_store_switch_delivers_the_reload_iii_026_no_longer_triggers(self):
         # iii 0.26 removed the `configuration` trigger the C7 base snapshot
         # reloads from; without this call criterion_store failed every round.

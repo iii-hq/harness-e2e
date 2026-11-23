@@ -96,6 +96,42 @@ try {
     for (const element of elements) { element.textContent = ''; const image = document.createElement('img'); image.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"></svg>')}`; element.append(image); await image.decode() }
   })
   const transparentImages = await run()
+  const glyphs = (css, extra = '', squareCss = '') => page.locator('[data-piece]').evaluateAll((elements, [css, extra, squareCss]) => elements.forEach(element => {
+    element.style.cssText = squareCss; element.innerHTML = `<span style="${css}">${element.dataset.piece}</span>${extra}`
+  }), [css, extra, squareCss])
+  await glyphs('color:#111;pointer-events:none')
+  const pointerEventsNone = await run()
+  const pointerEventsRestored = await page.locator('[data-piece] span').evaluateAll(spans => spans.every(span => span.style.pointerEvents === 'none' && !span.style.getPropertyPriority('pointer-events')))
+  await glyphs('color:#ddd;text-shadow:0 0 1px #111,1px 0 0 #111,-1px 0 0 #111,0 1px 0 #111,0 -1px 0 #111')
+  const shadowOutline = await run()
+  await glyphs('color:transparent;text-shadow:1px 0 0 #111,-1px 0 0 #111,0 1px 0 #111,0 -1px 0 #111')
+  const shadowOnlyGlyph = await run()
+  await glyphs('color:#ddd;-webkit-text-stroke:1px #111')
+  const strokeOutline = await run()
+  await glyphs('color:#ddd;text-shadow:0 0 12px #111')
+  const blurredHalo = await run()
+  await glyphs('color:#ddd;text-shadow:0 0 1px rgba(17,17,17,.1)')
+  const faintShadow = await run()
+  await glyphs('color:#ddd;text-shadow:0 0 1px #ddd;-webkit-text-stroke:1px #ddd')
+  const sameColorOutline = await run()
+  await glyphs('color:#ddd;-webkit-text-stroke:.01px #111')
+  const hairlineStroke = await run()
+  await glyphs('color:#ddd;text-shadow:200px 0 0 #111')
+  const farShadow = await run()
+  await glyphs('color:#ddd;opacity:.1;-webkit-text-stroke:1px #111')
+  const fadedStroke = await run()
+  await glyphs('color:#ddd;opacity:.1;text-shadow:1px 0 0 #111,-1px 0 0 #111,0 1px 0 #111,0 -1px 0 #111')
+  const fadedShadow = await run()
+  await glyphs('color:#111;-webkit-text-fill-color:transparent')
+  const fillTransparent = await run()
+  await glyphs('color:#111;pointer-events:none', '<i style="position:absolute;inset:0;background:#ddd"></i>', 'position:relative')
+  const coveredPointerEventsNone = await run()
+  await glyphs('color:#111;pointer-events:none;position:relative;z-index:-1')
+  const pointerEventsNoneBehindSquare = await run()
+  await page.locator('[data-piece]').evaluateAll(elements => elements.forEach(element => {
+    element.style.cssText = ''; element.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" style="pointer-events:none"><path d="M2 2h${8 + 'PNBRQKpnbrqk'.indexOf(element.dataset.piece)}v20H2z" fill="#111"/></svg>`
+  }))
+  const svgPointerEventsNone = await run()
   const rpcPage = await browser.newPage()
   await rpcPage.setContent('<main>rpc</main>')
   const functionId = 'chess-engine::play'
@@ -128,7 +164,7 @@ try {
     socket.close()
     return { rpc: window.__harnessRpc, controls: { outboundFakeResults: 100, inboundFakeRequests: 100 } }
   }, { functionId, url: rpcServer.url })
-  console.log(JSON.stringify({ invisible, visible, invisibleReplays: invisibleReplays.length, invisibleStable: invisibleReplays.every(result => !result.passed), visibleReplays: visibleReplays.length, visibleStable: visibleReplays.every(result => result.passed), variedPieceStyle, clipped, identicalBackgrounds, mixedGradients, sameColorGradients, transparentGradients, brokenBackgrounds, svgPieces, brokenImages, visibleImages, transparentImages, rpc: tracked.rpc, controls: tracked.controls }))
+  console.log(JSON.stringify({ invisible, visible, invisibleReplays: invisibleReplays.length, invisibleStable: invisibleReplays.every(result => !result.passed), visibleReplays: visibleReplays.length, visibleStable: visibleReplays.every(result => result.passed), variedPieceStyle, clipped, identicalBackgrounds, mixedGradients, sameColorGradients, transparentGradients, brokenBackgrounds, svgPieces, brokenImages, visibleImages, transparentImages, pointerEventsNone, pointerEventsRestored, shadowOutline, shadowOnlyGlyph, strokeOutline, blurredHalo, faintShadow, sameColorOutline, hairlineStroke, farShadow, fadedStroke, fadedShadow, fillTransparent, coveredPointerEventsNone, pointerEventsNoneBehindSquare, svgPointerEventsNone, rpc: tracked.rpc, controls: tracked.controls }))
 } finally {
   await browser.close()
   await rpcServer.close()

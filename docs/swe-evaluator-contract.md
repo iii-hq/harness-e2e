@@ -42,8 +42,22 @@ tickets selected` is not a total. Version 4 results are not rescored.
 `provenance.controller_sha256["probe.mjs"]` = `bbb269d804a3…` identifies the
 version 4 results of 0.38.0.
 
-C5 selects a visible, hit-tested point in the target lane and checks the exact
-status-only PATCH for the dragged ticket. Failure, success and navigation probes
+Kanban rubric version 6 changes C3, C4 and C5 evidence. A failed first load counts
+when an alert or status reads `could not`, `couldn't`, `cannot` or `can't`, as well as
+`unable`, `error` or `fail`. A card's priority and assignee may follow their own field
+label (`Priority: High`, `Assignee: Grace`, `Assigned to Grace`, `Owner: Grace`);
+another value, another label or extra words (`High priority`) still fail. Settings
+navigation in C3 and C5 follows the first visible link named `Settings`, so a header
+link beside an in-page action no longer fails; the settings form checks still decide
+where it led. C4 creation opens from a visible `New ticket` button or a link whose
+whole name is `New ticket`, optionally with `+` before or `…` after it; creation still
+submits with the exact `Create ticket` action. A C5 drag PATCH may wrap its status in
+one key (`{"changes":{"status":"done"}}`); a second key or any other field still
+fails. Version 5 results are not rescored. `provenance.controller_sha256["probe.mjs"]`
+= `9524ad8ca7a6…` identifies the version 5 results of 0.39.0 and 0.40.0.
+
+C5 selects a visible, hit-tested point in the target lane and checks a status-only
+PATCH for the dragged ticket, sent bare or under one wrapper key. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.
 
 Form and State Machine accept edits through either the domain operation or the
