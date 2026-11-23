@@ -91,7 +91,10 @@ browser opens the app on `localhost`, not `127.0.0.1`: the fixture's Next dev se
 refuses its HMR socket to a `127.0.0.1` origin, and a page opened there never hydrates,
 so client-side version changes never ran. On a hydrated page a controlled select keeps
 its value until the app's own navigation lands, so the keyboard check waits for the
-change instead of reading it right after `Enter`.
+change instead of reading it right after `Enter`. Comparison data is matched without
+regard to case: `innerText` applies `text-transform`, so a delivery that styles
+function names in capitals reads `ORDERS::GET`. The same match decides that the old
+result is gone after the failed comparison.
 
 Chess retains DOM, paint, hit testing, observed FENs, interactions and matched RPC.
 The playable UI criterion remains strict. Screenshot completeness is evaluated

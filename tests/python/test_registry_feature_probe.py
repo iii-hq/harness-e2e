@@ -24,6 +24,7 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         result = json.loads(result.stdout)
         self.assertEqual(len(result["replays"]), 6)
         self.assertTrue(all(count == 100 for count in result["replays"].values()))
+        self.assertEqual(result["uppercase"], {"ssr:correct": 10, "ssr:stale": 10, "spa:correct": 10, "spa:stale": 10})
         self.assertGreaterEqual(result["actual503Responses"], 1200)
 
     def test_expanded_detail_reads_only_visible_row_or_controlled_values(self):
