@@ -69,6 +69,13 @@ and `Description` never match.
 Version 6 results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
 `aca16eaa8489…` identifies the version 6 results of 0.41.0 and 0.42.0.
 
+Kanban rubric version 8 changes C6 parent navigation. A control whose name starts with
+`Reply` may open a reply composer, so it is still never pressed, unless its name also
+says `jump` or `go to`, as in `Reply to Alice, posted …. Jump to that comment.`
+Controls named `Delete`, `Remove`, `Edit` or `React` are never pressed. Version 7
+results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
+`89c1bbfcc0b1…` identifies the version 7 results of 0.43.0.
+
 C5 selects a visible, hit-tested point in the target lane and checks a status-only
 PATCH for the dragged ticket, sent bare or under one wrapper key. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.

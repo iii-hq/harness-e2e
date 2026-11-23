@@ -133,7 +133,9 @@ A drag PATCH may wrap its status in one key such as `changes`. A C3 loading stat
 a status mentioning load or visible text that starts with `Loading`, and loading text
 must be gone once the first read lands. The C6 and C7 comment body is found by its
 usual names (`Comment`, `Comment body`, `Add comment`, `Comment:`, `Body` and a few
-more) and never by the author field, `Notes` or `Description`. Keyboard actions, the
+more) and never by the author field, `Notes` or `Description`. C6 parent navigation
+never presses a `Reply …` control unless its name also says `jump` or `go to`.
+Keyboard actions, the
 selected ticket, actual field values, counts, persisted state and focus are still
 checked.
 Browser contexts are closed after each flow, including failed flows, to avoid

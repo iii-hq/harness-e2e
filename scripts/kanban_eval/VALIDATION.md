@@ -1,5 +1,29 @@
 # Kanban validation — 2026-09-20
 
+## Rubric version 8 after the 0.43.0 run — 2026-11-23
+
+The 0.43.0 software-engineering run
+([Actions run 45242118612](https://github.com/iii-hq/harness-e2e/actions/runs/45242118612))
+failed one working Kanban delivery on the name of its parent link:
+
+- C6 r01 scored 90. Each reply carried a button named `Reply to Alice, posted ….
+  Jump to that comment.` Enter on it moves focus to the parent comment. The
+  parent-navigation check refused every control whose name starts with `Reply`, so
+  the button was never pressed. A `Reply …` control is now pressed when its name also
+  says `jump` or `go to`. A plain `Reply` or a `Reply to the original comment` composer
+  is still never pressed.
+
+The other Kanban losses in that run stay the subjects':
+
+- C4 r01 scored 80. A deleted ticket's GET returned HTTP 500 instead of 404: its
+  error mapping matched `TICKET_NOT_FOUND` only at the start of the message, and the
+  error arrived as `invocation_failed: TICKET_NOT_FOUND: …`. Its mobile detail page
+  also scrolled sideways.
+- C7 r01 scored 60. Its ticket editor stays at `Saving changes…`: the save's own live
+  event starts a newer ticket read, so the editor drops the save's response.
+- C7 r03 scored 80. A live refresh during the first ticket load discarded that load,
+  so the ticket detail stayed hidden.
+
 ## Rubric version 7 after the 0.41.0 run — 2026-11-23
 
 The 0.41.0 software-engineering run
