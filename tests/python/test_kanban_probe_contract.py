@@ -52,6 +52,8 @@ class KanbanProbeContractTest(unittest.TestCase):
         self.assertNotIn("name: 'Comment', exact: true", probe)
         self.assertEqual(probe.count("getByRole('textbox', { name: COMMENT_BODY })"), 1)
         self.assertEqual(probe.count("getByRole('status').filter({ hasText: /load/i })"), 1)
+        # The C3 loading state must also clear once the held read is released.
+        self.assertIn("release()\n            await eventually(async () => await loadingText(page).count() === 0", probe)
 
     def test_c7_store_switch_delivers_the_reload_iii_026_no_longer_triggers(self):
         # iii 0.26 removed the `configuration` trigger the C7 base snapshot

@@ -8,14 +8,15 @@ failed two working Kanban deliveries on labels and roles the prompt does not set
 
 - C6 r03 scored 35. It labelled its comment body `Comment body` beside an `Author`
   field. Every discussion check looked for a textbox named exactly `Comment` and
-  timed out. The body is now found by its usual names; `Comments`, `Comment
-  author`, `Notes` and ticket fields still never match, and the author is still
+  timed out. The body is now found by its usual names, such as `Comment body`,
+  `Add comment` or `Comment:`; `Comments`, `Comment author`, `Notes` and `Description`
+  still never match, and the author is still
   found beside the body.
 - C3 r02 scored 90. It showed `Loading tickets…` in a busy section while the first
   read was held, with no total and no columns, and kept its only status empty. The
   loading check read only role=status. Visible text that starts with `Loading` now
-  counts; help text that merely contains the word, `Reload`, `Loaded`, `Download`
-  and hidden text still fail, and the zero-total and zero-lane checks are unchanged.
+  counts, and loading text must be gone once the read lands, so a stuck spinner or
+  static help text fails. The zero-total and zero-lane checks are unchanged.
 
 C7 r01 scored 60, and that loss stays the subject's. Its comment field is labelled `Comment`, but
 its ticket editor stays at `Saving changes…` after a successful save, which hides the

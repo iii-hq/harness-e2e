@@ -130,9 +130,10 @@ navigation follows the first visible `Settings` link, so a repeated header and
 in-page link is not ambiguous. The C4 opener is a `New ticket` button or a link whose
 whole name is `New ticket`, so a card titled with those words never opens creation.
 A drag PATCH may wrap its status in one key such as `changes`. A C3 loading state is
-a status mentioning loading or visible text that starts with `Loading`. The C6 and C7
-comment body is found by its usual names (`Comment`, `Comment body`, `Your comment`,
-`Body` and a few more) and never by the author or a ticket field. Keyboard actions, the
+a status mentioning load or visible text that starts with `Loading`, and loading text
+must be gone once the first read lands. The C6 and C7 comment body is found by its
+usual names (`Comment`, `Comment body`, `Add comment`, `Comment:`, `Body` and a few
+more) and never by the author field, `Notes` or `Description`. Keyboard actions, the
 selected ticket, actual field values, counts, persisted state and focus are still
 checked.
 Browser contexts are closed after each flow, including failed flows, to avoid

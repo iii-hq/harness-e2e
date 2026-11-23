@@ -591,6 +591,12 @@ export function boardLoadingIndicator(page) {
     .or(page.getByText(/^\s*loading\b/i).filter({ visible: true }))
 }
 
+// Loading text still on screen; a status that reads "Loaded 2 tickets" is not.
+export function loadingText(page) {
+  return page.getByRole('status').filter({ hasText: /loading/i })
+    .or(page.getByText(/^\s*loading\b/i).filter({ visible: true }))
+}
+
 export function mutationFailureFeedback(page) {
   return page.getByRole('alert').or(page.getByRole('status'))
     .filter({ hasText: /probe failure|(?:unable|failed|could not).*(?:sav|mov|creat|delet|post)|error/i }).filter({ visible: true })
@@ -626,7 +632,7 @@ export function saveTicketAction(scope) {
 }
 
 // The prompt names no label for the comment body: accept the usual names, never the author or a ticket field.
-const COMMENT_BODY = /^\s*(?:(?:your|new)\s+|(?:add|write|leave)\s+an?\s+)?comment(?:\s+(?:body|text))?\s*(?:…|\.{3})?\s*$|^\s*body\s*$/i
+const COMMENT_BODY = /^\s*(?:(?:your|new)\s+|(?:add|write|leave|post|type)\s+(?:an?\s+|your\s+)?)?comment(?:\s+(?:body|text))?(?:\s*(?:\(required\)|…|\.{3}|[:*]))*\s*$|^\s*body\s*$/i
 
 export function commentBody(page) {
   return page.getByRole('textbox', { name: COMMENT_BODY })
@@ -943,6 +949,9 @@ export const PROBES = {
             await expectText(boardLoadingIndicator(page), /load/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
             for (const [, label] of statuses) expect(await boardLaneCount(page, label, 0).count() === 0, 'loading fabricated zero lane counts')
+            // A loading state clears once the read lands: a stuck spinner or static help text is not one.
+            release()
+            await eventually(async () => await loadingText(page).count() === 0, 'loading state stayed after the first read')
           } else if (state === 'error') {
             await expectText(boardLoadFailure(page), BOARD_LOAD_FAILURE)
             expect(await boardTicketTotal(page, 0).count() === 0, 'failed first read fabricated a zero total')

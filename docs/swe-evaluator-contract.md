@@ -56,13 +56,16 @@ one key (`{"changes":{"status":"done"}}`); a second key or any other field still
 fails. Version 5 results are not rescored. `provenance.controller_sha256["probe.mjs"]`
 = `9524ad8ca7a6…` identifies the version 5 results of 0.39.0 and 0.40.0.
 
-Kanban rubric version 7 changes C3 and C6 evidence. The C3 loading state counts when
-visible text starts with `Loading`, as well as when a status mentions loading; help
-text that only contains the word, `Reload`, `Loaded`, `Download` and hidden text still
-fail, and loading must still show no zero total or zero lane count. The comment body
-in C6 and C7 is the textbox named `Comment`, `Comment body`, `Comment text`, `Your
-comment`, `New comment`, `Add a comment`, `Write a comment` (optionally followed by
-`…`) or `Body`; `Comments`, `Comment author`, `Notes` and ticket fields never match.
+Kanban rubric version 7 changes C3 and C6 evidence. While the first read is held, the
+C3 loading state is a status mentioning load, as in version 6, or visible text that
+starts with `Loading`. Once the read lands, any status saying loading and any visible
+text starting with `Loading` must be gone, so a stuck spinner or static help text
+fails. Loading must still show no zero total or zero lane count. The comment body in
+C6 and C7 is the textbox named `Comment`, `Comment body`, `Comment text`, `Your
+comment`, `New comment`, `Add comment`, `Add a comment`, `Write your comment`, `Post a
+comment`, `Type a comment` and similar, optionally followed by `:`, `*`, `(required)`
+or `…`, or `Body`; `Comments`, `Comment author`, `Commenter`, `Comment by`, `Notes`
+and `Description` never match.
 Version 6 results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
 `aca16eaa8489…` identifies the version 6 results of 0.41.0 and 0.42.0.
 
