@@ -56,6 +56,16 @@ one key (`{"changes":{"status":"done"}}`); a second key or any other field still
 fails. Version 5 results are not rescored. `provenance.controller_sha256["probe.mjs"]`
 = `9524ad8ca7a6…` identifies the version 5 results of 0.39.0 and 0.40.0.
 
+Kanban rubric version 7 changes C3 and C6 evidence. The C3 loading state counts when
+visible text starts with `Loading`, as well as when a status mentions loading; help
+text that only contains the word, `Reload`, `Loaded`, `Download` and hidden text still
+fail, and loading must still show no zero total or zero lane count. The comment body
+in C6 and C7 is the textbox named `Comment`, `Comment body`, `Comment text`, `Your
+comment`, `New comment`, `Add a comment`, `Write a comment` (optionally followed by
+`…`) or `Body`; `Comments`, `Comment author`, `Notes` and ticket fields never match.
+Version 6 results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
+`aca16eaa8489…` identifies the version 6 results of 0.41.0 and 0.42.0.
+
 C5 selects a visible, hit-tested point in the target lane and checks a status-only
 PATCH for the dragged ticket, sent bare or under one wrapper key. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.

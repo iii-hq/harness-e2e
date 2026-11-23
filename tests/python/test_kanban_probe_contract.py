@@ -46,6 +46,13 @@ class KanbanProbeContractTest(unittest.TestCase):
         self.assertEqual(probe.count("getByRole('link', { name: /^settings$/i })"), 1)
         self.assertEqual(probe.count("getByRole('button', { name: 'New ticket' })"), 1)
 
+    def test_comment_body_and_board_loading_are_only_reached_through_their_tolerant_helpers(self):
+        # An inline exact "Comment" or status-only loading locator fails labels the prompt never names.
+        probe = PROBE.read_text()
+        self.assertNotIn("name: 'Comment', exact: true", probe)
+        self.assertEqual(probe.count("getByRole('textbox', { name: COMMENT_BODY })"), 1)
+        self.assertEqual(probe.count("getByRole('status').filter({ hasText: /load/i })"), 1)
+
     def test_c7_store_switch_delivers_the_reload_iii_026_no_longer_triggers(self):
         # iii 0.26 removed the `configuration` trigger the C7 base snapshot
         # reloads from; without this call criterion_store failed every round.
