@@ -96,12 +96,17 @@ a measured failure. Other independent observations remain available. Faults are
 always cleared; seeded versions are not renamed to induce a failure. The probe's
 browser opens the app on `localhost`, not `127.0.0.1`: the fixture's Next dev server
 refuses its HMR socket to a `127.0.0.1` origin, and a page opened there never hydrates,
-so client-side version changes never ran. On a hydrated page a controlled select keeps
-its value until the app's own navigation lands, so the keyboard check waits for the
-change instead of reading it right after `Enter`. Comparison data is matched without
-regard to case: `innerText` applies `text-transform`, so a delivery that styles
-function names in capitals reads `ORDERS::GET`. The same match decides that the old
-result is gone after the failed comparison.
+so client-side version changes never ran. Subjects are given the same origin: the
+fixture's compose sets `E2E_APP_URL` on `localhost`, and for implementation and
+verification `inputs/environment.json` gives `web_url` on `localhost` and says why,
+because verification's pinned fixture still sets `E2E_APP_URL` on `127.0.0.1`. The API
+URL, the seeded artifact URLs and the environment case's readiness check stay on
+`127.0.0.1`: none of them needs a hydrated page. On a hydrated page a controlled
+select keeps its value until the app's own navigation lands, so the keyboard check
+waits for the change instead of reading it right after `Enter`. Comparison data is
+matched without regard to case: `innerText` applies `text-transform`, so a delivery
+that styles function names in capitals reads `ORDERS::GET`. The same match decides
+that the old result is gone after the failed comparison.
 
 Chess retains DOM, paint, hit testing, observed FENs, interactions and matched RPC.
 The playable UI criterion remains strict. Screenshot completeness is evaluated

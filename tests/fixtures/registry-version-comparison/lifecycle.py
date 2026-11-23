@@ -251,6 +251,9 @@ def prepare(args):
             "web_tests": "docker compose -f /fixture/compose.yaml exec -T web pnpm test",
         }
         environment["build_note"] = "Application containers use a built source snapshot. Rebuild with start_or_rebuild after edits; do not commit Registry HEAD because the fixture checks the starting SHA. Use docker compose exec for installed Node/pnpm/browser tools."
+        # The fixture's Next dev server refuses its HMR socket to a 127.0.0.1 origin, and a page opened there never hydrates.
+        environment["web_url"] = f"http://localhost:{args.web_port}"
+        environment["build_note"] += " Open the app in a browser on web_url (localhost), inside the web container too, even where E2E_APP_URL says 127.0.0.1: the Next dev server does not hydrate a page opened on 127.0.0.1."
     else:
         environment["build_note"] = "Basic shell, Git and Docker CLI are available. Install additional tools if needed. No prepared application environment is supplied."
     write_json(inputs / "environment.json", environment)

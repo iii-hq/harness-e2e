@@ -323,9 +323,16 @@ class RegistryDeliveryTests(unittest.TestCase):
                                  json.loads((self.delivery / "manifest.json").read_text()))
                 self.assertEqual((root / "workspace/registry/existing.txt").read_text(), "delivered\n")
             self.assertEqual((inputs / "seed.sql").exists(), test != 1)
+            environment = json.loads((inputs / "environment.json").read_text())
             if test == 1:
-                environment = json.loads((inputs / "environment.json").read_text())
                 self.assertIn("Planning only", environment["runtime_requirements"])
+            # Implementation and verification open the fixture's Next dev server, which hydrates only on localhost.
+            host = "localhost" if test in (2, 4) else "127.0.0.1"
+            self.assertEqual(environment["web_url"], f"http://{host}:{45000 + test * 2}")
+            self.assertEqual("localhost" in environment["build_note"], test in (2, 4))
+            # The API and the seeded artifact URLs need no hydrated page and stay where fixture.sh puts them.
+            self.assertEqual(environment["api_url"], f"http://127.0.0.1:{45001 + test * 2}")
+            self.assertEqual("artifact_origin=http://127.0.0.1:<web_port>" in environment["runtime_requirements"], test != 1)
             launch = next(c for c in calls if c[:3] == ["docker", "run", "-d"])
             self.assertFalse(any("/var/run/docker.sock" in c and "src=" in c for c in launch))
             self.assertEqual("--privileged" in launch, test != 1)
