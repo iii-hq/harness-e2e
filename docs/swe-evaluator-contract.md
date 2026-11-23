@@ -86,7 +86,12 @@ visible comparison data, then show an error and remove the old result. Both path
 need attempt-scoped HTTP 503 receipts. Missing receipts, restart or cleanup failure
 leave this observation unavailable; a proven request followed by incorrect UI is
 a measured failure. Other independent observations remain available. Faults are
-always cleared; seeded versions are not renamed to induce a failure.
+always cleared; seeded versions are not renamed to induce a failure. The probe's
+browser opens the app on `localhost`, not `127.0.0.1`: the fixture's Next dev server
+refuses its HMR socket to a `127.0.0.1` origin, and a page opened there never hydrates,
+so client-side version changes never ran. On a hydrated page a controlled select keeps
+its value until the app's own navigation lands, so the keyboard check waits for the
+change instead of reading it right after `Enter`.
 
 Chess retains DOM, paint, hit testing, observed FENs, interactions and matched RPC.
 The playable UI criterion remains strict. Screenshot completeness is evaluated
