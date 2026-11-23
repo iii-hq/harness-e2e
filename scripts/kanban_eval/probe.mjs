@@ -269,7 +269,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 7,
+    rubric_version: 8,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -282,7 +282,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 7,
+    rubric_version: 8,
     case_id: caseId,
     checks,
     status,
@@ -650,7 +650,8 @@ export function commentAuthor(page) {
 export async function activateCommentParent(entry, parent, page) {
   const relation = /previous|earlier|ancestor|reference|referenced|in reply|replying|responding|quoted|original|jump|go to|show|parent comment|comment parent/i
   const named = entry.getByRole('link', { name: relation }).or(entry.getByRole('button', { name: relation })).filter({ visible: true })
-  const destructiveName = /^\s*(?:delete|remove|edit|reply|react)\b/i
+  // A "Reply …" control opens a composer, unless its name also says it jumps to the earlier comment.
+  const destructiveName = /^\s*(?:delete|remove|edit|react)\b|^\s*reply\b(?!.*\b(?:jump|go to)\b)/i
   const destructive = entry.getByRole('link', { name: destructiveName }).or(entry.getByRole('button', { name: destructiveName }))
   const referenced = entry.locator('a[href^="#"], button[aria-controls], button[data-parent-id], button[data-parent], button[data-comment-parent]').filter({ visible: true })
   const attempt = async (action) => {

@@ -144,7 +144,8 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
   try {
     if (mode === 'interaction') {
       await page.goto(`${baseUrl}/workers/orders-worker?tab=changelog&from=1.0.0&to=2.0.0`, { waitUntil: 'domcontentloaded', timeout });
-      await page.waitForFunction(() => document.body.innerText.includes('orders::get')
+      // innerText applies text-transform, so a delivery that styles names in capitals reads ORDERS::GET.
+      await page.waitForFunction(() => document.body.innerText.toLowerCase().includes('orders::get')
         && document.querySelectorAll('select')[0]?.value === '1.0.0'
         && document.querySelectorAll('select')[1]?.value === '2.0.0', null, { timeout });
       precondition = true;
@@ -163,7 +164,7 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
     await page.waitForFunction(({ from, to }) => {
       const url = new URL(location.href);
       return url.searchParams.get('from') === from && url.searchParams.get('to') === to
-        && !document.body.innerText.includes('orders::get')
+        && !document.body.innerText.toLowerCase().includes('orders::get')
         && [...document.querySelectorAll('[role="alert"]')].some(node => node.checkVisibility() && node.innerText.trim());
     }, { from: expectedFrom, to: expectedTo }, { timeout: verdictTimeout });
   } catch (failure) { error = String(failure); }

@@ -1,6 +1,6 @@
 {
   "schema": "kanban-evaluation",
-  "rubric_version": 7,
+  "rubric_version": 8,
   "case_id": "kanban_c2_persistence",
   "checks": [
     {

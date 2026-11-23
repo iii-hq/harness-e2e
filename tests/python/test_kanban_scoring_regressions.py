@@ -426,6 +426,17 @@ console.log(JSON.stringify({inert,navigated,destructive:await page.evaluate(()=>
 """, browser=True)
         self.assertEqual(result, {'inert': False, 'navigated': True, 'destructive': 0})
 
+    def test_reply_named_jump_reaches_the_parent_but_a_reply_composer_stays_untouched(self):
+        # 0.43.0 C6 r01 named its parent jump "Reply to Alice, posted …. Jump to that comment."
+        result = self.node("""
+await page.setContent('<ul><li id="parent" tabindex="-1">Alice: first</li><li id="reply"><button id="compose" aria-label="Reply to the original comment" aria-controls="reply-form">↩</button><button id="jump" aria-label="Reply to Alice, posted 10:00. Jump to that comment.">Reply to Alice</button>second<form id="reply-form"></form></li></ul>');
+const entry=page.locator('#reply');const parent=await page.locator('#parent').elementHandle();
+await page.evaluate(()=>{window.destructive=0;document.querySelector('#compose').onclick=()=>window.destructive++;document.querySelector('#jump').onclick=()=>document.querySelector('#parent').focus()});
+const navigated=await probe.activateCommentParent(entry,parent,page);
+console.log(JSON.stringify({navigated,destructive:await page.evaluate(()=>window.destructive)}));
+""", browser=True)
+        self.assertEqual(result, {'navigated': True, 'destructive': 0})
+
     def test_preexisting_parent_hash_does_not_fake_navigation(self):
         result = self.node("""
 await page.setContent('<ul><li id="parent" tabindex="-1">first</li><li id="reply"><a href="#parent">Context</a></li></ul>');
