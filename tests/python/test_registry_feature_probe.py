@@ -25,6 +25,9 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         self.assertEqual(len(result["replays"]), 6)
         self.assertTrue(all(count == 100 for count in result["replays"].values()))
         self.assertEqual(result["uppercase"], {"ssr:correct": 10, "ssr:stale": 10, "spa:correct": 10, "spa:stale": 10})
+        # 0.45.0 r01 announced the failure in a polite live region, not role="alert".
+        self.assertEqual(result["live"], {f"{mode}:{variant}": 10 for mode in ("ssr", "spa") for variant in (
+            "live-status", "role-status", "no-error", "live-neutral", "live-hidden", "live-off")})
         self.assertGreaterEqual(result["actual503Responses"], 1200)
 
     def test_expanded_detail_reads_only_visible_row_or_controlled_values(self):
@@ -37,7 +40,7 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         accepted = {name for name, passed in json.loads(result.stdout)["disclosure"].items() if passed}
-        self.assertEqual(accepted, {"nested", "controlled_sibling"})
+        self.assertEqual(accepted, {"nested", "controlled_sibling", "details_combined_label"})
 
     def test_config_array_order_accepts_a_whole_or_per_index_reversal(self):
         # One changed array and one changed entry per index are both ordered JSON Pointer diffs.

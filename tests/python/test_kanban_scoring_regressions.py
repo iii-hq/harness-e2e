@@ -188,6 +188,61 @@ console.log(JSON.stringify({late,never}));
 """, browser=True)
         self.assertEqual(result, {'late': 'subscribed', 'never': 'session did not open the live event stream'})
 
+    def late_get(self, designs):
+        return self.node("""
+const designs=DESIGNS;
+const {createServer}=await import('node:http');
+let title;
+const server=createServer((request,response)=>{
+ const url=new URL(request.url,'http://kanban.test');
+ if(url.pathname==='/api/tickets/1'){response.setHeader('content-type','application/json');response.end(JSON.stringify({ticket:{title}}));return}
+ response.setHeader('content-type','text/html');
+ response.end(`<h1>Ticket</h1><script>const read=()=>fetch('/api/tickets/1').then(response=>response.json()).then(body=>body.ticket.title);const show=(text)=>{document.querySelector('h1').textContent=text};${designs[url.searchParams.get('design')]}</script>`);
+});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+page.setDefaultTimeout(8_000);
+const outcome={};
+try{
+ for(const design of Object.keys(designs)){
+  title='Response ordering probe';
+  await page.goto(`http://127.0.0.1:${server.address().port}/?design=${design}`);
+  await page.getByRole('heading',{name:title}).waitFor();
+  outcome[design]=await probe.assertLateGetKeepsNewerState(page,'**/api/tickets/1',title,'Newer GET state',async()=>{title='Newer GET state';await page.evaluate(()=>change())})
+   .then(()=>'kept',error=>error.message);
+  await page.unroute('**/api/tickets/1');
+ }
+}finally{server.closeAllConnections();server.close()}
+console.log(JSON.stringify(outcome));
+""".replace('DESIGNS', json.dumps(designs)), browser=True)
+
+    def test_late_get_accepts_reads_that_drop_or_queue_behind_the_stale_response(self):
+        result = self.late_get({
+            'latest-wins': 'let seq=0;const load=async()=>{const mine=++seq;const title=await read();if(mine===seq)show(title)};window.change=load;load()',
+            # 0.45.0 C7 r01: one read at a time; a change during a read queues another and drops the late result.
+            'serialised': 'let seq=0,loading=false,queued=false;const load=async()=>{if(loading){queued=true;return}loading=true;const mine=seq;'
+                          'try{const title=await read();if(mine!==seq){queued=true;return}show(title)}finally{loading=false;if(queued){queued=false;load()}}};'
+                          'window.change=()=>{seq++;load()};load()',
+        })
+        self.assertEqual(result, {'latest-wins': 'kept', 'serialised': 'kept'})
+
+    def test_late_get_rejects_a_stale_response_rendered_over_newer_state(self):
+        result = self.late_get({
+            'last-response-wins': 'const load=async()=>show(await read());window.change=load;load()',
+            # The stale title flashes over newer state until the next poll restores it.
+            'polling': 'const load=async()=>show(await read());window.change=load;load();setInterval(load,300)',
+            # The stale title lands 200 ms after its response, after a check that looked only right away.
+            'deferred-polling': 'const load=async()=>{const title=await read();setTimeout(()=>show(title),200)};window.change=load;load();setInterval(load,300)',
+        })
+        self.assertEqual(result, {'last-response-wins': 'late GET replaced newer state',
+                                  'polling': 'late GET rendered over newer state',
+                                  'deferred-polling': 'late GET rendered over newer state'})
+        # The stale title lands 700 ms after its response and stays.
+        self.assertEqual(self.late_get({'deferred': 'const load=async()=>{const title=await read();setTimeout(()=>show(title),700)};window.change=load;load()'}),
+                         {'deferred': 'late GET replaced newer state'})
+        # A page that never re-reads is named for that, not for a stale overwrite it never made.
+        self.assertEqual(self.late_get({'never-rereads': 'const load=async()=>show(await read());window.change=()=>{};load()'}),
+                         {'never-rereads': 'newer state did not render after the late GET'})
+
     def test_list_lanes_are_accepted_without_selecting_outer_board(self):
         result = self.node("""
 await page.setContent('<section id="board"><ol><li id="backlog"><h2>Backlog <span>1</span></h2><ul><li>Card</li></ul></li><li><h2>Done <span>1</span></h2></li></ol></section>')
@@ -437,6 +492,35 @@ console.log(JSON.stringify({navigated,destructive:await page.evaluate(()=>window
 """, browser=True)
         self.assertEqual(result, {'navigated': True, 'destructive': 0})
 
+    def test_reply_named_move_to_reaches_the_parent_but_reply_composers_stay_untouched(self):
+        # 0.45.0 C6 r01 timeline: the parent jump says "Move to that comment." and each entry has a "Reply" composer.
+        timeline = """<ol id="timeline" class="timeline" aria-label="Comments and replies in posting order"><li><article class="comment" id="comment-12e6ef05-5b3f-42e0-b922-d1c6647b126b" data-comment-id="12e6ef05-5b3f-42e0-b922-d1c6647b126b" tabindex="-1"><p class="comment-meta"><span class="comment-author">Alice</span> · <time datetime="2026-11-24T01:12:48.797Z">Nov 24, 2026, 1:12 AM</time></p><p class="comment-body">&lt;img src=x onerror=alert(1)&gt; first</p><button type="button" class="comment-reply" aria-label="Reply to Alice's comment">Reply</button></article></li><li><article class="comment" id="comment-62ea0a03-6719-4129-a909-062fe72924cc" data-comment-id="62ea0a03-6719-4129-a909-062fe72924cc" tabindex="-1"><p class="comment-meta"><span class="comment-author">Bob</span> · <time datetime="2026-11-24T01:12:48.896Z">Nov 24, 2026, 1:12 AM</time></p><p class="comment-parent-line"><button type="button" class="comment-parent-link" aria-label="Reply to Alice's comment from Nov 24, 2026, 1:12 AM. Move to that comment.">↳ Reply to Alice</button></p><p class="comment-body">second</p><button type="button" class="comment-reply" aria-label="Reply to Bob's comment">Reply</button></article></li><li><article class="comment" id="comment-e7d863ed-7be2-4a25-88a1-6a0865e13691" data-comment-id="e7d863ed-7be2-4a25-88a1-6a0865e13691" tabindex="-1"><p class="comment-meta"><span class="comment-author">Carol</span> · <time datetime="2026-11-24T01:12:48.932Z">Nov 24, 2026, 1:12 AM</time></p><p class="comment-parent-line"><button type="button" class="comment-parent-link" aria-label="Reply to Bob's comment from Nov 24, 2026, 1:12 AM. Move to that comment.">↳ Reply to Bob</button></p><p class="comment-body">third</p><button type="button" class="comment-reply" aria-label="Reply to Carol's comment">Reply</button></article></li></ol>"""
+        result = self.node("""
+await page.setContent(TIMELINE);
+await page.evaluate(()=>{window.pressed=[];document.addEventListener('click',event=>{const button=event.target.closest('button');window.pressed.push(button.getAttribute('aria-label'));
+ if(button.classList.contains('comment-parent-link'))button.closest('li').previousElementSibling.querySelector('article').focus()})});
+const entry=page.getByText('second',{exact:true}).locator('xpath=ancestor::*[self::li or self::article or @role="listitem"][1]');
+const parent=await page.locator('article').first().elementHandle();
+const link=entry.locator('.comment-parent-link');const name=await link.getAttribute('aria-label');
+const outcome={};
+// Composer-like names on the very control that would navigate must still never be pressed.
+for(const label of ["Reply to Alice's comment",'Reply to the original comment','Reply','Reply to Hugo to add context']){
+ await link.evaluate((element,label)=>element.setAttribute('aria-label',label),label);outcome[label]=await probe.activateCommentParent(entry,parent,page);
+}
+await link.evaluate((element,name)=>element.setAttribute('aria-label',name),name);
+outcome.navigated=await probe.activateCommentParent(entry,parent,page);
+// Rubric 8 let a bare "jump" through the Reply guard; it still does.
+await page.evaluate(()=>document.activeElement.blur());
+await link.evaluate(element=>element.setAttribute('aria-label','Reply to Alice (jump)'));
+outcome.bareJump=await probe.activateCommentParent(entry,parent,page);
+console.log(JSON.stringify({outcome,pressed:await page.evaluate(()=>window.pressed)}));
+""".replace('TIMELINE', json.dumps(timeline)), browser=True)
+        self.assertEqual(result, {
+            'outcome': {"Reply to Alice's comment": False, 'Reply to the original comment': False, 'Reply': False,
+                        'Reply to Hugo to add context': False, 'navigated': True, 'bareJump': True},
+            'pressed': ["Reply to Alice's comment from Nov 24, 2026, 1:12 AM. Move to that comment.", 'Reply to Alice (jump)'],
+        })
+
     def test_preexisting_parent_hash_does_not_fake_navigation(self):
         result = self.node("""
 await page.setContent('<ul><li id="parent" tabindex="-1">first</li><li id="reply"><a href="#parent">Context</a></li></ul>');
@@ -472,6 +556,22 @@ for(const text of ['probe failure','Failed to create ticket','Could not be creat
 console.log(JSON.stringify(found));
 """, browser=True)
         self.assertEqual(result, [1, 1, 1, 1, 1, 1, 1, 0, 0, 0])
+
+    def test_error_feedback_accepts_negated_verb_wording_but_not_progress_success_or_drafts(self):
+        # 0.45.0 C4 r02 creation dialog after the forced 500.
+        dialog = """<dialog id="create-dialog" aria-labelledby="create-heading" open=""><form id="create-form" novalidate=""><h2 id="create-heading">New ticket</h2><div class="field"><label for="new-title">Title</label><input id="new-title" name="title" required="" autofocus="" aria-describedby="create-error" style=""></div><div class="field"><label for="new-description">Description</label><textarea id="new-description" name="description" rows="4" style=""></textarea></div><div class="field-row"><div class="field"><label for="new-status">Status</label><select id="new-status" name="status"><option value="backlog">Backlog</option><option value="todo">To do</option><option value="in_progress">In progress</option><option value="in_review">In review</option><option value="done">Done</option></select></div><div class="field"><label for="new-priority">Priority</label><select id="new-priority" name="priority"><option value="low">Low</option><option value="medium" selected="">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></div></div><div class="field"><label for="new-assignee">Assignee</label><input id="new-assignee" name="assignee" autocomplete="off" style=""></div><p id="create-error" class="form-error" role="alert">The ticket was not created (500). Please try again.</p><p id="create-status" role="status" aria-live="polite"></p><div class="actions"><button id="create-submit" type="submit">Create ticket</button><button id="create-cancel" type="button" class="secondary">Cancel</button></div></form></dialog>"""
+        result = self.node("""
+await page.setContent(DIALOG);
+const found=[await probe.mutationFailureFeedback(page).allTextContents()];
+// An auxiliary other than was/were also reads as an idle draft or notice, which the callers cannot tell from a failure.
+for(const text of ["Ticket wasn't saved.",'Ticket wasn’t saved.','Your changes were not saved.','The ticket could not be moved.',
+ 'Creating ticket…','Ticket created.','Ticket deleted.','Saving changes…','Ticket not found. It may have been deleted.','Not saved yet','Cannot find that ticket',
+ 'Changes have not been saved yet.',"Your edits haven't been saved.",'This draft has not been saved',"Comments haven't been posted yet","This ticket can't be deleted right now."]){
+ await page.setContent(`<p role="status">${text}</p>`);found.push(await probe.mutationFailureFeedback(page).count());
+}
+console.log(JSON.stringify(found));
+""".replace('DIALOG', json.dumps(dialog)), browser=True)
+        self.assertEqual(result, [['The ticket was not created (500). Please try again.'], 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
     def test_save_action_accepts_contract_names_without_matching_settings(self):
         result = self.node("""

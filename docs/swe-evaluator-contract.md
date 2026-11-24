@@ -76,6 +76,25 @@ Controls named `Delete`, `Remove`, `Edit` or `React` are never pressed. Version 
 results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
 `89c1bbfcc0b1…` identifies the version 7 results of 0.43.0.
 
+Kanban rubric version 9 changes C4, C6 and C7 evidence. A failed create, edit, delete
+or comment also counts when its alert or status negates the verb after `was` or
+`were`: `was not created`, `wasn't saved`, `were not saved`. `could not be moved`
+counted already. Progress (`Creating ticket…`), success (`Ticket created.`), an idle
+`Not saved yet` or `Changes have not been saved yet` draft status, `can't be deleted`
+and `Ticket not found.` still fail, because the check cannot tell them from a failure
+report. C6 parent navigation reads `jump`, `go to`, `move to`, `navigate to`, `scroll
+to` and `skip to` as a jump to the parent, both to find the control and to let a
+`Reply …` control through: `Reply to Alice's comment from …. Move to that comment.` is
+pressed, and a `Reply to Alice's comment` composer is not. C7 no longer needs the
+newer title while the first ticket GET is held, since a delivery may queue its next
+read behind that one. After the release the newer title must show once, and once it
+has shown the stale title may not render again for 2 seconds after the held response
+lands, so a stale response that stays on screen, flashes over newer state or renders
+within those 2 seconds still fails. A page that never shows the newer title fails with
+`newer state did not render after the late GET`. Version 8 results are not rescored.
+`provenance.controller_sha256["probe.mjs"]` = `a6ea740efda5…` identifies the version 8
+results of 0.44.0 and 0.45.0.
+
 C5 selects a visible, hit-tested point in the target lane and checks a status-only
 PATCH for the dragged ticket, sent bare or under one wrapper key. Failure, success and navigation probes
 record separate observations. A failed subprobe does not cancel the others.
@@ -106,7 +125,13 @@ select keeps its value until the app's own navigation lands, so the keyboard che
 waits for the change instead of reading it right after `Enter`. Comparison data is
 matched without regard to case: `innerText` applies `text-transform`, so a delivery
 that styles function names in capitals reads `ORDERS::GET`. The same match decides
-that the old result is gone after the failed comparison.
+that the old result is gone after the failed comparison. The error is any visible
+`role="alert"` with text, or a visible `role="status"` or live region (not
+`aria-live="off"`) whose text says `fail`, `error`, `unavailable`, `could not` or
+`unable`; `Loading comparison…` in a live region does not count. The timeout row's
+label must end with `timeoutMs` or `/timeoutMs` as a separate word, so a combined
+label such as `configuration /timeoutMs` counts, while `configuration
+/retry/timeoutMs` and `configuration /timeoutMsOverride` do not.
 
 Chess retains DOM, paint, hit testing, observed FENs, interactions and matched RPC.
 The playable UI criterion remains strict. Screenshot completeness is evaluated

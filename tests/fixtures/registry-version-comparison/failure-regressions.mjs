@@ -22,11 +22,21 @@ const server = http.createServer(async (request, response) => {
   const failing = from === '1.1.0' || to === '1.1.0';
   // A delivery may style function names in capitals; the page text then reads ORDERS::GET.
   const orders = url.searchParams.get('upper') ? '<p style="text-transform:uppercase">orders::get</p>' : '<p>orders::get</p>';
+  const failure = {
+    'missing-alert': '<p>Failed</p>',
+    'no-error': '',
+    // 0.45.0 r01: the house StatusPanel (no role) inside the changelog's polite live region.
+    'live-status': '<div aria-live="polite"><div><div style="border:1px solid red"><div style="text-transform:lowercase">comparison failed</div><div>The comparison service is temporarily unavailable. Nothing is shown because the request failed.</div></div><div><button type="button">retry</button></div></div></div>',
+    'role-status': '<p role="status">Could not compare these versions.</p>',
+    'live-neutral': '<div aria-live="polite"><div role="status">Loading comparison…</div></div><div aria-live="polite">Comparing…</div>',
+    'live-hidden': '<div aria-live="polite"><div hidden>comparison failed</div></div><div aria-live="polite" style="display:none">comparison failed</div>',
+    'live-off': '<div aria-live="off">comparison failed</div>',
+  }[negative] ?? '<p role="alert">Comparison unavailable</p>';
   let result = orders;
   if (mode === 'ssr' && failing) {
     const fault = await fetch(`http://127.0.0.1:${server.address().port}/w/orders-worker/compare/${from}...${to}`);
     assert.equal(fault.status, 503);
-    result = negative === 'missing-alert' ? '<p>Failed</p>' : '<p role="alert">Comparison unavailable</p>';
+    result = failure;
     if (negative === 'stale') result += orders;
   }
   response.setHeader('content-type', 'text/html');
@@ -40,7 +50,7 @@ const server = http.createServer(async (request, response) => {
       if (mode === 'ssr') { location.href = url; return; }
       history.pushState({}, '', url);
       const response = await fetch('/w/orders-worker/compare/' + url.searchParams.get('from') + '...' + url.searchParams.get('to'));
-      if (!response.ok) document.querySelector('main').innerHTML = (negative === 'stale' ? ${JSON.stringify(orders)} : '') + (negative === 'missing-alert' ? '<p>Failed</p>' : '<p role="alert">Comparison unavailable</p>');
+      if (!response.ok) document.querySelector('main').innerHTML = (negative === 'stale' ? ${JSON.stringify(orders)} : '') + ${JSON.stringify(failure)};
     }
     document.querySelector('#to').onchange = compare;
     if (mode === 'spa' && ${failing}) compare();
@@ -51,12 +61,15 @@ await once(server, 'listening');
 const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
 const summary = {};
 const uppercase = {};
+const live = {};
 try {
   for (const mode of ['ssr', 'spa']) {
     const page = await browser.newPage();
-    for (const [upper, negative, replays, tally] of [
+    for (const [upper, negative, replays, tally, passes = !negative] of [
       [false, '', 100, summary], [false, 'stale', 100, summary], [false, 'missing-alert', 100, summary],
       [true, '', 10, uppercase], [true, 'stale', 10, uppercase],
+      [false, 'live-status', 10, live, true], [false, 'role-status', 10, live, true], [false, 'no-error', 10, live],
+      [false, 'live-neutral', 10, live], [false, 'live-hidden', 10, live], [false, 'live-off', 10, live],
     ]) {
       const key = `${mode}:${negative || 'correct'}`;
       tally[key] = 0;
@@ -69,10 +82,10 @@ try {
       });
       for (let replay = 0; replay < replays; replay++) {
         for (const path of ['navigation', 'interaction']) {
-          const result = await comparisonFailure(page, `http://127.0.0.1:${server.address().port}`, path, negative ? 150 : 3000);
+          const result = await comparisonFailure(page, `http://127.0.0.1:${server.address().port}`, path, passes ? 3000 : 150);
           assert.equal(result.precondition, true, JSON.stringify(result));
           assert.equal(result.attempted, true, JSON.stringify(result));
-          assert.equal(result.passed, !negative, JSON.stringify(result));
+          assert.equal(result.passed, passes, `${key} ${JSON.stringify(result)}`);
         }
         tally[key]++;
       }
@@ -82,7 +95,7 @@ try {
   }
   assert(requests.some(path => path.endsWith('1.1.0...2.0.0')));
   assert(requests.some(path => path.endsWith('1.0.0...1.1.0')));
-  console.log(JSON.stringify({ replays: summary, uppercase, actual503Responses: requests.length }));
+  console.log(JSON.stringify({ replays: summary, uppercase, live, actual503Responses: requests.length }));
 } finally {
   await browser.close();
   server.closeAllConnections();

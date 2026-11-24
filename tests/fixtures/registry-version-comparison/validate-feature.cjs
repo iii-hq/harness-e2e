@@ -134,6 +134,8 @@ async function apiProbes() {
   return true;
 }
 
+const errorRegions = '[role="alert"], [role="status"], [aria-live]:not([aria-live="off"])';
+
 async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, screenshotPath) {
   const errors = [];
   const onError = error => errors.push(String(error));
@@ -161,18 +163,22 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
     }
     const expectedFrom = mode === 'interaction' ? '1.0.0' : '1.1.0';
     const expectedTo = mode === 'interaction' ? '1.1.0' : '2.0.0';
-    await page.waitForFunction(({ from, to }) => {
+    await page.waitForFunction(({ from, to, regions }) => {
       const url = new URL(location.href);
+      // A status or live region (0.45.0 r01's house StatusPanel) counts only when it says the comparison failed.
       return url.searchParams.get('from') === from && url.searchParams.get('to') === to
         && !document.body.innerText.toLowerCase().includes('orders::get')
-        && [...document.querySelectorAll('[role="alert"]')].some(node => node.checkVisibility() && node.innerText.trim());
-    }, { from: expectedFrom, to: expectedTo }, { timeout: verdictTimeout });
+        && [...document.querySelectorAll(regions)].some(node => node.checkVisibility() && (node.matches('[role="alert"]')
+          ? node.innerText.trim() : /fail|error|unavailable|could not|unable/i.test(node.innerText)));
+    }, { from: expectedFrom, to: expectedTo, regions: errorRegions }, { timeout: verdictTimeout });
   } catch (failure) { error = String(failure); }
   try {
     const observed = {
       mode, precondition, attempted, error, errors, url: page.url(),
       selected: await page.locator('select').evaluateAll(nodes => nodes.map(node => node.value)),
-      alerts: await page.getByRole('alert').evaluateAll(nodes => nodes.filter(node => node.checkVisibility()).map(node => node.innerText.trim()).filter(Boolean)),
+      // document.querySelectorAll, unlike getByRole, skips Next's route announcer inside its shadow root.
+      alerts: await page.evaluate(regions => [...document.querySelectorAll(regions)].filter(node => node.checkVisibility())
+        .map(node => node.innerText.trim()).filter(Boolean), errorRegions),
       body: (await page.locator('body').innerText()).slice(0, 6000),
     };
     if (screenshotPath) {
@@ -184,7 +190,8 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
 }
 
 async function expandedDetail(page) {
-  const timeoutPath = page.getByText(/^\/?timeoutMs$/i).first();
+  // The path may end a combined label (0.45.0 r03: 'configuration /timeoutMs').
+  const timeoutPath = page.getByText(/(^|\s)\/?timeoutMs$/i).first();
   const detailRow = timeoutPath.locator('xpath=ancestor::*[self::tr or self::li or self::details or @role="row" or .//button][1]');
   const detail = detailRow.locator('button, summary').first();
   let expanded = false;
