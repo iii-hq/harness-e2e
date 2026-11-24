@@ -46,6 +46,12 @@ const cases = {
   details_inline_glued_longer_key: [inlineKind('/timeoutMs<b>Override</b>'), false],
   details_split_suffix: [details('/timeoutMs<!-- --> (changed)'), false],
   details_inline_hidden_label: [inlineKind('/timeoutMs', 'display:none'), false],
+  details_inline_invisible_label: [inlineKind('/timeoutMs', 'visibility:hidden'), false],
+  details_inline_split_word: [inlineKind('/time<!-- -->outMs'), true],
+  details_inline_hidden_separator: [inlineKind('/retry<span style="display:none">x</span>/timeoutMs'), false],
+  details_inline_nested_owner: [inlineKind('/retry<span>/timeoutMs<span style="margin-left:8px">changed</span></span>'), false],
+  // An invisible tooltip laid out right after the path does not glue a word to it.
+  details_inline_invisible_neighbour: [inlineKind('/timeoutMs<span style="position:absolute;opacity:0">copy</span>'), true],
   controlled_sibling: [page({}), true],
   region_stays_hidden: [page({ reveal: false }), false],
   toggle_does_not_flip: [page({ flip: false }), false],

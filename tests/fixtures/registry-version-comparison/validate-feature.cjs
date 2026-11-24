@@ -195,39 +195,47 @@ async function expandedDetail(page) {
   let timeoutPath = page.getByText(label).first();
   if (!await timeoutPath.count()) {
     // An inline label right after the path joins the element's text (0.46.0 r02:
-    // '/timeoutMs<span>changed</span>' reads '/timeoutMschanged'). So a run of the
-    // element's own text that ends with the path names the row, if whitespace or a
-    // visible gap parts it from the text of the elements beside it.
-    const owners = page.locator('xpath=//body//*[not(self::script or self::style or self::noscript)][text()[contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "timeoutms")]]');
+    // '/timeoutMs<span>changed</span>' reads '/timeoutMschanged'). So a visible run of
+    // an element's own text that ends with the path names the row, if the visible text
+    // on each side is parted from it by whitespace, a character no path uses (such as
+    // '→') or a visible gap.
+    const owners = page.locator('xpath=//body//*[not(self::script or self::style or self::noscript)][text()][contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "timeoutms")]');
     const owner = await owners.evaluateAll((nodes, source) => {
       const label = new RegExp(source, 'i');
+      const visible = { checkOpacity: true, checkVisibilityCSS: true };
       const rects = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getClientRects(); };
-      const apart = (left, right) => !left || !right || right.left - left.right >= 2 || right.top >= left.bottom - 1;
+      // The text a reader sees next to the path, wherever the markup puts it.
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: text => text.parentElement?.checkVisibility(visible) && rects(text).length
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+      });
+      const beside = (node, before) => { walker.currentNode = node; return before ? walker.previousNode() : walker.nextNode(); };
+      const pathCharacter = /[\w~./-]/;
+      const gap = (left, right) => right.left - left.right >= 2 || right.top >= left.bottom - 1;
       return nodes.findIndex(node => {
+        if (!node.checkVisibility(visible)) return false;
         // React splits one label into text nodes ('{parent}/{leaf}' renders
-        // '/retry<!-- -->/<!-- -->timeoutMs'), so only an element with text ends a run.
-        const runs = [{ nodes: [] }];
+        // '/retry<!-- -->/<!-- -->timeoutMs'), so only an element ends a run.
+        const runs = [[]];
         for (const child of node.childNodes) {
-          if (child.nodeType === Node.TEXT_NODE) runs.at(-1).nodes.push(child);
-          else if (child.nodeType === Node.ELEMENT_NODE && child.textContent.trim()) {
-            runs.at(-1).next = child;
-            runs.push({ nodes: [], previous: child });
-          }
+          if (child.nodeType === Node.TEXT_NODE) runs.at(-1).push(child);
+          else if (child.nodeType === Node.ELEMENT_NODE) runs.push([]);
         }
-        return runs.some(({ nodes: run, previous, next }) => {
+        return runs.some(run => {
           const text = run.map(child => child.textContent).join('');
           if (!run.length || !label.test(text.trim())) return false;
           const range = document.createRange();
           range.setStartBefore(run[0]);
           range.setEndAfter(run.at(-1));
           const own = range.getClientRects();
-          // A label nobody sees names no row (getByText above still reads hidden text).
           if (!own.length) return false;
+          const before = beside(run[0], true);
+          const after = beside(run.at(-1), false);
           // Whitespace inside the run already parts the path from what precedes it.
-          const leftApart = !previous || /\s/.test(text.trim()) || /^\s/.test(text) || /\s$/.test(previous.textContent)
-            || apart([...rects(previous)].at(-1), own[0]);
-          const rightApart = !next || /\s$/.test(text) || /^\s/.test(next.textContent)
-            || apart([...own].at(-1), rects(next)[0]);
+          const leftApart = /\s/.test(text.trim()) || /^\s/.test(text) || !before
+            || !pathCharacter.test(before.textContent.at(-1)) || gap([...rects(before)].at(-1), own[0]);
+          const rightApart = /\s$/.test(text) || !after
+            || !pathCharacter.test(after.textContent[0]) || gap([...own].at(-1), rects(after)[0]);
           return leftApart && rightApart;
         });
       });
