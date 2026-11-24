@@ -364,10 +364,10 @@ h2h_watch() {  # h2h_watch <job> <command...>: Ctrl-C the job on the first quota
 # Decoys, no model: nop must score a valid 0 and oracle 1 on every task.
 ./venv/bin/harbor run "${D[@]}" -a nop    -n 8 -o jobs -e docker --job-name h2h-tb41-nop
 ./venv/bin/harbor run "${D[@]}" -a oracle -n 8 -o jobs -e docker --job-name h2h-tb41-oracle
-X=()   # one -x <task> for each task that missed a decoy; more than 6 ends the plan
+X=()   # one -x terminal-bench/<task> per task that missed a decoy (4.1 names carry the prefix); more than 6 ends the plan
 
 # Pilot: 3 tasks per arm, interleaved.
-P=(-i heat-pump-warranty -i session-window-debug -i glycan-ms2-elucidation)
+P=(-i terminal-bench/heat-pump-warranty -i terminal-bench/session-window-debug -i terminal-bench/glycan-ms2-elucidation)
 h2h_watch h2h-pilot ./venv/bin/harbor run -c "$ADAPTER/h2h-ic.yaml" "${D[@]}" "${P[@]}" -n 2 --n-concurrent-agents 1 --job-name h2h-pilot
 python3 -I "$ADAPTER/tb_trace_scan.py" jobs/h2h-pilot     # read-only; writes agent/trace-scan.json per iii trial
 python3 -I "$ADAPTER/tb_pair.py" --pilot jobs/h2h-pilot     # one line per trial, then PILOT_READY: yes|no
