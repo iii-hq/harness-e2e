@@ -191,7 +191,57 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
 
 async function expandedDetail(page) {
   // The path may end a combined label (0.45.0 r03: 'configuration /timeoutMs').
-  const timeoutPath = page.getByText(/(^|\s)\/?timeoutMs$/i).first();
+  const label = /(^|\s)\/?timeoutMs$/i;
+  let timeoutPath = page.getByText(label).first();
+  if (!await timeoutPath.count()) {
+    // An inline label right after the path joins the element's text (0.46.0 r02:
+    // '/timeoutMs<span>changed</span>' reads '/timeoutMschanged'). So a visible run of
+    // an element's own text that ends with the path names the row, if the visible text
+    // on each side is parted from it by whitespace, a character no path uses (such as
+    // '→') or a visible gap.
+    const owners = page.locator('xpath=//body//*[not(self::script or self::style or self::noscript)][text()][contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "timeoutms")]');
+    const owner = await owners.evaluateAll((nodes, source) => {
+      const label = new RegExp(source, 'i');
+      const visible = { checkOpacity: true, checkVisibilityCSS: true };
+      const rects = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getClientRects(); };
+      // The text a reader sees next to the path, wherever the markup puts it.
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: text => text.parentElement?.checkVisibility(visible) && rects(text).length
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+      });
+      const beside = (node, before) => { walker.currentNode = node; return before ? walker.previousNode() : walker.nextNode(); };
+      const pathCharacter = /[\w~./-]/;
+      const gap = (left, right) => right.left - left.right >= 2 || right.top >= left.bottom - 1;
+      return nodes.findIndex(node => {
+        if (!node.checkVisibility(visible)) return false;
+        // React splits one label into text nodes ('{parent}/{leaf}' renders
+        // '/retry<!-- -->/<!-- -->timeoutMs'), so only an element ends a run.
+        const runs = [[]];
+        for (const child of node.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) runs.at(-1).push(child);
+          else if (child.nodeType === Node.ELEMENT_NODE) runs.push([]);
+        }
+        return runs.some(run => {
+          const text = run.map(child => child.textContent).join('');
+          if (!run.length || !label.test(text.trim())) return false;
+          const range = document.createRange();
+          range.setStartBefore(run[0]);
+          range.setEndAfter(run.at(-1));
+          const own = range.getClientRects();
+          if (!own.length) return false;
+          const before = beside(run[0], true);
+          const after = beside(run.at(-1), false);
+          // Whitespace inside the run already parts the path from what precedes it.
+          const leftApart = /\s/.test(text.trim()) || /^\s/.test(text) || !before
+            || !pathCharacter.test(before.textContent.at(-1)) || gap([...rects(before)].at(-1), own[0]);
+          const rightApart = /\s$/.test(text) || !after
+            || !pathCharacter.test(after.textContent[0]) || gap([...own].at(-1), rects(after)[0]);
+          return leftApart && rightApart;
+        });
+      });
+    }, label.source);
+    if (owner >= 0) timeoutPath = owners.nth(owner);
+  }
   const detailRow = timeoutPath.locator('xpath=ancestor::*[self::tr or self::li or self::details or @role="row" or .//button][1]');
   const detail = detailRow.locator('button, summary').first();
   let expanded = false;

@@ -40,7 +40,9 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         accepted = {name for name, passed in json.loads(result.stdout)["disclosure"].items() if passed}
-        self.assertEqual(accepted, {"nested", "controlled_sibling", "details_combined_label"})
+        self.assertEqual(accepted, {"nested", "controlled_sibling", "details_combined_label", "details_inline_kind",
+                                    "details_inline_split_path", "details_inline_split_word",
+                                    "details_inline_invisible_neighbour"})
 
     def test_config_array_order_accepts_a_whole_or_per_index_reversal(self):
         # One changed array and one changed entry per index are both ordered JSON Pointer diffs.
