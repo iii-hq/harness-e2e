@@ -1,0 +1,36 @@
+# Terminal-Bench scoring stack: its own engine port and namespace, never the
+# live stack (49134). Left out on purpose: memory (cross-session recall),
+# approval-gate (holds calls for a human), judge, fp and ade (prompt
+# injectors), sentinel, eval, workflow.
+namespace: tbench
+startup_timeout: 600s
+stop_timeout: 30s
+engine:
+  url: ws://127.0.0.1:49634
+# The Harness graph is listed explicitly: a bare `iii compose --up` does not
+# resolve it from `harness` alone. Pin exact versions for a reported run.
+containers:
+  queue:             {worker: package://queue,             version: latest}
+  state:             {worker: package://state,             version: latest}
+  session-manager:   {worker: package://session-manager,   version: latest}
+  llm-router:
+    worker: package://llm-router
+    version: latest
+    start_after: [state]
+    environment: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"}
+  context-manager:   {worker: package://context-manager,   version: latest, start_after: [llm-router]}
+  iii-directory:     {worker: package://iii-directory,     version: latest}
+  cron:              {worker: package://cron,              version: latest}
+  ide:               {worker: package://ide,               version: latest}
+  harness:
+    worker: package://harness
+    version: latest
+    start_after: [state, queue, session-manager, llm-router, context-manager, iii-directory, cron, ide]
+    config_override:
+      co_author: false                # no Co-authored-by instruction in git tasks
+      default_filesystem_root: "off"  # no host working directory in the prompt, no ide snapshots
+  provider-anthropic:
+    worker: package://provider-anthropic
+    version: latest
+    start_after: [llm-router, state]
+    environment: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"}

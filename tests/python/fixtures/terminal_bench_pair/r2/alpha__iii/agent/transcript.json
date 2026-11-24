@@ -1,0 +1,57 @@
+{
+ "messages": [
+  {
+   "entry_id": "u",
+   "message": {
+    "role": "user"
+   }
+  },
+  {
+   "entry_id": "e",
+   "message": {
+    "role": "assistant",
+    "model": "codex/gpt-6.2-sol",
+    "stop_reason": "end",
+    "content": []
+   }
+  },
+  {
+   "entry_id": "e",
+   "message": {
+    "role": "assistant",
+    "model": "codex/gpt-6.2-sol",
+    "stop_reason": "end",
+    "content": [
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input": 10,
+     "output": 5,
+     "reasoning": 9
+    }
+   }
+  },
+  {
+   "entry_id": "e",
+   "message": {
+    "role": "assistant",
+    "model": "codex/gpt-6.2-sol",
+    "stop_reason": "end",
+    "content": [
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ],
+    "usage": {
+     "input": 10,
+     "output": 5,
+     "reasoning": 0
+    }
+   }
+  }
+ ]
+}

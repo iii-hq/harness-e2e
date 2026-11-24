@@ -1,0 +1,25 @@
+{
+ "task_name": "alpha",
+ "trial_name": "alpha__codex",
+ "agent_info": {
+  "name": "codex"
+ },
+ "agent_result": {
+  "n_input_tokens": 1000,
+  "n_cache_tokens": 800,
+  "n_output_tokens": 50,
+  "metadata": null
+ },
+ "verifier_result": null,
+ "exception_info": {
+  "exception_type": "NonZeroAgentExitCodeError",
+  "exception_message": "NonZeroAgentExitCodeError: planted",
+  "exception_traceback": "",
+  "occurred_at": "2026-11-24T10:00:00Z"
+ },
+ "agent_execution": {
+  "started_at": "2026-11-24T10:00:00Z",
+  "finished_at": "2026-11-24T10:00:50Z"
+ },
+ "reward_valid": false
+}

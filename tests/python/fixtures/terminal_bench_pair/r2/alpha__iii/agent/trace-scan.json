@@ -1,0 +1,16 @@
+{
+ "session_id": "s_0123456789ab",
+ "trace_ids": [
+  "t"
+ ],
+ "steps": 2,
+ "step_levels": {
+  "xhigh": 2
+ },
+ "provider_inputs": {
+  "xhigh": 1,
+  "cut": 1
+ },
+ "ok": true,
+ "why": []
+}

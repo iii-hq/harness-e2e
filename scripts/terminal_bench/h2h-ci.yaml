@@ -1,0 +1,15 @@
+# Head-to-head: iii harness vs Codex CLI, same model and effort. Agent order: codex, iii.
+jobs_dir: jobs
+n_attempts: 1
+retry:
+  # No retries: Harbor deletes a retried attempt's directory, and its default policy retries
+  # unknown exception names (the adapter's), so one arm would be scored best-of-2.
+  max_retries: 0
+environment: {type: docker}
+agents:
+  - name: codex
+    model_name: openai/gpt-6.2-sol
+    kwargs: {reasoning_effort: xhigh, version: "0.170.0", web_search: disabled}
+  - name: iii_harbor_agent:IIIHarnessAgent
+    model_name: openai-codex/codex/gpt-6.2-sol
+    kwargs: {engine_url: "ws://127.0.0.1:49634", namespace: tbench, thinking_level: xhigh, prompt: stock}
