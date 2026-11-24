@@ -277,6 +277,38 @@ class MemoryGainTest(unittest.TestCase):
         code, report, _ = self.run_main(built, self.fake_compare)
         self.assertEqual((code, report[MODEL]["errors"]), (0, []))
 
+    def test_the_facts_line_says_what_one_dense_message_kept_per_arm(self):
+        _, report, text = self.run_main(arms(), self.fake_compare)
+        self.assertEqual(report[MODEL]["facts"], {})
+        self.assertNotIn("dense message", text)
+        built = arms()
+        for arm, kept in (("memory", (10, 9, 12)), ("memory-consolidated", (11, 8, 9))):
+            long_message = next(s for s in built[arm] if s["scenario_id"] == "memory_precise_long_message")
+            for index, survived in enumerate(kept):
+                measure(long_message, index, "memory_facts_planted", 12)
+                measure(long_message, index, "memory_facts_survived", survived)
+                if arm == "memory":
+                    measure(long_message, index, "memory_extraction_saturated", 1)
+                else:
+                    measure(long_message, index, "memory_facts_survived_consolidated", survived - 1)
+        code, report, text = self.run_main(built, self.fake_compare)
+        self.assertEqual(code, 0, text)
+        # The root bundle repeats each run: counted once.
+        self.assertEqual(report[MODEL]["facts"]["memory"],
+                         {"runs": 3, "planted": 36, "survived": 31, "consolidated": None, "saturated": 3})
+        self.assertNotIn("memory-off", report[MODEL]["facts"])
+        # An older memory counts no saturated pieces: unknown, never 0.
+        self.assertIn("- facts one dense message kept word for word: memory 31 of 36 in 3 runs, saturated "
+                      "pieces 3; memory-consolidated 28 of 36 in 3 runs, 25 of 36 after consolidation, saturated "
+                      "pieces unknown", text)
+        # One run whose doctor did not answer makes the arm's count unknown, not a partial sum.
+        run = next(s for s in built["memory"] if s["scenario_id"] == "memory_precise_long_message")["runs"][2]
+        run["scenario_measurements"] = [m for m in run["scenario_measurements"]
+                                        if m["id"] != "memory_extraction_saturated"]
+        _, report, text = self.run_main(built, self.fake_compare)
+        self.assertIsNone(report[MODEL]["facts"]["memory"]["saturated"])
+        self.assertIn("memory 31 of 36 in 3 runs, saturated pieces unknown;", text)
+
     def test_the_minilm_line_counts_each_arms_setups_and_fails_nothing(self):
         built = arms()
         for arm, scenarios in built.items():

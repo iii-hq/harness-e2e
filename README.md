@@ -784,8 +784,9 @@ the case reads the bank after its session, `bank_after.extraction`: `passes`,
 and `last_error`, the difference between two `memory::doctor` replies taken
 around the phase. A memory that reports them adds `returned` (items in the
 model's replies, memories and rules, before any check), `no_array` (replies
-with no JSON array, read as nothing returned) and `rule_items` (the doctor's
-`rules`); an older memory leaves them out. A failed learned gate, or a control
+with no JSON array, read as nothing returned), `rule_items` (the doctor's
+`rules`) and `saturated` (extraction pieces whose memories reached memory's
+`max_memories_per_turn`); an older memory leaves them out. A failed learned gate, or a control
 that found nothing stored, repeats them in its reason. Model calls with
 nothing created and nothing dropped mean the model returned no memory item:
 `returned 0` with `no_array 0` is an empty array, and `no_array` counts
@@ -936,7 +937,23 @@ as its seed states it: the variable with its prefix, the command with its
 flags. A canary whose label ends in `_usd`, `_date` or `_num` renders as an
 amount, a date or a five-digit number instead of eight hex characters.
 `memory_precise_long_message` teaches a port in the middle of one user message
-of about 15,000 characters. They run only in `memory-gain`.
+of about 17,000 characters. The same message states twelve exact values in
+all (the bucket, the port, two amounts, two dates, two environment variables
+and four ids), each once, and stays one extraction call of at most 24,000
+characters. One call keeps at most `max_memories_per_turn` memories (eight by
+default), so the model may drop values to stay under it, and memory counts no
+`over_cap` drop then. Once the teacher's extraction ran, the case records how
+many of the twelve values the bank holds word for word, in a live memory or a
+learned rule line (`memory_facts_survived` of `memory_facts_planted`), and
+`memory_extraction_saturated`, the doctor's count of pieces that reached the
+cap in that window (every session). An older memory reports no such count:
+the measurement is absent, which means unknown, not 0. On the
+memory-consolidated stack setup reads the bank again after the consolidation
+pass and records `memory_facts_survived_consolidated`. The counts gate
+nothing; the case's gates stay as they were. Until the cap changes, a learned
+gate here can also fail when the model drops its value to stay under the cap;
+its reason then shows the saturated piece. The precise cases run only in
+`memory-gain`.
 
 The consolidation cases plant a bank only a consolidated one answers well.
 Memory's own injection hides a line that restates another, and drops an older
@@ -989,8 +1006,9 @@ figure and verdict is the runner's. Read it this way:
   the compared runs consolidation ran, what it superseded, how many model calls
   it made and how many notes it left. Then one line per consolidation case
   lists, per consolidated run, what the pass superseded, how many of those the
-  semantic judge decided, and its notes. Last, how many compared runs of each
-  arm set up on MiniLM: information only, never an error.
+  semantic judge decided, and its notes. Then how many compared runs of each
+  arm set up on MiniLM, and the facts line below: information only, never an
+  error.
 - The report fails when a compared memory-consolidated run did not
   consolidate, including when none did. It also fails when a consolidation
   case has no consolidated run, or a run set up on MiniLM whose pass superseded
@@ -1001,6 +1019,11 @@ figure and verdict is the runner's. Read it this way:
   with no vector when setup stopped waiting. A memory-consolidate that reads
   vector coverage defers its semantic tier then; an older one judges without
   them. The report does not read that count.
+- One line per model says, per arm, how many of the twelve values of
+  `memory_precise_long_message` its runs' banks kept word for word, how many
+  after consolidation on the memory-consolidated arm, and how many extraction
+  pieces reached memory's cap (`unknown` when one run's memory does not count
+  them or its doctor did not answer). Information only, never an error.
 - A local stack with `memory-consolidate` installed also consolidates each
   attempt's bank in the other memory suites.
 
