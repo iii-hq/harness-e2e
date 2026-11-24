@@ -239,6 +239,18 @@ console.log(JSON.stringify(outcome));
         # The stale title lands 700 ms after its response and stays.
         self.assertEqual(self.late_get({'deferred': 'const load=async()=>{const title=await read();setTimeout(()=>show(title),700)};window.change=load;load()'}),
                          {'deferred': 'late GET replaced newer state'})
+        # A serialised page that keeps the stale title on screen and adds the newer one beside it.
+        self.assertEqual(self.late_get({'stale-beside-newer': 'let loading=false,queued=false;const load=async()=>{if(loading){queued=true;return}loading=true;'
+                                                              'try{const heading=document.createElement(\'h2\');heading.textContent=await read();document.body.append(heading)}'
+                                                              'finally{loading=false;if(queued){queued=false;load()}}};window.change=load;load()'}),
+                         {'stale-beside-newer': 'late GET rendered over newer state'})
+        # Polling flashes a title whose words are split by a newline, which the accessible name collapses.
+        self.assertEqual(self.late_get({'split-title-polling': 'const load=async()=>{document.querySelector(\'h1\').textContent=(await read()).replace(\' \',\'\\n\')};'
+                                                               'window.change=load;load();setInterval(load,300)'}),
+                         {'split-title-polling': 'late GET rendered over newer state'})
+        # The outgoing document's read must not be the held one: the reloaded page would never see it.
+        self.assertEqual(self.late_get({'unload-read': 'addEventListener(\'beforeunload\',()=>{read()});const load=async()=>show(await read());window.change=load;load()'}),
+                         {'unload-read': 'late GET replaced newer state'})
         # A page that never re-reads is named for that, not for a stale overwrite it never made.
         self.assertEqual(self.late_get({'never-rereads': 'const load=async()=>show(await read());window.change=()=>{};load()'}),
                          {'never-rereads': 'newer state did not render after the late GET'})

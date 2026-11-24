@@ -24,9 +24,11 @@ not set:
   ticket…`. The check waited for the newer title before releasing the held GET and
   timed out, so it never saw the delivery drop the stale response; the later stages
   were not reached. The newer title may now wait for the release. After it, the newer
-  title must show once and the stale title may not render again for 2 seconds after
-  the held response lands, so a stale response that stays on screen, flashes over
-  newer state or renders within those 2 seconds still fails.
+  title must show once and the stale title may not render again or stay beside it for
+  2 seconds after the held response lands, so a stale response that stays on screen,
+  flashes over newer state or renders within those 2 seconds still fails. Only a read
+  the reloaded page sends is held: a poll from the outgoing page could be held
+  instead, and the page under test never saw it.
 
 The other Kanban losses in that run stay the subjects':
 

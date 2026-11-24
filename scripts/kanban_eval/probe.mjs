@@ -697,8 +697,12 @@ export async function assertLateGetKeepsNewerState(page, url, stale, newer, upda
   const held = new Promise((resolve) => { release = resolve })
   const delivered = new Promise((resolve) => { fulfilled = resolve })
   let reads = 0
+  let reloaded = false
+  const committed = (frame) => { if (frame === page.mainFrame()) reloaded = true }
+  page.on('framenavigated', committed)
   await page.route(url, async (route) => {
-    if (route.request().method() !== 'GET' || ++reads > 1) { await route.continue(); return }
+    // A read the outgoing document sends before the reload commits never reaches the page, so holding it tests nothing.
+    if (route.request().method() !== 'GET' || !reloaded || ++reads > 1) { await route.continue(); return }
     const response = await route.fetch()
     intercepted()
     await held
@@ -706,6 +710,7 @@ export async function assertLateGetKeepsNewerState(page, url, stale, newer, upda
     fulfilled()
   })
   await page.reload()
+  page.off('framenavigated', committed)
   await reached
   await update()
   const heading = page.getByRole('heading', { name: newer })
@@ -722,7 +727,8 @@ export async function assertLateGetKeepsNewerState(page, url, stale, newer, upda
   })
   const log = await page.evaluate(() => { globalThis.__kanbanLateGet.observer.disconnect(); return globalThis.__kanbanLateGet.log })
   const first = log.findIndex((entry) => entry.newer)
-  expect(first < 0 || log.slice(first).every((entry, index, after) => index === 0 || entry.stale <= after[index - 1].stale),
+  // From the newer title on, stale headings may only go away, and none may stay beyond those shown before the release.
+  expect(first < 0 || log.slice(first).every((entry, index, after) => entry.stale <= (index ? after[index - 1] : log[0]).stale),
     'late GET rendered over newer state')
 }
 
@@ -730,7 +736,8 @@ function recordHeadings({ stale, newer }) {
   const log = []
   const record = () => {
     const texts = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')]
-      .filter((heading) => heading.checkVisibility()).map((heading) => heading.textContent)
+      // Whitespace collapses as in the accessible name the final heading check reads.
+      .filter((heading) => heading.checkVisibility()).map((heading) => heading.textContent.replace(/\s+/g, ' '))
     log.push({ stale: texts.filter((text) => text.includes(stale)).length, newer: texts.filter((text) => text.includes(newer)).length })
   }
   record()

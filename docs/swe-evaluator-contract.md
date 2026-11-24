@@ -87,13 +87,15 @@ to` and `skip to` as a jump to the parent, both to find the control and to let a
 `Reply …` control through: `Reply to Alice's comment from …. Move to that comment.` is
 pressed, and a `Reply to Alice's comment` composer is not. C7 no longer needs the
 newer title while the first ticket GET is held, since a delivery may queue its next
-read behind that one. After the release the newer title must show once, and once it
-has shown the stale title may not render again for 2 seconds after the held response
-lands, so a stale response that stays on screen, flashes over newer state or renders
-within those 2 seconds still fails. A page that never shows the newer title fails with
-`newer state did not render after the late GET`. Version 8 results are not rescored.
-`provenance.controller_sha256["probe.mjs"]` = `a6ea740efda5…` identifies the version 8
-results of 0.44.0 and 0.45.0.
+read behind that one. Only a read the reloaded page sends is held. After the release
+the newer title must show once, and from then on no stale title may render again or
+stay beyond those shown before the release, for 2 seconds after the held response
+lands. A stale response that stays on screen, even beside the newer title, flashes
+over newer state or renders within those 2 seconds still fails. Headings are matched
+with whitespace collapsed, as in their accessible name. A page that never shows the
+newer title fails with `newer state did not render after the late GET`. Version 8
+results are not rescored. `provenance.controller_sha256["probe.mjs"]` =
+`a6ea740efda5…` identifies the version 8 results of 0.44.0 and 0.45.0.
 
 C5 selects a visible, hit-tested point in the target lane and checks a status-only
 PATCH for the dragged ticket, sent bare or under one wrapper key. Failure, success and navigation probes

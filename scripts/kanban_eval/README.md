@@ -134,12 +134,12 @@ a status mentioning load or visible text that starts with `Loading`, and loading
 must be gone once the first read lands. The C6 and C7 comment body is found by its
 usual names (`Comment`, `Comment body`, `Add comment`, `Comment:`, `Body` and a few
 more) and never by the author field, `Notes` or `Description`. C6 parent navigation
-never presses a `Reply …` control unless its name also says `jump`, `go to`,
-`move to`, `navigate to`, `scroll to` or `skip to`. A failed mutation's alert or
-status may negate the verb after `was` or `were` (`was not created`, `wasn't
-saved`), and the C7 late-GET check lets a delivery queue its next read behind the
-held one, as long as the stale title does not render after the newer one in the 2
-seconds after the held response lands.
+never presses a `Reply …` control unless its name also says `jump`, `go to`, `move
+to`, `navigate to`, `scroll to` or `skip to`. A failed mutation's alert or status
+may negate the verb after `was` or `were` (`was not created`, `wasn't saved`), and
+the C7 late-GET check lets a delivery queue its next read behind the held one, as
+long as the stale title does not render after the newer one, or stay beside it, in
+the 2 seconds after the held response lands.
 Keyboard actions, the
 selected ticket, actual field values, counts, persisted state and focus are still
 checked.
