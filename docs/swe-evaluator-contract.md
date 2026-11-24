@@ -133,7 +133,14 @@ that the old result is gone after the failed comparison. The error is any visibl
 `unable`; `Loading comparison…` in a live region does not count. The timeout row's
 label must end with `timeoutMs` or `/timeoutMs` as a separate word, so a combined
 label such as `configuration /timeoutMs` counts, while `configuration
-/retry/timeoutMs` and `configuration /timeoutMsOverride` do not.
+/retry/timeoutMs` and `configuration /timeoutMsOverride` do not. When no element's
+text ends that way, a run of an element's own adjacent text nodes that does names the
+row, if whitespace or a visible gap of 2px parts the path from the text of the
+elements beside it. An inline kind label after the path, as in
+`/timeoutMs<span class="ml-2">changed</span>`, joins the element's text into
+`/timeoutMschanged`, while `/timeoutMs<b>Override</b>` with no gap is a longer key.
+Comments and empty elements do not end a run, so React's `/retry<!-- -->/timeoutMs`
+is still a nested path.
 
 Chess retains DOM, paint, hit testing, observed FENs, interactions and matched RPC.
 The playable UI criterion remains strict. Screenshot completeness is evaluated

@@ -27,11 +27,25 @@ const page = ({ layout = 'sibling', inner = values(), open = false, flip = true,
 };
 // 0.45.0 r03: a native disclosure whose one label span joins the area and the path.
 const details = label => `<!doctype html><main><details><summary><span>review</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span><span>changed</span></summary><div><div><span>before</span><pre>3000</pre></div><div><span>after</span><pre>5000</pre></div></div></details></main>`;
+// 0.46.0 r02: the kind label is an inline element right after the path, so the
+// label span's text reads '/timeoutMschanged'.
+const inlineKind = (path, style = '') => `<!doctype html><main><ul><li><details><summary><span aria-hidden="true">→</span><span style="${style}">${path}<span style="margin-left:8px">changed</span></span><span>~ review</span><span>show values</span></summary><div><div><p>before</p><pre><code>3000</code></pre></div><div><p>after</p><pre><code>5000</code></pre></div></div></details></li></ul></main>`;
 const cases = {
   nested: [page({ layout: 'nested' }), true],
   details_combined_label: [details('configuration /timeoutMs'), true],
   details_nested_path: [details('configuration /retry/timeoutMs'), false],
   details_longer_key: [details('configuration /timeoutMsOverride'), false],
+  details_inline_kind: [inlineKind('/timeoutMs'), true],
+  details_inline_nested_path: [inlineKind('/retry/timeoutMs'), false],
+  details_inline_longer_key: [inlineKind('/timeoutMsOverride'), false],
+  // React splits '{parent}/{leaf}' into text nodes; the label still reads as one word.
+  details_inline_split_path: [inlineKind('/<!-- -->timeoutMs'), true],
+  details_inline_split_nested_path: [inlineKind('/retry<!-- -->/<!-- -->timeoutMs'), false],
+  details_inline_wbr_nested_path: [inlineKind('/retry<wbr>/timeoutMs'), false],
+  details_inline_element_nested_path: [inlineKind('<span>/retry</span>/timeoutMs'), false],
+  details_inline_glued_longer_key: [inlineKind('/timeoutMs<b>Override</b>'), false],
+  details_split_suffix: [details('/timeoutMs<!-- --> (changed)'), false],
+  details_inline_hidden_label: [inlineKind('/timeoutMs', 'display:none'), false],
   controlled_sibling: [page({}), true],
   region_stays_hidden: [page({ reveal: false }), false],
   toggle_does_not_flip: [page({ flip: false }), false],
@@ -44,7 +58,7 @@ const cases = {
   nested_screen_reader_only: [page({ layout: 'nested', inner: values(SR_ONLY) }), false],
 };
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
 const results = {};
 try {
   for (const [name, [html, expected]] of Object.entries(cases)) {

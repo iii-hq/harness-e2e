@@ -191,7 +191,49 @@ async function comparisonFailure(page, baseUrl, mode, verdictTimeout = timeout, 
 
 async function expandedDetail(page) {
   // The path may end a combined label (0.45.0 r03: 'configuration /timeoutMs').
-  const timeoutPath = page.getByText(/(^|\s)\/?timeoutMs$/i).first();
+  const label = /(^|\s)\/?timeoutMs$/i;
+  let timeoutPath = page.getByText(label).first();
+  if (!await timeoutPath.count()) {
+    // An inline label right after the path joins the element's text (0.46.0 r02:
+    // '/timeoutMs<span>changed</span>' reads '/timeoutMschanged'). So a run of the
+    // element's own text that ends with the path names the row, if whitespace or a
+    // visible gap parts it from the text of the elements beside it.
+    const owners = page.locator('xpath=//body//*[not(self::script or self::style or self::noscript)][text()[contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "timeoutms")]]');
+    const owner = await owners.evaluateAll((nodes, source) => {
+      const label = new RegExp(source, 'i');
+      const rects = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getClientRects(); };
+      const apart = (left, right) => !left || !right || right.left - left.right >= 2 || right.top >= left.bottom - 1;
+      return nodes.findIndex(node => {
+        // React splits one label into text nodes ('{parent}/{leaf}' renders
+        // '/retry<!-- -->/<!-- -->timeoutMs'), so only an element with text ends a run.
+        const runs = [{ nodes: [] }];
+        for (const child of node.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) runs.at(-1).nodes.push(child);
+          else if (child.nodeType === Node.ELEMENT_NODE && child.textContent.trim()) {
+            runs.at(-1).next = child;
+            runs.push({ nodes: [], previous: child });
+          }
+        }
+        return runs.some(({ nodes: run, previous, next }) => {
+          const text = run.map(child => child.textContent).join('');
+          if (!run.length || !label.test(text.trim())) return false;
+          const range = document.createRange();
+          range.setStartBefore(run[0]);
+          range.setEndAfter(run.at(-1));
+          const own = range.getClientRects();
+          // A label nobody sees names no row (getByText above still reads hidden text).
+          if (!own.length) return false;
+          // Whitespace inside the run already parts the path from what precedes it.
+          const leftApart = !previous || /\s/.test(text.trim()) || /^\s/.test(text) || /\s$/.test(previous.textContent)
+            || apart([...rects(previous)].at(-1), own[0]);
+          const rightApart = !next || /\s$/.test(text) || /^\s/.test(next.textContent)
+            || apart([...own].at(-1), rects(next)[0]);
+          return leftApart && rightApart;
+        });
+      });
+    }, label.source);
+    if (owner >= 0) timeoutPath = owners.nth(owner);
+  }
   const detailRow = timeoutPath.locator('xpath=ancestor::*[self::tr or self::li or self::details or @role="row" or .//button][1]');
   const detail = detailRow.locator('button, summary').first();
   let expanded = false;
