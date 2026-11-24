@@ -1,5 +1,51 @@
 # Kanban validation — 2026-09-20
 
+## Rubric version 9 after the 0.45.0 run — 2026-11-24
+
+The 0.45.0 software-engineering run
+([Actions run 45302254512](https://github.com/iii-hq/harness-e2e/actions/runs/45302254512))
+failed three working Kanban deliveries on wording and read ordering the prompt does
+not set:
+
+- C4 r02 scored 90. Its failed creation showed `The ticket was not created (500).
+  Please try again.` in an alert and kept the draft. The failure check read only
+  `unable`, `failed`, `could not` or `error`, so it found no feedback. A verb negated
+  after `was` or `were` (`was not created`, `wasn't saved`) now counts. Other
+  auxiliaries stay out, since `Changes have not been saved yet` or `Not saved yet` is
+  also an idle draft status. Progress and success text still fail.
+- C6 r01 scored 90. Each reply carried a button named `Reply to Alice's comment from
+  …. Move to that comment.` Enter on it focuses the parent comment. The check read
+  only `jump` or `go to` as a jump, so the button was never pressed. `move to`,
+  `navigate to`, `scroll to` and `skip to` now count too, from one verb list shared
+  by the lookup and the `Reply …` guard. A `Reply to Alice's comment` composer is
+  still never pressed.
+- C7 r01 scored 80. It runs one ticket read at a time, so while the probe held the
+  first GET, the live update only queued a reload and the page showed `Loading
+  ticket…`. The check waited for the newer title before releasing the held GET and
+  timed out, so it never saw the delivery drop the stale response; the later stages
+  were not reached. The newer title may now wait for the release. After it, the newer
+  title must show once and the stale title may not render again or stay beside it for
+  2 seconds after the held response lands, so a stale response that stays on screen,
+  flashes over newer state or renders within those 2 seconds still fails. Only a read
+  the reloaded page sends is held: a poll from the outgoing page could be held
+  instead, and the page under test never saw it.
+
+The other Kanban losses in that run stay the subjects':
+
+- C4 r01 scored 60. Its creation form gives the id `create-status` to both the
+  Status select and the form's status message. Clearing the message through that id
+  empties the select, so creation cannot pick a status, and the label has two
+  targets. A deleted ticket's GET also returned HTTP 500 instead of 404: as in 0.43.0
+  r01, it matched `TICKET_NOT_FOUND` only at the start of
+  `invocation_failed: TICKET_NOT_FOUND: …`.
+- C4 r03 scored 85 on the same deleted-ticket HTTP 500.
+- C6 r02 scored 35. Its `index.html` drops a quote after `id="settings-view`, so the
+  settings view is not found, the page throws before it loads the board, and the
+  board stays at `Loading tickets…`. No discussion check could open the ticket.
+- C7 r03 scored 60. Its ticket editor stays at `Saving changes…`: a live refresh
+  during the save starts a newer ticket read, so the editor drops the save's
+  response and the comment form stays hidden.
+
 ## Rubric version 8 after the 0.43.0 run — 2026-11-23
 
 The 0.43.0 software-engineering run

@@ -269,7 +269,7 @@ async function main() {
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
     schema: 'kanban-evaluation-coverage',
-    rubric_version: 8,
+    rubric_version: 9,
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -282,7 +282,7 @@ async function main() {
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
     schema: 'kanban-evaluation',
-    rubric_version: 8,
+    rubric_version: 9,
     case_id: caseId,
     checks,
     status,
@@ -597,9 +597,10 @@ export function loadingText(page) {
     .or(page.getByText(/^\s*loading\b/i).filter({ visible: true }))
 }
 
+// Only "was/were not" negates a past attempt; "not saved yet" or "have not been saved" also reads as an idle draft.
 export function mutationFailureFeedback(page) {
   return page.getByRole('alert').or(page.getByRole('status'))
-    .filter({ hasText: /probe failure|(?:unable|failed|could not).*(?:sav|mov|creat|delet|post)|error/i }).filter({ visible: true })
+    .filter({ hasText: /probe failure|(?:unable|failed|could not).*(?:sav|mov|creat|delet|post)|\b(?:was|were)(?:\s+not|n['’]t)\s+(?:sav|mov|creat|delet|post)|error/i }).filter({ visible: true })
 }
 
 export async function assertClearedDiscussionDraft(page, title) {
@@ -647,11 +648,14 @@ export function commentAuthor(page) {
     .filter({ visible: true })
 }
 
+// One verb set for the relation and the reply guard, so a new synonym cannot pass one and fail the other.
+const PARENT_JUMP = String.raw`\b(?:jump|(?:go|move|navigate|scroll|skip)\s+to)\b`
+
 export async function activateCommentParent(entry, parent, page) {
-  const relation = /previous|earlier|ancestor|reference|referenced|in reply|replying|responding|quoted|original|jump|go to|show|parent comment|comment parent/i
+  const relation = new RegExp(`previous|earlier|ancestor|reference|referenced|in reply|replying|responding|quoted|original|jump|${PARENT_JUMP}|show|parent comment|comment parent`, 'i')
   const named = entry.getByRole('link', { name: relation }).or(entry.getByRole('button', { name: relation })).filter({ visible: true })
   // A "Reply …" control opens a composer, unless its name also says it jumps to the earlier comment.
-  const destructiveName = /^\s*(?:delete|remove|edit|react)\b|^\s*reply\b(?!.*\b(?:jump|go to)\b)/i
+  const destructiveName = new RegExp(String.raw`^\s*(?:delete|remove|edit|react)\b|^\s*reply\b(?!.*${PARENT_JUMP})`, 'i')
   const destructive = entry.getByRole('link', { name: destructiveName }).or(entry.getByRole('button', { name: destructiveName }))
   const referenced = entry.locator('a[href^="#"], button[aria-controls], button[data-parent-id], button[data-parent], button[data-comment-parent]').filter({ visible: true })
   const attempt = async (action) => {
@@ -683,6 +687,63 @@ export async function activateCommentParent(entry, parent, page) {
     if (targetsParent && await attempt(action)) return true
   }
   return false
+}
+
+export async function assertLateGetKeepsNewerState(page, url, stale, newer, update) {
+  let release
+  let intercepted
+  let fulfilled
+  const reached = new Promise((resolve) => { intercepted = resolve })
+  const held = new Promise((resolve) => { release = resolve })
+  const delivered = new Promise((resolve) => { fulfilled = resolve })
+  let reads = 0
+  let reloaded = false
+  const committed = (frame) => { if (frame === page.mainFrame()) reloaded = true }
+  page.on('framenavigated', committed)
+  await page.route(url, async (route) => {
+    // A read the outgoing document sends before the reload commits never reaches the page, so holding it tests nothing.
+    if (route.request().method() !== 'GET' || !reloaded || ++reads > 1) { await route.continue(); return }
+    const response = await route.fetch()
+    intercepted()
+    await held
+    await route.fulfill({ response })
+    fulfilled()
+  })
+  await page.reload()
+  page.off('framenavigated', committed)
+  await reached
+  await update()
+  const heading = page.getByRole('heading', { name: newer })
+  // The prompt forbids a late read overwriting newer state, not reads queued behind it, so newer state may wait for the release.
+  await eventually(async () => await heading.count(), '').catch(() => {})
+  await page.evaluate(recordHeadings, { stale, newer })
+  release()
+  await delivered
+  // A stale response may render a few frames or a timer after it lands; keep watching past that.
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  await eventually(async () => await heading.count() === 1, 'late GET replaced newer state').catch(async (error) => {
+    throw await page.evaluate(() => globalThis.__kanbanLateGet.log.some((entry) => entry.newer))
+      ? error : new Error('newer state did not render after the late GET')
+  })
+  const log = await page.evaluate(() => { globalThis.__kanbanLateGet.observer.disconnect(); return globalThis.__kanbanLateGet.log })
+  const first = log.findIndex((entry) => entry.newer)
+  // From the newer title on, stale headings may only go away, and none may stay beyond those shown before the release.
+  expect(first < 0 || log.slice(first).every((entry, index, after) => entry.stale <= (index ? after[index - 1] : log[0]).stale),
+    'late GET rendered over newer state')
+}
+
+function recordHeadings({ stale, newer }) {
+  const log = []
+  const record = () => {
+    const texts = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')]
+      // Whitespace collapses as in the accessible name the final heading check reads.
+      .filter((heading) => heading.checkVisibility()).map((heading) => heading.textContent.replace(/\s+/g, ' '))
+    log.push({ stale: texts.filter((text) => text.includes(stale)).length, newer: texts.filter((text) => text.includes(newer)).length })
+  }
+  record()
+  const observer = new MutationObserver(record)
+  observer.observe(document, { subtree: true, childList: true, characterData: true, attributes: true })
+  globalThis.__kanbanLateGet = { log, observer }
 }
 
 export async function assertAccessibleFormControls(form) {
@@ -1804,29 +1865,8 @@ export const PROBES = {
       const ticket = await create(trigger, { title: 'Response ordering probe' })
       const { context, page } = await openTicket(browser, baseUrl, ticket)
       await expectText(page.getByRole('heading', { name: ticket.title }), /Response ordering probe/)
-      let release
-      let intercepted
-      let fulfilled
-      const reached = new Promise((resolve) => { intercepted = resolve })
-      const held = new Promise((resolve) => { release = resolve })
-      const delivered = new Promise((resolve) => { fulfilled = resolve })
-      let reads = 0
-      await page.route(`**/api/tickets/${ticket.id}`, async (route) => {
-        if (route.request().method() !== 'GET' || ++reads > 1) { await route.continue(); return }
-        const response = await route.fetch()
-        intercepted()
-        await held
-        await route.fulfill({ response })
-        fulfilled()
-      })
-      await page.reload()
-      await reached
-      await trigger('kanban::tickets::update', { id: ticket.id, changes: { title: 'Newer GET state' } })
-      await expectText(page.getByRole('heading', { name: 'Newer GET state' }), /Newer GET state/)
-      release()
-      await delivered
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-      expect(await page.getByRole('heading', { name: 'Newer GET state' }).count() === 1, 'late GET replaced newer state')
+      await assertLateGetKeepsNewerState(page, `**/api/tickets/${ticket.id}`, ticket.title, 'Newer GET state',
+        () => trigger('kanban::tickets::update', { id: ticket.id, changes: { title: 'Newer GET state' } }))
 
       stage('live_late_mutation')
       await page.unroute(`**/api/tickets/${ticket.id}`)

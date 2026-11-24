@@ -25,8 +25,13 @@ const page = ({ layout = 'sibling', inner = values(), open = false, flip = true,
     });
   </script>`;
 };
+// 0.45.0 r03: a native disclosure whose one label span joins the area and the path.
+const details = label => `<!doctype html><main><details><summary><span>review</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span><span>changed</span></summary><div><div><span>before</span><pre>3000</pre></div><div><span>after</span><pre>5000</pre></div></div></details></main>`;
 const cases = {
   nested: [page({ layout: 'nested' }), true],
+  details_combined_label: [details('configuration /timeoutMs'), true],
+  details_nested_path: [details('configuration /retry/timeoutMs'), false],
+  details_longer_key: [details('configuration /timeoutMsOverride'), false],
   controlled_sibling: [page({}), true],
   region_stays_hidden: [page({ reveal: false }), false],
   toggle_does_not_flip: [page({ flip: false }), false],
