@@ -773,15 +773,22 @@ fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
 }
 
 /// How many of `values` a live memory or learned rule line of `read` holds
-/// word for word.
+/// word for word. A letter or digit next to one makes it another value; `_`
+/// does not (`LEDGER_SHARD_54321`), unlike in `holds_whole`.
 fn kept(read: &Extraction, values: &[&str]) -> usize {
+    let holds = |text: &str, value: &str| {
+        text.match_indices(value).any(|(at, _)| {
+            !text[..at].ends_with(char::is_alphanumeric)
+                && !text[at + value.len()..].starts_with(char::is_alphanumeric)
+        })
+    };
     values
         .iter()
         .filter(|value| {
             read.memories
                 .iter()
-                .any(|memory| memory.live && memory.text.contains(**value))
-                || read.learned_lines().any(|line| line.contains(**value))
+                .any(|memory| memory.live && holds(&memory.text, value))
+                || read.learned_lines().any(|line| holds(line, value))
         })
         .count()
 }
@@ -3755,6 +3762,9 @@ mod tests {
             "The certificate expires in {}.",
             &value("notes_cert_date")[..7]
         );
+        // Neither is one with a digit added; one after a `_` is.
+        let extended = format!("The tracker's project is {}0.", value("notes_tracker_num"));
+        let shard = format!("It reads LEDGER_SHARD_{}.", value("notes_shard_num"));
         let rule = format!(
             "# Learned\n- Cap the budget at USD {}.\n",
             value("notes_budget_usd")
@@ -3764,11 +3774,14 @@ mod tests {
                 saturated: Some(1),
                 ..one_rejected()
             }),
-            ..taught(&[&head, &port, &cut], &[(LEARNED_RULE, &rule)])
+            ..taught(
+                &[&head, &port, &cut, &extended, &shard],
+                &[(LEARNED_RULE, &rule)],
+            )
         };
         let evidence = taught_evidence(case, &["x"], vec![], PROMPT, teacher);
         assert_eq!(measured(&evidence, "memory_facts_planted"), Some(12.0));
-        assert_eq!(measured(&evidence, "memory_facts_survived"), Some(3.0));
+        assert_eq!(measured(&evidence, "memory_facts_survived"), Some(4.0));
         assert_eq!(
             measured(&evidence, "memory_extraction_saturated"),
             Some(1.0)
