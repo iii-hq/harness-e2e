@@ -2181,6 +2181,18 @@ pub fn audits_bank_after(case: &Case) -> bool {
         .any(|criterion| criterion.check == Check::BankUnchanged)
 }
 
+/// The labels of the facts whose survival the case counts: every value its
+/// teacher states, for the one case whose teacher states only facts to keep.
+pub fn counted_facts(case: &Case) -> Vec<&'static str> {
+    if case.id != super::precise_cases::LONG_MESSAGE.id {
+        return Vec::new();
+    }
+    let mut labels: Vec<&'static str> = case.teacher.iter().flat_map(|t| placeholders(t)).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    labels
+}
+
 /// Every label the case plants or checks for, sorted and deduplicated.
 pub fn labels(case: &Case) -> Vec<&'static str> {
     let mut found: Vec<&'static str> = templates(case)
@@ -3026,6 +3038,8 @@ mod tests {
     /// Before memory read a user line whole to 80,000 characters, it kept the
     /// first and last 6,000 of one past 12,000: the control fact sits in that
     /// kept head, the port wholly in that cut, more than 6,000 from either end.
+    /// The whole message stays one extraction call of up to 24,000 characters,
+    /// its line prefix included.
     #[test]
     fn the_precise_long_message_puts_its_port_where_memory_cuts_a_long_line() {
         let case = case_named("memory_precise_long_message");
@@ -3034,7 +3048,7 @@ mod tests {
         };
         let text = render(message, "a");
         assert!(text.is_ascii(), "bytes and characters must agree");
-        assert!((15_000..16_000).contains(&text.len()), "{}", text.len());
+        assert!((16_000..20_000).contains(&text.len()), "{}", text.len());
         let span = |fact: &str| {
             let fact = render(fact, "a");
             let start = text.find(&fact).unwrap_or_else(|| panic!("{fact}"));
@@ -3047,7 +3061,13 @@ mod tests {
             "the billing webhook receiver listens on port {notes_num} and nothing else may bind it",
         );
         assert!(start > 6_000 && end + 6_000 < text.len(), "{start}..{end}");
-        assert_eq!(text.matches(&canary("a", "notes_num")).count(), 1);
+        // A dozen exact values, each stated once: more than the eight memories
+        // one extraction call may keep.
+        let facts = counted_facts(case);
+        assert_eq!(facts.len(), 12, "{facts:?}");
+        for label in facts {
+            assert_eq!(text.matches(&canary("a", label)).count(), 1, "{label}");
+        }
     }
 
     /// Lookup returns a stored value; synthesis builds on it. A baseline

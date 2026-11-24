@@ -8,8 +8,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::cases::{
-    audits_bank_after, bank, canary, labels, learned_labels, placeholders, render, trashed_after,
-    Case, Change, Check, Criterion, DISTRACTORS,
+    audits_bank_after, bank, canary, counted_facts, labels, learned_labels, placeholders, render,
+    trashed_after, Case, Change, Check, Criterion, DISTRACTORS,
 };
 use super::observe::{observe, visible_at, MemoryBlock, Observed, RulesUpdate};
 use crate::report::EvaluationDimension;
@@ -138,6 +138,11 @@ pub struct Passes {
     /// Rule-kind items the model returned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_items: Option<u64>,
+    /// Extraction pieces whose memories reached memory's
+    /// `max_memories_per_turn`: the model may have left facts out to stay
+    /// under it. Absent from a memory that predates it: unknown, not 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saturated: Option<u64>,
     pub created: u64,
     pub reinforced: u64,
     pub superseded: u64,
@@ -167,6 +172,7 @@ impl Passes {
             ("returned", self.returned),
             ("no array", self.no_array),
             ("rule items", self.rule_items),
+            ("saturated pieces", self.saturated),
         ]
         .into_iter()
         .filter_map(|(name, count)| Some(format!(", {name} {}", count?)))
@@ -240,6 +246,9 @@ pub struct Snapshot {
     pub teacher: Option<Extraction>,
     /// What the consolidation pass did, on a stack that runs one.
     pub consolidation: Option<Consolidation>,
+    /// The bank once the consolidation pass ran, for a case that counts its
+    /// facts.
+    pub bank_consolidated: Option<Extraction>,
     /// The bank once extraction read the measured session.
     pub bank_after: Option<Extraction>,
 }
@@ -280,6 +289,10 @@ pub struct Evidence {
     /// The bank once memory's extraction read the teacher session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teacher: Option<Extraction>,
+    /// The bank once the consolidation pass ran, for a case that counts its
+    /// facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_consolidated: Option<Extraction>,
     /// The bank once memory's extraction read the measured session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bank_after: Option<Extraction>,
@@ -515,6 +528,7 @@ fn assemble(
         compaction_status: snapshot.compaction,
         changes: snapshot.changes,
         teacher: snapshot.teacher,
+        bank_consolidated: snapshot.bank_consolidated,
         bank_after: snapshot.bank_after,
         measurements: Vec::new(),
     };
@@ -732,7 +746,44 @@ fn measurements(case: &Case, evidence: &Evidence) -> Vec<Measurement> {
             unit: "ms".to_string(),
         });
     }
+    // An extraction call keeps at most `max_memories_per_turn` memories, and
+    // the model drops the rest itself: only counting the planted facts shows it.
+    let facts: Vec<&str> = counted_facts(case)
+        .into_iter()
+        .map(|label| evidence.canaries[label].as_str())
+        .collect();
+    if let (false, Some(teacher)) = (facts.is_empty(), &evidence.teacher) {
+        measured.push(count("memory_facts_planted", facts.len()));
+        measured.push(count("memory_facts_survived", kept(teacher, &facts)));
+        if let Some(saturated) = teacher
+            .extraction
+            .as_ref()
+            .and_then(|passes| passes.saturated)
+        {
+            measured.push(count("memory_extraction_saturated", saturated as usize));
+        }
+        if let Some(bank) = &evidence.bank_consolidated {
+            measured.push(count(
+                "memory_facts_survived_consolidated",
+                kept(bank, &facts),
+            ));
+        }
+    }
     measured
+}
+
+/// How many of `values` a live memory or learned rule line of `read` holds
+/// word for word.
+fn kept(read: &Extraction, values: &[&str]) -> usize {
+    values
+        .iter()
+        .filter(|value| {
+            read.memories
+                .iter()
+                .any(|memory| memory.live && memory.text.contains(**value))
+                || read.learned_lines().any(|line| line.contains(**value))
+        })
+        .count()
 }
 
 fn first_section(evidence: &Evidence) -> Option<&str> {
@@ -3582,12 +3633,13 @@ mod tests {
             returned: Some(1),
             no_array: Some(1),
             rule_items: Some(0),
+            saturated: Some(1),
             dropped: BTreeMap::from([("malformed".to_string(), 1)]),
             ..Passes::default()
         };
         assert_eq!(
             reported.summary(),
-            "memory's extraction in that window (every session): passes 2, model calls 2, returned 1, no array 1, rule items 0, created 0, reinforced 0, superseded 0, dropped malformed 1, last error none"
+            "memory's extraction in that window (every session): passes 2, model calls 2, returned 1, no array 1, rule items 0, saturated pieces 1, created 0, reinforced 0, superseded 0, dropped malformed 1, last error none"
         );
         // An older memory sends none of them: the line is what it always was.
         assert_eq!(
@@ -3687,5 +3739,67 @@ mod tests {
         );
         assert_eq!(measured(&plain, "memory_learned"), None);
         assert_eq!(measured(&plain, "memory_extraction_ms"), None);
+    }
+
+    #[test]
+    fn a_dense_message_counts_the_facts_its_bank_kept_word_for_word() {
+        let case = case_named("memory_precise_long_message");
+        let value = |label: &str| canary(RUN, label);
+        let head = format!("The build cache bucket is cache-{}.", value("notes_head"));
+        let port = format!(
+            "The billing webhook listens on port {}.",
+            value("notes_num")
+        );
+        // A date cut short is not the planted value.
+        let cut = format!(
+            "The certificate expires in {}.",
+            &value("notes_cert_date")[..7]
+        );
+        let rule = format!(
+            "# Learned\n- Cap the budget at USD {}.\n",
+            value("notes_budget_usd")
+        );
+        let teacher = Extraction {
+            extraction: Some(Passes {
+                saturated: Some(1),
+                ..one_rejected()
+            }),
+            ..taught(&[&head, &port, &cut], &[(LEARNED_RULE, &rule)])
+        };
+        let evidence = taught_evidence(case, &["x"], vec![], PROMPT, teacher);
+        assert_eq!(measured(&evidence, "memory_facts_planted"), Some(12.0));
+        assert_eq!(measured(&evidence, "memory_facts_survived"), Some(3.0));
+        assert_eq!(
+            measured(&evidence, "memory_extraction_saturated"),
+            Some(1.0)
+        );
+        assert_eq!(
+            measured(&evidence, "memory_facts_survived_consolidated"),
+            None
+        );
+        // An older memory counts no saturated pieces: absent, never 0.
+        let older = taught_evidence(case, &["x"], vec![], PROMPT, taught(&[], &[]));
+        assert_eq!(measured(&older, "memory_facts_survived"), Some(0.0));
+        assert_eq!(measured(&older, "memory_extraction_saturated"), None);
+        // The consolidated arm counts its bank again once the pass ran; a
+        // memory it superseded no longer counts.
+        let mut after = taught(&[&head, &port], &[]);
+        after.memories[1].live = false;
+        let mut seen = observed(&["x"], vec![]);
+        let snapshot = Snapshot {
+            teacher: Some(taught(&[&head, &port], &[])),
+            bank_consolidated: Some(after),
+            ..recorded(case, &mut seen, PROMPT, None)
+        };
+        let consolidated = assemble(case, RUN, seen, snapshot, None);
+        assert_eq!(measured(&consolidated, "memory_facts_survived"), Some(2.0));
+        assert_eq!(
+            measured(&consolidated, "memory_facts_survived_consolidated"),
+            Some(1.0)
+        );
+        // Another long message's teacher is not counted.
+        let other = case_named("memory_learn_from_long_message");
+        let evidence = taught_evidence(other, &["x"], vec![], PROMPT, taught(&[], &[]));
+        assert_eq!(measured(&evidence, "memory_facts_planted"), None);
     }
 }

@@ -18,7 +18,9 @@ use iii_sdk::RegisterFunction;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use super::cases::{audits_bank_after, bank, canary, labels, planted, render, Case, Change};
+use super::cases::{
+    audits_bank_after, bank, canary, counted_facts, labels, planted, render, Case, Change,
+};
 use super::observe::observe;
 use super::score::{
     ChangeOutcome, Consolidation, Extraction, Passes, PromptRecord, Retrieval, Snapshot,
@@ -88,6 +90,9 @@ struct Run {
     taught: Option<Extraction>,
     /// What the consolidation pass did to the planted and taught bank.
     consolidation: Option<Consolidation>,
+    /// The bank once the consolidation pass ran, for a case that counts its
+    /// facts.
+    bank_consolidated: Option<Extraction>,
     checkpoints: Option<Vec<super::learning_checkpoints::EvidenceCheckpoint>>,
     /// Each answered exchange's prompt prefix digest, in order, or why the
     /// status could not be read.
@@ -462,6 +467,7 @@ fn register(case: &Case, run_id: &str) -> Arc<Mutex<Vec<PromptRecord>>> {
             strays: Vec::new(),
             taught: None,
             consolidation: None,
+            bank_consolidated: None,
             checkpoints: super::learning_checkpoints::config(case).map(|_| Vec::new()),
             surface_digests: Vec::new(),
             passes_before: Value::Null,
@@ -555,6 +561,14 @@ pub async fn setup(context: &E2eContext, case: &Case, run_id: &str) -> Result<()
                 .await
                 .context(CONSOLIDATE)?;
             keep_consolidation(run_id, &reply, unembedded)?;
+            // Counted again: a merge that rewrote a value lost it too.
+            if !counted_facts(case).is_empty() {
+                let read = read_bank(context, &teacher(run_id), &bank).await?;
+                lock_unpoisoned(runs())
+                    .get_mut(run_id)
+                    .expect("registered above")
+                    .bank_consolidated = Some(read);
+            }
         }
     }
 
@@ -998,6 +1012,15 @@ async fn extraction(
     let entry = cursor_target(transcript)
         .with_context(|| format!("{session} holds no message for memory to read"))?;
     let waited = wait_cursor(context, session, entry).await?;
+    Ok(Extraction {
+        waited_ms: u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
+        ..read_bank(context, session, bank).await?
+    })
+}
+
+/// `bank` as it stands, superseded memories included; what `session` wrote
+/// counts as learned.
+async fn read_bank(context: &E2eContext, session: &str, bank: &str) -> Result<Extraction> {
     let list = context
         .trigger_value(
             "memory::list",
@@ -1011,7 +1034,7 @@ async fn extraction(
         .context("memory::rule::list")?;
     Ok(Extraction {
         session_id: session.to_string(),
-        waited_ms: u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
+        waited_ms: 0,
         memories: memories_of(&list),
         rules: rules_of(&rules),
         extraction: None,
@@ -1074,6 +1097,7 @@ fn passes_between(before: &Value, after: &Value) -> Option<Passes> {
         returned: reported("returned"),
         no_array: reported("no_array"),
         rule_items: reported("rules"),
+        saturated: reported("saturated"),
         created: total("created"),
         reinforced: total("reinforced"),
         superseded: total("superseded"),
@@ -1264,6 +1288,7 @@ pub fn snapshot(run_id: &str) -> Snapshot {
             changes: run.changes.clone(),
             teacher: run.taught.clone(),
             consolidation: run.consolidation,
+            bank_consolidated: run.bank_consolidated.clone(),
             bank_after: None,
             generation_messages_unavailable: true,
             generations: None,
@@ -2076,6 +2101,7 @@ mod tests {
                 returned: None,
                 no_array: None,
                 rule_items: None,
+                saturated: None,
                 created: 0,
                 reinforced: 1,
                 superseded: 0,
@@ -2089,9 +2115,9 @@ mod tests {
     #[test]
     fn the_reply_counters_are_read_when_memory_reports_them() {
         let before = json!({"extraction": {"passes": 1, "total": {
-            "calls": 1, "returned": 1, "no_array": 0, "rules": 0, "created": 1}}});
+            "calls": 1, "returned": 1, "no_array": 0, "rules": 0, "saturated": 1, "created": 1}}});
         let after = json!({"extraction": {"passes": 3, "total": {
-            "calls": 3, "returned": 2, "no_array": 1, "rules": 0, "created": 1,
+            "calls": 3, "returned": 2, "no_array": 1, "rules": 0, "saturated": 2, "created": 1,
             "dropped": {"malformed": 1}}}});
         assert_eq!(
             passes_between(&before, &after),
@@ -2102,6 +2128,7 @@ mod tests {
                 no_array: Some(1),
                 // Reported and unmoved: zero, not absent.
                 rule_items: Some(0),
+                saturated: Some(1),
                 dropped: BTreeMap::from([("malformed".to_string(), 1)]),
                 ..Passes::default()
             })

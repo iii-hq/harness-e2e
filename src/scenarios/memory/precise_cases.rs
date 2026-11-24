@@ -1,6 +1,7 @@
 //! Exact values: an amount, a date, a port, an environment variable and a
 //! command, each planted and asked for, and a port stated in the middle of a
-//! message of about 15,000 characters that memory must learn. A label's
+//! message of about 17,000 characters, among a dozen exact values, that
+//! memory must learn. A label's
 //! suffix gives its canary the shape of the value (see `cases::canary`). They
 //! run only in the `memory-gain` suite.
 
@@ -141,29 +142,52 @@ macro_rules! day_notes {
     };
 }
 
-/// The user's notes over two weeks, one message of about 15,000 characters: a
+/// The user's notes over two weeks, one message of about 17,000 characters: a
 /// cache bucket at its start, a webhook port in its middle. Before memory read
 /// a user line whole to 80,000 characters, it cut one past 12,000 to its first
-/// and last 6,000, and the port sat in that cut.
+/// and last 6,000, and the port sat in that cut. Twelve exact values in all,
+/// each stated once and the port sixth: one extraction call keeps at most
+/// eight memories, so the run counts how many survive.
 const PRECISE_NOTES: &str = concat!(
-    "Some notes for later about this project, mostly a long account of the last two weeks. One \
-    thing at the start does hold for good: the build cache bucket is cache-{notes_head} and \
-    nothing else writes to it. The rest is background, day by day, and none of it needs keeping. ",
+    "Some notes for later about this project, mostly a long account of the last two weeks. A few \
+    things in it do hold for good, each stated once. The first: the build cache bucket is \
+    cache-{notes_head} and nothing else writes to it. The rest is background, day by day, and \
+    none of it needs keeping. ",
+    day_notes!(),
+    "Another thing that holds for good: the staging cloud account's monthly budget cap is USD \
+    {notes_budget_usd}. ",
     day_notes!(),
     day_notes!(),
+    "Another thing that holds for good: the payments-api TLS certificate expires on \
+    {notes_cert_date}. ",
+    day_notes!(),
+    "Another thing that holds for good: the ledger worker reads its shard from the environment \
+    variable LEDGER_SHARD_{notes_shard_num}. ",
     day_notes!(),
     day_notes!(),
-    day_notes!(),
-    day_notes!(),
+    "Another thing that holds for good: the on-call rotation's schedule id is \
+    oncall-{notes_oncall}. ",
     day_notes!(),
     "One more thing in all this does hold for good: the billing webhook receiver listens on port \
     {notes_num} and nothing else may bind it. Back to the days. ",
     day_notes!(),
+    "Another thing that holds for good: the analytics warehouse project id is \
+    proj-{notes_project}. ",
     day_notes!(),
+    "Another thing that holds for good: the load balancer contract renews at USD \
+    {notes_renewal_usd} a year. ",
     day_notes!(),
+    "Another thing that holds for good: the production database freeze starts on \
+    {notes_freeze_date}. ",
     day_notes!(),
+    "Another thing that holds for good: the payments worker reads its queue from the environment \
+    variable PAYMENTS_QUEUE_{notes_queue_num}. ",
     day_notes!(),
+    "Another thing that holds for good: the deploy pipeline runs as the service account \
+    svc-{notes_account}. ",
     day_notes!(),
+    "Another thing that holds for good: the error tracker's project id for checkout is \
+    {notes_tracker_num}. ",
     day_notes!(),
     "That is all for now. Reply to this message with exactly one word: noted",
 );
@@ -171,8 +195,8 @@ const PRECISE_NOTES: &str = concat!(
 pub const LONG_MESSAGE: Case = Case {
     id: "memory_precise_long_message",
     title: "Memory learns an exact value from a long message",
-    summary: "A chat with the user sends one message of about 15,000 characters with a cache bucket near its start and a webhook port in its middle, and a later session asks for the port.",
-    protects: "A port stated in the middle of a very long message is learned like one at its start. If it fails, a user's long notes lose everything past their first and last 6,000 characters before extraction reads them, and nothing says so.",
+    summary: "A chat with the user sends one message of about 17,000 characters with a cache bucket near its start, a webhook port in its middle and ten more exact values between, and a later session asks for the port, after the run counts how many of the twelve values the bank kept word for word.",
+    protects: "A port stated in the middle of a very long message is learned like one at its start. If it fails, a user's long notes lose everything past their first and last 6,000 characters before extraction reads them, and nothing says so. The count shows the values one extraction call drops to stay under memory's eight memories. Until that cap changes, a learned gate can also fail because the model dropped its value for the cap; the reason then shows the saturated piece.",
     distractors: false,
     prompt: "Which port does the billing webhook receiver listen on? Reply with the port number only.",
     teacher: &[PRECISE_NOTES],

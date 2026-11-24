@@ -26,7 +26,9 @@ compares memory-off with memory, and memory with memory-consolidated, row by
 row: every figure and verdict is the runner's. The only sums here check the
 arms, from each run's measurements: the off arm must inject nothing, the
 consolidated arm says what its passes did, each consolidation case lists what
-every pass did to its bank, and each arm says how many runs set up on MiniLM.
+every pass did to its bank, each arm says how many runs set up on MiniLM, and
+how many of the facts planted in one dense message its bank kept word for
+word and how many extraction pieces reached memory's cap.
 
 It writes DIR/memory-gain.md and DIR/memory-gain.json, prints the markdown and
 appends it to the job summary. It exits 1 when a model's report has an error:
@@ -63,6 +65,9 @@ CASE_PASS = {"superseded": "memory_consolidation_superseded", "semantic": "memor
 ANSWER = "memory_answer_points"
 MINILM = "memory_setup_retrieval_minilm"
 CONSOLIDATION = "memory-consolidation"
+# What the dense message's extraction kept, and its pieces at memory's cap.
+FACTS = {"planted": "memory_facts_planted", "survived": "memory_facts_survived",
+         "consolidated": "memory_facts_survived_consolidated", "saturated": "memory_extraction_saturated"}
 
 
 def module(name: str) -> list[str]:
@@ -222,6 +227,15 @@ def gain(arms: dict[str, Path], work: Path) -> dict[str, Any]:
         modes = [run[MINILM] for run in measured(path, scored) if MINILM in run]
         if modes:
             report["minilm"][arm] = {"runs": len(modes), "minilm": sum(1 for mode in modes if mode)}
+    # Information only, like the line above. A count one run lacks is None: an
+    # older memory or a doctor that did not answer is unknown, not 0.
+    report["facts"] = {}
+    for arm, path in arms.items():
+        runs = [run for run in measured(path) if FACTS["planted"] in run]
+        if runs:
+            report["facts"][arm] = {"runs": len(runs), **{
+                key: sum(run[found] for run in runs) if all(found in run for run in runs) else None
+                for key, found in FACTS.items()}}
     return report
 
 
@@ -284,6 +298,13 @@ def markdown(models: dict[str, dict[str, Any]]) -> str:
         if modes := report.get("minilm"):
             lines.append("- set up on MiniLM: " + ", ".join(
                 f"{mode['minilm']} of {mode['runs']} {arm} runs" for arm, mode in modes.items()))
+        if facts := report.get("facts"):
+            lines.append("- facts one dense message kept word for word: " + "; ".join(
+                f"{arm} {kept['survived']:g} of {kept['planted']:g} in {kept['runs']} runs"
+                + ("" if kept["consolidated"] is None
+                   else f", {kept['consolidated']:g} of {kept['planted']:g} after consolidation")
+                + ", saturated pieces " + ("unknown" if kept["saturated"] is None else f"{kept['saturated']:g}")
+                for arm, kept in facts.items()))
         lines += [f"- {notice}" for notice in report.get("notices") or []]
         lines += [f"- {error}" for error in report["errors"]]
         lines.append("")
