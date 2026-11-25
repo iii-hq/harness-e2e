@@ -7,9 +7,10 @@ Terminal-Bench leaderboard. For each trial the agent:
 
 1. installs `curl bash nodejs npm ripgrep` with Harbor's own helper, the same
    packages Harbor's `codex` agent installs before its first model call;
-2. registers one bridge function, `workspace::t<12 hex>::exec`, that runs a command
-   in the trial's container through Harbor's `environment.exec`;
-3. calls `harness::send` with only that function allowed;
+2. registers two bridge functions: `workspace::t<12 hex>::exec` runs a command
+   in the trial's container through Harbor's `environment.exec`, and
+   `workspace::t<12 hex>::view_image` shows the model an image file from it;
+3. calls `harness::send` with only those two functions allowed;
 4. polls `harness::metrics` and `harness::status` every 5 s until the session
    tree is done, filling Harbor's token and cost counters as it goes;
 5. on a Harbor timeout, calls `harness::stop`, collects the final state and
@@ -37,6 +38,19 @@ keeps the first and last 20 KB, about where Codex CLI's default 10000-token cut 
 killed: the result carries its output so far, its `pid` and `log_path`. The
 command leads its own process group, so `kill -- -PID` ends its whole tree, and
 it keeps the default SIGINT handling.
+
+`view_image {path}` is Codex CLI 0.170.0's `view_image`: a path only, no crop
+or detail argument. It reads the file with `base64` in the container and
+returns it as an image block, which provider-openai-codex sends as
+`input_image`. Codex sends the file's own bytes unless a side passes 6000 px
+or the image passes 10000 32×32 patches. The iii arm does the same for PNG, JPEG and
+WebP up to 90 KB. Harness 1.10 replaces a function result over 256 KiB with a
+marker, and the image is in that result twice (content and details). So any other
+file is re-encoded on the host as WebP at quality 90, downscaled only as far as
+it must be. The two round-1 drawings stay at full size (62 and 47 KB). The context
+manager keeps a result image for one step, then leaves a marker that says to
+call again. Each call is a line in `exec.jsonl` with `view_image`, the source and
+shown size and the bytes sent.
 
 There is no interactive terminal: the model cannot type into a program that is
 already running (a serial console, a REPL, an ssh prompt), which terminus-2
@@ -109,11 +123,14 @@ E=(--engine ws://127.0.0.1:49634 -n tbench)
 ### 1. Python environment
 
 Harbor and the iii SDK share one venv because the agent imports both.
+`view_image` converts images with ImageMagick 7 on the host (`magick`, e.g.
+`pacman -S imagemagick`); the agent refuses to start without it.
 
 ```bash
 uv venv --python 3.13 "$TB/venv"
 uv pip install --python "$TB/venv/bin/python" 'harbor==0.27.0' 'iii-sdk==0.26.0'
 "$TB/venv/bin/python" -c 'import harbor, iii; print("ok")'
+magick -version | head -1
 ```
 
 ### 2. Isolated scoring stack
@@ -233,7 +250,7 @@ execs. Gate before going on; look in `jobs/smoke-regex-log/<trial>/`:
   no pricing for the model, as for every GPT-6.x on both OpenAI providers).
 - `agent/metrics.json`: `totals.function_calls > 0`.
 - `agent/system-prompt.json`: the `runtime` part lists only the
-  `workspace::t<hex>::exec` id and has no working-directory or `Co-authored-by`
+  `workspace::t<hex>::exec` and `::view_image` ids and has no working-directory or `Co-authored-by`
   line. With `prompt=override` the `built_in` part is the Terminal-Bench
   prompt. Note any `skills` or `injected` part.
 - `agent/exec.jsonl`: the commands ran in the container.
