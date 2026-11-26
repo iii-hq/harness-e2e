@@ -606,6 +606,15 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(AGENT.with_note("---\nname: a\n---\nBody\n", note), "---\nname: a\n---\n\nNOTE\nBody\n")
         self.assertEqual(AGENT.with_note("---\nname: a\n---", note), "---\nname: a\n---\nNOTE\n")
         self.assertEqual(AGENT.with_note("# Title\n", note), "NOTE\n# Title\n")
+        self.assertEqual(AGENT.with_note("---\r\nname: a\r\n---\r\nBody\r\n", note),
+                         "---\r\nname: a\r\n---\r\n\nNOTE\nBody\r\n")
+
+    def test_ids_cut_to_their_limit_stay_distinct(self):
+        taken = []
+        for name in ("t0-playwright-a", "t0-playwright-b", "t0-playwright-c", "t0-x"):
+            taken.append(AGENT._unique(name, 12, taken))
+        self.assertEqual(taken, ["t0-playwrigh", "t0-playwri-2", "t0-playwri-3", "t0-x"])
+        self.assertEqual(AGENT._unique("t0-play-wright", 8, ["t0-play"]), "t0-pla-2")
 
     async def test_task_skills_load_under_trial_ids_and_only_this_session_lists_them(self):
         root = self.exec_tmp / "app/.agents/skills"

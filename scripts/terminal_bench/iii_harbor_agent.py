@@ -288,12 +288,22 @@ def _slug(text):
     return re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-") or "x"
 
 
+def _unique(name, limit, taken):
+    """name cut to limit, ending in -<n> when that cut is already taken."""
+    out, n = name[:limit].rstrip("-"), 1
+    while out in taken:
+        n += 1
+        out = f"{name[:limit - len(str(n)) - 1].rstrip('-')}-{n}"
+    return out
+
+
+FRONTMATTER = re.compile(r"---\r?\n.*?\r?\n---[^\n]*(?:\n|$)", re.S)
+
+
 def with_note(content, note):
     """Put note right after the SKILL.md frontmatter, which must still open the file."""
-    if content.startswith("---\n") and (end := content.find("\n---", 3)) != -1:
-        cut = content.find("\n", end + 4)
-        cut = len(content) if cut == -1 else cut + 1
-        return content[:cut] + note + content[cut:]
+    if m := FRONTMATTER.match(content):
+        return content[:m.end()] + note + content[m.end():]
     return note.lstrip("\n") + content
 
 
@@ -414,7 +424,7 @@ class IIIHarnessAgent(BaseAgent):
         for chunk in (r.stdout or "").split(MARK)[1:]:
             name, _, encoded = chunk.partition("\n")
             content = base64.b64decode(encoded.strip()).decode("utf-8", "replace")
-            skill_id = f"t{self._hex}-{_slug(name)}"[:64]
+            skill_id = _unique(f"t{self._hex}-{_slug(name)}", 64, self._skill_ids)
             await self._call("directory::skills::create", {
                 "id": skill_id, "content": with_note(content, SKILL_NOTE.format(dir=f"{root}/{name}"))})
             self._skill_ids.append(skill_id)
@@ -442,7 +452,7 @@ class IIIHarnessAgent(BaseAgent):
             path = u.path.removesuffix("/sse") + "/mcp" if server.transport == "sse" else u.path
             entry = {"type": "http", "url": f"http://127.0.0.1:{fwd.sockets[0].getsockname()[1]}{path}"
                                             + (f"?{u.query}" if u.query else "")}
-            name = f"t{self._hex}-{_slug(server.name)}"[:24].rstrip("-")
+            name = _unique(f"t{self._hex}-{_slug(server.name)}", 24, [m["server"] for m in self._mcp])
             check = (await self._call("mcp-client::config::validate", {"mcpServers": {name: entry}}))["servers"][name]
             if not check["ok"]:
                 raise ValueError(f"MCP server {server.name}: mcp-client refused {entry}: {check['errors']}")
