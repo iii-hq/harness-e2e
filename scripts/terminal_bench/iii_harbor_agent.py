@@ -93,10 +93,16 @@ VIEW_SCHEMA = {"type": "object", "required": ["path"], "properties": {
                                               "to the task working directory"}}}
 VIEW_DESCRIPTION = (
     "View an image file from the task's container when visual inspection is needed (PNG, JPEG, GIF, "
-    "WebP, BMP, PNM or TIFF). The image is in the result for your next step only: call again to look "
-    "again. PNG, JPEG and WebP files up to 90 KB come as they are, anything else as WebP, downscaled "
-    "only if it would not fit; the result text gives both sizes. For fine detail, crop the region "
-    "into a new file with a shell command and view that.")
+    "WebP, BMP, PNM or TIFF). You see the image in your next step only, and your reasoning in that "
+    "step is not kept: write every value, label and shape you need from it in your reply text, "
+    "which stays in your context, instead of viewing it again. To compare regions, combine them "
+    "into one image with a shell command. PNG, JPEG and WebP files up to 90 KB come as they are, "
+    "anything else as WebP, downscaled only if it would not fit; the result text gives both sizes. "
+    "For fine detail, crop the region into a new file with a shell command and view that.")
+# The context manager drops a result image after one step and provider-openai-codex 0.5.6 does not
+# replay reasoning (store: false, no encrypted_content), so the model forgets what it saw unless it
+# writes it down. Without this, all four live trials alternated between two images for dozens of steps.
+VIEW_NOTE = "Only this step shows this image: write down now, in your reply, what you need from it."
 TB_SYSTEM_PROMPT = """You are an autonomous software agent working inside a Linux container to complete one task.
 - One tool runs bash commands in that container. Use it for everything: inspecting, editing files, building, running and testing. The other shows you an image file from the container when you need to look at one.
 - No human is available. Never ask questions or wait for confirmation; make the most reasonable choice and continue.
@@ -405,7 +411,7 @@ class IIIHarnessAgent(BaseAgent):
             mime, image, source, shown = await encode_image(raw)
             log = {"bytes": len(raw), "size": source, "shown": shown, "sent_bytes": len(image), "mime": mime}
             text = f"{path}: {source[0]}x{source[1]}" + (
-                f", shown downscaled to {shown[0]}x{shown[1]}" if shown != source else "")
+                f", shown downscaled to {shown[0]}x{shown[1]}" if shown != source else "") + ". " + VIEW_NOTE
             out = {"content": [{"type": "text", "text": text},
                                {"type": "image", "mime": mime, "data": base64.b64encode(image).decode()}]}
         except (ValueError, TimeoutError) as e:

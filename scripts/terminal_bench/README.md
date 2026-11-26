@@ -49,8 +49,12 @@ marker, and the image is in that result twice (content and details). So any othe
 file is re-encoded on the host as WebP at quality 90, downscaled only as far as
 it must be. The two round-1 drawings stay at full size (62 and 47 KB). The context
 manager keeps a result image for one step, then leaves a marker that says to
-call again. Each call is a line in `exec.jsonl` with `view_image`, the source and
-shown size and the bytes sent.
+call again, and provider-openai-codex 0.5.6 does not send the model's reasoning
+back. A model that writes nothing down forgets the image: in the first live run
+all four trials alternated between two images for dozens of steps. The
+description and each result therefore tell the model to write what it needs from
+the image into its reply text, which stays in context. Each call is a line in
+`exec.jsonl` with `view_image`, the source and shown size and the bytes sent.
 
 There is no interactive terminal: the model cannot type into a program that is
 already running (a serial console, a REPL, an ssh prompt), which terminus-2

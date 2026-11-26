@@ -532,7 +532,7 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         out = await handler({"path": small})
         self.assertNotIn("is_error", out)
         self.assertEqual(out["content"], [
-            {"type": "text", "text": f"{small}: 40x20"},
+            {"type": "text", "text": f"{small}: 40x20. {AGENT.VIEW_NOTE}"},
             {"type": "image", "mime": "image/png", "data": base64.b64encode(Path(small).read_bytes()).decode()}])
         # A 1.4 MB noisy drawing goes as WebP; a 7000 px wide BMP also passes Codex's 6000 px side.
         big = await asyncio.to_thread(image, "big.png", "-seed", "1", "-size", "1400x1000", "plasma:")
@@ -543,7 +543,7 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(picture["mime"], "image/webp")
             self.assertLessEqual(len(base64.b64decode(picture["data"])), AGENT.MAX_IMAGE_BYTES)
             shown = size(picture["data"]).replace(" ", "x")
-            self.assertEqual(text["text"], f"{path}: {source}, shown downscaled to {shown}")
+            self.assertEqual(text["text"], f"{path}: {source}, shown downscaled to {shown}. {AGENT.VIEW_NOTE}")
             # Harness 1.10 caps content plus details (the whole return value) at 256 KiB.
             self.assertLess(len(json.dumps([out["content"], out])), 256 * 1024)
         self.assertEqual(shown, "6000x25")
