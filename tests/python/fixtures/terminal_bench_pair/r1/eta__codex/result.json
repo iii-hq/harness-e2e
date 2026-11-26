@@ -1,0 +1,29 @@
+{
+ "task_name": "eta",
+ "trial_name": "eta__codex",
+ "agent_info": {
+  "name": "codex"
+ },
+ "agent_result": {
+  "n_input_tokens": null,
+  "n_cache_tokens": null,
+  "n_output_tokens": null,
+  "metadata": null
+ },
+ "verifier_result": {
+  "rewards": {
+   "reward": 0.0
+  }
+ },
+ "exception_info": {
+  "exception_type": "NonZeroAgentExitCodeError",
+  "exception_message": "NonZeroAgentExitCodeError: planted",
+  "exception_traceback": "",
+  "occurred_at": "2026-11-24T10:00:00Z"
+ },
+ "agent_execution": {
+  "started_at": "2026-11-24T10:00:00Z",
+  "finished_at": "2026-11-24T10:00:50Z"
+ },
+ "reward_valid": true
+}

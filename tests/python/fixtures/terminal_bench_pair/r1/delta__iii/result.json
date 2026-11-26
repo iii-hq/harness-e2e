@@ -1,0 +1,17 @@
+{
+ "task_name": "delta",
+ "trial_name": "delta__iii-h",
+ "agent_info": {
+  "name": "iii-harness"
+ },
+ "agent_result": null,
+ "verifier_result": null,
+ "exception_info": {
+  "exception_type": "ApiConnectionError",
+  "exception_message": "ApiConnectionError: planted",
+  "exception_traceback": "",
+  "occurred_at": "2026-11-24T10:00:00Z"
+ },
+ "agent_execution": null,
+ "reward_valid": false
+}

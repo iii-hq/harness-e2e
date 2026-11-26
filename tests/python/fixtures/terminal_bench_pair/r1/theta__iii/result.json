@@ -1,0 +1,46 @@
+{
+ "task_name": "theta",
+ "trial_name": "theta__iii-h",
+ "agent_info": {
+  "name": "iii-harness"
+ },
+ "agent_result": {
+  "n_input_tokens": 2000,
+  "n_cache_tokens": 1500,
+  "n_output_tokens": 80,
+  "metadata": {
+   "session_id": "s_0123456789ab",
+   "status": "completed",
+   "failure": null,
+   "function_calls": 3,
+   "thinking_level": "xhigh",
+   "prompt": "stock",
+   "provider": "openai-codex",
+   "model": "codex/gpt-6.2-sol",
+   "models_seen": [
+    "codex/gpt-6.2-sol"
+   ],
+   "generations": 4,
+   "reasoning_generations": 2,
+   "first_model_response": true,
+   "base_tools": {
+    "curl": true,
+    "rg": false,
+    "node": false,
+    "npm": false
+   },
+   "packages_installed": true
+  }
+ },
+ "verifier_result": {
+  "rewards": {
+   "reward": 1.0
+  }
+ },
+ "exception_info": null,
+ "agent_execution": {
+  "started_at": "2026-11-24T10:00:00Z",
+  "finished_at": "2026-11-24T10:01:40Z"
+ },
+ "reward_valid": true
+}

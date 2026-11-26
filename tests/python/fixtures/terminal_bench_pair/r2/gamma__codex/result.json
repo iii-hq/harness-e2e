@@ -1,0 +1,24 @@
+{
+ "task_name": "gamma",
+ "trial_name": "gamma__codex",
+ "agent_info": {
+  "name": "codex"
+ },
+ "agent_result": {
+  "n_input_tokens": 1000,
+  "n_cache_tokens": 800,
+  "n_output_tokens": 50,
+  "metadata": null
+ },
+ "verifier_result": {
+  "rewards": {
+   "reward": 0.0
+  }
+ },
+ "exception_info": null,
+ "agent_execution": {
+  "started_at": "2026-11-24T10:00:00Z",
+  "finished_at": "2026-11-24T10:00:50Z"
+ },
+ "reward_valid": true
+}

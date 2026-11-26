@@ -1,0 +1,9 @@
+{"type": "session_meta", "payload": {"id": "thread-root", "cli_version": "0.170.0"}}
+{"type": "turn_context", "payload": {"model": "gpt-6.2-sol", "effort": "high"}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": []}}
+{"type": "response_item", "payload": {"type": "reasoning", "summary": []}}
+{"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec", "input": "ls"}}
+{"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 600, "cached_input_tokens": 500, "output_tokens": 30, "reasoning_output_tokens": 12}}, "rate_limits": {"plan_type": "pro"}}}
+{"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": "ok"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": []}}
+{"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 400, "cached_input_tokens": 300, "output_tokens": 20, "reasoning_output_tokens": 0}}, "rate_limits": {"plan_type": "pro"}}}
