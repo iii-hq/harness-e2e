@@ -10,11 +10,14 @@ Terminal-Bench leaderboard. For each trial the agent:
 2. registers two bridge functions: `workspace::t<12 hex>::exec` runs a command
    in the trial's container through Harbor's `environment.exec`, and
    `workspace::t<12 hex>::view_image` shows the model an image file from it;
-3. calls `harness::send` with only those two functions allowed;
-4. polls `harness::metrics` and `harness::status` every 5 s until the session
+3. loads the task's skills into iii-directory and connects its MCP servers
+   through mcp-client, when the task declares them (below);
+4. calls `harness::send` with only those functions allowed;
+5. polls `harness::metrics` and `harness::status` every 5 s until the session
    tree is done, filling Harbor's token and cost counters as it goes;
-5. on a Harbor timeout, calls `harness::stop`, collects the final state and
-   unregisters the function. Harbor then grades the container as it is.
+6. on a Harbor timeout, calls `harness::stop`, collects the final state and
+   unregisters the functions, skills and MCP servers. Harbor then grades the
+   container as it is.
 
 It never touches the live stack: the agent requires `engine_url` and
 `namespace`, never reads `III_URL`, and every command below names
@@ -57,6 +60,53 @@ reasoning. The description and each result say only that older images are
 dropped, which holds on both, and tell the model to write what it needs from the
 image into its reply text, which stays in context. Each call is a line in
 `exec.jsonl` with `view_image`, the source and shown size and the bytes sent.
+
+### Task skills and MCP servers
+
+The agent declares Harbor's `skills` and `mcp_servers` capabilities. In TB 4.1,
+`cumulative-layout-shift` has skills and `medical-claims-processing` has an MCP
+server. Without these capabilities, Harbor refuses the agent on both tasks.
+
+**Skills.** Harbor's `codex` agent copies the task's `skills_dir` into its own
+skills folder in the container. The iii arm does this instead:
+
+- It reads each `<skills_dir>/<name>/SKILL.md` from the container.
+- It creates the skill in iii-directory as `t<12 hex>-<name>`, with
+  `directory::skills::create`. A one-segment id is always listed.
+- It adds a line after the frontmatter that names the skill's folder in the
+  container. The skill's other files never leave the container, so the model
+  reads or runs them with the shell function.
+- The send carries `options.skills` with only those ids and allows
+  `directory::skills::get`, so the session's `<available_skills>` index lists
+  this trial's skills and no other.
+- A trial without skills does not allow `directory::skills::get`, and the
+  harness then leaves the index out.
+- The trial deletes its skills at the end.
+
+**MCP servers.** A task's MCP server is a compose sidecar, such as
+`http://playwright-mcp:3080/sse`. The host reaches the sidecar only by IP, and
+mcp-client takes plain `http` only on loopback. So for each server the trial:
+
+- resolves the host name inside the container;
+- checks that the host can open that IP and port;
+- opens a loopback forwarder to it;
+- writes an `http` entry to the `<namespace>-mcp-client` configuration, after
+  approving its fingerprint.
+
+mcp-client has no SSE client. An `sse` URL ending in `/sse` is therefore sent to
+`/mcp` on the same server, where `@playwright/mcp` serves Streamable HTTP. A
+server that speaks only SSE would need SSE support added to mcp-client. stdio
+servers and HTTP headers are refused.
+
+The server's tools appear as `mcp::t<12 hex>-<name>::<tool>`. The send allows
+`mcp::t<12 hex>-<name>::*`. In `stock` mode it also allows
+`engine::functions::info`, and the task message lists the tool ids. Concurrent
+trials edit the one configuration entry under a lock in the Harbor process,
+because `configuration::set` has no compare-and-set. Two Harbor runs on one
+stack could still drop each other's entries.
+
+Each trial's metadata records its `skills` ids and its `mcp_servers`, with the
+tool counts. The stack needs `mcp-client` (see `worker-compose.yaml`).
 
 There is no interactive terminal: the model cannot type into a program that is
 already running (a serial console, a REPL, an ssh prompt), which terminus-2
