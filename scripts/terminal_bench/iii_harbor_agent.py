@@ -1,20 +1,23 @@
 """Harbor external agent that runs the iii harness on Terminal-Bench.
 
 Harbor owns the task container and its verifier. Per trial this agent
-installs the system packages Harbor's Codex agent installs, registers one
-bridge function on an isolated iii engine, sends the task to `harness::send`
-with only that function allowed, waits for the session tree, and fills
-Harbor's AgentContext from `harness::metrics`.
+installs the system packages Harbor's Codex agent installs, registers two
+bridge functions on an isolated iii engine (a shell executor and view_image),
+sends the task to `harness::send` with only those allowed, waits for the
+session tree, and fills Harbor's AgentContext from `harness::metrics`.
 
     PYTHONPATH=scripts/terminal_bench harbor run -d terminal-bench@2.0 \
       -a iii_harbor_agent:IIIHarnessAgent -m anthropic/<router catalog id> \
       --ak engine_url=ws://127.0.0.1:49634 --ak namespace=tbench [--ak prompt=override]
 """
 import asyncio
+import base64
 import hashlib
 import json
+import math
 import os
 import shlex
+import shutil
 import threading
 import time
 import uuid
@@ -67,8 +70,40 @@ EXEC_DESCRIPTION = (
     "servers or long jobs in the background with output redirected (nohup CMD > /tmp/job.log "
     "2>&1 &). There is no TTY: interactive programs (vim, less, REPLs, password or y/n prompts) "
     "do not work, so use non-interactive flags, here-docs or scripts.")
+# Codex CLI 0.170.0's view_image takes only a path and sends the file at "original" detail:
+# its own bytes unless a side passes 6000 px or the image passes 10000 32x32 patches.
+# Harness 1.10 replaces a function result over 256 KiB (content plus details, and details
+# repeats the image) with a marker, so a file over MAX_IMAGE_BYTES goes as WebP, downscaled
+# only as far as it must be. The context manager shows a result image for one step only.
+MAX_SIDE, MAX_PIXELS = 6000, 10_000 * 32 * 32
+MAX_IMAGE_BYTES, MAX_FILE_BYTES, MAX_SOURCE_PIXELS = 90_000, 64 << 20, 40_000_000
+MAGICK = shutil.which("magick")
+# Decoded on the host with an explicit ImageMagick coder, so a file never picks its own decoder.
+IMAGE_TYPES = ((b"\x89PNG\r\n\x1a\n", "PNG"), (b"\xff\xd8\xff", "JPEG"), (b"GIF87a", "GIF"),
+               (b"GIF89a", "GIF"), (b"BM", "BMP"), (b"II*\0", "TIFF"), (b"MM\0*", "TIFF"),
+               *((b"P%d" % i, "PNM") for i in range(1, 7)))
+SENT_AS_IS = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+READ_IMAGE = (
+    'f={q}; [ -f "$f" ] && [ -r "$f" ] || {{ echo "' + MARK + 'no readable file at $f"; exit 0; }}\n'
+    'command -v base64 >/dev/null || {{ echo "' + MARK + 'the container has no base64"; exit 0; }}\n'
+    's=$(wc -c <"$f"); [ "$s" -le {max} ] || {{ echo "' + MARK + 'the file is $s bytes, over {max}"; exit 0; }}\n'
+    'echo "' + MARK + 'ok"; base64 <"$f"')
+VIEW_SCHEMA = {"type": "object", "required": ["path"], "properties": {
+    "path": {"type": "string", "description": "Image file in the task container, absolute or relative "
+                                              "to the task working directory"}}}
+VIEW_DESCRIPTION = (
+    "View an image file from the task's container when visual inspection is needed (PNG, JPEG, GIF, "
+    "WebP, BMP, PNM or TIFF). The image stays in your context for a while; older images are dropped "
+    "later, so write the values, labels and shapes you need from it in your reply text, which stays "
+    "in your context. To compare regions, combine them "
+    "into one image with a shell command. PNG, JPEG and WebP files up to 90 KB come as they are, "
+    "anything else as WebP, downscaled only if it would not fit; the result text gives both sizes. "
+    "For fine detail, crop the region into a new file with a shell command and view that.")
+# Worded to hold on any stack: context-manager 1.2.7 drops a result image after one step, newer
+# builds keep a window of them. Never tell the model to re-call: that is what fed the view loop.
+VIEW_NOTE = "Write down what you need from this image: older images are dropped from your context."
 TB_SYSTEM_PROMPT = """You are an autonomous software agent working inside a Linux container to complete one task.
-- Your only tool runs bash commands in that container. Use it for everything: inspecting, editing files, building, running and testing.
+- One tool runs bash commands in that container. Use it for everything: inspecting, editing files, building, running and testing. The other shows you an image file from the container when you need to look at one.
 - No human is available. Never ask questions or wait for confirmation; make the most reasonable choice and continue.
 - Each command runs in a fresh non-interactive shell with no TTY. Run long jobs in the background with output redirected to a file and poll it.
 - Keep going until the task is completely done, then verify your work. Automated tests you cannot see will check the final state of the container, so leave files, services and outputs exactly as the task requires.
@@ -77,7 +112,8 @@ STOCK_NOTE = (
     "\n\nThe task's machine is an isolated Linux container, not your host. Work only through "
     "the function {fn}, a shell executor, not delegation: call agent_call with "
     '{{"function": "{fn}", "description": "Inspect the task", "payload": {{"command": "pwd"}}}}. '
-    "{desc}")
+    "{desc}\n\nTo look at an image file in the container, call {view} the same way, with the "
+    'payload {{"path": "<image file>"}}. {view_desc}')
 # Harbor 0.27.0 Codex.install() runs ensure_system_dependencies with these before its first
 # model call; the iii arm gets the same packages from the same helper. Still Codex-only: the
 # nvm Node 22 it symlinks over /usr/local/bin/node (apt's node stays here) and its own CLI.
@@ -155,6 +191,51 @@ def _clip(text):
     return f"{text[:CLIP // 2]}\n[... {len(text) - CLIP} chars omitted ...]\n{text[-CLIP // 2:]}"
 
 
+def _image_type(raw):
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "WEBP"
+    return next((coder for magic, coder in IMAGE_TYPES if raw.startswith(magic)), None)
+
+
+async def _magick(raw, *args):
+    proc = await asyncio.create_subprocess_exec(
+        MAGICK, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(raw), 60)
+    except BaseException:
+        if proc.returncode is None:
+            proc.kill()
+        raise
+    if proc.returncode:
+        raise ValueError(err.decode(errors="replace").strip()[-300:])
+    return out
+
+
+async def encode_image(raw):
+    """(mime, bytes, source size, shown size) for the model, or ValueError with the reason."""
+    coder = _image_type(raw)
+    if coder is None:
+        raise ValueError("invalid or unsupported image data")
+    src = f"{coder}:-[0]"  # the first frame of a GIF or TIFF
+    try:
+        w, h = map(int, (await _magick(raw, "identify", "-ping", "-format", "%w %h", src)).split())
+    except ValueError as e:
+        raise ValueError(f"invalid or unsupported image data ({e})") from e
+    if w * h > MAX_SOURCE_PIXELS:
+        raise ValueError(f"the image is {w}x{h}, over {MAX_SOURCE_PIXELS} pixels: downscale or crop it first")
+    scale = min(1.0, MAX_SIDE / max(w, h), math.sqrt(MAX_PIXELS / (w * h)))
+    if scale == 1 and coder in SENT_AS_IS and len(raw) <= MAX_IMAGE_BYTES:
+        return SENT_AS_IS[coder], raw, (w, h), (w, h)
+    for _ in range(6):
+        shown = max(int(w * scale), 1), max(int(h * scale), 1)
+        out = await _magick(raw, src, "-resize", "%dx%d!" % shown, "-quality", "90", "webp:-")
+        if len(out) <= MAX_IMAGE_BYTES:
+            return "image/webp", out, (w, h), shown
+        scale *= 0.95 * math.sqrt(MAX_IMAGE_BYTES / len(out))
+    raise ValueError(f"could not fit the image in {MAX_IMAGE_BYTES} bytes")
+
+
 def _input_tokens(usage):
     # Harbor counts cached input; router Usage.input is the cache-miss slice for every provider.
     n = usage.get("input_tokens")
@@ -196,13 +277,17 @@ class IIIHarnessAgent(BaseAgent):
         self._provider, _, self._model = (model_name or "").partition("/")
         if not self._provider or not self._model:
             raise ValueError("-m must be <provider>/<router catalog id>")
+        if not MAGICK:
+            raise ValueError("view_image needs ImageMagick 7 (magick) on the host")
         self._engine_url, self._namespace = engine_url, namespace
         self._prompt, self._max_turns, self._thinking_level = prompt, max_turns, thinking_level
         self._hex = uuid.uuid4().hex[:12]
         # Neutral ids: both reach the model, and the Codex arm sees no benchmark name either.
         self._iii_session_id = f"s_{self._hex}"
         self._fn_id = f"workspace::t{self._hex}::exec"
-        self._iii = self._ref = self._loop = self._env = self._send_log = None
+        self._view_id = f"workspace::t{self._hex}::view_image"
+        self._refs = []
+        self._iii = self._loop = self._env = self._send_log = None
         self._base_tools = self._packages_installed = None
         self._wrap = True
         self._inflight = set()
@@ -214,7 +299,7 @@ class IIIHarnessAgent(BaseAgent):
         return "iii-harness"
 
     def version(self):
-        return "0.1"
+        return "0.2"
 
     async def setup(self, environment):
         self._loop, self._env = asyncio.get_running_loop(), environment
@@ -232,23 +317,32 @@ class IIIHarnessAgent(BaseAgent):
         # Harbor's own helper: same commands as the Codex arm, and the same exception on failure.
         await Codex(self.logs_dir, logger=self.logger).ensure_system_dependencies(environment, CODEX_SYSTEM_DEPS)
         self._packages_installed = all((await self._tools(environment)).values())
-        self._ref = self._iii.register_function(
-            self._fn_id, self._on_exec, description=EXEC_DESCRIPTION, request_format=EXEC_SCHEMA)
+        bridges = ((self._fn_id, self._exec, EXEC_DESCRIPTION, EXEC_SCHEMA),
+                   (self._view_id, self._view_image, VIEW_DESCRIPTION, VIEW_SCHEMA))
         try:  # Harbor cancels setup at its timeout: never leave the bridge registered
-            for _ in range(40):
-                try:
-                    await self._call("engine::functions::info", {"function_id": self._fn_id}, PROBE_CALL_MS)
-                    break
-                except Exception:
-                    await asyncio.sleep(0.25)
-            else:
-                raise ApiConnectionError(f"{self._fn_id} never appeared on the engine")
+            for fn_id, work, description, schema in bridges:
+                self._refs.append(self._iii.register_function(
+                    fn_id, self._bridged(work), description=description, request_format=schema))
+            for fn_id, *_ in bridges:
+                for _ in range(40):
+                    try:
+                        await self._call("engine::functions::info", {"function_id": fn_id}, PROBE_CALL_MS)
+                        break
+                    except Exception:
+                        await asyncio.sleep(0.25)
+                else:
+                    raise ApiConnectionError(f"{fn_id} never appeared on the engine")
             # shortcut: a fixed wait for the harness's event-driven function snapshot, and run()
             # raises HarnessTurnError on a turn with zero function calls; probe the harness if that fires.
             await asyncio.sleep(SETTLE_S)
         except BaseException:
-            self._ref.unregister()
+            self._unregister()
             raise
+
+    def _unregister(self):
+        for ref in self._refs:
+            ref.unregister()
+        self._refs = []
 
     async def _tools(self, environment):
         found = set(((await environment.exec(TOOLS_PROBE, timeout_sec=30)).stdout or "").splitlines())
@@ -258,14 +352,21 @@ class IIIHarnessAgent(BaseAgent):
         return await self._iii.call_async(
             {"function_id": function_id, "payload": payload, "timeout_ms": timeout_ms})
 
-    async def _on_exec(self, data):
-        # Runs on the SDK's loop thread; Harbor's environment lives on Harbor's loop.
-        fut = asyncio.run_coroutine_threadsafe(self._exec(data), self._loop)
-        self._inflight.add(fut)
-        try:
-            return await asyncio.wrap_future(fut)
-        finally:
-            self._inflight.discard(fut)
+    def _bridged(self, work):
+        async def handler(data):
+            # Runs on the SDK's loop thread; Harbor's environment lives on Harbor's loop.
+            fut = asyncio.run_coroutine_threadsafe(work(data), self._loop)
+            self._inflight.add(fut)
+            try:
+                return await asyncio.wrap_future(fut)
+            finally:
+                self._inflight.discard(fut)
+        return handler
+
+    def _log(self, **fields):
+        self._n += 1
+        with open(self.logs_dir / "exec.jsonl", "a") as log:
+            log.write(json.dumps({"ts": time.time(), "n": self._n, **fields}) + "\n")
 
     async def _exec(self, data):
         data = data if isinstance(data, dict) else {}
@@ -285,10 +386,38 @@ class IIIHarnessAgent(BaseAgent):
                     raise
                 out = {"exit_code": None, "output": "[timeout: output lost]", "timed_out": True}
         out["duration_ms"] = int((time.monotonic() - started) * 1000)
-        self._n += 1
-        with open(self.logs_dir / "exec.jsonl", "a") as log:
-            log.write(json.dumps({"ts": time.time(), "n": self._n, "command": command, "cwd": cwd,
-                                  "timeout_sec": t, **out}) + "\n")
+        self._log(command=command, cwd=cwd, timeout_sec=t, **out)
+        return out
+
+    async def _view_image(self, data):
+        path = data.get("path") if isinstance(data, dict) else None
+        started, log = time.monotonic(), {}
+        try:
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError("path must be a non-empty string")
+            try:
+                r = await self._env.exec(READ_IMAGE.format(q=shlex.quote(path), max=MAX_FILE_BYTES), timeout_sec=60)
+            except RuntimeError as e:  # Harbor's own exec timeout; anything else is a bridge failure
+                if not str(e).startswith("Command timed out"):
+                    raise
+                raise ValueError("reading the file timed out") from e
+            # Text before MARK is docker noise, as for exec.
+            _, found, rest = (r.stdout or "").partition(MARK)
+            state, _, encoded = rest.partition("\n")
+            if state != "ok":
+                raise ValueError(state if found else f"the read failed: {_clip(r.stdout or '')}")
+            raw = base64.b64decode(encoded)
+            mime, image, source, shown = await encode_image(raw)
+            log = {"bytes": len(raw), "size": source, "shown": shown, "sent_bytes": len(image), "mime": mime}
+            text = f"{path}: {source[0]}x{source[1]}" + (
+                f", shown downscaled to {shown[0]}x{shown[1]}" if shown != source else "") + ". " + VIEW_NOTE
+            out = {"content": [{"type": "text", "text": text},
+                               {"type": "image", "mime": mime, "data": base64.b64encode(image).decode()}]}
+        except (ValueError, TimeoutError) as e:
+            log = {"error": str(e)}
+            out = {"content": [{"type": "text", "text": f"error: unable to view image {path!r}: {e}"}],
+                   "is_error": True}
+        self._log(view_image=path, **log, duration_ms=int((time.monotonic() - started) * 1000))
         return out
 
     async def _run_wrapped(self, command, cwd, t):
@@ -311,14 +440,15 @@ class IIIHarnessAgent(BaseAgent):
         return {"exit_code": r.return_code, "output": _clip(r.stdout or ""), "timed_out": False}
 
     def send_payload(self, instruction, trial, task):
-        functions = {"allow": [self._fn_id]}
+        functions = {"allow": [self._fn_id, self._view_id]}
         options = {"functions": functions, "max_turns": self._max_turns}
         if self._prompt == "override":
             functions["expose"] = "native"
             options.update(system_prompt=TB_SYSTEM_PROMPT, system_prompt_strategy="override")
             message = instruction
         else:
-            message = instruction + STOCK_NOTE.format(fn=self._fn_id, desc=EXEC_DESCRIPTION)
+            message = instruction + STOCK_NOTE.format(
+                fn=self._fn_id, desc=EXEC_DESCRIPTION, view=self._view_id, view_desc=VIEW_DESCRIPTION)
         if self._thinking_level:
             options["thinking_level"] = self._thinking_level
         return {
@@ -360,7 +490,7 @@ class IIIHarnessAgent(BaseAgent):
             except Exception as e:
                 self.logger.warning("iii cleanup incomplete: %s", e)
             finally:
-                self._ref.unregister()
+                self._unregister()
 
     def _metrics(self, omit_context=True, timeout_ms=CALL_TIMEOUT_MS):
         return self._call("harness::metrics", {"root_session_id": self._iii_session_id,

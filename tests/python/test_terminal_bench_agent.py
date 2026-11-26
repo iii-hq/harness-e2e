@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import importlib.util
 import json
 import logging
@@ -103,7 +104,7 @@ class FakeIII:
             "engine::functions::info": {}, "harness::send": {"accepted": True, "session_id": "x", "turn_id": "t1"},
             "harness::system-prompt::get": {"parts": []}, "harness::stop": {"stopping": True},
             "session::messages": {"messages": [{"role": "user"}], "next_cursor": None}}
-        self.calls, self.unregistered, self.state = [], [], "connected"
+        self.calls, self.unregistered, self.functions, self.state = [], [], {}, "connected"
 
     def get_connection_state(self):
         return self.state
@@ -112,7 +113,7 @@ class FakeIII:
         pass
 
     def register_function(self, function_id, handler, *, description=None, request_format=None):
-        self.function = (function_id, handler, description, request_format)
+        self.functions[function_id] = (handler, description, request_format)
         return types.SimpleNamespace(unregister=lambda: self.unregistered.append(function_id))
 
     async def call_async(self, request):
@@ -167,7 +168,9 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.exec_tmp.mkdir()
         self.iii = FakeIII()
         AGENT.Codex.installs.clear()
-        for name, value in (("_client", None), ("POLL_S", 0.01), ("SETTLE_S", 0)):
+        # CI has no ImageMagick; only the tests that convert an image need the real one.
+        for name, value in (("_client", None), ("POLL_S", 0.01), ("SETTLE_S", 0),
+                            ("MAGICK", AGENT.MAGICK or "magick")):
             patcher = mock.patch.object(AGENT, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -196,9 +199,12 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(lambda: (sdk_loop.call_soon_threadsafe(sdk_loop.stop), thread.join(), sdk_loop.close()))
         env = HostEnv(str(self.exec_tmp))
         agent = await self.ready(env)
-        function_id, handler, description, schema = self.iii.function
-        self.assertRegex(function_id, r"^workspace::t[0-9a-f]{12}::exec$")
+        self.assertEqual(list(self.iii.functions), [agent._fn_id, agent._view_id])
+        self.assertRegex(agent._fn_id, r"^workspace::t[0-9a-f]{12}::exec$")
+        self.assertEqual(agent._view_id, agent._fn_id.replace("::exec", "::view_image"))
+        handler, description, schema = self.iii.functions[agent._fn_id]
         self.assertEqual((description, schema), (AGENT.EXEC_DESCRIPTION, AGENT.EXEC_SCHEMA))
+        self.assertEqual(self.iii.functions[agent._view_id][1:], (AGENT.VIEW_DESCRIPTION, AGENT.VIEW_SCHEMA))
         self.register_worker.assert_called_once_with(
             "ws://127.0.0.1:49634", {"worker_name": f"tbench-harbor-{os.getpid()}", "namespace": "tbench"})
         # The SDK loop thread is non-daemon: without this hook harbor never exits.
@@ -305,7 +311,7 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         lean = [p for p in self.iii.payloads("harness::status") if not p.get("verbose")]
         self.assertEqual(len(lean), 3)
         self.assertEqual(self.iii.payloads("harness::stop"), [])
-        self.assertEqual(self.iii.unregistered, [agent._fn_id])
+        self.assertEqual(self.iii.unregistered, [agent._fn_id, agent._view_id])
         self.assertTrue(all(p["omit_traces"] for p in self.iii.payloads("harness::metrics")))
         send = self.iii.payloads("harness::send")[0]
         self.assertEqual(send["session"]["metadata"]["e2e_run_id"], TRIAL)
@@ -341,7 +347,7 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
                 AGENT.Codex, "ensure_system_dependencies", side_effect=RuntimeError("apt-get failed")):
             with self.assertRaisesRegex(RuntimeError, "apt-get failed"):
                 await self.agent().setup(FakeEnv())
-        self.assertFalse(hasattr(self.iii, "function"))
+        self.assertEqual(self.iii.functions, {})
 
     def test_transcript_stats_count_only_filled_replies(self):
         user = {"entry_id": "u", "message": {"role": "user"}}
@@ -375,7 +381,7 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(after[-1], {"root_session_id": agent._iii_session_id,
                                      "omit_context": False, "omit_traces": True})
         self.assertTrue(all(p["omit_traces"] for p in self.iii.payloads("harness::metrics")))
-        self.assertEqual(self.iii.unregistered, [agent._fn_id])
+        self.assertEqual(self.iii.unregistered, [agent._fn_id, agent._view_id])
         self.assertTrue(ctx.metadata["cancelled_by_harbor"])
         self.assertEqual(ctx.n_output_tokens, 20)
         self.assertTrue((agent.logs_dir / "transcript.json").exists())
@@ -452,13 +458,13 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.iii.state = "reconnecting"
         with self.assertRaises(AGENT.ApiConnectionError):
             await self.agent().setup(FakeEnv())
-        self.assertFalse(hasattr(self.iii, "function"))
+        self.assertEqual(self.iii.functions, {})
         self.iii.state = "connected"
         self.iii.script["engine::functions::info"] = RuntimeError("not found")
         agent = self.agent()
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(agent.setup(FakeEnv()), 0.3)
-        self.assertEqual(self.iii.unregistered, [agent._fn_id])
+        self.assertEqual(self.iii.unregistered, [agent._fn_id, agent._view_id])
 
     async def test_metadata_survives_a_cleanup_cut_short(self):
         agent = await self.ready()
@@ -476,7 +482,7 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((agent.logs_dir / "status.json").exists())
         self.assertTrue((agent.logs_dir / "iii-send.json").exists())
         self.assertFalse((agent.logs_dir / "transcript.json").exists())
-        self.assertEqual(self.iii.unregistered, [agent._fn_id])
+        self.assertEqual(self.iii.unregistered, [agent._fn_id, agent._view_id])
 
     async def test_wrapped_commands_keep_the_plain_shell_sigint_disposition(self):
         # bash ignores SIGINT in background jobs unless job control is on.
@@ -486,6 +492,68 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
         agent._wrap = False
         self.assertEqual(wrapped, (await agent._exec({"command": cmd}))["output"])
         self.assertIn("default_int_handler", wrapped)
+
+    async def test_view_image_reports_what_it_cannot_show_as_an_error_result(self):
+        agent = await self.ready(HostEnv(str(self.exec_tmp)))
+        handler = self.iii.functions[agent._view_id][0]
+        (self.tmp / "notes.txt").write_text("hello")
+        for payload, reason in (({"path": str(self.tmp / "missing.png")}, "no readable file at "),
+                                ({"path": str(self.tmp / "notes.txt")}, "invalid or unsupported image data"),
+                                ({"path": " "}, "path must be a non-empty string"), ("x", "path must be")):
+            out = await handler(payload)
+            self.assertTrue(out["is_error"])
+            self.assertEqual(len(out["content"]), 1)
+            self.assertIn(reason, out["content"][0]["text"])
+        # Docker's warnings come before the status line, as for exec; a wrapper that never ran says so.
+        agent._env = FakeEnv(types.SimpleNamespace(stdout="WARN[0000] noise\n@@iii-tb no readable file at /x\n",
+                                                   return_code=0),
+                             types.SimpleNamespace(stdout="OCI runtime exec failed", return_code=126))
+        self.assertIn("no readable file at /x", (await agent._view_image({"path": "/x"}))["content"][0]["text"])
+        self.assertIn("the read failed: OCI runtime", (await agent._view_image({"path": "/x"}))["content"][0]["text"])
+        logged = [json.loads(line) for line in (agent.logs_dir / "exec.jsonl").read_text().splitlines()]
+        self.assertEqual([entry["n"] for entry in logged], list(range(1, 7)))
+        self.assertEqual(logged[0]["view_image"], str(self.tmp / "missing.png"))
+        self.assertIn("no readable file", logged[0]["error"])
+
+    @unittest.skipUnless(AGENT.MAGICK, "needs ImageMagick 7 (magick)")
+    async def test_view_image_sends_small_files_as_they_are_and_fits_the_rest_under_the_result_cap(self):
+        agent = await self.ready(HostEnv(str(self.exec_tmp)))
+        handler = self.iii.functions[agent._view_id][0]
+
+        def image(name, *spec):
+            subprocess.run([AGENT.MAGICK, *spec, str(self.tmp / name)], check=True)
+            return str(self.tmp / name)
+
+        def size(data):
+            return subprocess.run([AGENT.MAGICK, "identify", "-format", "%w %h", "-"], input=base64.b64decode(data),
+                                  capture_output=True, check=True).stdout.decode()
+
+        small = image("small.png", "-size", "40x20", "xc:red")
+        out = await handler({"path": small})
+        self.assertNotIn("is_error", out)
+        self.assertEqual(out["content"], [
+            {"type": "text", "text": f"{small}: 40x20. {AGENT.VIEW_NOTE}"},
+            {"type": "image", "mime": "image/png", "data": base64.b64encode(Path(small).read_bytes()).decode()}])
+        # A 1.4 MB noisy drawing goes as WebP; a 7000 px wide BMP also passes Codex's 6000 px side.
+        big = await asyncio.to_thread(image, "big.png", "-seed", "1", "-size", "1400x1000", "plasma:")
+        wide = image("wide.bmp", "-size", "7000x30", "xc:white")
+        for path, source in ((big, "1400x1000"), (wide, "7000x30")):
+            out = await handler({"path": path})
+            text, picture = out["content"]
+            self.assertEqual(picture["mime"], "image/webp")
+            self.assertLessEqual(len(base64.b64decode(picture["data"])), AGENT.MAX_IMAGE_BYTES)
+            shown = size(picture["data"]).replace(" ", "x")
+            self.assertEqual(text["text"], f"{path}: {source}, shown downscaled to {shown}. {AGENT.VIEW_NOTE}")
+            # Harness 1.10 caps content plus details (the whole return value) at 256 KiB.
+            self.assertLess(len(json.dumps([out["content"], out])), 256 * 1024)
+        self.assertEqual(shown, "6000x25")
+        logged = json.loads((agent.logs_dir / "exec.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((logged["size"], logged["shown"], logged["mime"]), ([7000, 30], [6000, 25], "image/webp"))
+        bad = self.tmp / "bad.png"
+        bad.write_bytes(b"\x89PNG\r\n\x1a\njunk")
+        out = await handler({"path": str(bad)})
+        self.assertTrue(out["is_error"])
+        self.assertIn("invalid or unsupported image data (", out["content"][0]["text"])
 
     def test_usage_fills_the_agent_context(self):
         ctx = context()
@@ -510,14 +578,16 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
             "kind": "e2e", "title": "Harness E2E: regex-log",
             "metadata": {"e2e_run_id": TRIAL, "e2e_scenario": "regex-log", "e2e_execution_kind": "harbor"}})
         self.assertEqual((payload["provider"], payload["model"]), ("anthropic", "claude-x"))
-        self.assertEqual(payload["options"], {"functions": {"allow": [stock._fn_id]}, "max_turns": 1_000_000})
+        self.assertEqual(payload["options"], {"functions": {"allow": [stock._fn_id, stock._view_id]},
+                                              "max_turns": 1_000_000})
         self.assertTrue(payload["message"].startswith("Fix the regex.\n\n"))
         self.assertIn(f'agent_call with {{"function": "{stock._fn_id}"', payload["message"])
+        self.assertIn(f'call {stock._view_id} the same way, with the payload {{"path": ', payload["message"])
         override = self.agent(prompt="override", thinking_level="high", max_turns=200)
         payload = override.send_payload("Fix the regex.", TRIAL, "regex-log")
         self.assertEqual(payload["message"], "Fix the regex.")
         self.assertEqual(payload["options"], {
-            "functions": {"allow": [override._fn_id], "expose": "native"}, "max_turns": 200,
+            "functions": {"allow": [override._fn_id, override._view_id], "expose": "native"}, "max_turns": 200,
             "system_prompt": AGENT.TB_SYSTEM_PROMPT, "system_prompt_strategy": "override",
             "thinking_level": "high"})
         for kwargs in ({"prompt": "terminus"}, {"engine_url": None}, {"namespace": ""}, {"thinking_level": "max"}):
@@ -526,6 +596,8 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
                     "engine_url": "ws://127.0.0.1:49634", "namespace": "tbench", **kwargs})
         with self.assertRaises(ValueError):
             AGENT.IIIHarnessAgent(self.tmp, "claude-x", engine_url="ws://x", namespace="tbench")
+        with mock.patch.object(AGENT, "MAGICK", None), self.assertRaisesRegex(ValueError, "ImageMagick"):
+            self.agent()
 
 
 if __name__ == "__main__":
