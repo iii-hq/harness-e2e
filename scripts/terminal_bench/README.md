@@ -365,7 +365,13 @@ windows, host load and model drift. Only the harness differs.
 | Arm | What runs |
 |---|---|
 | `iii` | iii loop + stock prompt + provider, bash-only bridge. Harness 1.10.0, llm-router 1.5.7 and provider-openai-codex 0.5.6 on the isolated stack, `prompt=stock`, `thinking_level=xhigh`, model `openai-codex/codex/gpt-6.2-sol`. Every stock tool is denied and the model gets only the bridge, so a result is about this setup, not about iii's own tool surface. |
-| `codex` | Harbor's built-in `codex` agent: Codex CLI 0.170.0 inside the task container with its own prompt and tools, `reasoning_effort=xhigh`, `web_search=disabled`, model `openai/gpt-6.2-sol`. |
+| `codex` | Harbor's built-in `codex` agent: Codex CLI 0.170.0 inside the task container with its own prompt and tools, `reasoning_effort=xhigh`, `web_search=disabled`, `config={features: {apps: false}}`, model `openai/gpt-6.2-sol`. |
+
+`apps: false` matters: without it Codex loads the ChatGPT connectors of the login
+account (Gmail, Drive, GitHub, Calendar and a `search_service` web search) into a
+model that runs with approvals bypassed, and the web search works although
+`web_search` is disabled. A Codex rollout that still names `mcp__codex_apps__`
+means the setting did not apply.
 
 The isolated stack runs from `$TB/worker-compose.yaml`, pinned to the versions
 above, not from this folder's copy, which tracks `latest` with

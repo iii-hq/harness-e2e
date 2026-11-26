@@ -9,7 +9,9 @@ environment: {type: docker}
 agents:
   - name: codex
     model_name: openai/gpt-6.2-sol
-    kwargs: {reasoning_effort: xhigh, version: "0.170.0", web_search: disabled}
+    # apps off: Codex otherwise loads the login account's ChatGPT connectors (Gmail, Drive, GitHub,
+    # and a web search) into a model that runs with approvals bypassed.
+    kwargs: {reasoning_effort: xhigh, version: "0.170.0", web_search: disabled, config: {features: {apps: false}}}
   - name: iii_harbor_agent:IIIHarnessAgent
     model_name: openai-codex/codex/gpt-6.2-sol
     kwargs: {engine_url: "ws://127.0.0.1:49634", namespace: tbench, thinking_level: xhigh, prompt: stock}
