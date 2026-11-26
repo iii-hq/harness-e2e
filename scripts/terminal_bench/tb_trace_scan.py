@@ -95,8 +95,11 @@ def scan(tree):
             p = a.get("iii.payload.json") or ""
             if n["name"] == PROVIDER_SPAN:
                 levels = set(PROVIDER_LEVEL.findall(p))
-                cut = str(a.get("iii.payload.truncated")).lower() == "true"
-                provider.update(levels or {"cut" if cut else "absent"})
+                if str(a.get("iii.payload.truncated")).lower() == "true":
+                    # A cut input's own level is gone: an xhigh left in it is not uncut evidence, a wrong one still fails.
+                    provider.update((levels - {EFFORT}) or {"cut"})
+                else:
+                    provider.update(levels or {"absent"})
             elif '"harness_turn"' in p and (sid := STEP_ID.search(p)):
                 steps.setdefault(sid.group(1), set()).update(STEP_LEVEL.findall(p) or {"absent"})
     step_levels = Counter(level for levels in steps.values() for level in levels)

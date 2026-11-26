@@ -277,6 +277,18 @@ class TbPairTest(unittest.TestCase):
             code, out, _ = run("--gate", job)
             self.assertIn("no passing trace scan", out)
 
+    def test_an_iii_trial_on_another_model_fails_parity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job = Path(tmp, "r2")
+            shutil.copytree(FIX / "r2", job)
+            result = job / "alpha__iii/result.json"
+            r = json.loads(result.read_text())
+            r["agent_result"]["metadata"]["model"] = "codex/gpt-5.5"
+            result.write_text(json.dumps(r))
+            code, out, counts = run("--gate", job)
+            self.assertEqual((code, counts["parity_failures"]), (1, 1))
+            self.assertIn("PARITY_FAIL: round 1 iii alpha", out)
+
     def test_trace_scan_reads_the_level_downstream_of_the_harness(self):
         def span(name, payload, cut=False, children=()):
             return {"name": name, "children": list(children), "events": [{"name": "iii.invocation.input", "attributes": [
@@ -298,6 +310,11 @@ class TbPairTest(unittest.TestCase):
                          (False, ["provider input at absent"]))
         self.assertEqual(SCAN.verdict(SCAN.scan({"roots": [step(0), provider(cut=True)]})),
                          (None, ["no uncut provider input"]))
+        cut_with = lambda level: span(SCAN.PROVIDER_SPAN, {"messages": ["x"], "thinking_level": level}, cut=True)
+        self.assertEqual(SCAN.verdict(SCAN.scan({"roots": [step(0), cut_with("xhigh")]})),
+                         (None, ["no uncut provider input"]))
+        self.assertEqual(SCAN.verdict(SCAN.scan({"roots": [step(0), provider(), cut_with("low")]})),
+                         (False, ["provider input at low"]))
         self.assertEqual(SCAN.verdict(SCAN.scan({"roots": [span("execute harness::send", {})]})),
                          (None, ["no turn step record"]))
         with tempfile.TemporaryDirectory() as tmp:

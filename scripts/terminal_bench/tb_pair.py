@@ -118,7 +118,9 @@ def iii_evidence(meta, trial):
     return {"first": bool(meta.get("first_model_response")), "generations": meta.get("generations"),
             "reasoning_generations": meta.get("reasoning_generations"), "tool_calls": meta.get("function_calls"),
             "reasoning": [(g.get("usage") or {}).get("reasoning") or 0 for g in gens], "scan": scan,
-            "parity": meta.get("thinking_level") == EFFORT and scan is not False}
+            # The adapter takes any --model, so the comparison model is checked here too.
+            "parity": (meta.get("provider"), meta.get("model")) == ("openai-codex", "codex/" + CODEX_MODEL)
+            and meta.get("thinking_level") == EFFORT and scan is not False}
 
 
 def _seconds(span):

@@ -136,6 +136,7 @@ From a second terminal, the first two must print a description and the last
 two must fail, because memory and approval-gate must be absent:
 
 ```bash
+E=(--engine ws://127.0.0.1:49634 -n tbench)    # a new terminal does not have the first one's array
 iii call harness::send -h "${E[@]}"
 iii call harness::metrics -h "${E[@]}"
 iii call memory::save -h "${E[@]}"
@@ -391,8 +392,9 @@ over tasks, the realized mdd, the drop-invalid sensitivity reading (with
 `HARBOR_INVALID` lines when it disagrees), reasoning tokens per generation per
 arm and the `VERDICT`. Its last line is the JSON counts. Each round is gated on
 its own: a stop cell; an effort-parity failure (Codex: a rollout `turn_context`
-off `gpt-6.2-sol`/`xhigh` or no ChatGPT `plan_type`; iii: `thinking_level` off
-`xhigh` or a failing trace scan); more than 2 valid cells per arm without
+off `gpt-6.2-sol`/`xhigh` or no ChatGPT `plan_type`; iii: a model other than
+`openai-codex` `codex/gpt-6.2-sol`, `thinking_level` off `xhigh` or a failing
+trace scan); more than 2 valid cells per arm without
 effort evidence; no passing trace scan in the round; more than 3 infra cells
 per arm; a retried trial; a planned trial with no readable `result.json`; or a
 task with one arm only. `--gate` exits 1 on any of them; the plain run lists
