@@ -3,8 +3,9 @@
 Harbor owns the task container and its verifier. Per trial this agent
 installs the system packages Harbor's Codex agent installs, registers two
 bridge functions on an isolated iii engine (a shell executor and view_image),
-sends the task to `harness::send` with only those allowed, waits for the
-session tree, and fills Harbor's AgentContext from `harness::metrics`.
+loads the task's skills into iii-directory and connects its MCP servers through
+mcp-client, sends the task to `harness::send` with only those allowed, waits
+for the session tree, and fills Harbor's AgentContext from `harness::metrics`.
 
     PYTHONPATH=scripts/terminal_bench harbor run -d terminal-bench@2.0 \
       -a iii_harbor_agent:IIIHarnessAgent -m anthropic/<router catalog id> \
@@ -16,13 +17,16 @@ import hashlib
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.codex import Codex
 from harbor.models.agent.context import ModelUsage
 from iii import InitOptions, register_worker
@@ -120,6 +124,24 @@ STOCK_NOTE = (
 CODEX_SYSTEM_DEPS = ("curl", "bash", "nodejs", "npm", "ripgrep")
 TOOLS = ("curl", "rg", "node", "npm")
 TOOLS_PROBE = f"for t in {' '.join(TOOLS)}; do command -v $t >/dev/null 2>&1 && echo $t; done; true"
+# Task skills: Codex copies the task's skills_dir into its own skills root in the container.
+# The iii arm loads each SKILL.md into iii-directory under a per-trial id and lists only
+# those ids for the session; the skill's other files stay in the container.
+LIST_SKILLS = (
+    'for f in {q}/*/SKILL.md; do [ -f "$f" ] || continue; '
+    'printf "' + MARK + '%s\\n" "$(basename "$(dirname "$f")")"; base64 <"$f" | tr -d "\\n"; echo; done; true')
+SKILL_NOTE = "\nThis skill's other files are in the task container under {dir}/; use the shell function to read or run them.\n"
+# Task MCP servers are compose sidecars the host reaches only by IP; mcp-client takes plain
+# http only on loopback, so each one goes through a loopback forwarder owned by this trial.
+RESOLVE = (
+    'h={q}; a=$( (getent ahostsv4 "$h" || getent hosts "$h") 2>/dev/null | awk \'{{print $1; exit}}\'); '
+    '[ -n "$a" ] || a=$(python3 -c \'import socket,sys; print(socket.gethostbyname(sys.argv[1]))\' "$h" 2>/dev/null); '
+    'echo "' + MARK + '$a"')
+MCP_READY_S, MCP_PROBE_S = 90, 5
+MCP_NOTE = (
+    "\n\nThe task's MCP server {name} is connected through these functions, called the same way: {ids}. "
+    'engine::functions::info with {{"function_id": "<id>"}} gives a tool\'s input schema.')
+_mcp_config_lock = None
 
 
 # Harbor's error_policy.py classifies a trial by exception class name. All of
@@ -262,7 +284,59 @@ def _connect(url, namespace):
         return _client
 
 
+def _slug(text):
+    return re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-") or "x"
+
+
+def _unique(name, limit, taken):
+    """name cut to limit, ending in -<n> when that cut is already taken."""
+    out, n = name[:limit].rstrip("-"), 1
+    while out in taken:
+        n += 1
+        out = f"{name[:limit - len(str(n)) - 1].rstrip('-')}-{n}"
+    return out
+
+
+FRONTMATTER = re.compile(r"---\r?\n.*?\r?\n---[^\n]*(?:\n|$)", re.S)
+
+
+def with_note(content, note):
+    """Put note right after the SKILL.md frontmatter, which must still open the file."""
+    if m := FRONTMATTER.match(content):
+        return content[:m.end()] + note + content[m.end():]
+    return note.lstrip("\n") + content
+
+
+async def _pipe(reader, writer):
+    try:
+        while data := await reader.read(65536):
+            writer.write(data)
+            await writer.drain()
+        if writer.can_write_eof():
+            writer.write_eof()
+    except OSError:
+        pass
+
+
+async def forward(host, port):
+    """A loopback listener that relays each connection to host:port."""
+    async def relay(down_r, down_w):
+        try:
+            up_r, up_w = await asyncio.open_connection(host, port)
+        except OSError:
+            down_w.close()
+            return
+        try:
+            await asyncio.gather(_pipe(down_r, up_w), _pipe(up_r, down_w))
+        finally:
+            up_w.close()
+            down_w.close()
+    return await asyncio.start_server(relay, "127.0.0.1", 0)
+
+
 class IIIHarnessAgent(BaseAgent):
+    capabilities = AgentCapabilities(skills=True, mcp_servers=True)
+
     def __init__(self, logs_dir, model_name=None, *, engine_url=None, namespace=None,
                  prompt="stock", max_turns=1_000_000, thinking_level=None, **kwargs):
         super().__init__(logs_dir, model_name, **kwargs)
@@ -286,7 +360,7 @@ class IIIHarnessAgent(BaseAgent):
         self._iii_session_id = f"s_{self._hex}"
         self._fn_id = f"workspace::t{self._hex}::exec"
         self._view_id = f"workspace::t{self._hex}::view_image"
-        self._refs = []
+        self._refs, self._skill_ids, self._mcp, self._forwarders = [], [], [], []
         self._iii = self._loop = self._env = self._send_log = None
         self._base_tools = self._packages_installed = None
         self._wrap = True
@@ -332,12 +406,103 @@ class IIIHarnessAgent(BaseAgent):
                         await asyncio.sleep(0.25)
                 else:
                     raise ApiConnectionError(f"{fn_id} never appeared on the engine")
+            await self._load_skills()
+            await self._connect_mcp()
             # shortcut: a fixed wait for the harness's event-driven function snapshot, and run()
             # raises HarnessTurnError on a turn with zero function calls; probe the harness if that fires.
             await asyncio.sleep(SETTLE_S)
         except BaseException:
-            self._unregister()
+            await self._release()
             raise
+
+    async def _load_skills(self):
+        if not self.skills_dir:
+            return
+        root = self.skills_dir.rstrip("/")
+        r = await self._env.exec(LIST_SKILLS.format(q=shlex.quote(root)), timeout_sec=60)
+        # Text before the first MARK is docker noise; base64 never holds MARK.
+        for chunk in (r.stdout or "").split(MARK)[1:]:
+            name, _, encoded = chunk.partition("\n")
+            content = base64.b64decode(encoded.strip()).decode("utf-8", "replace")
+            skill_id = _unique(f"t{self._hex}-{_slug(name)}", 64, self._skill_ids)
+            await self._call("directory::skills::create", {
+                "id": skill_id, "content": with_note(content, SKILL_NOTE.format(dir=f"{root}/{name}"))})
+            self._skill_ids.append(skill_id)
+
+    async def _connect_mcp(self):
+        for server in self.mcp_servers:
+            u = urlsplit(server.url or "")
+            if server.transport == "stdio" or u.scheme != "http" or not u.hostname:
+                raise ValueError(f"MCP server {server.name}: only http:// sse and streamable-http servers "
+                                 f"are supported, got {server.transport} {server.url}")
+            if server.headers:
+                raise ValueError(f"MCP server {server.name}: HTTP headers are not supported")
+            r = await self._env.exec(RESOLVE.format(q=shlex.quote(u.hostname)), timeout_sec=30)
+            ip, port = (r.stdout or "").rpartition(MARK)[2].strip(), u.port or 80
+            if not ip:
+                raise ApiConnectionError(f"MCP server {server.name}: {u.hostname} does not resolve in the container")
+            try:
+                _, w = await asyncio.wait_for(asyncio.open_connection(ip, port), MCP_PROBE_S)
+                w.close()
+            except (OSError, TimeoutError) as e:
+                raise ApiConnectionError(f"MCP server {server.name}: the host cannot reach {ip}:{port}: {e}") from e
+            self._forwarders.append(fwd := await forward(ip, port))
+            # shortcut: mcp-client has no SSE client; @playwright/mcp (TB 4.1's only MCP task)
+            # serves Streamable HTTP at /mcp beside /sse. An SSE-only server needs SSE in mcp-client.
+            path = u.path.removesuffix("/sse") + "/mcp" if server.transport == "sse" else u.path
+            entry = {"type": "http", "url": f"http://127.0.0.1:{fwd.sockets[0].getsockname()[1]}{path}"
+                                            + (f"?{u.query}" if u.query else "")}
+            name = _unique(f"t{self._hex}-{_slug(server.name)}", 24, [m["server"] for m in self._mcp])
+            check = (await self._call("mcp-client::config::validate", {"mcpServers": {name: entry}}))["servers"][name]
+            if not check["ok"]:
+                raise ValueError(f"MCP server {server.name}: mcp-client refused {entry}: {check['errors']}")
+            # An approval given before the entry exists admits it when it arrives.
+            await self._call("mcp-client::servers::approve", {"server": name, "fingerprint": check["fingerprint"]})
+            self._mcp.append({"name": server.name, "server": name, "tools": []})
+            await self._edit_mcp_config(lambda servers: servers.__setitem__(name, entry))
+        if self._mcp:
+            await self._wait_mcp()
+
+    async def _edit_mcp_config(self, edit):
+        global _mcp_config_lock
+        # shortcut: configuration::set has no compare-and-set, so concurrent trials take turns
+        # through one lock per Harbor process; two harbor runs on one stack could still drop an entry.
+        _mcp_config_lock = _mcp_config_lock or asyncio.Lock()
+        config_id = f"{self._namespace}-mcp-client"  # the III_CONFIG_NAME Compose gives mcp-client
+        async with _mcp_config_lock:
+            value = (await self._call("configuration::get", {"id": config_id})).get("value") or {}
+            servers = dict(value.get("mcpServers") or {})
+            edit(servers)
+            await self._call("configuration::set", {"id": config_id, "value": {**value, "mcpServers": servers}})
+
+    async def _wait_mcp(self):
+        deadline = time.monotonic() + MCP_READY_S
+        while True:
+            listed = {s.get("name"): s for s in
+                      (await self._call("mcp-client::servers::list", {})).get("servers") or []}
+            pending = [m["server"] for m in self._mcp if (listed.get(m["server"]) or {}).get("state") != "ready"
+                       or not listed[m["server"]].get("tools_listed")]
+            if not pending:
+                for m in self._mcp:
+                    m["tools"] = [t["function_id"] for t in listed[m["server"]].get("tools") or []
+                                  if t.get("registered")]
+                return
+            if time.monotonic() > deadline:
+                raise ApiConnectionError("MCP servers not ready: " + "; ".join(
+                    f"{n} {(listed.get(n) or {}).get('state')} {(listed.get(n) or {}).get('error')}" for n in pending))
+            await asyncio.sleep(0.5)
+
+    async def _release(self):
+        self._unregister()
+        for skill_id in self._skill_ids:
+            await self._quietly("skill delete", self._call("directory::skills::delete", {"id": skill_id}, CLEANUP_CALL_MS))
+        if names := [m["server"] for m in self._mcp]:
+            await self._quietly("mcp-client config", self._edit_mcp_config(
+                lambda servers: [servers.pop(n, None) for n in names]))
+        for fwd in self._forwarders:
+            fwd.close()
+            fwd.close_clients()
+        self._skill_ids, self._mcp, self._forwarders = [], [], []
 
     def _unregister(self):
         for ref in self._refs:
@@ -440,8 +605,13 @@ class IIIHarnessAgent(BaseAgent):
         return {"exit_code": r.return_code, "output": _clip(r.stdout or ""), "timed_out": False}
 
     def send_payload(self, instruction, trial, task):
-        functions = {"allow": [self._fn_id, self._view_id]}
+        allow = [self._fn_id, self._view_id, *(f"mcp::{m['server']}::*" for m in self._mcp)]
+        functions = {"allow": allow}
         options = {"functions": functions, "max_turns": self._max_turns}
+        if self._skill_ids:
+            # Lists only this trial's skills; without the get function the harness drops the index.
+            allow.append("directory::skills::get")
+            options["skills"] = list(self._skill_ids)
         if self._prompt == "override":
             functions["expose"] = "native"
             options.update(system_prompt=TB_SYSTEM_PROMPT, system_prompt_strategy="override")
@@ -449,6 +619,9 @@ class IIIHarnessAgent(BaseAgent):
         else:
             message = instruction + STOCK_NOTE.format(
                 fn=self._fn_id, desc=EXEC_DESCRIPTION, view=self._view_id, view_desc=VIEW_DESCRIPTION)
+            if self._mcp:
+                allow.append("engine::functions::info")
+                message += "".join(MCP_NOTE.format(name=m["name"], ids=", ".join(m["tools"])) for m in self._mcp)
         if self._thinking_level:
             options["thinking_level"] = self._thinking_level
         return {
@@ -490,7 +663,7 @@ class IIIHarnessAgent(BaseAgent):
             except Exception as e:
                 self.logger.warning("iii cleanup incomplete: %s", e)
             finally:
-                self._unregister()
+                await self._release()
 
     def _metrics(self, omit_context=True, timeout_ms=CALL_TIMEOUT_MS):
         return self._call("harness::metrics", {"root_session_id": self._iii_session_id,
@@ -560,6 +733,8 @@ class IIIHarnessAgent(BaseAgent):
                 "engine_url": self._engine_url, "namespace": self._namespace,
                 **transcript_stats(transcript, t),
                 "base_tools": self._base_tools, "packages_installed": self._packages_installed,
+                "skills": list(self._skill_ids),
+                "mcp_servers": [{"name": m["name"], "server": m["server"], "tools": len(m["tools"])} for m in self._mcp],
             }
 
     async def _transcript(self):

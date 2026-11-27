@@ -289,6 +289,17 @@ class TbPairTest(unittest.TestCase):
             self.assertEqual((code, counts["parity_failures"]), (1, 1))
             self.assertIn("PARITY_FAIL: round 1 iii alpha", out)
 
+    def test_trace_scan_reads_every_span_when_the_tree_times_out(self):
+        spans = [{"name": "s%d" % i} for i in range(1200)]
+
+        def call(fn, payload):
+            if fn == "engine::traces::tree":
+                raise RuntimeError("timed out")
+            if not payload.get("search_all_spans"):  # what the engine answers without the flag
+                return {"spans": spans[:1], "total": 1}
+            return {"spans": spans[payload["offset"]:payload["offset"] + payload["limit"]], "total": len(spans)}
+        self.assertEqual(len(SCAN.fetch_tree(call, "T")["roots"]), 1200)
+
     def test_trace_scan_reads_the_level_downstream_of_the_harness(self):
         def span(name, payload, cut=False, children=()):
             return {"name": name, "children": list(children), "events": [{"name": "iii.invocation.input", "attributes": [

@@ -29,6 +29,10 @@ containers:
     config_override:
       co_author: false                # no Co-authored-by instruction in git tasks
       default_filesystem_root: "off"  # no host working directory in the prompt, no ide snapshots
+  secrets:           {worker: package://secrets,           version: latest}
+  # Task MCP servers (Harbor environment.mcp_servers) reach the iii arm through this worker;
+  # it keeps its server approvals in the secrets vault.
+  mcp-client:        {worker: package://mcp-client,        version: latest, start_after: [secrets]}
   provider-anthropic:
     worker: package://provider-anthropic
     version: latest

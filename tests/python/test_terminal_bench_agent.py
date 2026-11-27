@@ -20,16 +20,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def fake_modules():
     """Stand-ins for harbor and iii-sdk, which CI does not install."""
-    names = ("harbor", "harbor.agents", "harbor.agents.base", "harbor.agents.installed",
-             "harbor.agents.installed.codex", "harbor.models", "harbor.models.agent",
-             "harbor.models.agent.context", "iii")
+    names = ("harbor", "harbor.agents", "harbor.agents.base", "harbor.agents.capabilities",
+             "harbor.agents.installed", "harbor.agents.installed.codex", "harbor.models",
+             "harbor.models.agent", "harbor.models.agent.context", "iii")
     modules = {name: types.ModuleType(name) for name in names}
 
     class BaseAgent:
-        def __init__(self, logs_dir, model_name=None, logger=None, **kwargs):
+        def __init__(self, logs_dir, model_name=None, logger=None, mcp_servers=None, skills_dir=None, **kwargs):
             self.logs_dir, self.model_name = Path(logs_dir), model_name
             self.logger = logger or logging.getLogger("fake-harbor")
             self.session_id = None
+            self.mcp_servers, self.skills_dir = mcp_servers or [], skills_dir
 
     class ModelUsage:
         def __init__(self, **fields):
@@ -45,6 +46,7 @@ def fake_modules():
             self.installs.append((self.logs_dir, dependencies))
 
     modules["harbor.agents.base"].BaseAgent = BaseAgent
+    modules["harbor.agents.capabilities"].AgentCapabilities = types.SimpleNamespace
     modules["harbor.agents.installed.codex"].Codex = Codex
     modules["harbor.models.agent.context"].ModelUsage = ModelUsage
     modules["iii"].InitOptions = dict
@@ -598,6 +600,128 @@ class TerminalBenchAgentTest(unittest.IsolatedAsyncioTestCase):
             AGENT.IIIHarnessAgent(self.tmp, "claude-x", engine_url="ws://x", namespace="tbench")
         with mock.patch.object(AGENT, "MAGICK", None), self.assertRaisesRegex(ValueError, "ImageMagick"):
             self.agent()
+
+    def test_skill_note_goes_after_the_frontmatter(self):
+        note = "\nNOTE\n"
+        self.assertEqual(AGENT.with_note("---\nname: a\n---\nBody\n", note), "---\nname: a\n---\n\nNOTE\nBody\n")
+        self.assertEqual(AGENT.with_note("---\nname: a\n---", note), "---\nname: a\n---\nNOTE\n")
+        self.assertEqual(AGENT.with_note("# Title\n", note), "NOTE\n# Title\n")
+        self.assertEqual(AGENT.with_note("---\r\nname: a\r\n---\r\nBody\r\n", note),
+                         "---\r\nname: a\r\n---\r\n\nNOTE\nBody\r\n")
+
+    def test_ids_cut_to_their_limit_stay_distinct(self):
+        taken = []
+        for name in ("t0-playwright-a", "t0-playwright-b", "t0-playwright-c", "t0-x"):
+            taken.append(AGENT._unique(name, 12, taken))
+        self.assertEqual(taken, ["t0-playwrigh", "t0-playwri-2", "t0-playwri-3", "t0-x"])
+        self.assertEqual(AGENT._unique("t0-play-wright", 8, ["t0-play"]), "t0-pla-2")
+
+    async def test_task_skills_load_under_trial_ids_and_only_this_session_lists_them(self):
+        root = self.exec_tmp / "app/.agents/skills"
+        (root / "Perf Audit").mkdir(parents=True)
+        (root / "Perf Audit/SKILL.md").write_text("---\nname: perf\ndescription: Measure CLS\n---\nRun scripts/cls.mjs\n")
+        (root / "no-skill").mkdir()  # a folder without SKILL.md is not a skill
+        self.iii.script.update({"directory::skills::create": {}, "directory::skills::delete": {}})
+        agent = await self.ready(HostEnv(str(self.exec_tmp)), skills_dir=f"{root}/")
+        skill_id = f"t{agent._hex}-perf-audit"
+        self.assertEqual(self.iii.payloads("directory::skills::create"), [{"id": skill_id, "content": (
+            "---\nname: perf\ndescription: Measure CLS\n---\n"
+            + AGENT.SKILL_NOTE.format(dir=f"{root}/Perf Audit") + "Run scripts/cls.mjs\n")}])
+        options = agent.send_payload("x", TRIAL, "t")["options"]
+        self.assertEqual(options["skills"], [skill_id])
+        self.assertEqual(options["functions"]["allow"], [agent._fn_id, agent._view_id, "directory::skills::get"])
+        self.iii.script.update({"harness::metrics": metrics(True), "harness::status": status("completed")})
+        ctx = context()
+        await agent.run("x", FakeEnv(), ctx)
+        self.assertEqual(ctx.metadata["skills"], [skill_id])
+        self.assertEqual(self.iii.payloads("directory::skills::delete"), [{"id": skill_id}])
+        # A task without skills gets no index: the get function is not allowed.
+        self.assertEqual(self.agent().send_payload("x", TRIAL, "t")["options"]["functions"]["allow"][2:], [])
+
+    def mcp_stack(self, states):
+        """mcp-client and configuration as the adapter sees them; states feeds servers::list."""
+        config = {"id": "tbench-mcp-client", "value": {"mcpServers": {"kept": {"type": "http", "url": "https://x"}}}}
+
+        def validate(payload):
+            (name, entry), = payload["mcpServers"].items()
+            return {"servers": {name: {"ok": True, "errors": [], "warnings": [], "fingerprint": "f" * 64}}}
+
+        def put(payload):
+            config["value"] = payload["value"]
+            return {}
+
+        def listed(payload):
+            state = states.pop(0) if len(states) > 1 else states[0]
+            return {"servers": [{"name": name, "state": state, "tools_listed": state == "ready",
+                                 "tools": [{"name": "browser_click", "function_id": f"mcp::{name}::browser_click",
+                                            "registered": True},
+                                           {"name": "skipped", "function_id": f"mcp::{name}::skipped",
+                                            "registered": False}]}
+                                for name in config["value"]["mcpServers"] if name != "kept"]}
+        self.iii.script.update({
+            "mcp-client::config::validate": validate, "mcp-client::servers::approve": {},
+            "configuration::get": lambda _: json.loads(json.dumps(config)), "configuration::set": put,
+            "mcp-client::servers::list": listed})
+        return config
+
+    async def test_task_mcp_servers_reach_the_session_through_a_loopback_forwarder(self):
+        async def sidecar(reader, writer):
+            writer.write(b"pong " + await reader.readline())
+            await writer.drain()
+            writer.close()
+        upstream = await asyncio.start_server(sidecar, "127.0.0.1", 0)
+        self.addAsyncCleanup(upstream.wait_closed)
+        self.addCleanup(upstream.close)
+        port = upstream.sockets[0].getsockname()[1]
+        config = self.mcp_stack(["connecting", "ready"])
+        server = types.SimpleNamespace(name="playwright", transport="sse", url=f"http://localhost:{port}/sse",
+                                       headers={})
+        agent = await self.ready(HostEnv(str(self.exec_tmp)), mcp_servers=[server])
+        name = f"t{agent._hex}-playwright"
+        entry = config["value"]["mcpServers"][name]
+        self.assertEqual(len(name), 24)
+        self.assertEqual(self.iii.payloads("mcp-client::servers::approve"), [{"server": name, "fingerprint": "f" * 64}])
+        self.assertRegex(entry["url"], r"^http://127\.0\.0\.1:\d+/mcp$")
+        self.assertIn("kept", config["value"]["mcpServers"])
+        reader, writer = await asyncio.open_connection("127.0.0.1", int(entry["url"].split(":")[2].split("/")[0]))
+        writer.write(b"ping\n")
+        await writer.drain()
+        self.assertEqual(await reader.read(), b"pong ping\n")
+        writer.close()
+        payload = agent.send_payload("x", TRIAL, "t")
+        self.assertEqual(payload["options"]["functions"]["allow"],
+                         [agent._fn_id, agent._view_id, f"mcp::{name}::*", "engine::functions::info"])
+        self.assertIn(f"MCP server playwright is connected through these functions, called the same way: "
+                      f"mcp::{name}::browser_click.", payload["message"])
+        self.iii.script.update({"harness::metrics": metrics(True), "harness::status": status("completed")})
+        ctx = context()
+        await agent.run("x", FakeEnv(), ctx)
+        self.assertEqual(ctx.metadata["mcp_servers"], [{"name": "playwright", "server": name, "tools": 1}])
+        self.assertEqual(list(config["value"]["mcpServers"]), ["kept"])
+        with self.assertRaises(OSError):
+            await asyncio.open_connection("127.0.0.1", int(entry["url"].split(":")[2].split("/")[0]))
+
+    async def test_an_mcp_server_that_never_gets_ready_fails_setup_and_leaves_nothing_behind(self):
+        upstream = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+        self.addAsyncCleanup(upstream.wait_closed)
+        self.addCleanup(upstream.close)
+        config = self.mcp_stack(["connecting"])
+        url = f"http://localhost:{upstream.sockets[0].getsockname()[1]}/mcp"
+        agent = self.agent(mcp_servers=[types.SimpleNamespace(name="pw", transport="streamable-http", url=url,
+                                                              headers={})])
+        with mock.patch.object(AGENT, "MCP_READY_S", 0.2), self.assertRaisesRegex(AGENT.ApiConnectionError, "connecting"):
+            await agent.setup(HostEnv(str(self.exec_tmp)))
+        self.assertEqual(list(config["value"]["mcpServers"]), ["kept"])
+        self.assertEqual(self.iii.unregistered, [agent._fn_id, agent._view_id])
+        # Unreachable, stdio and header-carrying servers are refused before mcp-client hears of them.
+        for server, error in ((types.SimpleNamespace(name="a", transport="sse", url="http://localhost:9/sse",
+                                                     headers={}), AGENT.ApiConnectionError),
+                              (types.SimpleNamespace(name="b", transport="stdio", url=None, headers={}), ValueError),
+                              (types.SimpleNamespace(name="c", transport="sse", url=url, headers={"X": "1"}),
+                               ValueError)):
+            with self.assertRaises(error):
+                await self.agent(mcp_servers=[server]).setup(HostEnv(str(self.exec_tmp)))
+        self.assertEqual(len(self.iii.payloads("mcp-client::servers::approve")), 1)
 
 
 if __name__ == "__main__":

@@ -64,7 +64,9 @@ def fetch_tree(call, trace_id):
     except Exception:  # a session with thousands of spans can time out building the tree
         spans, offset = [], 0
         while True:
-            page = call("engine::traces::spans", {"trace_id": trace_id, "limit": PAGE, "offset": offset})
+            # Without search_all_spans the engine lists only the root span of the trace.
+            page = call("engine::traces::spans", {"trace_id": trace_id, "search_all_spans": True,
+                                                  "limit": PAGE, "offset": offset})
             spans += page.get("spans") or []
             offset += len(page.get("spans") or [])
             if not page.get("spans") or offset >= (page.get("total") or 0):
